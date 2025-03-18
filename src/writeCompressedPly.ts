@@ -377,9 +377,9 @@ const writeCompressedPly = async (fileHandle: FileHandle, splat: Splat) => {
         }
 
         // repeat the last gaussian to fill the rest of the final chunk
-        for (let j = num; j < 256; ++j) {
-            chunk.set(j, singleSplat);
-        }
+        // for (let j = num; j < 256; ++j) {
+        //     chunk.set(j, singleSplat);
+        // }
 
         // pack the chunk
         chunk.pack();
