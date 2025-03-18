@@ -192,7 +192,7 @@ class Chunk {
 }
 
 // sort the compressed indices into morton order
-const sortSplats = (splat: Splat, indices: CompressedIndex[]) => {
+const sortSplats = (splat: Splat, indices: Uint32Array) => {
     // https://fgiesen.wordpress.com/2009/12/13/decoding-morton-codes/
     const encodeMorton3 = (x: number, y: number, z: number) : number => {
         const Part1By2 = (x: number) => {
@@ -218,8 +218,8 @@ const sortSplats = (splat: Splat, indices: CompressedIndex[]) => {
     const it = splat.createIterator(['x', 'y', 'z'], vertex);
 
     // calculate scene extents across all splats (using sort centers, because they're in world space)
-    for (let i = 0; i < splat.numSplats; ++i) {
-        it(i);
+    for (let i = 0; i < indices.length; ++i) {
+        it(indices[i]);
 
         const x = vertex[0];
         const y = vertex[1];
@@ -240,24 +240,51 @@ const sortSplats = (splat: Splat, indices: CompressedIndex[]) => {
     const ylen = maxy - miny;
     const zlen = maxz - minz;
 
+    if (xlen === 0 && ylen === 0 && zlen === 0) {
+        return;
+    }
+
     const morton = new Uint32Array(indices.length);
     let idx = 0;
-    for (let i = 0; i < splat.numSplats; ++i) {
-        it(i);
+    for (let i = 0; i < indices.length; ++i) {
+        it(indices[i]);
 
         const x = vertex[0];
         const y = vertex[1];
         const z = vertex[2];
 
-        const ix = Math.floor(1024 * (x - minx) / xlen);
-        const iy = Math.floor(1024 * (y - miny) / ylen);
-        const iz = Math.floor(1024 * (z - minz) / zlen);
+        const ix = Math.min(1023, Math.floor(1024 * (x - minx) / xlen));
+        const iy = Math.min(1023, Math.floor(1024 * (y - miny) / ylen));
+        const iz = Math.min(1023, Math.floor(1024 * (z - minz) / zlen));
 
         morton[idx++] = encodeMorton3(ix, iy, iz);
     }
 
-    // order splats by morton code
-    indices.sort((a, b) => morton[a.globalIndex] - morton[b.globalIndex]);
+    // sort indices by morton code
+    const sortIndices = new Uint32Array(indices.length).fill(0).map((_, i) => i);
+    sortIndices.sort((a, b) => morton[a] - morton[b]);
+
+    // apply the sort to the indices
+    const store = indices.slice();
+    for (let i = 0; i < indices.length; ++i) {
+        indices[i] = store[sortIndices[i]];
+    }
+
+    // sort the largest buckets recursively
+    // let start = 0;
+    // let end = 0;
+    // while (start < indices.length) {
+    //     while (end < indices.length && morton[sortIndices[start]] === morton[sortIndices[end]]) {
+    //         ++end;
+    //     }
+
+    //     if (end - start > 1) {
+    //         console.log('sorting', end - start);
+    //         sortSplats(splat, indices.subarray(start, end));
+    //     }
+
+    //     start = end;
+    // }
 };
 
 const chunkProps = [
@@ -315,7 +342,9 @@ const writeCompressedPly = async (fileHandle: FileHandle, splat: Splat) => {
     const shData = new Uint8Array(numSplats * outputSHCoeffs * 3);
 
     // sort splats into some kind of order (morton order rn)
-    sortSplats(splat, indices);
+    const sortIndices = new Uint32Array(numSplats).fill(0).map((_, i) => i);
+    sortSplats(splat, sortIndices);
+    indices.sort((a, b) => sortIndices[a.i] - sortIndices[b.i]);
 
     const singleSplat = Chunk.members.map(_ => 0);
     const it = splat.createIterator(Chunk.members, singleSplat);
@@ -345,6 +374,11 @@ const writeCompressedPly = async (fileHandle: FileHandle, splat: Splat) => {
                 const nvalue = singleSH[k] / 8 + 0.5;
                 shData[off++] = Math.max(0, Math.min(255, Math.trunc(nvalue * 256)));
             }
+        }
+
+        // repeat the last gaussian to fill the rest of the final chunk
+        for (let j = num; j < 256; ++j) {
+            chunk.set(j, singleSplat);
         }
 
         // pack the chunk
