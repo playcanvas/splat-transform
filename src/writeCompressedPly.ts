@@ -253,22 +253,21 @@ const sortSplats = (splat: Splat, indices: Uint32Array) => {
         const y = vertex[1];
         const z = vertex[2];
 
-        const ix = Math.min(1023, Math.floor(1024 * (x - minx) / xlen));
-        const iy = Math.min(1023, Math.floor(1024 * (y - miny) / ylen));
-        const iz = Math.min(1023, Math.floor(1024 * (z - minz) / zlen));
+        // const ix = Math.min(1023, Math.floor(1024 * (x - minx) / xlen));
+        // const iy = Math.min(1023, Math.floor(1024 * (y - miny) / ylen));
+        // const iz = Math.min(1023, Math.floor(1024 * (z - minz) / zlen));
+
+        const ix = Math.floor(1024 * (x - minx) / xlen);
+        const iy = Math.floor(1024 * (y - miny) / ylen);
+        const iz = Math.floor(1024 * (z - minz) / zlen);
 
         morton[idx++] = encodeMorton3(ix, iy, iz);
     }
 
     // sort indices by morton code
-    const sortIndices = new Uint32Array(indices.length).fill(0).map((_, i) => i);
-    sortIndices.sort((a, b) => morton[a] - morton[b]);
-
-    // apply the sort to the indices
-    const store = indices.slice();
-    for (let i = 0; i < indices.length; ++i) {
-        indices[i] = store[sortIndices[i]];
-    }
+    const mapping: Record<number, number> = {};
+    indices.forEach((v, i) => mapping[v] = i);
+    indices.sort((a, b) => morton[mapping[a]] - morton[mapping[b]]);
 
     // sort the largest buckets recursively
     // let start = 0;
