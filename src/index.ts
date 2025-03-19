@@ -25,6 +25,8 @@ const processData = (plyFile: PlyFile) => {
 };
 
 const writeData = async (filename: string, plyFile: PlyFile) => {
+    // open output
+    console.log(`writing '${filename}'...`);
     const outputFile = await open(filename, 'w');
     await writeCompressedPly(outputFile, new Splat(plyFile));
     await outputFile.close();
