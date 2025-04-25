@@ -30,7 +30,7 @@ const getDataType = (type: string) => {
         case 'float': return Float32Array;
         case 'double': return Float64Array;
         default: return null;
-    };
+    }
 };
 
 const calcDataSize = (plyFile: PlyHeader) => {

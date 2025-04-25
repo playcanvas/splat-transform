@@ -1,5 +1,6 @@
-import { FileHandle } from 'node:fs/promises';
 import { Buffer } from 'node:buffer';
+import { FileHandle } from 'node:fs/promises';
+
 import { calcDataSize, PlyElement, PlyHeader, PlyFile, getDataType } from './ply';
 
 // parse the ply header text and return an array of Element structures and a
@@ -52,7 +53,7 @@ const parsePlyHeader = (data: Buffer): PlyHeader => {
     }
 
     return { strings, elements };
-}
+};
 
 const cmp = (a: Uint8Array, b: Uint8Array, aOffset = 0) => {
     for (let i = 0; i < b.length; ++i) {
@@ -103,7 +104,7 @@ const readPly = async (fileHandle: FileHandle): Promise<PlyFile> => {
     const data = Buffer.alloc(dataSize);
     if ((await fileHandle.read(data, 0, dataSize)).bytesRead !== dataSize) {
         throw new Error('failed reading ply data');
-    };
+    }
 
     return { header, data };
 };

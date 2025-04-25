@@ -13,9 +13,7 @@ const application = {
     plugins: [
         resolve(),
         json(),
-        typescript({
-            sourceMap: false
-        })
+        typescript()
     ],
     cache: false
 };

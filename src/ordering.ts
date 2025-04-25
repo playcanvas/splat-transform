@@ -1,7 +1,7 @@
-import { Splat } from './splat';
+import { SplatData } from './splat-data';
 
 // sort the compressed indices into morton order
-const generateOrdering = (splat: Splat, indices: Uint32Array) => {
+const generateOrdering = (splatData: SplatData, indices: Uint32Array) => {
     // https://fgiesen.wordpress.com/2009/12/13/decoding-morton-codes/
     const encodeMorton3 = (x: number, y: number, z: number) : number => {
         const Part1By2 = (x: number) => {
@@ -16,78 +16,82 @@ const generateOrdering = (splat: Splat, indices: Uint32Array) => {
         return (Part1By2(z) << 2) + (Part1By2(y) << 1) + Part1By2(x);
     };
 
-    let minx: number;
-    let miny: number;
-    let minz: number;
-    let maxx: number;
-    let maxy: number;
-    let maxz: number;
+    let mx: number;
+    let my: number;
+    let mz: number;
+    let Mx: number;
+    let My: number;
+    let Mz: number;
 
+    const names = ['x', 'y', 'z'];
     const vertex = [0, 0, 0];
-    const it = splat.createIterator(['x', 'y', 'z'], vertex);
+    const accessor = splatData.makeAccessor(names, vertex);
 
     // calculate scene extents across all splats (using sort centers, because they're in world space)
     for (let i = 0; i < indices.length; ++i) {
-        it(indices[i]);
+        accessor(indices[i]);
 
         const x = vertex[0];
         const y = vertex[1];
         const z = vertex[2];
 
-        if (minx === undefined) {
-            minx = maxx = x;
-            miny = maxy = y;
-            minz = maxz = z;
+        if (mx === undefined) {
+            mx = Mx = x;
+            my = My = y;
+            mz = Mz = z;
         } else {
-            if (x < minx) minx = x; else if (x > maxx) maxx = x;
-            if (y < miny) miny = y; else if (y > maxy) maxy = y;
-            if (z < minz) minz = z; else if (z > maxz) maxz = z;
+            if (x < mx) mx = x; else if (x > Mx) Mx = x;
+            if (y < my) my = y; else if (y > My) My = y;
+            if (z < mz) mz = z; else if (z > Mz) Mz = z;
         }
     }
 
-    const xlen = maxx - minx;
-    const ylen = maxy - miny;
-    const zlen = maxz - minz;
+    console.log('extents', mx, my, mz, Mx, My, Mz);
 
-    const xmul = isFinite(xlen) ? 1024 / xlen : 0;
-    const ymul = isFinite(ylen) ? 1024 / ylen : 0;
-    const zmul = isFinite(zlen) ? 1024 / zlen : 0;
+    const xlen = Mx - mx;
+    const ylen = My - my;
+    const zlen = Mz - mz;
 
-    if (xmul === 0 && ymul === 0 && zmul === 0) {
+    if (!isFinite(xlen) || !isFinite(ylen) || !isFinite(zlen)) {
+        console.log('invalid extents', xlen, ylen, zlen);
         return;
     }
 
+    const xmul = 1024 / xlen;
+    const ymul = 1024 / ylen;
+    const zmul = 1024 / zlen;
+
     const morton = new Uint32Array(indices.length);
     for (let i = 0; i < indices.length; ++i) {
-        it(indices[i]);
+        accessor(indices[i]);
 
-        const x = vertex[0];
-        const y = vertex[1];
-        const z = vertex[2];
-
-        const ix = Math.min(1023, Math.floor((x - minx) * xmul));
-        const iy = Math.min(1023, Math.floor((y - miny) * ymul));
-        const iz = Math.min(1023, Math.floor((z - minz) * zmul));
+        const ix = Math.min(1023, (vertex[0] - mx) * xmul) >>> 0;
+        const iy = Math.min(1023, (vertex[1] - my) * ymul) >>> 0;
+        const iz = Math.min(1023, (vertex[2] - mz) * zmul) >>> 0;
 
         morton[i] = encodeMorton3(ix, iy, iz);
     }
 
     // sort indices by morton code
-    const mapping: Record<number, number> = {};
-    indices.forEach((v, i) => mapping[v] = i);
-    indices.sort((a, b) => morton[mapping[a]] - morton[mapping[b]]);
+    const order = indices.map((_, i) => i);
+    order.sort((a, b) => morton[a] - morton[b]);
+
+    const tmpIndices = indices.slice();
+    for (let i = 0; i < indices.length; ++i) {
+        indices[i] = tmpIndices[order[i]];
+    }
 
     // sort the largest buckets recursively
     let start = 0;
-    let end = 0;
+    let end = 1;
     while (start < indices.length) {
-        while (end < indices.length && morton[start] === morton[end]) {
+        while (end < indices.length && morton[order[end]] === morton[order[start]]) {
             ++end;
         }
 
-        if (end - start > 16) {
+        if (end - start > 256) {
             console.log('sorting', end - start);
-            generateOrdering(splat, indices.subarray(start, end));
+            generateOrdering(splatData, indices.subarray(start, end));
         }
 
         start = end;

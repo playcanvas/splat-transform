@@ -10,8 +10,7 @@ export default [
         languageOptions: {
             parser: tsParser,
             globals: {
-                ...globals.browser,
-                ...globals.serviceworker
+                ...globals.node
             }
         },
         plugins: {
