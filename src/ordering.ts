@@ -46,8 +46,6 @@ const generateOrdering = (splatData: SplatData, indices: Uint32Array) => {
         }
     }
 
-    console.log('extents', mx, my, mz, Mx, My, Mz);
-
     const xlen = Mx - mx;
     const ylen = My - my;
     const zlen = Mz - mz;

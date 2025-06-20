@@ -2,6 +2,7 @@ import { FileHandle } from 'node:fs/promises';
 
 import { Quat } from 'playcanvas';
 
+import { sigmoid } from './math';
 import { generateOrdering } from './ordering';
 import { shNames } from './ply';
 import { SplatData } from './splat-data';
@@ -183,7 +184,7 @@ class Chunk {
                 normalize(f_dc_0[i], cr.min, cr.max),
                 normalize(f_dc_1[i], cg.min, cg.max),
                 normalize(f_dc_2[i], cb.min, cb.max),
-                1 / (1 + Math.exp(-opacity[i]))
+                sigmoid(opacity[i])
             );
         }
 

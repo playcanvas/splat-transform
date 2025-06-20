@@ -2,6 +2,7 @@ import { open } from 'node:fs/promises';
 
 import { version } from '../package.json';
 import { GaussianData } from './gaussian-data';
+import { sigmoid } from './math';
 import { readPly } from './readPly';
 import { SplatData } from './splat-data';
 import { writeCompressedPly } from './writeCompressedPly';
@@ -23,11 +24,19 @@ const readSplatData = async (filename: string) => {
 
 const filter = (gaussianData: GaussianData) => {
     const { buffer } = gaussianData;
+
+    // filter out very small opacities
+    if (sigmoid(gaussianData.data.opacity) < 1/255) {
+        return false;
+    }
+
+    // if any property is NaN or Inf, filter it out
     for (let i = 0; i < buffer.length; ++i) {
         if (!isFinite(buffer[i])) {
             return false;
         }
     }
+
     return true;
 };
 
