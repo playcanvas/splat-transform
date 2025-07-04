@@ -98,9 +98,9 @@ const parseArguments = () => {
     const getProcessOptions = (args: any): ProcessOptions => {
         const processOptions: ProcessOptions = { };
 
-        if (args.trans || args.rot || args.scale) {
-            const t = args.trans ?? [0, 0, 0];
-            const r = args.rot ?? [0, 0, 0];
+        if (args.translate || args.rotate || args.scale) {
+            const t = args.translate ?? [0, 0, 0];
+            const r = args.rotate ?? [0, 0, 0];
             const s = args.scale ? args.scale[0] : 1;
             processOptions.transform = {
                 translate: new Vec3(t[0], t[1], t[2]),
@@ -137,13 +137,21 @@ const parseArguments = () => {
     };
 }
 
+const usage = `Usage: splat-transform input.ply [options] input.ply [options] ... output.ply [options]
+options:
+-translate -t x,y,z           Translate splats by x,y,z
+-rotate -r    x,y,z           Rotate splats by euler angles x,y,z (in degrees)
+-scale -s     x               Scale splats by x (uniform scaling)
+-filter -f invalid,invisible  Filter splats by removing invalid splats (NaN, Inf)
+`;
+
 const main = async () => {
     console.log(`splat-transform v${version}`);
 
     // read args
     const args = parseArguments();
     if (args.files.length < 2) {
-        console.error('Usage: splat-transform file1.ply [file2.ply ...] output.ply');
+        console.error(usage);
         exit(1);
     }
 
