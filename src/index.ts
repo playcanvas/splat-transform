@@ -6,6 +6,7 @@ import { exit } from 'node:process';
 import { version } from '../package.json';
 import { readPly } from './read-ply';
 import { writePly } from './write-ply';
+import { writeCompressedPly } from './write-compressed-ply';
 
 import { Quat, Vec3 } from 'playcanvas';
 import { DataTable } from './data-table';
@@ -23,13 +24,18 @@ const readFile = async (filename: string) => {
 const writeFile = async (filename: string, dataTable: DataTable) => {
     console.log(`writing '${filename}'...`);
     const outputFile = await open(filename, 'w');
-    await writePly(outputFile, {
-        comments: [],
-        elements: [{
-            name: 'vertex',
-            dataTable: dataTable
-        }]
-    });
+
+    if (filename.endsWith('.compressed.ply')) {
+        await writeCompressedPly(outputFile, dataTable);
+    } else {
+        await writePly(outputFile, {
+            comments: [],
+            elements: [{
+                name: 'vertex',
+                dataTable: dataTable
+            }]
+        });
+    }
     await outputFile.close();
 };
 
