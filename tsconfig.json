@@ -1,17 +1,14 @@
 {
     "compilerOptions": {
-        "noImplicitAny": true,
         "target": "es2022",
-        "lib": ["es2022"],
-        "sourceMap": true,
-        "inlineSources": true,
         "module": "es2022",
+        "lib": ["es2022"],
         "moduleResolution": "node",
+        "esModuleInterop": true,
+        "sourceMap": true,
+        "noImplicitAny": true,
+        "inlineSources": true,
         "resolveJsonModule": true,
-        "baseUrl": ".",
-        "paths": {
-            "playcanvas": ["node_modules/playcanvas/build/playcanvas"],
-        }
     },
     "include": ["./src/**/*.ts"],
     "exclude": ["node_modules", "**/*.js", "dist"]

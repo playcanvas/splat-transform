@@ -5,6 +5,8 @@ import { exit } from 'node:process';
 
 import { version } from '../package.json';
 import { readPly } from './read-ply';
+
+import { writeSogs } from './write-sogs';
 import { writePly } from './write-ply';
 import { writeCompressedPly } from './write-compressed-ply';
 
@@ -25,7 +27,9 @@ const writeFile = async (filename: string, dataTable: DataTable) => {
     console.log(`writing '${filename}'...`);
     const outputFile = await open(filename, 'w');
 
-    if (filename.endsWith('.compressed.ply')) {
+    if (filename.endsWith('.json')) {
+        await writeSogs(outputFile, dataTable);
+    } else if (filename.endsWith('.compressed.ply')) {
         await writeCompressedPly(outputFile, dataTable);
     } else {
         await writePly(outputFile, {

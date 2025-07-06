@@ -72,15 +72,15 @@ class DataTable {
         return this.columns[0].data.length;
     }
 
-    getRow(index: number, row: Row = {}): Row {
-        for (const column of this.columns) {
+    getRow(index: number, row: Row = {}, columns=this.columns): Row {
+        for (const column of columns) {
             row[column.name] = column.data[index];
         }
         return row;
     }
 
-    setRow(index: number, row: Row) {
-        for (const column of this.columns) {
+    setRow(index: number, row: Row, columns=this.columns) {
+        for (const column of columns) {
             if (row.hasOwnProperty(column.name)) {
                 column.data[index] = row[column.name];
             }

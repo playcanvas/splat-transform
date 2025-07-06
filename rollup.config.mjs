@@ -10,14 +10,15 @@ const application = {
         sourcemap: true,
         entryFileNames: '[name].mjs',
     },
+    external: ['sharp'],
     plugins: [
+        typescript(),
         resolve(),
         json(),
-        typescript()
     ],
     cache: false
 };
 
 export default [
-    application,
+    application
 ];
