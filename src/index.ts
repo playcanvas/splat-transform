@@ -1,7 +1,7 @@
+import { exit } from 'node:process';
 import { open } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
 import { resolve } from 'node:path';
-import { exit } from 'node:process';
 
 import { version } from '../package.json';
 import { readPly } from './read-ply';
@@ -24,14 +24,16 @@ const readFile = async (filename: string) => {
 };
 
 const writeFile = async (filename: string, dataTable: DataTable) => {
-    console.log(`writing '${filename}'...`);
-    const outputFile = await open(filename, 'w');
-
     if (filename.endsWith('.json')) {
-        await writeSogs(outputFile, dataTable);
+        await writeSogs(filename, dataTable);
     } else if (filename.endsWith('.compressed.ply')) {
+        console.log(`writing '${filename}'...`);
+        const outputFile = await open(filename, 'w');
         await writeCompressedPly(outputFile, dataTable);
+        await outputFile.close();
     } else {
+        console.log(`writing '${filename}'...`);
+        const outputFile = await open(filename, 'w');
         await writePly(outputFile, {
             comments: [],
             elements: [{
@@ -39,8 +41,8 @@ const writeFile = async (filename: string, dataTable: DataTable) => {
                 dataTable: dataTable
             }]
         });
+        await outputFile.close();
     }
-    await outputFile.close();
 };
 
 // combine the supplied tables into one
@@ -194,7 +196,7 @@ const main = async () => {
         );
 
         // write file
-        await writeFile(outputArg.filename, dataTable);
+        await writeFile(resolve(outputArg.filename), dataTable);
     } catch (err) {
         // handle errors
         console.error(`error: ${err.message}`);
