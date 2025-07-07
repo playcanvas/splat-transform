@@ -13,7 +13,8 @@ import { writeCompressedPly } from './write-compressed-ply';
 import { Quat, Vec3 } from 'playcanvas';
 import { DataTable } from './data-table';
 
-import { ProcessOptions, process } from './process';
+import { filter } from './filter';
+import { transform } from './transform';
 
 const readFile = async (filename: string) => {
     console.log(`reading '${filename}'...`);
@@ -51,6 +52,44 @@ const combine = (dataTables: DataTable[]) => {
         // nothing to combine
         return dataTables[0];
     }
+};
+
+type ProcessOptions = {
+    transform?: {
+        translate: Vec3;
+        rotate: Quat;
+        scale: number;
+    },
+    filter?: {
+        invalid: boolean;
+        invisible: boolean;
+    }
+};
+
+// process a data table with standard options
+const process = (dataTable: DataTable, options: ProcessOptions) => {
+    let result = dataTable;
+
+    // transform
+    if (options.transform) {
+        transform(
+            result,
+            options.transform.translate,
+            options.transform.rotate,
+            options.transform.scale
+        );
+    }
+
+    // filter rows
+    if (options.filter) {
+        result = filter(
+            result,
+            options.filter.invalid,
+            options.filter.invisible
+        );
+    }
+
+    return result;
 };
 
 const isGSData = (dataTable: DataTable) => {

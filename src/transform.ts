@@ -1,7 +1,6 @@
 import { Mat3, Mat4, Quat, Vec3 } from 'playcanvas';
 import { RotateSH } from './utils/rotate-sh';
 import { DataTable } from './data-table';
-import { sigmoid } from './utils/math';
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
@@ -64,65 +63,5 @@ const transform = (dataTable: DataTable, t: Vec3, r: Quat, s: number) => {
     }
 };
 
-const filter = (dataTable: DataTable, removeInvalid: boolean, removeInvisible: boolean) => {
 
-    const predicate = (rowIndex: number, row: any) => {
-        // remove any rows containing NaN or Inf
-        if (removeInvalid) {
-            for (const key in row) {
-                if (!isFinite(row[key])) {
-                    return false;
-                }
-            }
-        }
-
-        // filter out very small opacities
-        if (removeInvisible && sigmoid(row.opacity) < 1 / 255) {
-            return false;
-        }
-
-        return true;
-    };
-
-    return dataTable.filter(predicate);
-};
-
-type ProcessOptions = {
-    transform?: {
-        translate: Vec3;
-        rotate: Quat;
-        scale: number;
-    },
-    filter?: {
-        invalid: boolean;
-        invisible: boolean;
-    }
-};
-
-// process a data table with standard options
-const process = (dataTable: DataTable, options: ProcessOptions) => {
-    let result = dataTable;
-
-    // transform
-    if (options.transform) {
-        transform(
-            result,
-            options.transform.translate,
-            options.transform.rotate,
-            options.transform.scale
-        );
-    }
-
-    // filter rows
-    if (options.filter) {
-        result = filter(
-            result,
-            options.filter.invalid,
-            options.filter.invisible
-        );
-    }
-
-    return result;
-};
-
-export { ProcessOptions, process };
+export { transform };
