@@ -32,7 +32,7 @@ const writePly = async (fileHandle: FileHandle, plyData: PlyData) => {
     ];
 
     // write the header
-    fileHandle.write((new TextEncoder()).encode(header.flat(3).join('\n') + '\n'));
+    await fileHandle.write((new TextEncoder()).encode(header.flat(3).join('\n') + '\n'));
 
     for (let i = 0; i < plyData.elements.length; ++i) {
         const table = plyData.elements[i].dataTable;
@@ -62,7 +62,7 @@ const writePly = async (fileHandle: FileHandle, plyData: PlyData) => {
             }
 
             // write the chunk
-            fileHandle.write(chunkData.subarray(0, offset));
+            await fileHandle.write(chunkData.subarray(0, offset));
         }
     }
 };

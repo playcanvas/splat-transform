@@ -10,7 +10,7 @@ import { writeSogs } from './write-sogs';
 import { writePly } from './write-ply';
 import { writeCompressedPly } from './write-compressed-ply';
 
-import { Quat, Vec3 } from 'playcanvas';
+import { Vec3 } from 'playcanvas';
 import { Column, DataTable, TypedArray } from './data-table';
 
 import { ProcessAction, process } from './process';
@@ -101,7 +101,7 @@ const combine = (dataTables: DataTable[]) => {
     return result;
 };
 
-const isGSData = (dataTable: DataTable) => {
+const isGSDataTable = (dataTable: DataTable) => {
     if (![
         'x', 'y', 'z',
         'rot_0', 'rot_1', 'rot_2', 'rot_3',
@@ -257,7 +257,7 @@ const main = async () => {
             }
 
             const { dataTable } = element;
-            if (dataTable.numRows === 0 || !isGSData(dataTable)) {
+            if (dataTable.numRows === 0 || !isGSDataTable(dataTable)) {
                 return null;
             }
 
@@ -266,7 +266,7 @@ const main = async () => {
             return file;
         }));
 
-        // combine inputs into single output dataTable
+        // combine inputs into a single output dataTable
         const dataTable = process(
             combine(inputFiles.map(file => file.elements[0].dataTable)),
             outputArg.processActions

@@ -89,8 +89,8 @@ const writeSogs = async (outputFilename: string, dataTable: DataTable) => {
         meansU[ti * 4 + 2] = (z >> 8) & 0xff;
         meansU[ti * 4 + 3] = 0xff;
     }
-    write('means_l.webp', meansL);
-    write('means_u.webp', meansU);
+    await write('means_l.webp', meansL);
+    await write('means_u.webp', meansU);
 
     // convert quaternions
     const quats = new Uint8Array(width * height * channels);
@@ -136,7 +136,7 @@ const writeSogs = async (outputFilename: string, dataTable: DataTable) => {
         quats[ti * 4 + 2] = 255 * (q[idx[2]] * 0.5 + 0.5);
         quats[ti * 4 + 3] = 252 + maxComp;
     }
-    write('quats.webp', quats);
+    await write('quats.webp', quats);
 
     // scales
     const scales = new Uint8Array(width * height * channels);
@@ -153,7 +153,7 @@ const writeSogs = async (outputFilename: string, dataTable: DataTable) => {
         scales[ti * 4 + 2] = 255 * (row.scale_2 - scaleMinMax[2][0]) / (scaleMinMax[2][1] - scaleMinMax[2][0]);
         scales[ti * 4 + 3] = 0xff;
     }
-    write('scales.webp', scales);
+    await write('scales.webp', scales);
 
     // colors
     const sh0 = new Uint8Array(width * height * channels);
@@ -170,7 +170,7 @@ const writeSogs = async (outputFilename: string, dataTable: DataTable) => {
         sh0[ti * 4 + 2] = 255 * (row.f_dc_2 - sh0MinMax[2][0]) / (sh0MinMax[2][1] - sh0MinMax[2][0]);
         sh0[ti * 4 + 3] = 255 * (row.opacity - sh0MinMax[3][0]) / (sh0MinMax[3][1] - sh0MinMax[3][0]);
     }
-    write('sh0.webp', sh0);
+    await write('sh0.webp', sh0);
 
     // write meta.json
     const meta: any = {
@@ -242,7 +242,7 @@ const writeSogs = async (outputFilename: string, dataTable: DataTable) => {
                     centroidsBuf[i * shCoeffs * 4 + j * 4 + 3] = 0xff;
                 }
             }
-            write('shN_centroids.webp', centroidsBuf, 64 * shCoeffs, Math.ceil(centroids.numRows / 64));
+            await write('shN_centroids.webp', centroidsBuf, 64 * shCoeffs, Math.ceil(centroids.numRows / 64));
 
             // write labels
             const labelsBuf = new Uint8Array(width * height * channels);
@@ -255,7 +255,7 @@ const writeSogs = async (outputFilename: string, dataTable: DataTable) => {
                 labelsBuf[ti * 4 + 2] = 0;
                 labelsBuf[ti * 4 + 3] = 0xff;
             }
-            write('shN_labels.webp', labelsBuf);
+            await write('shN_labels.webp', labelsBuf);
 
             meta.shN = {
                 shape: [dataTable.numRows, shCoeffs],
@@ -274,7 +274,7 @@ const writeSogs = async (outputFilename: string, dataTable: DataTable) => {
     }
 
     const outputFile = await open(outputFilename, 'w');
-    outputFile.write((new TextEncoder()).encode(JSON.stringify(meta, null, 4)));
+    await outputFile.write((new TextEncoder()).encode(JSON.stringify(meta, null, 4)));
     await outputFile.close();
 };
 
