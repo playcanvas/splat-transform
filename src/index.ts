@@ -13,8 +13,7 @@ import { writeCompressedPly } from './write-compressed-ply';
 import { Quat, Vec3 } from 'playcanvas';
 import { Column, DataTable, TypedArray } from './data-table';
 
-import { filter } from './filter';
-import { transform } from './transform';
+import { ProcessAction, process } from './process';
 
 const readFile = async (filename: string) => {
     console.log(`reading '${filename}'...`);
@@ -102,44 +101,6 @@ const combine = (dataTables: DataTable[]) => {
     return result;
 };
 
-type ProcessOptions = {
-    transform?: {
-        translate: Vec3;
-        rotate: Quat;
-        scale: number;
-    },
-    filter?: {
-        invalid: boolean;
-        invisible: boolean;
-    }
-};
-
-// process a data table with standard options
-const process = (dataTable: DataTable, options: ProcessOptions) => {
-    let result = dataTable;
-
-    // transform
-    if (options.transform) {
-        transform(
-            result,
-            options.transform.translate,
-            options.transform.rotate,
-            options.transform.scale
-        );
-    }
-
-    // filter rows
-    if (options.filter) {
-        result = filter(
-            result,
-            options.filter.invalid,
-            options.filter.invisible
-        );
-    }
-
-    return result;
-};
-
 const isGSData = (dataTable: DataTable) => {
     if (![
         'x', 'y', 'z',
@@ -153,6 +114,11 @@ const isGSData = (dataTable: DataTable) => {
     return true;
 };
 
+type File = {
+    filename: string;
+    processActions: ProcessAction[];
+};
+
 const parseArguments = () => {
     const { values: v, tokens } = parseArgs({
         tokens: true,
@@ -162,67 +128,90 @@ const parseArguments = () => {
             translate: { type: 'string', short: 't', multiple: true },
             rotate: { type: 'string', short: 'r', multiple: true },
             scale: { type: 'string', short: 's', multiple: true },
-            filter: { type: 'string', short: 'f', multiple: true, default: ['invalid,invisible'] },
+            filterNaN: { type: 'boolean', short: 'n', multiple: true },
+            filterColumn: { type: 'string', short: 'c', multiple: true },
             sh: { type: 'string', short: 'h', default: '3' },
         },
     });
 
-    const args = [];
-    let current: any = null;
+    const parseNumber = (value: string): number => {
+        const result = Number(value);
+        if (isNaN(result)) {
+            throw new Error(`Invalid number value: ${value}`);
+        }
+        return result;
+    };
+
+    const parseVec3 = (value: string): Vec3 => {
+        const parts = value.split(',').map(Number);
+        if (parts.length !== 3 || parts.some(isNaN)) {
+            throw new Error(`Invalid Vec3 value: ${value}`);
+        }
+        return new Vec3(parts[0], parts[1], parts[2]);
+    };
+
+    const parseComparator = (value: string): 'lt' | 'lte' | 'gt' | 'gte' | 'eq' | 'neq' => {
+        switch (value) {
+            case 'lt': return 'lt';
+            case 'lte': return 'lte';
+            case 'gt': return 'gt';
+            case 'gte': return 'gte';
+            case 'eq': return 'eq';
+            case 'neq': return 'neq';
+            default:
+                throw new Error(`Invalid comparator value: ${value}`);
+        }
+    };
+
+    const files: File[] = [];
 
     for (const t of tokens) {
         if (t.kind === 'positional') {
-            current = { filename: t.value };
-            args.push(current);
-        } else if (t.kind === 'option' && current) {
+            files.push({
+                filename: t.value,
+                processActions: []
+            });
+        } else if (t.kind === 'option' && files.length > 0) {
+            const current = files[files.length - 1];
             switch (t.name) {
                 case 'translate':
-                case 'rotate':
-                case 'scale':
-                    current[t.name] = t.value.split(',').map(Number);
+                    current.processActions.push({
+                        kind: 'translate',
+                        value: parseVec3(t.value)
+                    });
                     break;
-                case 'filter':
-                    current[t.name] = t.value.split(',').map(f => f.trim());
+                case 'rotate':
+                    current.processActions.push({
+                        kind: 'rotate',
+                        value: parseVec3(t.value)
+                    });
+                    break;
+                case 'scale':
+                    current.processActions.push({
+                        kind: 'scale',
+                        value: parseNumber(t.value)
+                    });
+                    break;
+                case 'filterNaN':
+                    current.processActions.push({
+                        kind: 'filterNaN'
+                    });
+                    break;
+                case 'filterColumn':
+                    const parts = t.value.split(',').map(p => p.trim());
+                    if (parts.length !== 3) {
+                        throw new Error(`Invalid filterColumn value: ${t.value}`);
+                    }
+                    current.processActions.push({
+                        kind: 'filterColumn',
+                        columnName: parts[0],
+                        comparator: parseComparator(parts[1]),
+                        value: parseNumber(parts[2]),
+                    });
                     break;
             }
         }
     }
-
-    const getProcessOptions = (args: any): ProcessOptions => {
-        const processOptions: ProcessOptions = { };
-
-        if (args.translate || args.rotate || args.scale) {
-            const t = args.translate ?? [0, 0, 0];
-            const r = args.rotate ?? [0, 0, 0];
-            const s = args.scale ? args.scale[0] : 1;
-            processOptions.transform = {
-                translate: new Vec3(t[0], t[1], t[2]),
-                rotate: new Quat().setFromEulerAngles(r[0], r[1], r[2]),
-                scale: s
-            };
-        }
-
-        if (args.filter) {
-            processOptions.filter = {
-                invalid: args.filter.includes('invalid'),
-                invisible: args.filter.includes('invisible')
-            };
-        } else {
-            processOptions.filter = {
-                invalid: true,
-                invisible: true
-            };
-        }
-
-        return processOptions;
-    };
-
-    const files = args.map((arg) => {
-        return {
-            filename: arg.filename,
-            processOptions: getProcessOptions(arg)
-        }
-    });
 
     return {
         files,
@@ -230,12 +219,13 @@ const parseArguments = () => {
     };
 }
 
-const usage = `Usage: splat-transform input.ply [options] input.ply [options] ... output.ply [options]
-options:
--translate -t x,y,z           Translate splats by x,y,z
--rotate -r    x,y,z           Rotate splats by euler angles x,y,z (in degrees)
--scale -s     x               Scale splats by x (uniform scaling)
--filter -f invalid,invisible  Filter splats by removing invalid splats (NaN, Inf)
+const usage = `Usage: splat-transform input.ply [actions] input.ply [actions] ... output.ply [actions]
+actions:
+-translate -t x,y,z                         Translate splats by (x, y, z)
+-rotate -r    x,y,z                         Rotate splats by euler angles (x, y, z) (in degrees)
+-scale -s     x                             Scale splats by x (uniform scaling)
+-filterNaN -n                               Remove gaussians which have a NaN or Inf value
+-filterColumn -c name,comparator,value      Filter gaussians by column name, comparator (lt, lte, gt, gte, eq, neq) and value
 `;
 
 const main = async () => {
@@ -271,7 +261,7 @@ const main = async () => {
                 return null;
             }
 
-            file.elements[0].dataTable = process(dataTable, inputArg.processOptions);
+            file.elements[0].dataTable = process(dataTable, inputArg.processActions);
 
             return file;
         }));
@@ -279,7 +269,7 @@ const main = async () => {
         // combine inputs into single output dataTable
         const dataTable = process(
             combine(inputFiles.map(file => file.elements[0].dataTable)),
-            outputArg.processOptions
+            outputArg.processActions
         );
 
         // write file
