@@ -1,10 +1,13 @@
 import { open } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
+import sharp from 'sharp';
+
 import { DataTable } from './data-table';
 import { generateOrdering } from './ordering';
-import sharp from 'sharp';
-import { kmeans } from './utils/k-means'
+import { kmeans } from './utils/k-means';
+
+const enableSogs = false;
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
@@ -58,8 +61,8 @@ const writeSogs = async (outputFilename: string, dataTable: DataTable) => {
         const pathname = resolve(dirname(outputFilename), filename);
         console.log(`writing '${pathname}'...`);
         return sharp(data, { raw: { width: w, height: h, channels } })
-            .webp({ lossless: true })
-            .toFile(pathname);
+        .webp({ lossless: true })
+        .toFile(pathname);
     };
 
     const row: any = {};
@@ -108,19 +111,25 @@ const writeSogs = async (outputFilename: string, dataTable: DataTable) => {
         const l = Math.sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
 
         // normalize
-        q.forEach((v, j) => q[j] = v / l);
+        q.forEach((v, j) => {
+            q[j] = v / l;
+        });
 
         // find max component
-        const maxComp = q.reduce((v, _, i) => Math.abs(q[i]) > Math.abs(q[v]) ? i : v, 0);
+        const maxComp = q.reduce((v, _, i) => (Math.abs(q[i]) > Math.abs(q[v]) ? i : v), 0);
 
         // invert if max component is negative
         if (q[maxComp] < 0) {
-            q.forEach((v, j) => q[j] *= -1);
+            q.forEach((v, j) => {
+                q[j] *= -1;
+            });
         }
 
         // scale by sqrt(2) to fit in [-1, 1] range
         const sqrt2 = Math.sqrt(2);
-        q.forEach((v, j) => q[j] *= sqrt2);
+        q.forEach((v, j) => {
+            q[j] *= sqrt2;
+        });
 
         const idx = [
             [1, 2, 3],
@@ -182,7 +191,7 @@ const writeSogs = async (outputFilename: string, dataTable: DataTable) => {
             files: [
                 'means_l.webp',
                 'means_u.webp'
-            ],
+            ]
         },
         scales: {
             shape: [numRows, 3],
@@ -207,7 +216,7 @@ const writeSogs = async (outputFilename: string, dataTable: DataTable) => {
     };
 
     // disable spherical harmonics
-    if (false) {
+    if (enableSogs) {
         // spherical harmonics
         const shBands = { '9': 1, '24': 2, '-1': 3 }[shNames.findIndex(v => !dataTable.hasColumn(v))] ?? 0;
 

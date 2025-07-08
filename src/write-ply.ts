@@ -32,7 +32,7 @@ const writePly = async (fileHandle: FileHandle, plyData: PlyData) => {
     ];
 
     // write the header
-    await fileHandle.write((new TextEncoder()).encode(header.flat(3).join('\n') + '\n'));
+    await fileHandle.write((new TextEncoder()).encode(`${header.flat(3).join('\n')}\n`));
 
     for (let i = 0; i < plyData.elements.length; ++i) {
         const table = plyData.elements[i].dataTable;

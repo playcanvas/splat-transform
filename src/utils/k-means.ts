@@ -51,7 +51,7 @@ const calcAverage = (dataTable: DataTable, cluster: number[], row: any) => {
     const dataRow: any = {};
     for (let i = 0; i < cluster.length; ++i) {
         dataTable.getRow(cluster[i], dataRow);
-        
+
         for (let j = 0; j < keys.length; ++j) {
             const key = keys[j];
             row[key] += dataRow[key];
@@ -69,8 +69,8 @@ const kmeans = (dataTable: DataTable, k: number) => {
         return {
             centroids: dataTable.clone(),
             labels: new Array(dataTable.numRows).fill(0).map((_, i) => i)
-        }
-    };
+        };
+    }
 
     const row = {};
 
@@ -88,7 +88,9 @@ const kmeans = (dataTable: DataTable, k: number) => {
 
     while (!converged) {
         // reset clusters
-        clusters.forEach(c => c.length = 0);
+        clusters.forEach((c) => {
+            c.length = 0;
+        });
 
         // assign each point to the nearest centroid
         for (let i = 0; i < dataTable.numRows; ++i) {

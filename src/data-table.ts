@@ -1,4 +1,3 @@
-
 type TypedArray = Int8Array | Uint8Array | Int16Array | Uint16Array | Int32Array | Uint32Array | Float32Array | Float64Array;
 
 type ColumnType = 'int8' | 'uint8' | 'int16' | 'uint16' | 'int32' | 'uint32' | 'float32' | 'float64';
@@ -12,7 +11,7 @@ class Column {
         this.data = data;
     }
 
-    get dataType(): ColumnType {
+    get dataType(): ColumnType | null {
         switch (this.data.constructor) {
             case Int8Array: return 'int8';
             case Uint8Array: return 'uint8';
@@ -23,6 +22,7 @@ class Column {
             case Float32Array: return 'float32';
             case Float64Array: return 'float64';
         }
+        return null;
     }
 
     clone(): Column {
@@ -40,7 +40,7 @@ class Column {
         }
         return new Column(this.name, data);
     }
-};
+}
 
 type Row = {
     [colName: string]: number;
@@ -72,14 +72,14 @@ class DataTable {
         return this.columns[0].data.length;
     }
 
-    getRow(index: number, row: Row = {}, columns=this.columns): Row {
+    getRow(index: number, row: Row = {}, columns = this.columns): Row {
         for (const column of columns) {
             row[column.name] = column.data[index];
         }
         return row;
     }
 
-    setRow(index: number, row: Row, columns=this.columns) {
+    setRow(index: number, row: Row, columns = this.columns) {
         for (const column of columns) {
             if (row.hasOwnProperty(column.name)) {
                 column.data[index] = row[column.name];

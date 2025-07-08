@@ -59,7 +59,7 @@ const process = (dataTable: DataTable, processActions: ProcessAction[]) => {
             case 'scale':
                 transform(result, Vec3.ZERO, Quat.IDENTITY, processAction.value);
                 break;
-            case 'filterNaN':
+            case 'filterNaN': {
                 const predicate = (rowIndex: number, row: any) => {
                     for (const key in row) {
                         if (!isFinite(row[key])) {
@@ -70,26 +70,27 @@ const process = (dataTable: DataTable, processActions: ProcessAction[]) => {
                 };
                 result = result.filter(predicate);
                 break;
+            }
             case 'filterByValue': {
                 const { columnName, comparator, value } = processAction;
                 const Predicates = {
                     'lt': (rowIndex: number, row: any) => row[columnName] < value,
                     'lte': (rowIndex: number, row: any) => row[columnName] <= value,
-                    'gt':  (rowIndex: number, row: any) => row[columnName] > value,
+                    'gt': (rowIndex: number, row: any) => row[columnName] > value,
                     'gte': (rowIndex: number, row: any) => row[columnName] >= value,
                     'eq': (rowIndex: number, row: any) => row[columnName] === value,
-                    'neq': (rowIndex: number, row: any) => row[columnName] !== value,
+                    'neq': (rowIndex: number, row: any) => row[columnName] !== value
                 };
                 const predicate = Predicates[comparator] ?? ((rowIndex: number, row: any) => true);
                 result = result.filter(predicate);
                 break;
             }
-            case 'filterBands':
+            case 'filterBands': {
                 const inputBands = { '9': 1, '24': 2, '-1': 3 }[shNames.findIndex(v => !dataTable.hasColumn(v))] ?? 0;
                 const outputBands = processAction.value;
 
                 if (outputBands < inputBands) {
-                    const inputCoeffs = [0, 3, 8, 15][inputBands];  
+                    const inputCoeffs = [0, 3, 8, 15][inputBands];
                     const outputCoeffs = [0, 3, 8, 15][outputBands];
 
                     const map: any = {};
@@ -104,12 +105,13 @@ const process = (dataTable: DataTable, processActions: ProcessAction[]) => {
                         if (map.hasOwnProperty(column.name)) {
                             const name = map[column.name];
                             return name ? new Column(name, column.data) : null;
-                        } else {
-                            return column;
                         }
+                        return column;
+
                     }).filter(c => c !== null));
                 }
                 break;
+            }
         }
     }
 

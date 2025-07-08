@@ -1,19 +1,18 @@
-import { exit } from 'node:process';
 import { open } from 'node:fs/promises';
-import { parseArgs } from 'node:util';
 import { resolve } from 'node:path';
-
-import { version } from '../package.json';
-import { readPly } from './read-ply';
-
-import { writeSogs } from './write-sogs';
-import { writePly } from './write-ply';
-import { writeCompressedPly } from './write-compressed-ply';
+import { exit } from 'node:process';
+import { parseArgs } from 'node:util';
 
 import { Vec3 } from 'playcanvas';
-import { Column, DataTable, TypedArray } from './data-table';
 
+import { version } from '../package.json';
+import { Column, DataTable, TypedArray } from './data-table';
 import { ProcessAction, process } from './process';
+import { readPly } from './read-ply';
+import { writeCompressedPly } from './write-compressed-ply';
+import { writePly } from './write-ply';
+import { writeSogs } from './write-sogs';
+
 
 const readFile = async (filename: string) => {
     console.log(`reading '${filename}'...`);
@@ -57,7 +56,7 @@ const combine = (dataTables: DataTable[]) => {
         for (let i = 0; i < columns.length; ++i) {
             if (columns[i].name === column.name &&
                 columns[i].dataType === column.dataType) {
-                    return columns[i];
+                return columns[i];
             }
         }
         return null;
@@ -78,7 +77,7 @@ const combine = (dataTables: DataTable[]) => {
     const totalRows = dataTables.reduce((sum, dataTable) => sum + dataTable.numRows, 0);
 
     // construct output dataTable
-    const resultColumns = columns.map(column => {
+    const resultColumns = columns.map((column) => {
         const constructor = column.data.constructor as new (length: number) => TypedArray;
         return new Column(column.name, new constructor(totalRows));
     });
@@ -130,8 +129,8 @@ const parseArguments = () => {
             scale: { type: 'string', short: 's', multiple: true },
             filterNaN: { type: 'boolean', short: 'n', multiple: true },
             filterByValue: { type: 'string', short: 'c', multiple: true },
-            filterBands: { type: 'string', short: 'h', multiple: true },
-        },
+            filterBands: { type: 'string', short: 'h', multiple: true }
+        }
     });
 
     const parseNumber = (value: string): number => {
@@ -197,7 +196,7 @@ const parseArguments = () => {
                         kind: 'filterNaN'
                     });
                     break;
-                case 'filterByValue':
+                case 'filterByValue': {
                     const parts = t.value.split(',').map(p => p.trim());
                     if (parts.length !== 3) {
                         throw new Error(`Invalid filterByValue value: ${t.value}`);
@@ -206,10 +205,11 @@ const parseArguments = () => {
                         kind: 'filterByValue',
                         columnName: parts[0],
                         comparator: parseComparator(parts[1]),
-                        value: parseNumber(parts[2]),
+                        value: parseNumber(parts[2])
                     });
                     break;
-                case 'filterBands':
+                }
+                case 'filterBands': {
                     const shBands = parseNumber(t.value);
                     if (![0, 1, 2, 3].includes(shBands)) {
                         throw new Error(`Invalid filterBands value: ${t.value}. Must be 0, 1, 2, or 3.`);
@@ -220,12 +220,13 @@ const parseArguments = () => {
                     });
 
                     break;
+                }
             }
         }
     }
 
     return files;
-}
+};
 
 const usage = `Usage: splat-transform input.ply [actions] input.ply [actions] ... output.ply [actions]
 actions:

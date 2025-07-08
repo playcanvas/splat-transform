@@ -1,6 +1,6 @@
-import { sigmoid } from './utils/math';
-
 import { Quat } from 'playcanvas';
+
+import { sigmoid } from './utils/math';
 
 const q = new Quat();
 
@@ -39,7 +39,7 @@ class CompressedChunk {
         CompressedChunk.members.forEach((m) => {
             this.data[m][index] = data[m];
         });
-    };
+    }
 
     pack() {
         const calcMinMax = (data: Float32Array) => {
