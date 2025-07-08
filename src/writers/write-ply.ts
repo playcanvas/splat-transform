@@ -1,6 +1,6 @@
 import { FileHandle } from 'node:fs/promises';
 
-import { PlyData } from './read-ply';
+import { PlyData } from '../readers/read-ply';
 
 const columnTypeToPlyType = (type: string): string => {
     switch (type) {

@@ -3,9 +3,9 @@ import { dirname, resolve } from 'node:path';
 
 import sharp from 'sharp';
 
-import { DataTable } from './data-table';
-import { generateOrdering } from './ordering';
-import { kmeans } from './utils/k-means';
+import { DataTable } from '../data-table';
+import { generateOrdering } from '../ordering';
+import { kmeans } from '../utils/k-means';
 
 const enableSogs = false;
 

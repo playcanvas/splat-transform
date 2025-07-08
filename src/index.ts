@@ -8,10 +8,10 @@ import { Vec3 } from 'playcanvas';
 import { version } from '../package.json';
 import { Column, DataTable, TypedArray } from './data-table';
 import { ProcessAction, process } from './process';
-import { readPly } from './read-ply';
-import { writeCompressedPly } from './write-compressed-ply';
-import { writePly } from './write-ply';
-import { writeSogs } from './write-sogs';
+import { readPly } from './readers/read-ply';
+import { writeCompressedPly } from './writers/write-compressed-ply';
+import { writePly } from './writers/write-ply';
+import { writeSogs } from './writers/write-sogs';
 
 
 const readFile = async (filename: string) => {
