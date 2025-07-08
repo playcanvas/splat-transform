@@ -1,6 +1,6 @@
 import { Quat, Vec3 } from 'playcanvas';
 
-import { DataTable } from './data-table';
+import { Column, DataTable } from './data-table';
 import { transform } from './transform';
 
 type Translate = {
@@ -22,40 +22,42 @@ type FilterNaN = {
     kind: 'filterNaN';
 };
 
-type FilterColumn = {
-    kind: 'filterColumn';
+type FilterByValue = {
+    kind: 'filterByValue';
     columnName: string;
     comparator: 'lt' | 'lte' | 'gt' | 'gte' | 'eq' | 'neq';
     value: number;
 };
 
-type CustomFilter = {
-    kind: 'customFilter';
-    jsCallback: (rowIndex: number, row: any) => boolean;
+type FilterBands = {
+    kind: 'filterBands';
+    value: 0 | 1 | 2 | 3;
 };
 
-type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterColumn | CustomFilter;
+type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands;
+
+const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
 // process a data table with standard options
 const process = (dataTable: DataTable, processActions: ProcessAction[]) => {
     let result = dataTable;
 
     for (let i = 0; i < processActions.length; i++) {
-        const ProcessAction = processActions[i];
+        const processAction = processActions[i];
 
-        switch (ProcessAction.kind) {
+        switch (processAction.kind) {
             case 'translate':
-                transform(result, ProcessAction.value, Quat.IDENTITY, 1);
+                transform(result, processAction.value, Quat.IDENTITY, 1);
                 break;
             case 'rotate':
                 transform(result, Vec3.ZERO, new Quat().setFromEulerAngles(
-                    ProcessAction.value.x,
-                    ProcessAction.value.y,
-                    ProcessAction.value.z
+                    processAction.value.x,
+                    processAction.value.y,
+                    processAction.value.z
                 ), 1);
                 break;
             case 'scale':
-                transform(result, Vec3.ZERO, Quat.IDENTITY, ProcessAction.value);
+                transform(result, Vec3.ZERO, Quat.IDENTITY, processAction.value);
                 break;
             case 'filterNaN':
                 const predicate = (rowIndex: number, row: any) => {
@@ -68,8 +70,8 @@ const process = (dataTable: DataTable, processActions: ProcessAction[]) => {
                 };
                 result = result.filter(predicate);
                 break;
-            case 'filterColumn': {
-                const { columnName, comparator, value } = ProcessAction;
+            case 'filterByValue': {
+                const { columnName, comparator, value } = processAction;
                 const Predicates = {
                     'lt': (rowIndex: number, row: any) => row[columnName] < value,
                     'lte': (rowIndex: number, row: any) => row[columnName] <= value,
@@ -82,8 +84,31 @@ const process = (dataTable: DataTable, processActions: ProcessAction[]) => {
                 result = result.filter(predicate);
                 break;
             }
-            case 'customFilter':
-                result = result.filter(ProcessAction.jsCallback);
+            case 'filterBands':
+                const inputBands = { '9': 1, '24': 2, '-1': 3 }[shNames.findIndex(v => !dataTable.hasColumn(v))] ?? 0;
+                const outputBands = processAction.value;
+
+                if (outputBands < inputBands) {
+                    const inputCoeffs = [0, 3, 8, 15][inputBands];  
+                    const outputCoeffs = [0, 3, 8, 15][outputBands];
+
+                    const map: any = {};
+                    for (let i = 0; i < inputCoeffs; ++i) {
+                        for (let j = 0; j < 3; ++j) {
+                            const inputName = `f_rest_${i + j * inputCoeffs}`;
+                            map[inputName] = i < outputCoeffs ? `f_rest_${i + j * outputCoeffs}` : null;
+                        }
+                    }
+
+                    result = new DataTable(result.columns.map((column) => {
+                        if (map.hasOwnProperty(column.name)) {
+                            const name = map[column.name];
+                            return name ? new Column(name, column.data) : null;
+                        } else {
+                            return column;
+                        }
+                    }).filter(c => c !== null));
+                }
                 break;
         }
     }

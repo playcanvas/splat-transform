@@ -129,8 +129,8 @@ const parseArguments = () => {
             rotate: { type: 'string', short: 'r', multiple: true },
             scale: { type: 'string', short: 's', multiple: true },
             filterNaN: { type: 'boolean', short: 'n', multiple: true },
-            filterColumn: { type: 'string', short: 'c', multiple: true },
-            sh: { type: 'string', short: 'h', default: '3' },
+            filterByValue: { type: 'string', short: 'c', multiple: true },
+            filterBands: { type: 'string', short: 'h', multiple: true },
         },
     });
 
@@ -197,49 +197,58 @@ const parseArguments = () => {
                         kind: 'filterNaN'
                     });
                     break;
-                case 'filterColumn':
+                case 'filterByValue':
                     const parts = t.value.split(',').map(p => p.trim());
                     if (parts.length !== 3) {
-                        throw new Error(`Invalid filterColumn value: ${t.value}`);
+                        throw new Error(`Invalid filterByValue value: ${t.value}`);
                     }
                     current.processActions.push({
-                        kind: 'filterColumn',
+                        kind: 'filterByValue',
                         columnName: parts[0],
                         comparator: parseComparator(parts[1]),
                         value: parseNumber(parts[2]),
                     });
                     break;
+                case 'filterBands':
+                    const shBands = parseNumber(t.value);
+                    if (![0, 1, 2, 3].includes(shBands)) {
+                        throw new Error(`Invalid filterBands value: ${t.value}. Must be 0, 1, 2, or 3.`);
+                    }
+                    current.processActions.push({
+                        kind: 'filterBands',
+                        value: shBands as 0 | 1 | 2 | 3
+                    });
+
+                    break;
             }
         }
     }
 
-    return {
-        files,
-        sh: parseInt(v.sh, 10)
-    };
+    return files;
 }
 
 const usage = `Usage: splat-transform input.ply [actions] input.ply [actions] ... output.ply [actions]
 actions:
--translate -t x,y,z                         Translate splats by (x, y, z)
--rotate -r    x,y,z                         Rotate splats by euler angles (x, y, z) (in degrees)
--scale -s     x                             Scale splats by x (uniform scaling)
--filterNaN -n                               Remove gaussians which have a NaN or Inf value
--filterColumn -c name,comparator,value      Filter gaussians by column name, comparator (lt, lte, gt, gte, eq, neq) and value
+-translate     -t x,y,z                     Translate splats by (x, y, z)
+-rotate        -r x,y,z                     Rotate splats by euler angles (x, y, z) (in degrees)
+-scale         -s x                         Scale splats by x (uniform scaling)
+-filterNaN     -n                           Remove gaussians containing any NaN or Inf value
+-filterByValue -c name,comparator,value     Filter gaussians by a value. Specify the value name, comparator (lt, lte, gt, gte, eq, neq) and value
+-filterBands   -h 1                         Filter spherical harmonic band data. Value must be 0, 1, 2 or 3.
 `;
 
 const main = async () => {
     console.log(`splat-transform v${version}`);
 
     // read args
-    const args = parseArguments();
-    if (args.files.length < 2) {
+    const files = parseArguments();
+    if (files.length < 2) {
         console.error(usage);
         exit(1);
     }
 
-    const inputArgs = args.files.slice(0, -1);
-    const outputArg = args.files[args.files.length - 1];
+    const inputArgs = files.slice(0, -1);
+    const outputArg = files[files.length - 1];
 
     try {
         // read, filter, process input files
