@@ -1,4 +1,5 @@
 import { Column, DataTable } from '../data-table';
+import { KdTree } from './kd-tree';
 
 const initializeCentroids = (dataTable: DataTable, centroids: DataTable, row: any) => {
     const chosenRows = new Set();
@@ -12,33 +13,6 @@ const initializeCentroids = (dataTable: DataTable, centroids: DataTable, row: an
         dataTable.getRow(candidateRow, row);
         centroids.setRow(i, row);
     }
-};
-
-const findMinDistance = (dataTable: DataTable, row: any) => {
-    let minDistance = Infinity;
-    let index = -1;
-
-    const keys = dataTable.columnNames;
-    const dataRow: any = {};
-
-    for (let i = 0; i < dataTable.numRows; ++i) {
-        dataTable.getRow(i, dataRow);
-
-        // calculate squared distance
-        let distance = 0;
-        for (let j = 0; j < keys.length; ++j) {
-            const key = keys[j];
-            const diff = row[key] - dataRow[key];
-            distance += diff * diff;
-        }
-
-        if (distance < minDistance) {
-            minDistance = distance;
-            index = i;
-        }
-    }
-
-    return index;
 };
 
 const calcAverage = (dataTable: DataTable, cluster: number[], row: any) => {
@@ -58,8 +32,10 @@ const calcAverage = (dataTable: DataTable, cluster: number[], row: any) => {
         }
     }
 
-    for (let i = 0; i < keys.length; ++i) {
-        row[keys[i]] /= cluster.length;
+    if (cluster.length > 0) {
+        for (let i = 0; i < keys.length; ++i) {
+            row[keys[i]] /= cluster.length;
+        }
     }
 };
 
@@ -72,9 +48,9 @@ const kmeans = (dataTable: DataTable, k: number) => {
         };
     }
 
-    const row = {};
+    const row: any = {};
 
-    // construct a dataTable to hold the centroids
+    // construct centroids data table and assign initial values
     const centroids = new DataTable(dataTable.columns.map(c => new Column(c.name, new Float32Array(k))));
     initializeCentroids(dataTable, centroids, row);
 
@@ -92,11 +68,20 @@ const kmeans = (dataTable: DataTable, k: number) => {
             c.length = 0;
         });
 
+        // construct a kdtree over the centroids so we can find the nearest quickly
+        const kdTree = new KdTree(centroids.columns.map(c => c.data) as Float32Array[]);
+        const point = new Float32Array(dataTable.numColumns);
+
         // assign each point to the nearest centroid
         for (let i = 0; i < dataTable.numRows; ++i) {
             dataTable.getRow(i, row);
-            const index = findMinDistance(centroids, row);
-            clusters[index].push(i);
+            dataTable.columns.forEach((c, i) => {
+                point[i] = row[c.name];
+            });
+
+            const result = kdTree.findNearest(point);
+
+            clusters[result.index].push(i);
         }
 
         // calculate the new centroid positions
@@ -106,7 +91,7 @@ const kmeans = (dataTable: DataTable, k: number) => {
         }
 
         steps++;
-        if (steps > 100) {
+        if (steps > 10) {
             converged = true;
         }
     }

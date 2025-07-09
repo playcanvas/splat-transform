@@ -229,7 +229,7 @@ const writeSogs = async (outputFilename: string, dataTable: DataTable) => {
             const shDataTable = new DataTable(centroidsColumns);
 
             // calculate kmeans
-            const { centroids, labels } = kmeans(shDataTable, 1 * 1024);
+            const { centroids, labels } = kmeans(shDataTable, 64 * 1024);
 
             // write centroids
             const centroidsBuf = new Uint8Array(64 * shCoeffs * Math.ceil(centroids.numRows / 64) * channels);
@@ -277,8 +277,6 @@ const writeSogs = async (outputFilename: string, dataTable: DataTable) => {
                     'shN_labels.webp'
                 ]
             };
-
-            console.log(centroids, labels);
         }
     }
 

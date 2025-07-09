@@ -8,23 +8,26 @@ class KdTree {
     data: Float32Array[];
     root: KdTreeNode;
 
-    constructor(x: Float32Array, y: Float32Array, z: Float32Array) {
-        const indices = new Uint32Array(x.length);
+    constructor(data: Float32Array[]) {
+        const indices = new Uint32Array(data[0].length);
         indices.forEach((v, i) => {
             indices[i] = i;
         });
-        this.data = [x, y, z];
+        this.data = data;
         this.root = this.build(indices, 0);
     }
 
-    findNearest(x: number, y: number, z: number, filterFunc?: (index: number) => boolean) {
-        const search = [x, y, z];
+    findNearest(point: Float32Array, filterFunc?: (index: number) => boolean) {
+        const { data } = this;
+        const { length } = data;
 
         const calcDistance = (index: number) => {
-            const xd = this.data[0][index] - search[0];
-            const yd = this.data[1][index] - search[1];
-            const zd = this.data[2][index] - search[2];
-            return xd * xd + yd * yd + zd * zd;
+            let l = 0;
+            for (let i = 0; i < length; ++i) {
+                const v = data[i][index] - point[i];
+                l += v * v;
+            }
+            return l;
         };
 
         let mind = Infinity;
@@ -32,8 +35,8 @@ class KdTree {
         let cnt = 0;
 
         const recurse = (node: KdTreeNode, depth: number) => {
-            const axis = depth % 3;
-            const distance = search[axis] - (this.data[axis])[node.index];
+            const axis = depth % length;
+            const distance = point[axis] - (this.data[axis])[node.index];
             const next = (distance > 0) ? node.right : node.left;
 
             cnt++;
@@ -66,47 +69,31 @@ class KdTree {
     }
 
     private build(indices: Uint32Array, depth: number): KdTreeNode {
-        const values = this.data[depth % 3];
+        const { data } = this;
+        const values = data[depth % data.length];
         indices.sort((a, b) => values[a] - values[b]);
 
-        let result;
-
-        if (indices.length === 4) {
-            result = {
-                index: indices[1],
-                left: {
-                    index: indices[0]
-                },
-                right: this.build(indices.subarray(2), depth + 1)
-            };
-        } else if (indices.length === 3) {
-            result = {
-                index: indices[1],
-                left: {
-                    index: indices[0]
-                },
-                right: {
-                    index: indices[2]
-                }
+        if (indices.length === 1) {
+            return {
+                index: indices[0]
             };
         } else if (indices.length === 2) {
-            result = {
-                index: indices[0],
-                right: {
-                    index: indices[1]
+            return {
+                index : indices[0],
+                right : {
+                    index : indices[1]
                 }
             };
-        } else {
-            const mid = Math.floor(indices.length / 2);
-            const index = indices[mid];
-            const ldata = indices.subarray(0, mid);
-            const rdata = indices.subarray(mid + 1);
-            const left = this.build(ldata, depth + 1);
-            const right = this.build(rdata, depth + 1);
-            result = { index, left, right };
         }
 
-        return result;
+        const mid = indices.length >> 1;
+        const left = this.build(indices.subarray(0, mid), depth + 1);
+        const right = this.build(indices.subarray(mid + 1), depth + 1);
+        return {
+            index: indices[mid],
+            left,
+            right
+        };
     }
 }
 

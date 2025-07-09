@@ -1,6 +1,6 @@
 import { open } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { exit } from 'node:process';
+import { exit, hrtime } from 'node:process';
 import { parseArgs } from 'node:util';
 
 import { Vec3 } from 'playcanvas';
@@ -12,7 +12,6 @@ import { readPly } from './readers/read-ply';
 import { writeCompressedPly } from './writers/write-compressed-ply';
 import { writePly } from './writers/write-ply';
 import { writeSogs } from './writers/write-sogs';
-
 
 const readFile = async (filename: string) => {
     console.log(`reading '${filename}'...`);
@@ -241,6 +240,8 @@ actions:
 const main = async () => {
     console.log(`splat-transform v${version}`);
 
+    const startTime = hrtime();
+
     // read args
     const files = parseArguments();
     if (files.length < 2) {
@@ -290,7 +291,9 @@ const main = async () => {
         exit(1);
     }
 
-    console.log('done');
+    const endTime = hrtime(startTime);
+
+    console.log(`done in ${endTime[1] / 1e9}s`);
 };
 
 export { main };
