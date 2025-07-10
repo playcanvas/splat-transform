@@ -1,5 +1,6 @@
 import { Column, DataTable } from '../data-table';
 import { KdTree } from './kd-tree';
+import { GpuDevice } from '../gpu/gpu-device';
 
 const initializeCentroids = (dataTable: DataTable, centroids: DataTable, row: any) => {
     const chosenRows = new Set();
@@ -39,7 +40,7 @@ const calcAverage = (dataTable: DataTable, cluster: number[], row: any) => {
     }
 };
 
-const kmeans = (dataTable: DataTable, k: number) => {
+const kmeans = (dataTable: DataTable, k: number, device?: GpuDevice) => {
     // too few data points
     if (dataTable.numRows < k) {
         return {

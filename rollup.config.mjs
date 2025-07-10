@@ -10,7 +10,7 @@ const application = {
         sourcemap: true,
         entryFileNames: '[name].mjs',
     },
-    external: ['sharp'],
+    external: ['sharp', 'webgpu', 'jsdom'],
     plugins: [
         typescript(),
         resolve(),

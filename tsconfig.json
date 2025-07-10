@@ -2,13 +2,15 @@
     "compilerOptions": {
         "target": "es2022",
         "module": "es2022",
-        "lib": ["es2022"],
+        "lib": ["es2022", "dom"],
         "moduleResolution": "node",
         "esModuleInterop": true,
         "sourceMap": true,
         "noImplicitAny": true,
         "inlineSources": true,
         "resolveJsonModule": true,
+        "allowJs": true,
+        "checkJs": false
     },
     "include": ["./src/**/*.ts"],
     "exclude": ["node_modules", "**/*.js", "dist"]
