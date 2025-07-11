@@ -180,7 +180,7 @@ const parseArguments = () => {
             scale: { type: 'string', short: 's', multiple: true },
             filterNaN: { type: 'boolean', short: 'n', multiple: true },
             filterByValue: { type: 'string', short: 'c', multiple: true },
-            filterBands: { type: 'string', short: 'h', multiple: true },
+            filterBands: { type: 'string', short: 'b', multiple: true },
         }
     });
 
@@ -300,7 +300,7 @@ SUPPORTED INPUTS
     .ply
 
 SUPPORTED OUTPUTS
-    .ply   .compressed.ply   meta.json (SoGS)   .csv
+    .ply   .compressed.ply   meta.json (SOGS)   .csv
 
 ACTIONS (can be repeated, in any order)
     -t, --translate  x,y,z                  Translate splats by (x, y, z)
