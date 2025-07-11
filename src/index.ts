@@ -53,8 +53,8 @@ const getOutputFormat = (filename: string) => {
     } else if (lowerFilename.endsWith('.ply')) {
         return 'ply';
     }
-    throw new Error(`Unsupported output file type: ${filename}`);
 
+    throw new Error(`Unsupported output file type: ${filename}`);
 };
 
 const writeFile = async (filename: string, dataTable: DataTable, options: Options) => {
