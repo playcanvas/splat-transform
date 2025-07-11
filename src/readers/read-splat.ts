@@ -104,10 +104,12 @@ const readSplat = async (fileHandle: FileHandle): Promise<SplatData> => {
             (columns[4].data as Float32Array)[splatIndex] = Math.log(scaleY);
             (columns[5].data as Float32Array)[splatIndex] = Math.log(scaleZ);
 
-            // Store color (convert from uint8 [0,255] to float [-0.5, 0.5] range for spherical harmonics)
-            (columns[6].data as Float32Array)[splatIndex] = (red / 255.0) - 0.5;
-            (columns[7].data as Float32Array)[splatIndex] = (green / 255.0) - 0.5;
-            (columns[8].data as Float32Array)[splatIndex] = (blue / 255.0) - 0.5;
+            // Store color (convert from uint8 back to spherical harmonics)
+            // Reverse SuperSplat's conversion: uint8 = (0.5 + SH_C0 * sh_value) * 255
+            const SH_C0 = 0.28209479177387814;
+            (columns[6].data as Float32Array)[splatIndex] = (red / 255.0 - 0.5) / SH_C0;
+            (columns[7].data as Float32Array)[splatIndex] = (green / 255.0 - 0.5) / SH_C0;
+            (columns[8].data as Float32Array)[splatIndex] = (blue / 255.0 - 0.5) / SH_C0;
 
             // Store opacity (convert from uint8 to float and apply inverse sigmoid)
             const epsilon = 1e-6;
