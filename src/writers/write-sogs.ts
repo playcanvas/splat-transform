@@ -289,9 +289,7 @@ const writeSogs = async (fileHandle: FileHandle, dataTable: DataTable, outputFil
         }
     }
 
-    const outputFile = await open(outputFilename, 'w');
-    await outputFile.write((new TextEncoder()).encode(JSON.stringify(meta, null, 4)));
-    await outputFile.close();
+    await fileHandle.write((new TextEncoder()).encode(JSON.stringify(meta, null, 4)));
 };
 
 export { writeSogs };
