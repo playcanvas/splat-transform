@@ -35,7 +35,7 @@ const readSplat = async (fileHandle: FileHandle): Promise<SplatData> => {
         new Column('y', new Float32Array(numSplats)),
         new Column('z', new Float32Array(numSplats)),
 
-        // Scale (stored as linear scale in .splat format)
+        // Scale (stored as linear in .splat, convert to log for internal use)
         new Column('scale_0', new Float32Array(numSplats)),
         new Column('scale_1', new Float32Array(numSplats)),
         new Column('scale_2', new Float32Array(numSplats)),
@@ -77,7 +77,7 @@ const readSplat = async (fileHandle: FileHandle): Promise<SplatData> => {
             const y = chunkData.readFloatLE(offset + 4);
             const z = chunkData.readFloatLE(offset + 8);
 
-            // Read scale (3 × float32) - stored as linear scale
+            // Read scale (3 × float32) - stored as linear, convert to log
             const scaleX = chunkData.readFloatLE(offset + 12);
             const scaleY = chunkData.readFloatLE(offset + 16);
             const scaleZ = chunkData.readFloatLE(offset + 20);
@@ -99,10 +99,10 @@ const readSplat = async (fileHandle: FileHandle): Promise<SplatData> => {
             (columns[1].data as Float32Array)[splatIndex] = y;
             (columns[2].data as Float32Array)[splatIndex] = z;
 
-            // Store scale (already in linear form in .splat format)
-            (columns[3].data as Float32Array)[splatIndex] = scaleX;
-            (columns[4].data as Float32Array)[splatIndex] = scaleY;
-            (columns[5].data as Float32Array)[splatIndex] = scaleZ;
+            // Store scale (convert from linear in .splat to log scale for internal use)
+            (columns[3].data as Float32Array)[splatIndex] = Math.log(scaleX);
+            (columns[4].data as Float32Array)[splatIndex] = Math.log(scaleY);
+            (columns[5].data as Float32Array)[splatIndex] = Math.log(scaleZ);
 
             // Store color (convert from uint8 [0,255] to float [-0.5, 0.5] range for spherical harmonics)
             (columns[6].data as Float32Array)[splatIndex] = (red / 255.0) - 0.5;
