@@ -52,14 +52,14 @@ const getOutputFormat = (filename: string) => {
         return 'compressed-ply';
     } else if (lowerFilename.endsWith('.ply')) {
         return 'ply';
-    } else {
-        throw new Error(`Unsupported output file type: ${filename}`);
     }
+    throw new Error(`Unsupported output file type: ${filename}`);
+
 };
 
 const writeFile = async (filename: string, dataTable: DataTable, options: Options) => {
 
-    const outputFormat = getOutputFormat(filename); 
+    const outputFormat = getOutputFormat(filename);
 
     // open the output file
     let outputFile;
@@ -193,7 +193,7 @@ const parseArguments = () => {
             scale: { type: 'string', short: 's', multiple: true },
             filterNaN: { type: 'boolean', short: 'n', multiple: true },
             filterByValue: { type: 'string', short: 'c', multiple: true },
-            filterBands: { type: 'string', short: 'b', multiple: true },
+            filterBands: { type: 'string', short: 'b', multiple: true }
         }
     });
 
