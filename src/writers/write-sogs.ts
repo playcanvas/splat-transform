@@ -1,4 +1,4 @@
-import { open } from 'node:fs/promises';
+import { FileHandle, open } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 import sharp from 'sharp';
@@ -35,9 +35,8 @@ const logTransform = (value: number) => {
     return Math.sign(value) * Math.log(Math.abs(value) + 1);
 };
 
-// calculate the output index of the gaussian given its index. chunks of
-// 256 gaussians are packed into 16x16 tiles on the output texture.
-const target = (index: number, width: number) => {
+// pack every 256 indices into a grid of 16x16 chunks
+const rectChunks = (index: number, width: number) => {
     const chunkWidth = width / 16;
     const chunkIndex = Math.floor(index / 256);
     const chunkX = chunkIndex % chunkWidth;
@@ -49,7 +48,12 @@ const target = (index: number, width: number) => {
     return x + y * width;
 };
 
-const writeSogs = async (outputFilename: string, dataTable: DataTable) => {
+// no packing
+const identity = (index: number, width: number) => {
+    return index;
+};
+
+const writeSogs = async (fileHandle: FileHandle, dataTable: DataTable, outputFilename: string) => {
 
     // generate an optimal ordering
     const sortIndices = generateOrdering(dataTable);
@@ -67,6 +71,9 @@ const writeSogs = async (outputFilename: string, dataTable: DataTable) => {
         .toFile(pathname);
     };
 
+    // the layout function determines how the data is packed into the output texture.
+    const layout = identity; // rectChunks;
+
     const row: any = {};
 
     // convert position/means
@@ -82,7 +89,7 @@ const writeSogs = async (outputFilename: string, dataTable: DataTable) => {
         const y = 65535 * (logTransform(row.y) - meansMinMax[1][0]) / (meansMinMax[1][1] - meansMinMax[1][0]);
         const z = 65535 * (logTransform(row.z) - meansMinMax[2][0]) / (meansMinMax[2][1] - meansMinMax[2][0]);
 
-        const ti = target(i, width);
+        const ti = layout(i, width);
 
         meansL[ti * 4] = x & 0xff;
         meansL[ti * 4 + 1] = y & 0xff;
@@ -140,7 +147,7 @@ const writeSogs = async (outputFilename: string, dataTable: DataTable) => {
             [0, 1, 2]
         ][maxComp];
 
-        const ti = target(i, width);
+        const ti = layout(i, width);
 
         quats[ti * 4]     = 255 * (q[idx[0]] * 0.5 + 0.5);
         quats[ti * 4 + 1] = 255 * (q[idx[1]] * 0.5 + 0.5);
@@ -157,7 +164,7 @@ const writeSogs = async (outputFilename: string, dataTable: DataTable) => {
     for (let i = 0; i < dataTable.numRows; ++i) {
         dataTable.getRow(sortIndices[i], row, scaleColumns);
 
-        const ti = target(i, width);
+        const ti = layout(i, width);
 
         scales[ti * 4]     = 255 * (row.scale_0 - scaleMinMax[0][0]) / (scaleMinMax[0][1] - scaleMinMax[0][0]);
         scales[ti * 4 + 1] = 255 * (row.scale_1 - scaleMinMax[1][0]) / (scaleMinMax[1][1] - scaleMinMax[1][0]);
@@ -174,7 +181,7 @@ const writeSogs = async (outputFilename: string, dataTable: DataTable) => {
     for (let i = 0; i < dataTable.numRows; ++i) {
         dataTable.getRow(sortIndices[i], row, sh0Columns);
 
-        const ti = target(i, width);
+        const ti = layout(i, width);
 
         sh0[ti * 4]     = 255 * (row.f_dc_0 - sh0MinMax[0][0]) / (sh0MinMax[0][1] - sh0MinMax[0][0]);
         sh0[ti * 4 + 1] = 255 * (row.f_dc_1 - sh0MinMax[1][0]) / (sh0MinMax[1][1] - sh0MinMax[1][0]);
@@ -281,9 +288,7 @@ const writeSogs = async (outputFilename: string, dataTable: DataTable) => {
         };
     }
 
-    const outputFile = await open(outputFilename, 'w');
-    await outputFile.write((new TextEncoder()).encode(JSON.stringify(meta, null, 4)));
-    await outputFile.close();
+    await fileHandle.write((new TextEncoder()).encode(JSON.stringify(meta, null, 4)));
 };
 
 export { writeSogs };

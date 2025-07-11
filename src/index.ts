@@ -13,6 +13,10 @@ import { writeCompressedPly } from './writers/write-compressed-ply';
 import { writePly } from './writers/write-ply';
 import { writeSogs } from './writers/write-sogs';
 
+type Options = {
+    overwrite: boolean
+};
+
 const readFile = async (filename: string) => {
     console.log(`reading '${filename}'...`);
     const inputFile = await open(filename, 'r');
@@ -21,17 +25,30 @@ const readFile = async (filename: string) => {
     return plyData;
 };
 
-const writeFile = async (filename: string, dataTable: DataTable) => {
+const writeFile = async (filename: string, dataTable: DataTable, options: Options) => {
+
+    // open the output file
+    let outputFile;
+
+    try {
+        outputFile = await open(filename, options.overwrite ? 'w' : 'wx');
+    } catch (err) {
+        if (err.code === 'EEXIST') {
+            console.error(`File '${filename}' already exists. Use -o option to overwrite.`);
+            exit(1);
+        } else {
+            throw err;
+        }
+    }
+
+    console.log(`writing '${filename}'...`);
+
+    // write the data
     if (filename.endsWith('.json')) {
-        await writeSogs(filename, dataTable);
+        await writeSogs(outputFile, dataTable, filename);
     } else if (filename.endsWith('.compressed.ply')) {
-        console.log(`writing '${filename}'...`);
-        const outputFile = await open(filename, 'w');
         await writeCompressedPly(outputFile, dataTable);
-        await outputFile.close();
     } else {
-        console.log(`writing '${filename}'...`);
-        const outputFile = await open(filename, 'w');
         await writePly(outputFile, {
             comments: [],
             elements: [{
@@ -39,8 +56,9 @@ const writeFile = async (filename: string, dataTable: DataTable) => {
                 dataTable: dataTable
             }]
         });
-        await outputFile.close();
     }
+
+    await outputFile.close();
 };
 
 // combine multiple tables into one
@@ -128,7 +146,8 @@ const parseArguments = () => {
             scale: { type: 'string', short: 's', multiple: true },
             filterNaN: { type: 'boolean', short: 'n', multiple: true },
             filterByValue: { type: 'string', short: 'c', multiple: true },
-            filterBands: { type: 'string', short: 'h', multiple: true }
+            filterBands: { type: 'string', short: 'h', multiple: true },
+            overwrite: { type: 'boolean', short: 'o' }
         }
     });
 
@@ -162,6 +181,9 @@ const parseArguments = () => {
     };
 
     const files: File[] = [];
+    const options: Options = {
+        overwrite: v.overwrite || false
+    };
 
     for (const t of tokens) {
         if (t.kind === 'positional') {
@@ -224,7 +246,7 @@ const parseArguments = () => {
         }
     }
 
-    return files;
+    return { files, options };
 };
 
 const usage = `Usage: splat-transform input.ply [actions] input.ply [actions] ... output.ply [actions]
@@ -235,6 +257,7 @@ actions:
 -filterNaN     -n                           Remove gaussians containing any NaN or Inf value
 -filterByValue -c name,comparator,value     Filter gaussians by a value. Specify the value name, comparator (lt, lte, gt, gte, eq, neq) and value
 -filterBands   -h 1                         Filter spherical harmonic band data. Value must be 0, 1, 2 or 3.
+-overwrite     -o                           Overwrite output file if it exists
 `;
 
 const main = async () => {
@@ -243,7 +266,7 @@ const main = async () => {
     const startTime = hrtime();
 
     // read args
-    const files = parseArguments();
+    const { files, options } = parseArguments();
     if (files.length < 2) {
         console.error(usage);
         exit(1);
@@ -284,7 +307,7 @@ const main = async () => {
         );
 
         // write file
-        await writeFile(resolve(outputArg.filename), dataTable);
+        await writeFile(resolve(outputArg.filename), dataTable, options);
     } catch (err) {
         // handle errors
         console.error(`error: ${err.message}`);
