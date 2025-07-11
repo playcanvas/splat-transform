@@ -40,6 +40,32 @@ const calcAverage = (dataTable: DataTable, cluster: number[], row: any) => {
     }
 };
 
+const cluster = (dataTable: DataTable, kdTree: KdTree, k: number) => {
+    // construct a kdtree over the centroids so we can find the nearest quickly
+    const point = new Float32Array(dataTable.numColumns);
+
+    const clusters: number[][] = [];
+    for (let i = 0; i < k; ++i) {
+        clusters[i] = [];
+    }
+
+    const row: any = {};
+
+    // assign each point to the nearest centroid
+    for (let i = 0; i < dataTable.numRows; ++i) {
+        dataTable.getRow(i, row);
+        dataTable.columns.forEach((c, i) => {
+            point[i] = row[c.name];
+        });
+
+        const result = kdTree.findNearest(point);
+
+        clusters[result.index].push(i);
+    }
+
+    return clusters;
+};
+
 const kmeans = (dataTable: DataTable, k: number, device?: GpuDevice) => {
     // too few data points
     if (dataTable.numRows < k) {
@@ -55,38 +81,17 @@ const kmeans = (dataTable: DataTable, k: number, device?: GpuDevice) => {
     const centroids = new DataTable(dataTable.columns.map(c => new Column(c.name, new Float32Array(k))));
     initializeCentroids(dataTable, centroids, row);
 
-    const clusters: number[][] = [];
-    for (let i = 0; i < k; ++i) {
-        clusters[i] = [];
-    }
-
     let converged = false;
     let steps = 0;
+    let clusters: number[][];
 
     while (!converged) {
-        // reset clusters
-        clusters.forEach((c) => {
-            c.length = 0;
-        });
-
-        // construct a kdtree over the centroids so we can find the nearest quickly
         const kdTree = new KdTree(centroids.columns.map(c => c.data) as Float32Array[]);
-        const point = new Float32Array(dataTable.numColumns);
 
-        // assign each point to the nearest centroid
-        for (let i = 0; i < dataTable.numRows; ++i) {
-            dataTable.getRow(i, row);
-            dataTable.columns.forEach((c, i) => {
-                point[i] = row[c.name];
-            });
-
-            const result = kdTree.findNearest(point);
-
-            clusters[result.index].push(i);
-        }
+        clusters = device ? cluster(dataTable, kdTree, k) : cluster(dataTable, kdTree, k);
 
         // calculate the new centroid positions
-        for (let i = 0; i < k; ++i) {
+        for (let i = 0; i < centroids.numRows; ++i) {
             calcAverage(dataTable, clusters[i], row);
             centroids.setRow(i, row);
         }
@@ -97,9 +102,8 @@ const kmeans = (dataTable: DataTable, k: number, device?: GpuDevice) => {
         }
     }
 
-    const labels = new Uint32Array(dataTable.numRows);
-
     // construct labels from clusters
+    const labels = new Uint32Array(dataTable.numRows);
     for (let i = 0; i < clusters.length; ++i) {
         const cluster = clusters[i];
         for (let j = 0; j < cluster.length; ++j) {

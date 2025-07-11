@@ -70,7 +70,7 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
             await writeCsv(outputFile, dataTable);
             break;
         case 'json':
-            await writeSogs(outputFile, dataTable, filename);
+            await writeSogs(outputFile, dataTable, filename, 'cpu');
             break;
         case 'compressed-ply':
             await writeCompressedPly(outputFile, dataTable);

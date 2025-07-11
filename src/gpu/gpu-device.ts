@@ -7,7 +7,8 @@ import {
     WebgpuGraphicsDevice
 } from 'playcanvas';
 
-import { Column, DataTable } from '../data-table.js';
+import { DataTable } from '../data-table.js';
+import { KdTree } from '../utils/kd-tree.js';
 
 import { JSDOM } from 'jsdom';
 
@@ -47,11 +48,13 @@ class GpuDevice {
         this.backbuffer = backbuffer;
     }
 
-    kmeans(dataTable: DataTable, k: number, iterations = 10) {
-        const centroids = new DataTable(dataTable.columns.map(c => new Column(c.name, new Float32Array(k))));
-        const labels = new Uint32Array(k);
+    cluster(dataTable: DataTable, tree: KdTree, k: number) {
+        const clusters: number[][] = [];
+        for (let i = 0; i < k; ++i) {
+            clusters[i] = [];
+        }
 
-        return { centroids, labels };
+        return clusters;
     }
 };
 

@@ -9,8 +9,6 @@ import { kmeans } from '../utils/k-means';
 
 import { createDevice } from '../gpu/gpu-device';
 
-const sogsSH: 'disabled' | 'cpu' | 'gpu' = 'gpu';
-
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
 const calcMinMax = (dataTable: DataTable, columnNames: string[]) => {
@@ -53,7 +51,7 @@ const identity = (index: number, width: number) => {
     return index;
 };
 
-const writeSogs = async (fileHandle: FileHandle, dataTable: DataTable, outputFilename: string) => {
+const writeSogs = async (fileHandle: FileHandle, dataTable: DataTable, outputFilename: string, shMethod: 'disabled' | 'cpu' | 'gpu') => {
 
     // generate an optimal ordering
     const sortIndices = generateOrdering(dataTable);
@@ -228,7 +226,7 @@ const writeSogs = async (fileHandle: FileHandle, dataTable: DataTable, outputFil
     const shBands = { '9': 1, '24': 2, '-1': 3 }[shNames.findIndex(v => !dataTable.hasColumn(v))] ?? 0;
 
     // @ts-ignore
-    if (sogsSH !== 'disabled' && shBands > 0) {
+    if (shMethod !== 'disabled' && shBands > 0) {
         const shCoeffs = [0, 3, 8, 15][shBands];
         const shColumnNames = shNames.slice(0, shCoeffs * 3);
         const shColumns = shColumnNames.map(name => dataTable.getColumnByName(name));
@@ -237,8 +235,8 @@ const writeSogs = async (fileHandle: FileHandle, dataTable: DataTable, outputFil
         const shDataTable = new DataTable(shColumns);
 
         // calculate kmeans
-        const gpuDevice = sogsSH === 'gpu' ? await createDevice() : null;
-        const { centroids, labels } = kmeans(shDataTable, 64 * 1024, gpuDevice);
+        const gpuDevice = shMethod === 'gpu' ? await createDevice() : null;
+        const { centroids, labels } = kmeans(shDataTable, 2 * 1024, gpuDevice);
 
         // write centroids
         const centroidsBuf = new Uint8Array(64 * shCoeffs * Math.ceil(centroids.numRows / 64) * channels);
