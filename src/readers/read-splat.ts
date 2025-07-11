@@ -73,20 +73,20 @@ const readSplat = async (fileHandle: FileHandle): Promise<SplatData> => {
             const offset = r * BYTES_PER_SPLAT;
             
             // Read position (3 × float32)
-            const x = chunkData.readFloatLE(offset + 0);
-            const y = chunkData.readFloatLE(offset + 4);
-            const z = chunkData.readFloatLE(offset + 8);
+            const x = chunkData.readFloatLE(offset + POSITION_X_OFFSET);
+            const y = chunkData.readFloatLE(offset + POSITION_Y_OFFSET);
+            const z = chunkData.readFloatLE(offset + POSITION_Z_OFFSET);
             
             // Read scale (3 × float32) - stored as linear scale
-            const scaleX = chunkData.readFloatLE(offset + 12);
-            const scaleY = chunkData.readFloatLE(offset + 16);
-            const scaleZ = chunkData.readFloatLE(offset + 20);
+            const scaleX = chunkData.readFloatLE(offset + SCALE_X_OFFSET);
+            const scaleY = chunkData.readFloatLE(offset + SCALE_Y_OFFSET);
+            const scaleZ = chunkData.readFloatLE(offset + SCALE_Z_OFFSET);
             
             // Read color and opacity (4 × uint8)
-            const red = chunkData.readUInt8(offset + 24);
-            const green = chunkData.readUInt8(offset + 25);
-            const blue = chunkData.readUInt8(offset + 26);
-            const opacity = chunkData.readUInt8(offset + 27);
+            const red = chunkData.readUInt8(offset + COLOR_RED_OFFSET);
+            const green = chunkData.readUInt8(offset + COLOR_GREEN_OFFSET);
+            const blue = chunkData.readUInt8(offset + COLOR_BLUE_OFFSET);
+            const opacity = chunkData.readUInt8(offset + COLOR_OPACITY_OFFSET);
             
             // Read rotation quaternion (4 × uint8, normalized)
             const qx = chunkData.readUInt8(offset + 28);
