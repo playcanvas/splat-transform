@@ -267,7 +267,7 @@ const writeSogs = async (fileHandle: FileHandle, dataTable: DataTable, outputFil
         for (let i = 0; i < dataTable.numRows; ++i) {
             const label = labels[sortIndices[i]];
 
-            const ti = target(i, width);
+            const ti = layout(i, width);
             labelsBuf[ti * 4] = label & 0xff;
             labelsBuf[ti * 4 + 1] = (label >> 8) & 0xff;
             labelsBuf[ti * 4 + 2] = 0;
