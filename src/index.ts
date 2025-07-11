@@ -10,6 +10,7 @@ import { Column, DataTable, TypedArray } from './data-table';
 import { ProcessAction, process } from './process';
 import { readPly } from './readers/read-ply';
 import { writeCompressedPly } from './writers/write-compressed-ply';
+import { writeCsv } from './writers/write-csv';
 import { writePly } from './writers/write-ply';
 import { writeSogs } from './writers/write-sogs';
 
@@ -43,10 +44,14 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
 
     console.log(`writing '${filename}'...`);
 
+    const lowerFilename = filename.toLowerCase();
+
     // write the data
-    if (filename.endsWith('.json')) {
+    if (lowerFilename.endsWith('.csv')) {
+        await writeCsv(outputFile, dataTable);
+    } else if (lowerFilename.endsWith('.json')) {
         await writeSogs(outputFile, dataTable, filename);
-    } else if (filename.endsWith('.compressed.ply')) {
+    } else if (lowerFilename.endsWith('.compressed.ply')) {
         await writeCompressedPly(outputFile, dataTable);
     } else {
         await writePly(outputFile, {
