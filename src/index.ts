@@ -34,7 +34,7 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
         outputFile = await open(filename, options.overwrite ? 'w' : 'wx');
     } catch (err) {
         if (err.code === 'EEXIST') {
-            console.error(`File '${filename}' already exists. Use -o option to overwrite.`);
+            console.error(`File '${filename}' already exists. Use -w option to overwrite.`);
             exit(1);
         } else {
             throw err;
@@ -147,7 +147,7 @@ const parseArguments = () => {
             filterNaN: { type: 'boolean', short: 'n', multiple: true },
             filterByValue: { type: 'string', short: 'c', multiple: true },
             filterBands: { type: 'string', short: 'h', multiple: true },
-            overwrite: { type: 'boolean', short: 'o' }
+            overwrite: { type: 'boolean', short: 'w' }
         }
     });
 
@@ -257,7 +257,7 @@ actions:
 -filterNaN     -n                           Remove gaussians containing any NaN or Inf value
 -filterByValue -c name,comparator,value     Filter gaussians by a value. Specify the value name, comparator (lt, lte, gt, gte, eq, neq) and value
 -filterBands   -h 1                         Filter spherical harmonic band data. Value must be 0, 1, 2 or 3.
--overwrite     -o                           Overwrite output file if it exists
+-overwrite     -w                           Overwrite output file if it exists
 `;
 
 const main = async () => {
