@@ -110,7 +110,8 @@ const readSplat = async (fileHandle: FileHandle): Promise<SplatData> => {
             (columns[8].data as Float32Array)[splatIndex] = (blue / 255.0) - 0.5;
             
             // Store opacity (convert from uint8 to float and apply inverse sigmoid)
-            const normalizedOpacity = opacity / 255.0;
+            const epsilon = 1e-6;
+            const normalizedOpacity = Math.max(epsilon, Math.min(1.0 - epsilon, opacity / 255.0));
             (columns[9].data as Float32Array)[splatIndex] = Math.log(normalizedOpacity / (1.0 - normalizedOpacity));
             
             // Store rotation quaternion (convert from uint8 [0,255] to float [-1,1] and normalize)
