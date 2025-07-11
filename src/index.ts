@@ -15,7 +15,9 @@ import { writePly } from './writers/write-ply';
 import { writeSogs } from './writers/write-sogs';
 
 type Options = {
-    overwrite: boolean
+    overwrite: boolean,
+    help: boolean,
+    version: boolean
 };
 
 const readFile = async (filename: string) => {
@@ -26,7 +28,25 @@ const readFile = async (filename: string) => {
     return plyData;
 };
 
+const getOutputFormat = (filename: string) => {
+    const lowerFilename = filename.toLowerCase();
+
+    if (lowerFilename.endsWith('.csv')) {
+        return 'csv';
+    } else if (lowerFilename.endsWith('.json')) {
+        return 'json';
+    } else if (lowerFilename.endsWith('.compressed.ply')) {
+        return 'compressed-ply';
+    } else if (lowerFilename.endsWith('.ply')) {
+        return 'ply';
+    } else {
+        throw new Error(`Unsupported output file type: ${filename}`);
+    }
+};
+
 const writeFile = async (filename: string, dataTable: DataTable, options: Options) => {
+
+    const outputFormat = getOutputFormat(filename); 
 
     // open the output file
     let outputFile;
@@ -44,23 +64,26 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
 
     console.log(`writing '${filename}'...`);
 
-    const lowerFilename = filename.toLowerCase();
-
     // write the data
-    if (lowerFilename.endsWith('.csv')) {
-        await writeCsv(outputFile, dataTable);
-    } else if (lowerFilename.endsWith('.json')) {
-        await writeSogs(outputFile, dataTable, filename);
-    } else if (lowerFilename.endsWith('.compressed.ply')) {
-        await writeCompressedPly(outputFile, dataTable);
-    } else {
-        await writePly(outputFile, {
-            comments: [],
-            elements: [{
-                name: 'vertex',
-                dataTable: dataTable
-            }]
-        });
+    switch (outputFormat) {
+        case 'csv':
+            await writeCsv(outputFile, dataTable);
+            break;
+        case 'json':
+            await writeSogs(outputFile, dataTable, filename);
+            break;
+        case 'compressed-ply':
+            await writeCompressedPly(outputFile, dataTable);
+            break;
+        case 'ply':
+            await writePly(outputFile, {
+                comments: [],
+                elements: [{
+                    name: 'vertex',
+                    dataTable: dataTable
+                }]
+            });
+            break;
     }
 
     await outputFile.close();
@@ -146,13 +169,18 @@ const parseArguments = () => {
         strict: true,
         allowPositionals: true,
         options: {
+            // global options
+            overwrite: { type: 'boolean', short: 'w' },
+            help: { type: 'boolean', short: 'h' },
+            version: { type: 'boolean', short: 'v' },
+
+            // file options
             translate: { type: 'string', short: 't', multiple: true },
             rotate: { type: 'string', short: 'r', multiple: true },
             scale: { type: 'string', short: 's', multiple: true },
             filterNaN: { type: 'boolean', short: 'n', multiple: true },
             filterByValue: { type: 'string', short: 'c', multiple: true },
             filterBands: { type: 'string', short: 'h', multiple: true },
-            overwrite: { type: 'boolean', short: 'w' }
         }
     });
 
@@ -187,7 +215,9 @@ const parseArguments = () => {
 
     const files: File[] = [];
     const options: Options = {
-        overwrite: v.overwrite || false
+        overwrite: v.overwrite || false,
+        help: v.help || false,
+        version: v.version || false
     };
 
     for (const t of tokens) {
@@ -254,15 +284,44 @@ const parseArguments = () => {
     return { files, options };
 };
 
-const usage = `Usage: splat-transform input.ply [actions] input.ply [actions] ... output.ply [actions]
-actions:
--translate     -t x,y,z                     Translate splats by (x, y, z)
--rotate        -r x,y,z                     Rotate splats by euler angles (x, y, z) (in degrees)
--scale         -s x                         Scale splats by x (uniform scaling)
--filterNaN     -n                           Remove gaussians containing any NaN or Inf value
--filterByValue -c name,comparator,value     Filter gaussians by a value. Specify the value name, comparator (lt, lte, gt, gte, eq, neq) and value
--filterBands   -h 1                         Filter spherical harmonic band data. Value must be 0, 1, 2 or 3.
--overwrite     -w                           Overwrite output file if it exists
+const usage = `
+Apply geometric transforms & filters to Gaussian-splat point clouds
+===================================================================
+
+USAGE
+  splat-transform [GLOBAL]  <input.ply> [ACTIONS]  ...  <output.{ply|compressed.ply|meta.json|csv}> [ACTIONS]
+
+  • Every time an *.ply* appears, it becomes the current working set; the following
+    ACTIONS are applied in the order listed.  
+  • The last file on the command line is treated as the output; anything after it is
+    interpreted as actions that modify the final result.
+
+SUPPORTED INPUTS
+    .ply
+
+SUPPORTED OUTPUTS
+    .ply   .compressed.ply   meta.json (SoGS)   .csv
+
+ACTIONS (can be repeated, in any order)
+    -t, --translate  x,y,z                  Translate splats by (x, y, z)
+    -r, --rotate     x,y,z                  Rotate splats by Euler angles (deg)
+    -s, --scale      x                      Uniformly scale splats by factor x
+    -n, --filterNaN                         Remove any Gaussian containing NaN/Inf
+    -c, --filterByValue name,cmp,value      Keep splats where  <name> <cmp> <value>
+                                            cmp ∈ {lt,lte,gt,gte,eq,neq}
+    -h, --filterBands  {0|1|2|3}            Strip spherical-harmonic bands > N
+
+GLOBAL OPTIONS
+    -w, --overwrite                         Overwrite output file if it already exists
+    -h, --help                              Show this help and exit
+    -v, --version                           Show version and exit
+
+EXAMPLES
+    # Simple scale-then-translate
+    splat-transform bunny.ply -s 0.5 -t 0,0,10 bunny_scaled.ply
+
+    # Chain two inputs and write compressed output, overwriting if necessary
+    splat-transform -w cloudA.ply -r 0,90,0 cloudB.ply -s 2 merged.compressed.ply
 `;
 
 const main = async () => {
@@ -270,7 +329,14 @@ const main = async () => {
 
     // read args
     const { files, options } = parseArguments();
-    if (files.length < 2) {
+
+    // show version and exit
+    if (options.version) {
+        exit(0);
+    }
+
+    // invalid args or show help
+    if (files.length < 2 || options.help) {
         console.error(usage);
         exit(1);
     }
