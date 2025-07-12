@@ -47,10 +47,10 @@ const readSplat = async (fileHandle: FileHandle): Promise<SplatData> => {
         new Column('opacity', new Float32Array(numSplats)),
 
         // Rotation quaternion
-        new Column('rot_0', new Float32Array(numSplats)), // qx
-        new Column('rot_1', new Float32Array(numSplats)), // qy
-        new Column('rot_2', new Float32Array(numSplats)), // qz
-        new Column('rot_3', new Float32Array(numSplats))  // qw
+        new Column('rot_0', new Float32Array(numSplats)),
+        new Column('rot_1', new Float32Array(numSplats)),
+        new Column('rot_2', new Float32Array(numSplats)),
+        new Column('rot_3', new Float32Array(numSplats))
     ];
 
     // Read data in chunks
@@ -77,7 +77,7 @@ const readSplat = async (fileHandle: FileHandle): Promise<SplatData> => {
             const y = chunkData.readFloatLE(offset + 4);
             const z = chunkData.readFloatLE(offset + 8);
 
-            // Read scale (3 × float32) - stored as linear, convert to log
+            // Read scale (3 × float32)
             const scaleX = chunkData.readFloatLE(offset + 12);
             const scaleY = chunkData.readFloatLE(offset + 16);
             const scaleZ = chunkData.readFloatLE(offset + 20);
@@ -88,11 +88,11 @@ const readSplat = async (fileHandle: FileHandle): Promise<SplatData> => {
             const blue = chunkData.readUInt8(offset + 26);
             const opacity = chunkData.readUInt8(offset + 27);
 
-            // Read rotation quaternion (4 × uint8, normalized)
-            const qx = chunkData.readUInt8(offset + 28);
-            const qy = chunkData.readUInt8(offset + 29);
-            const qz = chunkData.readUInt8(offset + 30);
-            const qw = chunkData.readUInt8(offset + 31);
+            // Read rotation quaternion (4 × uint8)
+            const rot0 = chunkData.readUInt8(offset + 28);
+            const rot1 = chunkData.readUInt8(offset + 29);
+            const rot2 = chunkData.readUInt8(offset + 30);
+            const rot3 = chunkData.readUInt8(offset + 31);
 
             // Store position
             (columns[0].data as Float32Array)[splatIndex] = x;
@@ -116,18 +116,18 @@ const readSplat = async (fileHandle: FileHandle): Promise<SplatData> => {
             (columns[9].data as Float32Array)[splatIndex] = Math.log(normalizedOpacity / (1.0 - normalizedOpacity));
 
             // Store rotation quaternion (convert from uint8 [0,255] to float [-1,1] and normalize)
-            const qxNorm = (qx / 255.0) * 2.0 - 1.0;
-            const qyNorm = (qy / 255.0) * 2.0 - 1.0;
-            const qzNorm = (qz / 255.0) * 2.0 - 1.0;
-            const qwNorm = (qw / 255.0) * 2.0 - 1.0;
+            const rot0Norm = (rot0 / 255.0) * 2.0 - 1.0;
+            const rot1Norm = (rot1 / 255.0) * 2.0 - 1.0;
+            const rot2Norm = (rot2 / 255.0) * 2.0 - 1.0;
+            const rot3Norm = (rot3 / 255.0) * 2.0 - 1.0;
 
             // Normalize quaternion
-            const length = Math.sqrt(qxNorm * qxNorm + qyNorm * qyNorm + qzNorm * qzNorm + qwNorm * qwNorm);
+            const length = Math.sqrt(rot0Norm * rot0Norm + rot1Norm * rot1Norm + rot2Norm * rot2Norm + rot3Norm * rot3Norm);
             if (length > 0) {
-                (columns[10].data as Float32Array)[splatIndex] = qxNorm / length;
-                (columns[11].data as Float32Array)[splatIndex] = qyNorm / length;
-                (columns[12].data as Float32Array)[splatIndex] = qzNorm / length;
-                (columns[13].data as Float32Array)[splatIndex] = qwNorm / length;
+                (columns[10].data as Float32Array)[splatIndex] = rot0Norm / length;
+                (columns[11].data as Float32Array)[splatIndex] = rot1Norm / length;
+                (columns[12].data as Float32Array)[splatIndex] = rot2Norm / length;
+                (columns[13].data as Float32Array)[splatIndex] = rot3Norm / length;
             } else {
                 // Default to identity quaternion if invalid
                 (columns[10].data as Float32Array)[splatIndex] = 0.0;
