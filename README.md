@@ -15,7 +15,7 @@ npm install -g @playcanvas/splat-transform
 ## Usage
 
 ```bash
-splat-transform [GLOBAL]  <input.{ply|splat}> [ACTIONS]  ...  <output.{ply|compressed.ply|meta.json|csv}> [ACTIONS]
+splat-transform [GLOBAL]  <input.{ply|splat|ksplat}> [ACTIONS]  ...  <output.{ply|compressed.ply|meta.json|csv}> [ACTIONS]
 ```
 
 **Key points:**
@@ -27,6 +27,7 @@ splat-transform [GLOBAL]  <input.{ply|splat}> [ACTIONS]  ...  <output.{ply|compr
 **Input:**
 - `.ply` - Standard PLY format
 - `.splat` - Binary splat format (antimatter15 format)
+- `.ksplat` - Compressed binary splat format (PlayCanvas format)
 
 **Output:**
 - `.ply` - Standard PLY format
@@ -66,6 +67,9 @@ splat-transform input.ply output.csv
 
 # Convert from .splat format
 splat-transform input.splat output.ply
+
+# Convert from .ksplat format
+splat-transform input.ksplat output.ply
 
 # Convert to compressed PLY
 splat-transform input.ply output.compressed.ply

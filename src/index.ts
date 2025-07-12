@@ -10,6 +10,7 @@ import { Column, DataTable, TypedArray } from './data-table';
 import { ProcessAction, process } from './process';
 import { readPly } from './readers/read-ply';
 import { readSplat } from './readers/read-splat';
+import { readKsplat } from './readers/read-ksplat';
 import { writeCompressedPly } from './writers/write-compressed-ply';
 import { writeCsv } from './writers/write-csv';
 import { writePly } from './writers/write-ply';
@@ -28,7 +29,9 @@ const readFile = async (filename: string) => {
     const lowerFilename = filename.toLowerCase();
     let fileData;
 
-    if (lowerFilename.endsWith('.splat')) {
+    if (lowerFilename.endsWith('.ksplat')) {
+        fileData = await readKsplat(inputFile);
+    } else if (lowerFilename.endsWith('.splat')) {
         fileData = await readSplat(inputFile);
     } else if (lowerFilename.endsWith('.ply')) {
         fileData = await readPly(inputFile);
@@ -302,7 +305,7 @@ Apply geometric transforms & filters to Gaussian-splat point clouds
 ===================================================================
 
 USAGE
-  splat-transform [GLOBAL]  <input.{ply|splat}> [ACTIONS]  ...  <output.{ply|compressed.ply|meta.json|csv}> [ACTIONS]
+  splat-transform [GLOBAL]  <input.{ply|splat|ksplat}> [ACTIONS]  ...  <output.{ply|compressed.ply|meta.json|csv}> [ACTIONS]
 
   • Every time an input file appears, it becomes the current working set; the following
     ACTIONS are applied in the order listed.  
@@ -310,7 +313,7 @@ USAGE
     interpreted as actions that modify the final result.
 
 SUPPORTED INPUTS
-    .ply   .splat
+    .ply   .splat   .ksplat
 
 SUPPORTED OUTPUTS
     .ply   .compressed.ply   meta.json (SOGS)   .csv
