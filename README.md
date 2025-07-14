@@ -27,7 +27,7 @@ splat-transform [GLOBAL]  <input.{ply|splat|ksplat}> [ACTIONS]  ...  <output.{pl
 **Input:**
 - `.ply` - Standard PLY format
 - `.splat` - Binary splat format (antimatter15 format)
-- `.ksplat` - Compressed binary splat format (PlayCanvas format)
+- `.ksplat` - Compressed binary splat format (mkkellogg format)
 
 **Output:**
 - `.ply` - Standard PLY format
