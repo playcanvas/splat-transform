@@ -125,7 +125,7 @@ const readKsplat = async (fileHandle: FileHandle): Promise<KsplatFileData> => {
     }
 
     const maxSections = mainHeader.getUint32(4, true);
-    const totalSplats = mainHeader.getUint32(16, true);
+    const numSplats = mainHeader.getUint32(16, true);
     const compressionMode = mainHeader.getUint16(20, true);
 
     if (compressionMode > 2) {
@@ -135,31 +135,43 @@ const readKsplat = async (fileHandle: FileHandle): Promise<KsplatFileData> => {
     const minHarmonicsValue = mainHeader.getFloat32(36, true) || -1.5;
     const maxHarmonicsValue = mainHeader.getFloat32(40, true) || 1.5;
 
-    if (totalSplats === 0) {
-        throw new Error('No splats found in file');
+    if (numSplats === 0) {
+        throw new Error('Invalid .ksplat file: file is empty');
     }
 
     // Initialize data storage
-    const dataColumns: Column[] = [
-        new Column('x', new Float32Array(totalSplats)),
-        new Column('y', new Float32Array(totalSplats)),
-        new Column('z', new Float32Array(totalSplats)),
-        new Column('scale_0', new Float32Array(totalSplats)),
-        new Column('scale_1', new Float32Array(totalSplats)),
-        new Column('scale_2', new Float32Array(totalSplats)),
-        new Column('f_dc_0', new Float32Array(totalSplats)),
-        new Column('f_dc_1', new Float32Array(totalSplats)),
-        new Column('f_dc_2', new Float32Array(totalSplats)),
-        new Column('opacity', new Float32Array(totalSplats)),
-        new Column('rot_0', new Float32Array(totalSplats)),
-        new Column('rot_1', new Float32Array(totalSplats)),
-        new Column('rot_2', new Float32Array(totalSplats)),
-        new Column('rot_3', new Float32Array(totalSplats))
+    const columns: Column[] = [
+        new Column('x', new Float32Array(numSplats)),
+        new Column('y', new Float32Array(numSplats)),
+        new Column('z', new Float32Array(numSplats)),
+        new Column('scale_0', new Float32Array(numSplats)),
+        new Column('scale_1', new Float32Array(numSplats)),
+        new Column('scale_2', new Float32Array(numSplats)),
+        new Column('f_dc_0', new Float32Array(numSplats)),
+        new Column('f_dc_1', new Float32Array(numSplats)),
+        new Column('f_dc_2', new Float32Array(numSplats)),
+        new Column('opacity', new Float32Array(numSplats)),
+        new Column('rot_0', new Float32Array(numSplats)),
+        new Column('rot_1', new Float32Array(numSplats)),
+        new Column('rot_2', new Float32Array(numSplats)),
+        new Column('rot_3', new Float32Array(numSplats))
     ];
 
-    const config = COMPRESSION_MODES[compressionMode];
+    const {
+        centerBytes,
+        scaleBytes,
+        rotationBytes,
+        colorBytes,
+        harmonicsBytes,
+        scaleStartByte,
+        rotationStartByte,
+        colorStartByte,
+        harmonicsStartByte,
+        scaleQuantRange
+    } = COMPRESSION_MODES[compressionMode];
+    
     let currentSectionDataOffset = MAIN_HEADER_SIZE + maxSections * SECTION_HEADER_SIZE;
-    let globalSplatIndex = 0;
+    let splatIndex = 0;
 
     // Process each section
     for (let sectionIdx = 0; sectionIdx < maxSections; sectionIdx++) {
@@ -172,7 +184,7 @@ const readKsplat = async (fileHandle: FileHandle): Promise<KsplatFileData> => {
         const bucketCount = sectionHeader.getUint32(12, true);
         const spatialBlockSize = sectionHeader.getFloat32(16, true);
         const bucketStorageSize = sectionHeader.getUint16(20, true);
-        const quantizationRange = sectionHeader.getUint32(24, true) || config.scaleQuantRange;
+        const quantizationRange = sectionHeader.getUint32(24, true) || scaleQuantRange;
         const fullBuckets = sectionHeader.getUint32(32, true);
         const partialBuckets = sectionHeader.getUint32(36, true);
         const harmonicsDegree = sectionHeader.getUint16(40, true);
@@ -182,8 +194,8 @@ const readKsplat = async (fileHandle: FileHandle): Promise<KsplatFileData> => {
         const partialBucketMetaSize = partialBuckets * 4;
         const totalBucketStorageSize = bucketStorageSize * bucketCount + partialBucketMetaSize;
         const harmonicsComponentCount = HARMONICS_COMPONENT_COUNT[harmonicsDegree];
-        const bytesPerSplat = config.centerBytes + config.scaleBytes + config.rotationBytes +
-                             config.colorBytes + harmonicsComponentCount * config.harmonicsBytes;
+        const bytesPerSplat = centerBytes + scaleBytes + rotationBytes +
+                             colorBytes + harmonicsComponentCount * harmonicsBytes;
         const sectionDataSize = bytesPerSplat * maxSectionSplats;
 
         // Calculate decompression parameters
@@ -200,21 +212,21 @@ const readKsplat = async (fileHandle: FileHandle): Promise<KsplatFileData> => {
         const splatDataOffset = currentSectionDataOffset + totalBucketStorageSize;
         const splatData = new DataView(fileBuffer.buffer, fileBuffer.byteOffset + splatDataOffset, sectionDataSize);
 
-                 // Harmonic value decoder
-         const decodeHarmonics = (offset: number, component: number): number => {
-             switch (compressionMode) {
-                 case 0:
-                     return splatData.getFloat32(offset + config.harmonicsStartByte + component * 4, true);
-                 case 1:
-                     return decodeFloat16(splatData.getUint16(offset + config.harmonicsStartByte + component * 2, true));
-                 case 2: {
-                     const normalized = splatData.getUint8(offset + config.harmonicsStartByte + component) / 255;
-                     return minHarmonicsValue + normalized * (maxHarmonicsValue - minHarmonicsValue);
-                 }
-                 default:
-                     return 0;
-             }
-         };
+        // Harmonic value decoder
+        const decodeHarmonics = (offset: number, component: number): number => {
+            switch (compressionMode) {
+                case 0:
+                    return splatData.getFloat32(offset + harmonicsStartByte + component * 4, true);
+                case 1:
+                    return decodeFloat16(splatData.getUint16(offset + harmonicsStartByte + component * 2, true));
+                case 2: {
+                    const normalized = splatData.getUint8(offset + harmonicsStartByte + component) / 255;
+                    return minHarmonicsValue + normalized * (maxHarmonicsValue - minHarmonicsValue);
+                }
+                default:
+                    return 0;
+            }
+        };
 
         // Track partial bucket processing
         let currentPartialBucket = fullBuckets;
@@ -238,90 +250,90 @@ const readKsplat = async (fileHandle: FileHandle): Promise<KsplatFileData> => {
             }
 
             // Decode position
-            let posX: number, posY: number, posZ: number;
+            let x: number, y: number, z: number;
             if (compressionMode === 0) {
-                posX = splatData.getFloat32(splatByteOffset, true);
-                posY = splatData.getFloat32(splatByteOffset + 4, true);
-                posZ = splatData.getFloat32(splatByteOffset + 8, true);
+                x = splatData.getFloat32(splatByteOffset, true);
+                y = splatData.getFloat32(splatByteOffset + 4, true);
+                z = splatData.getFloat32(splatByteOffset + 8, true);
             } else {
-                posX = (splatData.getUint16(splatByteOffset, true) - quantizationRange) * positionScale + bucketCenters[bucketIdx * 3];
-                posY = (splatData.getUint16(splatByteOffset + 2, true) - quantizationRange) * positionScale + bucketCenters[bucketIdx * 3 + 1];
-                posZ = (splatData.getUint16(splatByteOffset + 4, true) - quantizationRange) * positionScale + bucketCenters[bucketIdx * 3 + 2];
+                x = (splatData.getUint16(splatByteOffset, true) - quantizationRange) * positionScale + bucketCenters[bucketIdx * 3];
+                y = (splatData.getUint16(splatByteOffset + 2, true) - quantizationRange) * positionScale + bucketCenters[bucketIdx * 3 + 1];
+                z = (splatData.getUint16(splatByteOffset + 4, true) - quantizationRange) * positionScale + bucketCenters[bucketIdx * 3 + 2];
             }
 
             // Decode scales
             let scaleX: number, scaleY: number, scaleZ: number;
             if (compressionMode === 0) {
-                scaleX = splatData.getFloat32(splatByteOffset + config.scaleStartByte, true);
-                scaleY = splatData.getFloat32(splatByteOffset + config.scaleStartByte + 4, true);
-                scaleZ = splatData.getFloat32(splatByteOffset + config.scaleStartByte + 8, true);
+                scaleX = splatData.getFloat32(splatByteOffset + scaleStartByte, true);
+                scaleY = splatData.getFloat32(splatByteOffset + scaleStartByte + 4, true);
+                scaleZ = splatData.getFloat32(splatByteOffset + scaleStartByte + 8, true);
             } else {
-                scaleX = decodeFloat16(splatData.getUint16(splatByteOffset + config.scaleStartByte, true));
-                scaleY = decodeFloat16(splatData.getUint16(splatByteOffset + config.scaleStartByte + 2, true));
-                scaleZ = decodeFloat16(splatData.getUint16(splatByteOffset + config.scaleStartByte + 4, true));
+                scaleX = decodeFloat16(splatData.getUint16(splatByteOffset + scaleStartByte, true));
+                scaleY = decodeFloat16(splatData.getUint16(splatByteOffset + scaleStartByte + 2, true));
+                scaleZ = decodeFloat16(splatData.getUint16(splatByteOffset + scaleStartByte + 4, true));
             }
 
             // Decode rotation quaternion
             let rotW: number, rotX: number, rotY: number, rotZ: number;
             if (compressionMode === 0) {
-                rotW = splatData.getFloat32(splatByteOffset + config.rotationStartByte, true);
-                rotX = splatData.getFloat32(splatByteOffset + config.rotationStartByte + 4, true);
-                rotY = splatData.getFloat32(splatByteOffset + config.rotationStartByte + 8, true);
-                rotZ = splatData.getFloat32(splatByteOffset + config.rotationStartByte + 12, true);
+                rotW = splatData.getFloat32(splatByteOffset + rotationStartByte, true);
+                rotX = splatData.getFloat32(splatByteOffset + rotationStartByte + 4, true);
+                rotY = splatData.getFloat32(splatByteOffset + rotationStartByte + 8, true);
+                rotZ = splatData.getFloat32(splatByteOffset + rotationStartByte + 12, true);
             } else {
-                rotW = decodeFloat16(splatData.getUint16(splatByteOffset + config.rotationStartByte, true));
-                rotX = decodeFloat16(splatData.getUint16(splatByteOffset + config.rotationStartByte + 2, true));
-                rotY = decodeFloat16(splatData.getUint16(splatByteOffset + config.rotationStartByte + 4, true));
-                rotZ = decodeFloat16(splatData.getUint16(splatByteOffset + config.rotationStartByte + 6, true));
+                rotW = decodeFloat16(splatData.getUint16(splatByteOffset + rotationStartByte, true));
+                rotX = decodeFloat16(splatData.getUint16(splatByteOffset + rotationStartByte + 2, true));
+                rotY = decodeFloat16(splatData.getUint16(splatByteOffset + rotationStartByte + 4, true));
+                rotZ = decodeFloat16(splatData.getUint16(splatByteOffset + rotationStartByte + 6, true));
             }
 
             // Decode color and opacity
-            const colorR = splatData.getUint8(splatByteOffset + config.colorStartByte) / 255;
-            const colorG = splatData.getUint8(splatByteOffset + config.colorStartByte + 1) / 255;
-            const colorB = splatData.getUint8(splatByteOffset + config.colorStartByte + 2) / 255;
-            const alpha = splatData.getUint8(splatByteOffset + config.colorStartByte + 3) / 255;
+            const red = splatData.getUint8(splatByteOffset + colorStartByte);
+            const green = splatData.getUint8(splatByteOffset + colorStartByte + 1);
+            const blue = splatData.getUint8(splatByteOffset + colorStartByte + 2);
+            const opacity = splatData.getUint8(splatByteOffset + colorStartByte + 3);
 
             // Store position
-            (dataColumns[0].data as Float32Array)[globalSplatIndex] = posX;
-            (dataColumns[1].data as Float32Array)[globalSplatIndex] = posY;
-            (dataColumns[2].data as Float32Array)[globalSplatIndex] = posZ;
+            (columns[0].data as Float32Array)[splatIndex] = x;
+            (columns[1].data as Float32Array)[splatIndex] = y;
+            (columns[2].data as Float32Array)[splatIndex] = z;
 
-            // Store scale as logarithmic values
-            (dataColumns[3].data as Float32Array)[globalSplatIndex] = Math.log(scaleX);
-            (dataColumns[4].data as Float32Array)[globalSplatIndex] = Math.log(scaleY);
-            (dataColumns[5].data as Float32Array)[globalSplatIndex] = Math.log(scaleZ);
+            // Store scale (convert from linear in .ksplat to log scale for internal use)
+            (columns[3].data as Float32Array)[splatIndex] = Math.log(scaleX);
+            (columns[4].data as Float32Array)[splatIndex] = Math.log(scaleY);
+            (columns[5].data as Float32Array)[splatIndex] = Math.log(scaleZ);
 
-            // Convert color to spherical harmonics coefficients
-            const SH_NORMALIZATION = 0.28209479177387814;
-            (dataColumns[6].data as Float32Array)[globalSplatIndex] = (colorR - 0.5) / SH_NORMALIZATION;
-            (dataColumns[7].data as Float32Array)[globalSplatIndex] = (colorG - 0.5) / SH_NORMALIZATION;
-            (dataColumns[8].data as Float32Array)[globalSplatIndex] = (colorB - 0.5) / SH_NORMALIZATION;
+            // Store color (convert from uint8 back to spherical harmonics)
+            const SH_C0 = 0.28209479177387814;
+            (columns[6].data as Float32Array)[splatIndex] = (red / 255.0 - 0.5) / SH_C0;
+            (columns[7].data as Float32Array)[splatIndex] = (green / 255.0 - 0.5) / SH_C0;
+            (columns[8].data as Float32Array)[splatIndex] = (blue / 255.0 - 0.5) / SH_C0;
 
-            // Convert opacity to sigmoid domain
-            const EPSILON = 1e-6;
-            const clampedAlpha = Math.max(EPSILON, Math.min(1.0 - EPSILON, alpha));
-            (dataColumns[9].data as Float32Array)[globalSplatIndex] = -Math.log(1.0 / clampedAlpha - 1.0);
+            // Store opacity (convert from uint8 to float and apply inverse sigmoid)
+            const epsilon = 1e-6;
+            const normalizedOpacity = Math.max(epsilon, Math.min(1.0 - epsilon, opacity / 255.0));
+            (columns[9].data as Float32Array)[splatIndex] = Math.log(normalizedOpacity / (1.0 - normalizedOpacity));
 
             // Store quaternion
-            (dataColumns[10].data as Float32Array)[globalSplatIndex] = rotX;
-            (dataColumns[11].data as Float32Array)[globalSplatIndex] = rotY;
-            (dataColumns[12].data as Float32Array)[globalSplatIndex] = rotZ;
-            (dataColumns[13].data as Float32Array)[globalSplatIndex] = rotW;
+            (columns[10].data as Float32Array)[splatIndex] = rotW;
+            (columns[11].data as Float32Array)[splatIndex] = rotX;
+            (columns[12].data as Float32Array)[splatIndex] = rotY;
+            (columns[13].data as Float32Array)[splatIndex] = rotZ;
 
-            globalSplatIndex++;
+            splatIndex++;
         }
 
         currentSectionDataOffset += sectionDataSize + totalBucketStorageSize;
     }
 
-    if (globalSplatIndex !== totalSplats) {
-        throw new Error(`Splat count mismatch: expected ${totalSplats}, processed ${globalSplatIndex}`);
+    if (splatIndex !== numSplats) {
+        throw new Error(`Splat count mismatch: expected ${numSplats}, processed ${splatIndex}`);
     }
 
-    const resultTable = new DataTable(dataColumns);
+    const resultTable = new DataTable(columns);
 
     return {
-        comments: [`Loaded ${totalSplats} splats from .ksplat format`],
+        comments: [],
         elements: [{
             name: 'vertex',
             dataTable: resultTable
