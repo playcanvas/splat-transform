@@ -139,7 +139,20 @@ const readKsplat = async (fileHandle: FileHandle): Promise<KsplatFileData> => {
         throw new Error('Invalid .ksplat file: file is empty');
     }
 
-    // Initialize data storage
+    // First pass: scan all sections to find maximum harmonics degree
+    let maxHarmonicsDegree = 0;
+    for (let sectionIdx = 0; sectionIdx < maxSections; sectionIdx++) {
+        const sectionHeaderOffset = MAIN_HEADER_SIZE + sectionIdx * SECTION_HEADER_SIZE;
+        const sectionHeader = new DataView(fileBuffer.buffer, fileBuffer.byteOffset + sectionHeaderOffset, SECTION_HEADER_SIZE);
+        
+        const sectionSplatCount = sectionHeader.getUint32(0, true);
+        if (sectionSplatCount === 0) continue; // Skip empty sections
+        
+        const harmonicsDegree = sectionHeader.getUint16(40, true);
+        maxHarmonicsDegree = Math.max(maxHarmonicsDegree, harmonicsDegree);
+    }
+
+    // Initialize data storage with base columns
     const columns: Column[] = [
         new Column('x', new Float32Array(numSplats)),
         new Column('y', new Float32Array(numSplats)),
@@ -156,6 +169,12 @@ const readKsplat = async (fileHandle: FileHandle): Promise<KsplatFileData> => {
         new Column('rot_2', new Float32Array(numSplats)),
         new Column('rot_3', new Float32Array(numSplats))
     ];
+
+    // Add spherical harmonics columns based on maximum degree found
+    const maxHarmonicsComponentCount = HARMONICS_COMPONENT_COUNT[maxHarmonicsDegree];
+    for (let i = 0; i < maxHarmonicsComponentCount; i++) {
+        columns.push(new Column(`f_rest_${i}`, new Float32Array(numSplats)));
+    }
 
     const {
         centerBytes,
@@ -319,6 +338,11 @@ const readKsplat = async (fileHandle: FileHandle): Promise<KsplatFileData> => {
             (columns[11].data as Float32Array)[splatIndex] = rotX;
             (columns[12].data as Float32Array)[splatIndex] = rotY;
             (columns[13].data as Float32Array)[splatIndex] = rotZ;
+
+            // Store spherical harmonics
+            for (let i = 0; i < harmonicsComponentCount; i++) {
+                (columns[14 + i].data as Float32Array)[splatIndex] = decodeHarmonics(splatByteOffset, i);
+            }
 
             splatIndex++;
         }
