@@ -132,8 +132,8 @@ const readKsplat = async (fileHandle: FileHandle): Promise<KsplatFileData> => {
         throw new Error(`Invalid compression mode: ${compressionMode}`);
     }
 
-    const minHarmonicsValue = mainHeader.getFloat32(36, true) ?? -1.5;
-    const maxHarmonicsValue = mainHeader.getFloat32(40, true) ?? 1.5;
+    const minHarmonicsValue = mainHeader.getFloat32(36, true) || -1.5;
+    const maxHarmonicsValue = mainHeader.getFloat32(40, true) || 1.5;
 
     if (numSplats === 0) {
         throw new Error('Invalid .ksplat file: file is empty');
