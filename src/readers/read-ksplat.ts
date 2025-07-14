@@ -293,17 +293,17 @@ const readKsplat = async (fileHandle: FileHandle): Promise<KsplatFileData> => {
             }
 
             // Decode rotation quaternion
-            let rotW: number, rotX: number, rotY: number, rotZ: number;
+            let rot0: number, rot1: number, rot2: number, rot3: number;
             if (compressionMode === 0) {
-                rotW = splatData.getFloat32(splatByteOffset + rotationStartByte, true);
-                rotX = splatData.getFloat32(splatByteOffset + rotationStartByte + 4, true);
-                rotY = splatData.getFloat32(splatByteOffset + rotationStartByte + 8, true);
-                rotZ = splatData.getFloat32(splatByteOffset + rotationStartByte + 12, true);
+                rot0 = splatData.getFloat32(splatByteOffset + rotationStartByte, true);
+                rot1 = splatData.getFloat32(splatByteOffset + rotationStartByte + 4, true);
+                rot2 = splatData.getFloat32(splatByteOffset + rotationStartByte + 8, true);
+                rot3 = splatData.getFloat32(splatByteOffset + rotationStartByte + 12, true);
             } else {
-                rotW = decodeFloat16(splatData.getUint16(splatByteOffset + rotationStartByte, true));
-                rotX = decodeFloat16(splatData.getUint16(splatByteOffset + rotationStartByte + 2, true));
-                rotY = decodeFloat16(splatData.getUint16(splatByteOffset + rotationStartByte + 4, true));
-                rotZ = decodeFloat16(splatData.getUint16(splatByteOffset + rotationStartByte + 6, true));
+                rot0 = decodeFloat16(splatData.getUint16(splatByteOffset + rotationStartByte, true));
+                rot1 = decodeFloat16(splatData.getUint16(splatByteOffset + rotationStartByte + 2, true));
+                rot2 = decodeFloat16(splatData.getUint16(splatByteOffset + rotationStartByte + 4, true));
+                rot3 = decodeFloat16(splatData.getUint16(splatByteOffset + rotationStartByte + 6, true));
             }
 
             // Decode color and opacity
@@ -334,10 +334,10 @@ const readKsplat = async (fileHandle: FileHandle): Promise<KsplatFileData> => {
             (columns[9].data as Float32Array)[splatIndex] = Math.log(normalizedOpacity / (1.0 - normalizedOpacity));
 
             // Store quaternion
-            (columns[10].data as Float32Array)[splatIndex] = rotW;
-            (columns[11].data as Float32Array)[splatIndex] = rotX;
-            (columns[12].data as Float32Array)[splatIndex] = rotY;
-            (columns[13].data as Float32Array)[splatIndex] = rotZ;
+            (columns[10].data as Float32Array)[splatIndex] = rot0;
+            (columns[11].data as Float32Array)[splatIndex] = rot1;
+            (columns[12].data as Float32Array)[splatIndex] = rot2;
+            (columns[13].data as Float32Array)[splatIndex] = rot3;
 
             // Store spherical harmonics
             for (let i = 0; i < harmonicsComponentCount; i++) {
