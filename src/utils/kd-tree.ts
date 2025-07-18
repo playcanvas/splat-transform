@@ -1,3 +1,5 @@
+import { DataTable } from '../data-table';
+
 interface KdTreeNode {
     index: number;
     left?: KdTreeNode;
@@ -5,26 +7,55 @@ interface KdTreeNode {
 }
 
 class KdTree {
-    data: Float32Array[];
+    centroids: DataTable;
     root: KdTreeNode;
 
-    constructor(data: Float32Array[]) {
-        const indices = new Uint32Array(data[0].length);
+    constructor(centroids: DataTable) {
+        const indices = new Uint32Array(centroids.numRows);
         indices.forEach((v, i) => {
             indices[i] = i;
         });
-        this.data = data;
+        this.centroids = centroids;
         this.root = this.build(indices, 0);
     }
 
+    // construct a flat buffer representation of the tree
+    flatten() {
+        const { totalNodes } = this;
+
+        const result = new Uint32Array(totalNodes * 3);
+        let index = 0;
+
+        const recurse = (node: KdTreeNode) => {
+            const i = index++;
+            result[i * 3] = node.index;
+            result[i * 3 + 1] = node.left ? recurse(node.left) : 0;
+            result[i * 3 + 2] = node.right ? recurse(node.right) : 0;
+            return i;
+        };
+
+        recurse(this.root);
+
+        return result;
+    }
+
+    get totalNodes() {
+        const recurse = (node: KdTreeNode): number => {
+            return 1 +
+                (node.left ? recurse(node.left) : 0) +
+                (node.right ? recurse(node.right) : 0);
+        };
+        return recurse(this.root);
+    }
+
     findNearest(point: Float32Array, filterFunc?: (index: number) => boolean) {
-        const { data } = this;
-        const { length } = data;
+        const { centroids } = this;
+        const { numColumns } = centroids;
 
         const calcDistance = (index: number) => {
             let l = 0;
-            for (let i = 0; i < length; ++i) {
-                const v = data[i][index] - point[i];
+            for (let i = 0; i < numColumns; ++i) {
+                const v = centroids.columns[i].data[index] - point[i];
                 l += v * v;
             }
             return l;
@@ -35,8 +66,8 @@ class KdTree {
         let cnt = 0;
 
         const recurse = (node: KdTreeNode, depth: number) => {
-            const axis = depth % length;
-            const distance = point[axis] - (this.data[axis])[node.index];
+            const axis = depth % numColumns;
+            const distance = point[axis] - centroids.columns[axis].data[node.index];
             const next = (distance > 0) ? node.right : node.left;
 
             cnt++;
@@ -69,8 +100,8 @@ class KdTree {
     }
 
     private build(indices: Uint32Array, depth: number): KdTreeNode {
-        const { data } = this;
-        const values = data[depth % data.length];
+        const { centroids } = this;
+        const values = centroids.columns[depth % centroids.numColumns].data;
         indices.sort((a, b) => values[a] - values[b]);
 
         if (indices.length === 1) {

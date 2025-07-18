@@ -40,7 +40,9 @@ const calcAverage = (dataTable: DataTable, cluster: number[], row: any) => {
     }
 };
 
-const cluster = (dataTable: DataTable, kdTree: KdTree, k: number) => {
+const cluster = (dataTable: DataTable, kdTree: KdTree) => {
+    const k = kdTree.centroids.numRows;
+
     // construct a kdtree over the centroids so we can find the nearest quickly
     const point = new Float32Array(dataTable.numColumns);
 
@@ -66,7 +68,7 @@ const cluster = (dataTable: DataTable, kdTree: KdTree, k: number) => {
     return clusters;
 };
 
-const kmeans = (dataTable: DataTable, k: number, device?: GpuDevice) => {
+const kmeans = async (dataTable: DataTable, k: number, device?: GpuDevice) => {
     // too few data points
     if (dataTable.numRows < k) {
         return {
@@ -86,9 +88,9 @@ const kmeans = (dataTable: DataTable, k: number, device?: GpuDevice) => {
     let clusters: number[][];
 
     while (!converged) {
-        const kdTree = new KdTree(centroids.columns.map(c => c.data) as Float32Array[]);
+        const kdTree = new KdTree(centroids);
 
-        clusters = device ? cluster(dataTable, kdTree, k) : cluster(dataTable, kdTree, k);
+        clusters = device ? await device.cluster.execute(dataTable, kdTree) : cluster(dataTable, kdTree);
 
         // calculate the new centroid positions
         for (let i = 0; i < centroids.numRows; ++i) {

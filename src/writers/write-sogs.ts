@@ -236,7 +236,7 @@ const writeSogs = async (fileHandle: FileHandle, dataTable: DataTable, outputFil
 
         // calculate kmeans
         const gpuDevice = shMethod === 'gpu' ? await createDevice() : null;
-        const { centroids, labels } = kmeans(shDataTable, 2 * 1024, gpuDevice);
+        const { centroids, labels } = await kmeans(shDataTable, 2 * 1024, gpuDevice);
 
         // write centroids
         const centroidsBuf = new Uint8Array(64 * shCoeffs * Math.ceil(centroids.numRows / 64) * channels);
