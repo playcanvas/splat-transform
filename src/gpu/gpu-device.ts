@@ -53,70 +53,97 @@ const clusterWgsl = /* wgsl */ `
 @group(0) @binding(1) var<storage, read> centroids: array<f32>;
 @group(0) @binding(2) var<storage, read_write> results: array<u32>;
 
-struct DataShape {
-    numRows: u32,
-    numColumns: u32,
-    numCentroids: u32
-};
+const numColumns = 45u;
+const chunkSize = 128u;
+
+var<workgroup> sharedChunk: array<f32, numColumns * chunkSize>;
 
 // calculate the squared distance between the point and centroid
-fn calcDistanceSqr(dataShape: ptr<function, DataShape>, point: array<f32, 45>, centroid: u32) -> f32 {
+fn calcDistanceSqr(point: array<f32, numColumns>, centroid: u32) -> f32 {
     var result = 0.0;
 
-    var ci = centroid * dataShape.numColumns;
+    var ci = centroid * numColumns;
 
-    for (var i = 0u; i < dataShape.numColumns; i++) {
-        let v = point[i] - centroids[ci+i];
+    for (var i = 0u; i < numColumns; i++) {
+        let v = point[i] - sharedChunk[ci+i];
         result += v * v;
     }
 
     return result;
 }
 
-// return the index of the nearest centroid to the point
-fn findNearest(dataShape: ptr<function, DataShape>, point: array<f32, 45>) -> u32 {
-    var mind = 1000000.0;
-    var mini = 0u;
+@compute @workgroup_size(64)
+fn main(
+    @builtin(local_invocation_index) local_id : u32,
+    @builtin(global_invocation_id) global_id: vec3u,
+    @builtin(num_workgroups) num_workgroups: vec3u
+) {
+    // calculate data shape given array lengths
+    let numPoints = arrayLength(&points) / numColumns;
+    let numCentroids = arrayLength(&centroids) / numColumns;
 
-    for (var i = 0u; i < dataShape.numCentroids; i++) {
-        let d = calcDistanceSqr(dataShape, point, i);
-        if (d < mind) {
-            mind = d;
-            mini = i;
+    // calculate row index for this thread point
+    let pointIndex = global_id.x + global_id.y * num_workgroups.x * 64;
+
+    // copy the point data from global memory
+    var point: array<f32, numColumns>;
+    if (pointIndex < numPoints) {
+        for (var i = 0u; i < numColumns; i++) {
+            point[i] = points[pointIndex * numColumns + i];
         }
     }
 
-    return mini;
-}
+    var mind = 1000000.0;
+    var mini = 0u;
 
-@compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(num_workgroups) num_workgroups: vec3u) {
-    // calculate data shape given array lengths
-    var dataShape: DataShape;
-    dataShape.numRows = arrayLength(&results);
-    dataShape.numColumns = arrayLength(&points) / dataShape.numRows;
-    dataShape.numCentroids = arrayLength(&centroids) / dataShape.numColumns;
+    // work through the list of centroids in shared memory chunks
+    let numChunks = u32(ceil(f32(numCentroids) / f32(chunkSize)));
+    for (var i = 0u; i < numChunks; i++) {
 
-    let index = global_id.x + global_id.y * num_workgroups.x * 64;
-    if (index < dataShape.numRows) {
+        // copy this thread's slice of the centroid shared chunk data
+        let dstRow = local_id * (chunkSize / 64u);
+        let srcRow = min(numCentroids, i * chunkSize + local_id * chunkSize / 64u);
+        let numRows = min(numCentroids, srcRow + chunkSize / 64u) - srcRow;
 
-        // read the point data from main memory
-        var point: array<f32, 45>;
-        for (var i = 0u; i < dataShape.numColumns; i++) {
-            point[i] = points[index * dataShape.numColumns + i];
+        var dst = dstRow * numColumns;
+        var src = srcRow * numColumns;
+
+        for (var c = 0u; c < numRows * numColumns; c++) {
+            sharedChunk[dst + c] = centroids[src + c];
         }
 
-        results[index] = findNearest(&dataShape, point);
+        // wait for all threads to finish writing their part of centroids shared memory buffer
+        workgroupBarrier();
+
+        // loop over the next chunk of centroids finding the closest
+        if (pointIndex < numPoints) {
+            let thisChunkSize = min(chunkSize, numCentroids - i * chunkSize);
+            for (var c = 0u; c < thisChunkSize; c++) {
+                let d = calcDistanceSqr(point, c);
+                if (d < mind) {
+                    mind = d;
+                    mini = i * chunkSize + c;
+                }
+            }
+        }
+
+        // next look will overwrite the shared memory, so wait
+        workgroupBarrier();
+    }
+
+    if (pointIndex < numPoints) {
+        results[pointIndex] = mini;
     }
 }
 `;
 
 const interleaveData = (dataTable: DataTable) => {
-    const result = new Float32Array(dataTable.numRows * dataTable.numColumns);
-    for (let c = 0; c < dataTable.numColumns; ++c) {
+    const { numRows, numColumns } = dataTable;
+    const result = new Float32Array(numRows * numColumns);
+    for (let c = 0; c < numColumns; ++c) {
         const column = dataTable.columns[c];
-        for (let r = 0; r < dataTable.numRows; ++r) {
-            result[r * dataTable.numColumns + c] = column.data[r];
+        for (let r = 0; r < numRows; ++r) {
+            result[r * numColumns + c] = column.data[r];
         }
     }
     return result;
