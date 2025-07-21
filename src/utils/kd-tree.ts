@@ -99,6 +99,112 @@ class KdTree {
         return { index: mini, distanceSqr: mind, cnt };
     }
 
+    // traverse the kd-tree to find the nearest centroid
+    findNearest2(point: Float32Array) {
+        const calcDistance = (centroid: number) => {
+            let result = 0;
+            for (let i = 0; i < point.length; ++i) {
+                result += (point[i] - this.centroids.columns[i].data[centroid]) ** 2;
+            }
+            return result;
+        };
+        const select = (failValue: number, sucessValue: number, test: boolean) => {
+            return test ? sucessValue : failValue;
+        };
+        const { numColumns } = this.centroids;
+        const kdTree = this.flatten();
+
+        let mind = 1000000.0;
+        let mini = 0;
+
+        let stack: { node: number, depth: number }[] = [];
+
+        for (let i = 0; i < 64; ++i) {
+            stack[i] = { node: 0, depth: 0 };
+        }
+
+        // initialize first stack element to reference root element
+        stack[0].node = 0;
+        stack[0].depth = 0;
+
+        let stackIndex = 1;
+
+        let cnt = 0;
+
+        while (stackIndex > 0) {
+            // pop the top of the stack
+            stackIndex--;
+            const s = stack[stackIndex];
+
+            const node = s.node * 3;
+            const depth = s.depth;
+            const centroid = kdTree[node];
+            const left = kdTree[node + 1];
+            const right = kdTree[node + 2];
+
+            // calculate distance to the kdtree node
+            const d = calcDistance(centroid);
+            if (d < mind) {
+                mind = d;
+                mini = centroid;
+            }
+
+            // calculate distance to kdtree split plane
+            const axis = depth % numColumns;
+            const distance = point[axis] - this.centroids.columns[axis].data[centroid];
+            const onRight = distance > 0.0;
+
+            // push the other side if necessary
+            if (distance * distance < mind) {
+                let other = select(right, left, onRight);
+                if (other > 0) {
+                    stack[stackIndex].node = other;
+                    stack[stackIndex].depth = depth + 1;
+                    stackIndex++;
+                }
+            }
+
+            // push the kdtree node of the side we are on
+            const next = select(left, right, onRight);
+            if (next > 0) {
+                stack[stackIndex].node = next;
+                stack[stackIndex].depth = depth + 1;
+                stackIndex++;
+            }
+
+            cnt++;
+
+            if (stackIndex >= 64) {
+                console.log('err');
+            }
+        }
+
+        return { index: mini, distanceSqr: mind, cnt };
+    }
+
+    findNearest3(point: Float32Array) {
+        const calcDistance = (centroid: number) => {
+            let result = 0;
+            for (let i = 0; i < point.length; ++i) {
+                result += (point[i] - this.centroids.columns[i].data[centroid]) ** 2;
+            }
+            return result;
+        };
+
+        let mind = 100000.0;
+        let mini = 0;
+
+        for (let i = 0; i < this.centroids.numRows; ++i) {
+            let d = calcDistance(i);
+            if (d < mind) {
+                mind = d;
+                mini = i;
+            }
+        }
+
+        return { index: mini, distanceSqr: mind, cnt: this.centroids.numRows };
+    }
+
     private build(indices: Uint32Array, depth: number): KdTreeNode {
         const { centroids } = this;
         const values = centroids.columns[depth % centroids.numColumns].data;

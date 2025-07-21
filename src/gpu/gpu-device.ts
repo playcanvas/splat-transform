@@ -55,17 +55,24 @@ const clusterWgsl = /* wgsl */ `
 @group(0) @binding(2) var<storage, read> kdTree: array<u32>;
 @group(0) @binding(3) var<storage, read_write> results: array<u32>;
 
-// calculate the squared distance between the point and centroid
-fn calcDistance(point: u32, centroid: u32) -> f32 {
-    let numRows = arrayLength(&results);
-    let numColumns = arrayLength(&points) / numRows;
-    let numCentroids = arrayLength(&centroids) / numColumns;
+struct DataShape {
+    numRows: u32,
+    numColumns: u32,
+    numCentroids: u32
+};
 
+struct Stack {
+    node: u32,
+    depth: u32
+};
+
+// calculate the squared distance between the point and centroid
+fn calcDistance(dataShape: ptr<function, DataShape>, point: u32, centroid: u32) -> f32 {
     var result = 0.0;
 
-    for (var i = 0u; i < numColumns; i++) {
-        let p = points[point + i * numRows];
-        let c = centroids[centroid + i * numCentroids];
+    for (var i = 0u; i < dataShape.numColumns; i++) {
+        let p = points[point + i * dataShape.numRows];
+        let c = centroids[centroid + i * dataShape.numCentroids];
         let v = p - c;
         result += v * v;
     }
@@ -74,16 +81,12 @@ fn calcDistance(point: u32, centroid: u32) -> f32 {
 }
 
 // return the index of the nearest centroid to the point
-fn findNearest(point: u32) -> u32 {
-    let numRows = arrayLength(&results);
-    let numColumns = arrayLength(&points) / numRows;
-    let numCentroids = arrayLength(&centroids) / numColumns;
-
+fn findNearest(dataShape: ptr<function, DataShape>, point: u32) -> u32 {
     var mind = 1000000.0;
     var mini = 0u;
 
-    for (var i = 0u; i < numCentroids; i++) {
-        let d = calcDistance(point, i);
+    for (var i = 0u; i < dataShape.numCentroids; i++) {
+        let d = calcDistance(dataShape, point, i);
         if (d < mind) {
             mind = d;
             mini = i;
@@ -93,13 +96,76 @@ fn findNearest(point: u32) -> u32 {
     return mini;
 }
 
+// traverse the kd-tree to find the nearest centroid
+fn findNearestKdTree(dataShape: ptr<function, DataShape>, point: u32) -> u32 {
+    var mind = 1000000.0;
+    var mini = 0u;
+
+    var stack: array<Stack, 64>;
+
+    // initialize first stack element to reference root element
+    stack[0].node = 0u;
+    stack[0].depth = 0u;
+
+    var stackIndex = 1u;
+
+    while (stackIndex > 0u) {
+        // pop the top of the stack
+        stackIndex--;
+        let s = stack[stackIndex];
+
+        let node = s.node * 3;
+        let depth = s.depth;
+        let centroid = kdTree[node];
+        let left = kdTree[node + 1];
+        let right = kdTree[node + 2];
+
+        // calculate distance to the kdtree node
+        let d = calcDistance(dataShape, point, centroid);
+        if (d < mind) {
+            mind = d;
+            mini = centroid;
+        }
+
+        // calculate distance to kdtree split plane
+        let axis = depth % dataShape.numColumns;
+        let distance = points[point + axis * dataShape.numRows] - centroids[centroid + axis * dataShape.numCentroids];
+        let onRight = distance > 0.0;
+
+        // push the other side if necessary
+        if (distance * distance < mind) {
+            let other = select(right, left, onRight);
+            if (other > 0) {
+                stack[stackIndex].node = other;
+                stack[stackIndex].depth = depth + 1;
+                stackIndex++;
+            }
+        }
+
+        // push the kdtree node of the side we are on
+        let next = select(left, right, onRight);
+        if (next > 0) {
+            stack[stackIndex].node = next;
+            stack[stackIndex].depth = depth + 1;
+            stackIndex++;
+        }
+    }
+
+    return mini;
+}
+
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_invocation_id: vec3u) {
+    // calculate data shape given array lengths
+    var dataShape: DataShape;
+    dataShape.numRows = arrayLength(&results);
+    dataShape.numColumns = arrayLength(&points) / dataShape.numRows;
+    dataShape.numCentroids = arrayLength(&centroids) / dataShape.numColumns;
+
     let index = global_invocation_id.x;
-    if (index >= arrayLength(&results)) {
-        return;
+    if (index < dataShape.numRows) {
+        results[index] = findNearest(&dataShape, index);
     }
-    results[index] = findNearest(index);
 }
 `;
 

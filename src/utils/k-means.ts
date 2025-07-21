@@ -53,6 +53,10 @@ const cluster = (dataTable: DataTable, kdTree: KdTree) => {
 
     const row: any = {};
 
+    let atot = 0;
+    let btot = 0;
+    let ctot = 0;
+
     // assign each point to the nearest centroid
     for (let i = 0; i < dataTable.numRows; ++i) {
         dataTable.getRow(i, row);
@@ -60,10 +64,18 @@ const cluster = (dataTable: DataTable, kdTree: KdTree) => {
             point[i] = row[c.name];
         });
 
-        const result = kdTree.findNearest(point);
+        const a = kdTree.findNearest(point);
+        const b = kdTree.findNearest2(point);
+        const c = kdTree.findNearest3(point);
 
-        clusters[result.index].push(i);
+        atot += a.cnt;
+        btot += b.cnt;
+        ctot += c.cnt;
+
+        clusters[a.index].push(i);
     }
+
+    console.log(`atot=${atot} btot=${btot} ctot=${ctot}`);
 
     return clusters;
 };
@@ -89,6 +101,24 @@ const kmeans = async (dataTable: DataTable, k: number, device?: GpuDevice) => {
 
     while (!converged) {
         const kdTree = new KdTree(centroids);
+
+        /*
+        // compare cpu and gpu results
+        const a = await device.cluster.execute(dataTable, kdTree);
+        const b = cluster(dataTable, kdTree);
+
+        for (let i = 0; i < a.length; ++i) {
+            if (a[i].length !== b[i].length) {
+                console.log(`Cluster mismatch at index ${i}: GPU has ${a[i].length} points, CPU has ${b[i].length} points`);
+            } else {
+                for (let j = 0; j < a[i].length; ++j) {
+                    if (a[i][j] !== b[i][j]) {
+                        console.log(`Point mismatch at cluster ${i}, point index ${j}: GPU has ${a[i][j]}, CPU has ${b[i][j]}`);
+                    }
+                }
+            }
+        }
+        //*/
 
         clusters = device ? await device.cluster.execute(dataTable, kdTree) : cluster(dataTable, kdTree);
 

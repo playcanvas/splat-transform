@@ -387,7 +387,7 @@ const main = async () => {
 
     const endTime = hrtime(startTime);
 
-    console.log(`done in ${endTime[1] / 1e9}s`);
+    console.log(`done in ${endTime[0] + endTime[1] / 1e9}s`);
 };
 
 export { main };

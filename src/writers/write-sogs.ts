@@ -234,9 +234,11 @@ const writeSogs = async (fileHandle: FileHandle, dataTable: DataTable, outputFil
         // create a table with just spherical harmonics data
         const shDataTable = new DataTable(shColumns);
 
+        const paletteSize = Math.min(64, 2 ** Math.floor(Math.log2(dataTable.numRows / 1024))) * 1024;
+
         // calculate kmeans
         const gpuDevice = shMethod === 'gpu' ? await createDevice() : null;
-        const { centroids, labels } = await kmeans(shDataTable, 2 * 1024, gpuDevice);
+        const { centroids, labels } = await kmeans(shDataTable, paletteSize, gpuDevice);
 
         // write centroids
         const centroidsBuf = new Uint8Array(64 * shCoeffs * Math.ceil(centroids.numRows / 64) * channels);
