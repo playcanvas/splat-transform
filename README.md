@@ -1,39 +1,125 @@
 # Splat Transform - 3D Gaussian Splat Converter
 
-Splat Transform is an open source CLI tool for reading gaussian splat PLY files and writing them to PLY, compressed.ply and SOGS format.
+Splat Transform is an open source CLI tool for reading gaussian splat PLY files and writing them to PLY, Compressed PLY, CSV, and SOGS format.
 
 Multiple files may be combined and transformed before being written to the output.
 
 ## Installation
+
 First install the package globally:
-```
+
+```bash
 npm install -g @playcanvas/splat-transform
 ```
 
-Then invoke the CLI from anywhere as follows:
+## Usage
+
 ```bash
-# combine input_a.ply and input_b.ply and write the result to compressed ply format
-splat-transform input_a.ply input_b.ply output.compressed.ply
-
-# read input_a.ply and input_b.ply and write the result in SOGS format
-splat-transform input_a.ply input_b.ply output/meta.json
+splat-transform [GLOBAL]  <input.{ply|splat|ksplat}> [ACTIONS]  ...  <output.{ply|compressed.ply|meta.json|csv}> [ACTIONS]
 ```
 
-The input and output files can optionally be transformed. For example:
-```
-# load input.ply and translate it by (1, 0, 0) and write the result to output.ply
-splat-transform input.ply -t 1,0,0 output.ply
+**Key points:**
+- Every time an `*.ply*` appears, it becomes the current working set; the following ACTIONS are applied in the order listed
+- The last file on the command line is treated as the output; anything after it is interpreted as actions that modify the final result
 
-# remove entries containing NaN and Inf and bands larger than 2
-splat-transform input.ply output.ply --filterNaN --filterBands 2
+## Supported Formats
+
+**Input:**
+- `.ply` - Standard PLY format
+- `.splat` - Binary splat format (antimatter15 format)
+- `.ksplat` - Compressed binary splat format (mkkellogg format)
+
+**Output:**
+- `.ply` - Standard PLY format
+- `.compressed.ply` - Compressed PLY format
+- `meta.json` - SOGS format (JSON + WebP images)
+- `.csv` - Comma-separated values
+
+## Actions
+
+Actions can be repeated and applied in any order:
+
+```bash
+-t, --translate  x,y,z                  Translate splats by (x, y, z)
+-r, --rotate     x,y,z                  Rotate splats by Euler angles (deg)
+-s, --scale      x                      Uniformly scale splats by factor x
+-n, --filterNaN                         Remove any Gaussian containing NaN/Inf
+-c, --filterByValue name,cmp,value      Keep splats where <name> <cmp> <value>
+                                        cmp ∈ {lt,lte,gt,gte,eq,neq}
+-b, --filterBands  {0|1|2|3}            Strip spherical-harmonic bands > N
 ```
 
-The full list of possible actions are as follows:
+## Global Options
+
+```bash
+-w, --overwrite                         Overwrite output file if it already exists
+-h, --help                              Show help and exit
+-v, --version                           Show version and exit
 ```
--translate     -t x,y,z                     Translate splats by (x, y, z)
--rotate        -r x,y,z                     Rotate splats by euler angles (x, y, z) (in degrees)
--scale         -s x                         Scale splats by x (uniform scaling)
--filterNaN     -n                           Remove gaussians containing any NaN or Inf value
--filterByValue -c name,comparator,value     Filter gaussians by a value. Specify the value name, comparator (lt, lte, gt, gte, eq, neq) and value
--filterBands   -h 1                         Filter spherical harmonic band data. Value must be 0, 1, 2 or 3.
+
+## Examples
+
+### Basic Operations
+
+```bash
+# Simple format conversion
+splat-transform input.ply output.csv
+
+# Convert from .splat format
+splat-transform input.splat output.ply
+
+# Convert from .ksplat format
+splat-transform input.ksplat output.ply
+
+# Convert to compressed PLY
+splat-transform input.ply output.compressed.ply
+
+# Convert to SOGS format
+splat-transform input.ply output/meta.json
+```
+
+### Transformations
+
+```bash
+# Scale and translate
+splat-transform bunny.ply -s 0.5 -t 0,0,10 bunny_scaled.ply
+
+# Rotate by 90 degrees around Y axis
+splat-transform input.ply -r 0,90,0 output.ply
+
+# Chain multiple transformations
+splat-transform input.ply -s 2 -t 1,0,0 -r 0,0,45 output.ply
+```
+
+### Filtering
+
+```bash
+# Remove entries containing NaN and Inf
+splat-transform input.ply --filterNaN output.ply
+
+# Filter by opacity values (keep only splats with opacity > 0.5)
+splat-transform input.ply -c opacity,gt,0.5 output.ply
+
+# Strip spherical harmonic bands higher than 2
+splat-transform input.ply --filterBands 2 output.ply
+```
+
+### Advanced Usage
+
+```bash
+# Combine multiple files with different transforms
+splat-transform -w cloudA.ply -r 0,90,0 cloudB.ply -s 2 merged.compressed.ply
+
+# Apply final transformations to combined result
+splat-transform input1.ply input2.ply output.ply -t 0,0,10 -s 0.5
+```
+
+## Getting Help
+
+```bash
+# Show version
+splat-transform --version
+
+# Show help
+splat-transform --help
 ```

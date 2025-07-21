@@ -8,7 +8,9 @@ import { Vec3 } from 'playcanvas';
 import { version } from '../package.json';
 import { Column, DataTable, TypedArray } from './data-table';
 import { ProcessAction, process } from './process';
+import { readKsplat } from './readers/read-ksplat';
 import { readPly } from './readers/read-ply';
+import { readSplat } from './readers/read-splat';
 import { writeCompressedPly } from './writers/write-compressed-ply';
 import { writeCsv } from './writers/write-csv';
 import { writePly } from './writers/write-ply';
@@ -23,9 +25,23 @@ type Options = {
 const readFile = async (filename: string) => {
     console.log(`reading '${filename}'...`);
     const inputFile = await open(filename, 'r');
-    const plyData = await readPly(inputFile);
+
+    const lowerFilename = filename.toLowerCase();
+    let fileData;
+
+    if (lowerFilename.endsWith('.ksplat')) {
+        fileData = await readKsplat(inputFile);
+    } else if (lowerFilename.endsWith('.splat')) {
+        fileData = await readSplat(inputFile);
+    } else if (lowerFilename.endsWith('.ply')) {
+        fileData = await readPly(inputFile);
+    } else {
+        await inputFile.close();
+        throw new Error(`Unsupported input file type: ${filename}`);
+    }
+
     await inputFile.close();
-    return plyData;
+    return fileData;
 };
 
 const getOutputFormat = (filename: string) => {
@@ -39,14 +55,14 @@ const getOutputFormat = (filename: string) => {
         return 'compressed-ply';
     } else if (lowerFilename.endsWith('.ply')) {
         return 'ply';
-    } else {
-        throw new Error(`Unsupported output file type: ${filename}`);
     }
+
+    throw new Error(`Unsupported output file type: ${filename}`);
 };
 
 const writeFile = async (filename: string, dataTable: DataTable, options: Options) => {
 
-    const outputFormat = getOutputFormat(filename); 
+    const outputFormat = getOutputFormat(filename);
 
     // open the output file
     let outputFile;
@@ -180,7 +196,7 @@ const parseArguments = () => {
             scale: { type: 'string', short: 's', multiple: true },
             filterNaN: { type: 'boolean', short: 'n', multiple: true },
             filterByValue: { type: 'string', short: 'c', multiple: true },
-            filterBands: { type: 'string', short: 'b', multiple: true },
+            filterBands: { type: 'string', short: 'b', multiple: true }
         }
     });
 
@@ -289,15 +305,15 @@ Apply geometric transforms & filters to Gaussian-splat point clouds
 ===================================================================
 
 USAGE
-  splat-transform [GLOBAL]  <input.ply> [ACTIONS]  ...  <output.{ply|compressed.ply|meta.json|csv}> [ACTIONS]
+  splat-transform [GLOBAL]  <input.{ply|splat|ksplat}> [ACTIONS]  ...  <output.{ply|compressed.ply|meta.json|csv}> [ACTIONS]
 
-  • Every time an *.ply* appears, it becomes the current working set; the following
+  • Every time an input file appears, it becomes the current working set; the following
     ACTIONS are applied in the order listed.  
   • The last file on the command line is treated as the output; anything after it is
     interpreted as actions that modify the final result.
 
 SUPPORTED INPUTS
-    .ply
+    .ply   .splat   .ksplat
 
 SUPPORTED OUTPUTS
     .ply   .compressed.ply   meta.json (SOGS)   .csv
