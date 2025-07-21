@@ -1,6 +1,6 @@
 {
   "name": "@playcanvas/splat-transform",
-  "version": "0.4.0",
+  "version": "0.4.2",
   "author": "PlayCanvas<support@playcanvas.com>",
   "homepage": "https://playcanvas.com",
   "description": "CLI tool for converting PLY gaussian splat scenes to compressed.ply",
