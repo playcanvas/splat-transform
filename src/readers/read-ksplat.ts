@@ -318,9 +318,9 @@ const readKsplat = async (fileHandle: FileHandle): Promise<KsplatFileData> => {
             (columns[2].data as Float32Array)[splatIndex] = z;
 
             // Store scale (convert from linear in .ksplat to log scale for internal use)
-            (columns[3].data as Float32Array)[splatIndex] = Math.log(scaleX);
-            (columns[4].data as Float32Array)[splatIndex] = Math.log(scaleY);
-            (columns[5].data as Float32Array)[splatIndex] = Math.log(scaleZ);
+            (columns[3].data as Float32Array)[splatIndex] = scaleX > 0 ? Math.log(scaleX) : -10;
+            (columns[4].data as Float32Array)[splatIndex] = scaleY > 0 ? Math.log(scaleY) : -10;
+            (columns[5].data as Float32Array)[splatIndex] = scaleZ > 0 ? Math.log(scaleZ) : -10;
 
             // Store color (convert from uint8 back to spherical harmonics)
             const SH_C0 = 0.28209479177387814;
@@ -341,7 +341,25 @@ const readKsplat = async (fileHandle: FileHandle): Promise<KsplatFileData> => {
 
             // Store spherical harmonics
             for (let i = 0; i < harmonicsComponentCount; i++) {
-                (columns[14 + i].data as Float32Array)[splatIndex] = decodeHarmonics(splatByteOffset, i);
+                let channel;
+                let coeff;
+
+                // band 0 is packed together, then band 1, then band 2.
+                if (i < 9) {
+                    channel = Math.floor(i / 3);
+                    coeff = i % 3;
+                } else if (i < 24) {
+                    channel = Math.floor((i - 9) / 5);
+                    coeff = (i - 9) % 5 + 3;
+                } else {
+                    // don't think 3 bands are supported, but here just in case
+                    channel = Math.floor((i - 24) / 7);
+                    coeff = (i - 24) % 7 + 8;
+                }
+
+                const col = channel * (harmonicsComponentCount / 3) + coeff;
+
+                (columns[14 + col].data as Float32Array)[splatIndex] = decodeHarmonics(splatByteOffset, i);
             }
 
             splatIndex++;
