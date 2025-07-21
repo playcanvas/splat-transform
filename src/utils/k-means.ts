@@ -1,3 +1,5 @@
+import { stdout } from 'node:process';
+
 import { Column, DataTable } from '../data-table';
 import { KdTree } from './kd-tree';
 import { GpuDevice } from '../gpu/gpu-device';
@@ -120,7 +122,7 @@ const kmeans = async (dataTable: DataTable, k: number, device?: GpuDevice) => {
         }
         //*/
 
-        clusters = device ? await device.cluster.execute(dataTable, kdTree) : cluster(dataTable, kdTree);
+        clusters = device ? await device.cluster.execute(dataTable, centroids) : cluster(dataTable, kdTree);
 
         // calculate the new centroid positions
         for (let i = 0; i < centroids.numRows; ++i) {
@@ -132,7 +134,11 @@ const kmeans = async (dataTable: DataTable, k: number, device?: GpuDevice) => {
         if (steps > 10) {
             converged = true;
         }
+
+        stdout.write("#");
     }
+
+    console.log(' done 🎉');
 
     // construct labels from clusters
     const labels = new Uint32Array(dataTable.numRows);

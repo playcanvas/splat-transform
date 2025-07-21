@@ -18,7 +18,6 @@ import {
 } from 'playcanvas/debug';
 
 import { DataTable } from '../data-table.js';
-import { KdTree } from '../utils/kd-tree.js';
 
 import { JSDOM } from 'jsdom';
 
@@ -52,8 +51,7 @@ const clusterWgsl = /* wgsl */ `
 
 @group(0) @binding(0) var<storage, read> points: array<f32>;
 @group(0) @binding(1) var<storage, read> centroids: array<f32>;
-@group(0) @binding(2) var<storage, read> kdTree: array<u32>;
-@group(0) @binding(3) var<storage, read_write> results: array<u32>;
+@group(0) @binding(2) var<storage, read_write> results: array<u32>;
 
 struct DataShape {
     numRows: u32,
@@ -61,19 +59,14 @@ struct DataShape {
     numCentroids: u32
 };
 
-struct Stack {
-    node: u32,
-    depth: u32
-};
-
 // calculate the squared distance between the point and centroid
-fn calcDistance(dataShape: ptr<function, DataShape>, point: u32, centroid: u32) -> f32 {
+fn calcDistanceSqr(dataShape: ptr<function, DataShape>, point: array<f32, 45>, centroid: u32) -> f32 {
     var result = 0.0;
 
+    var ci = centroid * dataShape.numColumns;
+
     for (var i = 0u; i < dataShape.numColumns; i++) {
-        let p = points[point + i * dataShape.numRows];
-        let c = centroids[centroid + i * dataShape.numCentroids];
-        let v = p - c;
+        let v = point[i] - centroids[ci+i];
         result += v * v;
     }
 
@@ -81,12 +74,12 @@ fn calcDistance(dataShape: ptr<function, DataShape>, point: u32, centroid: u32) 
 }
 
 // return the index of the nearest centroid to the point
-fn findNearest(dataShape: ptr<function, DataShape>, point: u32) -> u32 {
+fn findNearest(dataShape: ptr<function, DataShape>, point: array<f32, 45>) -> u32 {
     var mind = 1000000.0;
     var mini = 0u;
 
     for (var i = 0u; i < dataShape.numCentroids; i++) {
-        let d = calcDistance(dataShape, point, i);
+        let d = calcDistanceSqr(dataShape, point, i);
         if (d < mind) {
             mind = d;
             mini = i;
@@ -96,78 +89,38 @@ fn findNearest(dataShape: ptr<function, DataShape>, point: u32) -> u32 {
     return mini;
 }
 
-// traverse the kd-tree to find the nearest centroid
-fn findNearestKdTree(dataShape: ptr<function, DataShape>, point: u32) -> u32 {
-    var mind = 1000000.0;
-    var mini = 0u;
-
-    var stack: array<Stack, 64>;
-
-    // initialize first stack element to reference root element
-    stack[0].node = 0u;
-    stack[0].depth = 0u;
-
-    var stackIndex = 1u;
-
-    while (stackIndex > 0u) {
-        // pop the top of the stack
-        stackIndex--;
-        let s = stack[stackIndex];
-
-        let node = s.node * 3;
-        let depth = s.depth;
-        let centroid = kdTree[node];
-        let left = kdTree[node + 1];
-        let right = kdTree[node + 2];
-
-        // calculate distance to the kdtree node
-        let d = calcDistance(dataShape, point, centroid);
-        if (d < mind) {
-            mind = d;
-            mini = centroid;
-        }
-
-        // calculate distance to kdtree split plane
-        let axis = depth % dataShape.numColumns;
-        let distance = points[point + axis * dataShape.numRows] - centroids[centroid + axis * dataShape.numCentroids];
-        let onRight = distance > 0.0;
-
-        // push the other side if necessary
-        if (distance * distance < mind) {
-            let other = select(right, left, onRight);
-            if (other > 0) {
-                stack[stackIndex].node = other;
-                stack[stackIndex].depth = depth + 1;
-                stackIndex++;
-            }
-        }
-
-        // push the kdtree node of the side we are on
-        let next = select(left, right, onRight);
-        if (next > 0) {
-            stack[stackIndex].node = next;
-            stack[stackIndex].depth = depth + 1;
-            stackIndex++;
-        }
-    }
-
-    return mini;
-}
-
 @compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) global_invocation_id: vec3u) {
+fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(num_workgroups) num_workgroups: vec3u) {
     // calculate data shape given array lengths
     var dataShape: DataShape;
     dataShape.numRows = arrayLength(&results);
     dataShape.numColumns = arrayLength(&points) / dataShape.numRows;
     dataShape.numCentroids = arrayLength(&centroids) / dataShape.numColumns;
 
-    let index = global_invocation_id.x;
+    let index = global_id.x + global_id.y * num_workgroups.x * 64;
     if (index < dataShape.numRows) {
-        results[index] = findNearest(&dataShape, index);
+
+        // read the point data from main memory
+        var point: array<f32, 45>;
+        for (var i = 0u; i < dataShape.numColumns; i++) {
+            point[i] = points[index * dataShape.numColumns + i];
+        }
+
+        results[index] = findNearest(&dataShape, point);
     }
 }
 `;
+
+const interleaveData = (dataTable: DataTable) => {
+    const result = new Float32Array(dataTable.numRows * dataTable.numColumns);
+    for (let c = 0; c < dataTable.numColumns; ++c) {
+        const column = dataTable.columns[c];
+        for (let r = 0; r < dataTable.numRows; ++r) {
+            result[r * dataTable.numColumns + c] = column.data[r];
+        }
+    }
+    return result;
+};
 
 class Cluster {
     device: GraphicsDevice;
@@ -180,7 +133,6 @@ class Cluster {
         const bindGroupFormat = new BindGroupFormat(device, [
             new BindStorageBufferFormat('pointsBuffer', SHADERSTAGE_COMPUTE, true),
             new BindStorageBufferFormat('centroidsBuffer', SHADERSTAGE_COMPUTE, true),
-            new BindStorageBufferFormat('kdTreeBuffer', SHADERSTAGE_COMPUTE, true),
             new BindStorageBufferFormat('resultsBuffer', SHADERSTAGE_COMPUTE)
         ]);
 
@@ -195,11 +147,8 @@ class Cluster {
         this.compute = new Compute(device, shader, 'compute-cluster');
     }
 
-    async execute(dataTable: DataTable, kdTree: KdTree) {
+    async execute(dataTable: DataTable, centroids: DataTable) {
         const { device, compute } = this;
-
-        const kdTreeData = kdTree.flatten();
-        const { centroids } = kdTree;
 
         // construct data buffers
         const pointsBuffer = new StorageBuffer(
@@ -214,12 +163,6 @@ class Cluster {
             BUFFERUSAGE_COPY_DST
         );
 
-        const kdTreeBuffer = new StorageBuffer(
-            device,
-            kdTreeData.length * 4,
-            BUFFERUSAGE_COPY_DST
-        );
-
         const resultsBuffer = new StorageBuffer(
             device,
             dataTable.numRows * 4,
@@ -228,36 +171,31 @@ class Cluster {
 
         const resultsData = new Uint32Array(dataTable.numRows);
 
-        // write dataTable in columns to gpu
-        for (let c = 0; c < dataTable.numColumns; ++c) {
-            const { data } = dataTable.columns[c];
-            pointsBuffer.write(c * dataTable.numRows * 4, data, 0, data.length);
-        }
+        // interleave the table data and write to gpu
+        const interleavedPoints = interleaveData(dataTable);
+        const interleavedCentroids = interleaveData(centroids);
 
-        // write centroids in columns to gpu
-        for (let c = 0; c < centroids.numColumns; ++c) {
-            const { data } = centroids.columns[c];
-            centroidsBuffer.write(c * centroids.numRows * 4, data, 0, data.length);
-        }
+        pointsBuffer.write(0, interleavedPoints, 0, interleavedPoints.length);
+        centroidsBuffer.write(0, interleavedCentroids, 0, interleavedCentroids.length);
 
         compute.setParameter('pointsBuffer', pointsBuffer);
         compute.setParameter('centroidsBuffer', centroidsBuffer);
-        compute.setParameter('kdTreeBuffer', kdTreeBuffer);
         compute.setParameter('resultsBuffer', resultsBuffer);
 
+        // calculate the workgroup layout to try minimize the number of empty workgroups
+        const groups = Math.ceil(dataTable.numRows / 64);
+        const height = Math.ceil(groups / 65536);
+        const width = Math.ceil(groups / height);
+
         // start compute job
-        compute.setupDispatch(Math.ceil(dataTable.numRows / 64));
+        compute.setupDispatch(width, height);
         device.computeDispatch([compute], 'cluster-dispatch');
 
         // read back results
-        const result = await resultsBuffer.read(0, undefined, resultsData, true);
-
-        if (result === resultsData) {
-            console.log('same');
-        }
+        await resultsBuffer.read(0, undefined, resultsData, true);
 
         const clusters: number[][] = [];
-        for (let i = 0; i < kdTree.centroids.numRows; ++i) {
+        for (let i = 0; i < centroids.numRows; ++i) {
             clusters[i] = [];
         }
 
