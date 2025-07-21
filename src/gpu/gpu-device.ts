@@ -10,6 +10,7 @@ import {
     BindGroupFormat,
     BindStorageBufferFormat,
     Compute,
+    FloatPacking,
     GraphicsDevice,
     Shader,
     StorageBuffer,
@@ -47,15 +48,17 @@ const jsdomSetup = () => {
     global.XMLHttpRequest = jsdom.window.XMLHttpRequest;
 };
 
-const clusterWgsl = /* wgsl */ `
-
+const clusterWgsl = (numPoints: number, numCentroids: number, numColumns: number) => {
+    return `
 @group(0) @binding(0) var<storage, read> points: array<f32>;
 @group(0) @binding(1) var<storage, read> centroids: array<f32>;
 @group(0) @binding(2) var<storage, read_write> results: array<u32>;
 
-const numColumns = 45u;
-const chunkSize = 128u;
+const numPoints = ${numPoints};
+const numCentroids = ${numCentroids};
+const numColumns = ${numColumns};
 
+const chunkSize = 128u;
 var<workgroup> sharedChunk: array<f32, numColumns * chunkSize>;
 
 // calculate the squared distance between the point and centroid
@@ -78,10 +81,6 @@ fn main(
     @builtin(global_invocation_id) global_id: vec3u,
     @builtin(num_workgroups) num_workgroups: vec3u
 ) {
-    // calculate data shape given array lengths
-    let numPoints = arrayLength(&points) / numColumns;
-    let numCentroids = arrayLength(&centroids) / numColumns;
-
     // calculate row index for this thread point
     let pointIndex = global_id.x + global_id.y * num_workgroups.x * 64;
 
@@ -127,7 +126,7 @@ fn main(
             }
         }
 
-        // next look will overwrite the shared memory, so wait
+        // next loop will overwrite the shared memory, so wait
         workgroupBarrier();
     }
 
@@ -136,6 +135,7 @@ fn main(
     }
 }
 `;
+}
 
 const interleaveData = (dataTable: DataTable) => {
     const { numRows, numColumns } = dataTable;
@@ -143,7 +143,7 @@ const interleaveData = (dataTable: DataTable) => {
     for (let c = 0; c < numColumns; ++c) {
         const column = dataTable.columns[c];
         for (let r = 0; r < numRows; ++r) {
-            result[r * numColumns + c] = column.data[r];
+            result[r * numColumns + c] = column.data[r]; // FloatPacking.float2Half(column.data[r]);
         }
     }
     return result;
@@ -152,7 +152,7 @@ const interleaveData = (dataTable: DataTable) => {
 class Cluster {
     device: GraphicsDevice;
 
-    compute: Compute;
+    compute: (points: number, centroids: number, columns: number) => Compute;
 
     constructor(device: GraphicsDevice) {
         this.device = device;
@@ -163,19 +163,43 @@ class Cluster {
             new BindStorageBufferFormat('resultsBuffer', SHADERSTAGE_COMPUTE)
         ]);
 
-        const shader = new Shader(device, {
-            name: 'compute-cluster',
-            shaderLanguage: SHADERLANGUAGE_WGSL,
-            cshader: clusterWgsl,
-            // @ts-ignore
-            computeBindGroupFormat: bindGroupFormat
-        });
+        let points = 0;
+        let centroids = 0;
+        let columns = 0;
+        let shader: Shader;
+        let compute: Compute;
 
-        this.compute = new Compute(device, shader, 'compute-cluster');
+        this.compute = (points_: number, centroids_: number, columns_: number) => {
+            if (points === points_ && centroids === centroids_ && columns === columns_) {
+                return compute;
+            }
+
+            points = points_;
+            centroids = centroids_;
+            columns = columns_;
+
+            if (shader) {
+                shader.destroy();
+            }
+
+            shader = new Shader(device, {
+                name: 'compute-cluster',
+                shaderLanguage: SHADERLANGUAGE_WGSL,
+                cshader: clusterWgsl(points, centroids, columns),
+                // @ts-ignore
+                computeBindGroupFormat: bindGroupFormat
+            });
+
+            compute = new Compute(device, shader, 'compute-cluster');
+
+            return compute;
+        }
     }
 
     async execute(dataTable: DataTable, centroids: DataTable) {
-        const { device, compute } = this;
+        const { device } = this;
+
+        const compute = this.compute(dataTable.numRows, centroids.numRows, dataTable.numColumns);
 
         // construct data buffers
         const pointsBuffer = new StorageBuffer(
@@ -205,6 +229,10 @@ class Cluster {
         pointsBuffer.write(0, interleavedPoints, 0, interleavedPoints.length);
         centroidsBuffer.write(0, interleavedCentroids, 0, interleavedCentroids.length);
 
+        compute.setParameter('points', dataTable.numRows);
+        compute.setParameter('centroids', centroids.numRows);
+        compute.setParameter('columns', dataTable.numColumns);
+
         compute.setParameter('pointsBuffer', pointsBuffer);
         compute.setParameter('centroidsBuffer', centroidsBuffer);
         compute.setParameter('resultsBuffer', resultsBuffer);
@@ -229,6 +257,11 @@ class Cluster {
         for (let i = 0; i < resultsData.length; ++i) {
             clusters[resultsData[i]].push(i);
         }
+
+        // cleanup
+        pointsBuffer.destroy();
+        centroidsBuffer.destroy();
+        resultsBuffer.destroy();
 
         return clusters;
     }
