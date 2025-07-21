@@ -325,7 +325,7 @@ ACTIONS (can be repeated, in any order)
     -n, --filterNaN                         Remove any Gaussian containing NaN/Inf
     -c, --filterByValue name,cmp,value      Keep splats where  <name> <cmp> <value>
                                             cmp ∈ {lt,lte,gt,gte,eq,neq}
-    -h, --filterBands  {0|1|2|3}            Strip spherical-harmonic bands > N
+    -b, --filterBands  {0|1|2|3}            Strip spherical-harmonic bands > N
 
 GLOBAL OPTIONS
     -w, --overwrite                         Overwrite output file if it already exists
