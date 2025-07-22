@@ -15,13 +15,14 @@ import {
 import { DataTable } from '../data-table.js';
 import { GpuDevice } from './gpu-device.js';
 
-const clusterWgsl = (numColumns: number, numPoints: number, numCentroids: number) => {
+const clusterWgsl = (numColumns: number, numPoints: number, numCentroids: number, useF16: boolean) => {
+    const floatType = useF16 ? 'f16' : 'f32';
+    
     return `
+${useF16 ? 'enable f16;' : ''}
 
-enable f16;
-
-@group(0) @binding(0) var<storage, read> points: array<f16>;
-@group(0) @binding(1) var<storage, read> centroids: array<f16>;
+@group(0) @binding(0) var<storage, read> points: array<${floatType}>;
+@group(0) @binding(1) var<storage, read> centroids: array<${floatType}>;
 @group(0) @binding(2) var<storage, read_write> results: array<u32>;
 
 const numColumns = ${numColumns};
@@ -29,10 +30,10 @@ const numPoints = ${numPoints};
 const numCentroids = ${numCentroids};
 
 const chunkSize = 128u; // must be a multiple of 64
-var<workgroup> sharedChunk: array<f16, numColumns * chunkSize>;
+var<workgroup> sharedChunk: array<${floatType}, numColumns * chunkSize>;
 
 // calculate the squared distance between the point and centroid
-fn calcDistanceSqr(point: array<f16, numColumns>, centroid: u32) -> f32 {
+fn calcDistanceSqr(point: array<${floatType}, numColumns>, centroid: u32) -> f32 {
     var result = 0.0;
 
     var ci = centroid * numColumns;
@@ -55,7 +56,7 @@ fn main(
     let pointIndex = global_id.x + global_id.y * num_workgroups.x * 64;
 
     // copy the point data from global memory
-    var point: array<f16, numColumns>;
+    var point: array<${floatType}, numColumns>;
     if (pointIndex < numPoints) {
         for (var i = 0u; i < numColumns; i++) {
             point[i] = points[pointIndex * numColumns + i];
@@ -111,16 +112,27 @@ const roundUp = (value: number, multiple: number) => {
     return Math.ceil(value / multiple) * multiple;
 };
 
-const interleaveData = (dataTable: DataTable) => {
+const interleaveData = (dataTable: DataTable, useF16: boolean) => {
     const { numRows, numColumns } = dataTable;
-    const result = new Uint16Array(roundUp(numColumns * numRows, 2));
-    for (let c = 0; c < numColumns; ++c) {
-        const column = dataTable.columns[c];
-        for (let r = 0; r < numRows; ++r) {
-            result[r * numColumns + c] = FloatPacking.float2Half(column.data[r]);
+    if (useF16) {
+        const result = new Uint16Array(roundUp(numColumns * numRows, 2));
+        for (let c = 0; c < numColumns; ++c) {
+            const column = dataTable.columns[c];
+            for (let r = 0; r < numRows; ++r) {
+                result[r * numColumns + c] = FloatPacking.float2Half(column.data[r]);
+            }
         }
+        return result;
+    } else {
+        const result = new Float32Array(numColumns * numRows);
+        for (let c = 0; c < numColumns; ++c) {
+            const column = dataTable.columns[c];
+            for (let r = 0; r < numRows; ++r) {
+                result[r * numColumns + c] = column.data[r];
+            }
+        }
+        return result;
     }
-    return result;
 };
 
 class GpuCluster {
@@ -129,6 +141,10 @@ class GpuCluster {
 
     constructor(gpuDevice: GpuDevice, points: DataTable, numCentroids: number) {
         const device = gpuDevice.app.graphicsDevice;
+
+        // Check if device supports f16
+        const useF16 = (device as any).supportsShaderF16 || false;
+        const bytesPerFloat = useF16 ? 2 : 4;
 
         const bindGroupFormat = new BindGroupFormat(device, [
             new BindStorageBufferFormat('pointsBuffer', SHADERSTAGE_COMPUTE, true),
@@ -142,7 +158,7 @@ class GpuCluster {
         const shader = new Shader(device, {
             name: 'compute-cluster',
             shaderLanguage: SHADERLANGUAGE_WGSL,
-            cshader: clusterWgsl(numColumns, numPoints, numCentroids),
+            cshader: clusterWgsl(numColumns, numPoints, numCentroids, useF16),
             // @ts-ignore
             computeBindGroupFormat: bindGroupFormat
         });
@@ -151,13 +167,13 @@ class GpuCluster {
 
         const pointsBuffer = new StorageBuffer(
             device,
-            roundUp(numColumns * numPoints, 2) * 2,
+            useF16 ? roundUp(numColumns * numPoints, 2) * 2 : numColumns * numPoints * 4,
             BUFFERUSAGE_COPY_DST
         );
 
         const centroidsBuffer = new StorageBuffer(
             device,
-            numColumns * numCentroids * 2,
+            numColumns * numCentroids * bytesPerFloat,
             BUFFERUSAGE_COPY_DST
         );
 
@@ -168,7 +184,7 @@ class GpuCluster {
         );
 
         // interleave the points table data and write to gpu
-        const interleavedPoints = interleaveData(points);
+        const interleavedPoints = interleaveData(points, useF16);
         pointsBuffer.write(0, interleavedPoints, 0, interleavedPoints.length);
 
         compute.setParameter('columns', numColumns);
@@ -181,7 +197,7 @@ class GpuCluster {
 
         this.execute = async (centroids: DataTable, labels: Uint32Array) => {
             // interleave centroids and write to gpu
-            const interleavedCentroids = interleaveData(centroids);
+            const interleavedCentroids = interleaveData(centroids, useF16);
             centroidsBuffer.write(0, interleavedCentroids, 0, interleavedCentroids.length);
 
             // calculate the workgroup layout to minimize the number of empty workgroups
