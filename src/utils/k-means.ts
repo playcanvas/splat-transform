@@ -136,6 +136,8 @@ const kmeans = async (points: DataTable, k: number, iterations: number, device?:
     let converged = false;
     let steps = 0;
 
+    console.log(`Running k-means clustering: dims=${points.numColumns} points=${points.numRows} clusters=${k} iterations=${iterations}...`);
+
     while (!converged) {
         if (gpuCluster) {
             await gpuCluster.execute(centroids, labels);

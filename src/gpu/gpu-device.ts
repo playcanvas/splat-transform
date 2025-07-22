@@ -1,8 +1,27 @@
 import { Worker } from 'node:worker_threads';
 import { create, globals } from 'webgpu';
 import {
+    // components
+    AnimComponentSystem,
+    RenderComponentSystem,
+    CameraComponentSystem,
+    LightComponentSystem,
+    GSplatComponentSystem,
+    ScriptComponentSystem,
+    // handlers
+    AnimClipHandler,
+    AnimStateGraphHandler,
+    BinaryHandler,
+    ContainerHandler,
+    CubemapHandler,
+    GSplatHandler,
+    RenderHandler,
+    TextureHandler,
+    // rest
     PIXELFORMAT_BGRA8,
-    Application,
+    AppBase,
+    AppOptions,
+    Lightmapper,
     Texture,
     WebgpuGraphicsDevice
 } from 'playcanvas/debug';
@@ -34,6 +53,50 @@ const jsdomSetup = () => {
     global.MouseEvent = jsdom.window.MouseEvent;
     global.XMLHttpRequest = jsdom.window.XMLHttpRequest;
 };
+
+class Application extends AppBase {
+    constructor(canvas: HTMLCanvasElement, options: any = {}) {
+        super(canvas);
+
+        const appOptions = new AppOptions();
+
+        appOptions.graphicsDevice = options.graphicsDevice;
+
+        appOptions.componentSystems = [
+            AnimComponentSystem,
+            CameraComponentSystem,
+            GSplatComponentSystem,
+            LightComponentSystem,
+            RenderComponentSystem,
+            ScriptComponentSystem
+        ];
+
+        appOptions.resourceHandlers = [
+            AnimClipHandler,
+            AnimStateGraphHandler,
+            BinaryHandler,
+            ContainerHandler,
+            CubemapHandler,
+            GSplatHandler,
+            RenderHandler,
+            TextureHandler
+        ];
+
+        appOptions.elementInput = options.elementInput;
+        appOptions.keyboard = options.keyboard;
+        appOptions.mouse = options.mouse;
+        appOptions.touch = options.touch;
+        appOptions.gamepads = options.gamepads;
+
+        appOptions.scriptPrefix = options.scriptPrefix;
+        appOptions.assetPrefix = options.assetPrefix;
+        appOptions.scriptsOrder = options.scriptsOrder;
+
+        appOptions.lightmapper = Lightmapper;
+
+        this.init(appOptions);
+    }
+}
 
 class GpuDevice {
     app: Application;
