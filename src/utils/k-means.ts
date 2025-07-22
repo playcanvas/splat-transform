@@ -50,7 +50,7 @@ const clusterCpu = (points: DataTable, centroids: DataTable, labels: Uint32Array
     const pData = points.columns.map(c => c.data);
     const cData = centroids.columns.map(c => c.data);
 
-    const point = new Float32Array(points.numColumns);
+    const point = new Float32Array(numColumns);
 
     const distance = (centroidIndex: number) => {
         let result = 0;
@@ -65,7 +65,7 @@ const clusterCpu = (points: DataTable, centroids: DataTable, labels: Uint32Array
         let mind = Infinity;
         let mini = -1;
 
-        for (let c = 0; c < points.numColumns; ++c) {
+        for (let c = 0; c < numColumns; ++c) {
             point[c] = pData[c][i];
         }
 
