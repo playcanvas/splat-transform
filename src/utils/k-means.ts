@@ -1,8 +1,9 @@
 import { stdout } from 'node:process';
 
 import { Column, DataTable } from '../data-table';
-import { KdTree } from './kd-tree';
 import { GpuDevice } from '../gpu/gpu-device';
+import { GpuCluster } from '../gpu/gpu-cluster';
+import { KdTree } from './kd-tree';
 
 const initializeCentroids = (dataTable: DataTable, centroids: DataTable, row: any) => {
     const chosenRows = new Set();
@@ -42,96 +43,116 @@ const calcAverage = (dataTable: DataTable, cluster: number[], row: any) => {
     }
 };
 
-const cluster = (dataTable: DataTable, kdTree: KdTree) => {
-    const k = kdTree.centroids.numRows;
+// cpu cluster
+const clusterCpu = (points: DataTable, centroids: DataTable, labels: Uint32Array) => {
+    const numColumns = points.numColumns;
+
+    const pData = points.columns.map(c => c.data);
+    const cData = centroids.columns.map(c => c.data);
+
+    const point = new Float32Array(points.numColumns);
+
+    const distance = (centroidIndex: number) => {
+        let result = 0;
+        for (let i = 0; i < numColumns; ++i) {
+            const v = point[i] - cData[i][centroidIndex];
+            result += v * v;
+        }
+        return result;
+    };
+
+    for (let i = 0; i < points.numRows; ++i) {
+        let mind = Infinity;
+        let mini = -1;
+
+        for (let c = 0; c < points.numColumns; ++c) {
+            point[c] = pData[c][i];
+        }
+
+        for (let j = 0; j < centroids.numRows; ++j) {
+            const d = distance(j);
+            if (d < mind) {
+                mind = d;
+                mini = j;
+            }
+        }
+
+        labels[i] = mini;
+    }
+}
+
+const clusterKdTreeCpu = (points: DataTable, centroids: DataTable, labels: Uint32Array) => {
+    const kdTree = new KdTree(centroids);
 
     // construct a kdtree over the centroids so we can find the nearest quickly
-    const point = new Float32Array(dataTable.numColumns);
-
-    const clusters: number[][] = [];
-    for (let i = 0; i < k; ++i) {
-        clusters[i] = [];
-    }
-
+    const point = new Float32Array(points.numColumns);
     const row: any = {};
 
-    let atot = 0;
-    let btot = 0;
-    let ctot = 0;
-
     // assign each point to the nearest centroid
-    for (let i = 0; i < dataTable.numRows; ++i) {
-        dataTable.getRow(i, row);
-        dataTable.columns.forEach((c, i) => {
+    for (let i = 0; i < points.numRows; ++i) {
+        points.getRow(i, row);
+        points.columns.forEach((c, i) => {
             point[i] = row[c.name];
         });
 
         const a = kdTree.findNearest(point);
-        const b = kdTree.findNearest2(point);
-        const c = kdTree.findNearest3(point);
 
-        atot += a.cnt;
-        btot += b.cnt;
-        ctot += c.cnt;
+        labels[i] = a.index;
+    }
+};
 
-        clusters[a.index].push(i);
+const groupLabels = (labels: Uint32Array, k: number) => {
+    const clusters: number[][] = [];
+
+    for (let i = 0; i < k; ++i) {
+        clusters[i] = [];
     }
 
-    console.log(`atot=${atot} btot=${btot} ctot=${ctot}`);
+    for (let i = 0; i < labels.length; ++i) {
+        clusters[labels[i]].push(i);
+    }
 
     return clusters;
 };
 
-const kmeans = async (dataTable: DataTable, k: number, device?: GpuDevice) => {
+const kmeans = async (points: DataTable, k: number, iterations: number, device?: GpuDevice) => {
     // too few data points
-    if (dataTable.numRows < k) {
+    if (points.numRows < k) {
         return {
-            centroids: dataTable.clone(),
-            labels: new Array(dataTable.numRows).fill(0).map((_, i) => i)
+            centroids: points.clone(),
+            labels: new Array(points.numRows).fill(0).map((_, i) => i)
         };
     }
 
     const row: any = {};
 
     // construct centroids data table and assign initial values
-    const centroids = new DataTable(dataTable.columns.map(c => new Column(c.name, new Float32Array(k))));
-    initializeCentroids(dataTable, centroids, row);
+    const centroids = new DataTable(points.columns.map(c => new Column(c.name, new Float32Array(k))));
+    initializeCentroids(points, centroids, row);
+
+    const gpuCluster = device && new GpuCluster(device, points, k);
+    const labels = new Uint32Array(points.numRows);
 
     let converged = false;
     let steps = 0;
-    let clusters: number[][];
 
     while (!converged) {
-        const kdTree = new KdTree(centroids);
-
-        /*
-        // compare cpu and gpu results
-        const a = await device.cluster.execute(dataTable, kdTree);
-        const b = cluster(dataTable, kdTree);
-
-        for (let i = 0; i < a.length; ++i) {
-            if (a[i].length !== b[i].length) {
-                console.log(`Cluster mismatch at index ${i}: GPU has ${a[i].length} points, CPU has ${b[i].length} points`);
-            } else {
-                for (let j = 0; j < a[i].length; ++j) {
-                    if (a[i][j] !== b[i][j]) {
-                        console.log(`Point mismatch at cluster ${i}, point index ${j}: GPU has ${a[i][j]}, CPU has ${b[i][j]}`);
-                    }
-                }
-            }
+        if (gpuCluster) {
+            await gpuCluster.execute(centroids, labels);
+        } else {
+            clusterKdTreeCpu(points, centroids, labels);
         }
-        //*/
-
-        clusters = device ? await device.cluster.execute(dataTable, centroids) : cluster(dataTable, kdTree);
 
         // calculate the new centroid positions
+        const groups = groupLabels(labels, k);
         for (let i = 0; i < centroids.numRows; ++i) {
-            calcAverage(dataTable, clusters[i], row);
+            calcAverage(points, groups[i], row);
             centroids.setRow(i, row);
         }
 
         steps++;
-        if (steps > 10) {
+
+        if (steps >= iterations) {
             converged = true;
         }
 
@@ -139,15 +160,6 @@ const kmeans = async (dataTable: DataTable, k: number, device?: GpuDevice) => {
     }
 
     console.log(' done 🎉');
-
-    // construct labels from clusters
-    const labels = new Uint32Array(dataTable.numRows);
-    for (let i = 0; i < clusters.length; ++i) {
-        const cluster = clusters[i];
-        for (let j = 0; j < cluster.length; ++j) {
-            labels[cluster[j]] = i;
-        }
-    }
 
     return { centroids, labels };
 };

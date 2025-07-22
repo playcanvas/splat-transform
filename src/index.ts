@@ -19,7 +19,9 @@ import { writeSogs } from './writers/write-sogs';
 type Options = {
     overwrite: boolean,
     help: boolean,
-    version: boolean
+    version: boolean,
+    gpu: boolean,
+    iterations: number
 };
 
 const readFile = async (filename: string) => {
@@ -86,7 +88,7 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
             await writeCsv(outputFile, dataTable);
             break;
         case 'json':
-            await writeSogs(outputFile, dataTable, filename, 'gpu');
+            await writeSogs(outputFile, dataTable, filename, options.iterations, options.gpu ? 'gpu' : 'cpu');
             break;
         case 'compressed-ply':
             await writeCompressedPly(outputFile, dataTable);
@@ -184,11 +186,14 @@ const parseArguments = () => {
         tokens: true,
         strict: true,
         allowPositionals: true,
+        allowNegative: true,
         options: {
             // global options
             overwrite: { type: 'boolean', short: 'w' },
             help: { type: 'boolean', short: 'h' },
             version: { type: 'boolean', short: 'v' },
+            gpu: { type: 'boolean', short: 'g' },
+            iterations: { type: 'string', short: 'i' },
 
             // file options
             translate: { type: 'string', short: 't', multiple: true },
@@ -204,6 +209,14 @@ const parseArguments = () => {
         const result = Number(value);
         if (isNaN(result)) {
             throw new Error(`Invalid number value: ${value}`);
+        }
+        return result;
+    };
+
+    const parseInteger = (value: string): number => {
+        const result = parseInt(value);
+        if (isNaN(result)) {
+            throw new Error(`Invalid integer value: ${value}`);
         }
         return result;
     };
@@ -231,9 +244,11 @@ const parseArguments = () => {
 
     const files: File[] = [];
     const options: Options = {
-        overwrite: v.overwrite || false,
-        help: v.help || false,
-        version: v.version || false
+        overwrite: v.overwrite ?? false,
+        help: v.help ?? false,
+        version: v.version ?? false,
+        gpu: v.gpu ?? true,
+        iterations: parseInteger(v.iterations ?? '10')
     };
 
     for (const t of tokens) {
@@ -328,9 +343,11 @@ ACTIONS (can be repeated, in any order)
     -b, --filterBands  {0|1|2|3}            Strip spherical-harmonic bands > N
 
 GLOBAL OPTIONS
-    -w, --overwrite                         Overwrite output file if it already exists
+    -w, --overwrite                         Overwrite output file if it already exists. Default is false.
     -h, --help                              Show this help and exit
     -v, --version                           Show version and exit
+    -g, --gpu                               Enable gpu for k-means clustering. Specify --no-gpu to disable. Default is true.
+    -i, --iterations  <number>              Number of iterations for k-means clustering. Default is 10.
 
 EXAMPLES
     # Simple scale-then-translate
@@ -404,6 +421,10 @@ const main = async () => {
     const endTime = hrtime(startTime);
 
     console.log(`done in ${endTime[0] + endTime[1] / 1e9}s`);
+
+    // something in webgpu seems to keep the process alive after returning
+    // from main so force exit
+    exit(0);
 };
 
 export { main };
