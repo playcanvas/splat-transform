@@ -381,28 +381,25 @@ const main = async () => {
 
     try {
         // read, filter, process input files
-        const inputFiles = await Promise.all(inputArgs.map(async (inputArg) => {
+        const inputFiles = (await Promise.all(inputArgs.map(async (inputArg) => {
             const file = await readFile(resolve(inputArg.filename));
 
-            // filter out non-gs files
-            if (file.elements.length !== 1) {
-                return null;
+            // filter out non-gs data
+            if (file.elements.length !== 1 || file.elements[0].name !== 'vertex') {
+                throw new Error(`Unsupported data in file '${inputArg.filename}'`);
             }
 
             const element = file.elements[0];
-            if (element.name !== 'vertex') {
-                return null;
-            }
 
             const { dataTable } = element;
             if (dataTable.numRows === 0 || !isGSDataTable(dataTable)) {
-                return null;
+                throw new Error(`Unsupported data in file '${inputArg.filename}'`);
             }
 
-            file.elements[0].dataTable = process(dataTable, inputArg.processActions);
+            element.dataTable = process(dataTable, inputArg.processActions);
 
             return file;
-        }));
+        }))).filter(file => file !== null);
 
         // combine inputs into a single output dataTable
         const dataTable = process(
