@@ -22,7 +22,6 @@ import {
     PIXELFORMAT_BGRA8,
     AppBase,
     AppOptions,
-    Lightmapper,
     Texture,
     WebgpuGraphicsDevice
 } from 'playcanvas/debug';
@@ -81,18 +80,6 @@ class Application extends AppBase {
             RenderHandler,
             TextureHandler
         ];
-
-        appOptions.elementInput = options.elementInput;
-        appOptions.keyboard = options.keyboard;
-        appOptions.mouse = options.mouse;
-        appOptions.touch = options.touch;
-        appOptions.gamepads = options.gamepads;
-
-        appOptions.scriptPrefix = options.scriptPrefix;
-        appOptions.assetPrefix = options.assetPrefix;
-        appOptions.scriptsOrder = options.scriptsOrder;
-
-        appOptions.lightmapper = Lightmapper;
 
         this.init(appOptions);
     }
