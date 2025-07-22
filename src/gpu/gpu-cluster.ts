@@ -8,7 +8,8 @@ import {
     Compute,
     FloatPacking,
     Shader,
-    StorageBuffer
+    StorageBuffer,
+    WebgpuGraphicsDevice
 } from 'playcanvas/debug';
 
 import { DataTable } from '../data-table.js';
@@ -193,7 +194,10 @@ class GpuCluster {
             device.computeDispatch([compute], 'cluster-dispatch');
 
             // read results from gpu
-            await resultsBuffer.read(0, undefined, labels, true);
+            // await resultsBuffer.read(0, undefined, labels, true);
+
+            // use internal read function until immediate flag is available (see https://github.com/playcanvas/engine/pull/7843)
+            await (device as WebgpuGraphicsDevice).readStorageBuffer(resultsBuffer.impl, 0, resultsBuffer.byteSize, labels, true);
         }
 
         this.destroy = () => {
