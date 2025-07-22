@@ -143,7 +143,7 @@ class GpuCluster {
         const device = gpuDevice.app.graphicsDevice;
 
         // Check if device supports f16
-        const useF16 = (device as any).supportsShaderF16 || false;
+        const useF16 = 'supportsShaderF16' in device && device.supportsShaderF16;
         const bytesPerFloat = useF16 ? 2 : 4;
 
         const bindGroupFormat = new BindGroupFormat(device, [
