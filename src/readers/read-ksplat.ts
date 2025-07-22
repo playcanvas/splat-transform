@@ -144,10 +144,10 @@ const readKsplat = async (fileHandle: FileHandle): Promise<KsplatFileData> => {
     for (let sectionIdx = 0; sectionIdx < maxSections; sectionIdx++) {
         const sectionHeaderOffset = MAIN_HEADER_SIZE + sectionIdx * SECTION_HEADER_SIZE;
         const sectionHeader = new DataView(fileBuffer.buffer, fileBuffer.byteOffset + sectionHeaderOffset, SECTION_HEADER_SIZE);
-        
+
         const sectionSplatCount = sectionHeader.getUint32(0, true);
         if (sectionSplatCount === 0) continue; // Skip empty sections
-        
+
         const harmonicsDegree = sectionHeader.getUint16(40, true);
         maxHarmonicsDegree = Math.max(maxHarmonicsDegree, harmonicsDegree);
     }
@@ -188,7 +188,7 @@ const readKsplat = async (fileHandle: FileHandle): Promise<KsplatFileData> => {
         harmonicsStartByte,
         scaleQuantRange
     } = COMPRESSION_MODES[compressionMode];
-    
+
     let currentSectionDataOffset = MAIN_HEADER_SIZE + maxSections * SECTION_HEADER_SIZE;
     let splatIndex = 0;
 

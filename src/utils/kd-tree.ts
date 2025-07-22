@@ -81,9 +81,9 @@ class KdTree {
             };
         } else if (indices.length === 2) {
             return {
-                index : indices[0],
-                right : {
-                    index : indices[1]
+                index: indices[0],
+                right: {
+                    index: indices[1]
                 }
             };
         }

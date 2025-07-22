@@ -1,9 +1,9 @@
 import { stdout } from 'node:process';
 
 import { Column, DataTable } from '../data-table';
-import { GpuDevice } from '../gpu/gpu-device';
-import { GpuCluster } from '../gpu/gpu-cluster';
 import { KdTree } from './kd-tree';
+import { GpuCluster } from '../gpu/gpu-cluster';
+import { GpuDevice } from '../gpu/gpu-device';
 
 const initializeCentroids = (dataTable: DataTable, centroids: DataTable, row: any) => {
     const chosenRows = new Set();
@@ -79,7 +79,7 @@ const clusterCpu = (points: DataTable, centroids: DataTable, labels: Uint32Array
 
         labels[i] = mini;
     }
-}
+};
 
 const clusterKdTreeCpu = (points: DataTable, centroids: DataTable, labels: Uint32Array) => {
     const kdTree = new KdTree(centroids);
@@ -158,7 +158,7 @@ const kmeans = async (points: DataTable, k: number, iterations: number, device?:
             converged = true;
         }
 
-        stdout.write("#");
+        stdout.write('#');
     }
 
     console.log(' done 🎉');

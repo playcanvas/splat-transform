@@ -105,7 +105,7 @@ fn main(
     }
 }
 `;
-}
+};
 
 const roundUp = (value: number, multiple: number) => {
     return Math.ceil(value / multiple) * multiple;
@@ -198,7 +198,7 @@ class GpuCluster {
 
             // use internal read function until immediate flag is available (see https://github.com/playcanvas/engine/pull/7843)
             await (device as WebgpuGraphicsDevice).readStorageBuffer(resultsBuffer.impl, 0, resultsBuffer.byteSize, labels, true);
-        }
+        };
 
         this.destroy = () => {
             pointsBuffer.destroy();
@@ -206,7 +206,7 @@ class GpuCluster {
             resultsBuffer.destroy();
             shader.destroy();
             bindGroupFormat.destroy();
-        }
+        };
     }
 }
 

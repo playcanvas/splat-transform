@@ -214,7 +214,7 @@ const parseArguments = () => {
     };
 
     const parseInteger = (value: string): number => {
-        const result = parseInt(value);
+        const result = parseInt(value, 10);
         if (isNaN(result)) {
             throw new Error(`Invalid integer value: ${value}`);
         }

@@ -1,5 +1,6 @@
 import { Worker } from 'node:worker_threads';
-import { create, globals } from 'webgpu';
+
+import { JSDOM } from 'jsdom';
 import {
     // components
     AnimComponentSystem,
@@ -25,8 +26,8 @@ import {
     Texture,
     WebgpuGraphicsDevice
 } from 'playcanvas/debug';
+import { create, globals } from 'webgpu';
 
-import { JSDOM } from 'jsdom';
 
 Object.assign(globalThis, globals);
 
@@ -106,7 +107,7 @@ class GpuDevice {
         this.app = app;
         this.backbuffer = backbuffer;
     }
-};
+}
 
 const createDevice = async () => {
     jsdomSetup();
