@@ -4,10 +4,10 @@ import { dirname, resolve } from 'node:path';
 import sharp from 'sharp';
 
 import { DataTable } from '../data-table';
+import { createDevice } from '../gpu/gpu-device';
 import { generateOrdering } from '../ordering';
 import { kmeans } from '../utils/k-means';
 
-import { createDevice } from '../gpu/gpu-device';
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 

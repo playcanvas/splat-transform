@@ -28,7 +28,6 @@ import {
 } from 'playcanvas/debug';
 import { create, globals } from 'webgpu';
 
-
 Object.assign(globalThis, globals);
 
 const jsdomSetup = () => {

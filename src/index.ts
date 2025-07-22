@@ -186,13 +186,12 @@ const parseArguments = () => {
         tokens: true,
         strict: true,
         allowPositionals: true,
-        allowNegative: true,
         options: {
             // global options
             overwrite: { type: 'boolean', short: 'w' },
             help: { type: 'boolean', short: 'h' },
             version: { type: 'boolean', short: 'v' },
-            gpu: { type: 'boolean', short: 'g' },
+            'no-gpu': { type: 'boolean', short: 'g' },
             iterations: { type: 'string', short: 'i' },
 
             // file options
@@ -247,7 +246,7 @@ const parseArguments = () => {
         overwrite: v.overwrite ?? false,
         help: v.help ?? false,
         version: v.version ?? false,
-        gpu: v.gpu ?? true,
+        gpu: !(v['no-gpu'] ?? false),
         iterations: parseInteger(v.iterations ?? '10')
     };
 
@@ -344,10 +343,10 @@ ACTIONS (can be repeated, in any order)
 
 GLOBAL OPTIONS
     -w, --overwrite                         Overwrite output file if it already exists. Default is false.
-    -h, --help                              Show this help and exit
-    -v, --version                           Show version and exit
-    -g, --gpu                               Enable gpu for k-means clustering. Specify --no-gpu to disable. Default is true.
-    -i, --iterations  <number>              Number of iterations for k-means clustering. Default is 10.
+    -h, --help                              Show this help and exit.
+    -v, --version                           Show version and exit.
+    -g, --no-gpu                            Disable gpu when compressing spherical harmonics.
+    -i, --iterations  <number>              Specify the number of iterations when compressing spherical harmonics. More iterations generally lead to better results. Default is 10.
 
 EXAMPLES
     # Simple scale-then-translate
