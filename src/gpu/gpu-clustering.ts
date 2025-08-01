@@ -218,7 +218,7 @@ class GpuClustering {
 
                 // write this batch of point data to gpu
                 interleaveData(interleavedPoints, points, currentBatchSize, batch * batchSize);
-                pointsBuffer.write(0, interleavedPoints, 0, roundUp(numColumns * currentBatchSize, 2));
+                pointsBuffer.write(0, interleavedPoints, 0, useF16 ? roundUp(numColumns * currentBatchSize, 2) : numColumns * currentBatchSize);
                 compute.setParameter('numPoints', currentBatchSize);
 
                 // start compute job
