@@ -3,33 +3,41 @@ import {
     BUFFERUSAGE_COPY_SRC,
     SHADERLANGUAGE_WGSL,
     SHADERSTAGE_COMPUTE,
+    UNIFORMTYPE_UINT,
     BindGroupFormat,
     BindStorageBufferFormat,
+    BindUniformBufferFormat,
     Compute,
     FloatPacking,
     Shader,
     StorageBuffer,
+    UniformBufferFormat,
+    UniformFormat,
     WebgpuGraphicsDevice
 } from 'playcanvas/debug';
 
 import { DataTable } from '../data-table.js';
 import { GpuDevice } from './gpu-device.js';
 
-const clusterWgsl = (numColumns: number, numPoints: number, numCentroids: number, useF16: boolean) => {
+const clusterWgsl = (numColumns: number, useF16: boolean) => {
     const floatType = useF16 ? 'f16' : 'f32';
-    
-    return `
+
+    return /* wgsl */ `
 ${useF16 ? 'enable f16;' : ''}
 
-@group(0) @binding(0) var<storage, read> points: array<${floatType}>;
-@group(0) @binding(1) var<storage, read> centroids: array<${floatType}>;
-@group(0) @binding(2) var<storage, read_write> results: array<u32>;
+struct Uniforms {
+    numPoints: u32,
+    numCentroids: u32,
+    pointBase: u32
+};
 
-const numColumns = ${numColumns};
-const numPoints = ${numPoints};
-const numCentroids = ${numCentroids};
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(0) @binding(1) var<storage, read> points: array<${floatType}>;
+@group(0) @binding(2) var<storage, read> centroids: array<${floatType}>;
+@group(0) @binding(3) var<storage, read_write> results: array<u32>;
 
-const chunkSize = 128u; // must be a multiple of 64
+const numColumns = ${numColumns};   // number of columns in the points and centroids tables
+const chunkSize = 128u;             // must be a multiple of 64
 var<workgroup> sharedChunk: array<${floatType}, numColumns * chunkSize>;
 
 // calculate the squared distance between the point and centroid
@@ -53,11 +61,11 @@ fn main(
     @builtin(num_workgroups) num_workgroups: vec3u
 ) {
     // calculate row index for this thread point
-    let pointIndex = global_id.x + global_id.y * num_workgroups.x * 64;
+    let pointIndex = uniforms.pointBase + global_id.x + global_id.y * num_workgroups.x * 64u;
 
     // copy the point data from global memory
     var point: array<${floatType}, numColumns>;
-    if (pointIndex < numPoints) {
+    if (pointIndex < uniforms.numPoints) {
         for (var i = 0u; i < numColumns; i++) {
             point[i] = points[pointIndex * numColumns + i];
         }
@@ -67,13 +75,13 @@ fn main(
     var mini = 0u;
 
     // work through the list of centroids in shared memory chunks
-    let numChunks = u32(ceil(f32(numCentroids) / f32(chunkSize)));
+    let numChunks = u32(ceil(f32(uniforms.numCentroids) / f32(chunkSize)));
     for (var i = 0u; i < numChunks; i++) {
 
         // copy this thread's slice of the centroid shared chunk data
         let dstRow = local_id * (chunkSize / 64u);
-        let srcRow = min(numCentroids, i * chunkSize + local_id * chunkSize / 64u);
-        let numRows = min(numCentroids, srcRow + chunkSize / 64u) - srcRow;
+        let srcRow = min(uniforms.numCentroids, i * chunkSize + local_id * chunkSize / 64u);
+        let numRows = min(uniforms.numCentroids, srcRow + chunkSize / 64u) - srcRow;
 
         var dst = dstRow * numColumns;
         var src = srcRow * numColumns;
@@ -86,8 +94,8 @@ fn main(
         workgroupBarrier();
 
         // loop over the next chunk of centroids finding the closest
-        if (pointIndex < numPoints) {
-            let thisChunkSize = min(chunkSize, numCentroids - i * chunkSize);
+        if (pointIndex < uniforms.numPoints) {
+            let thisChunkSize = min(chunkSize, uniforms.numCentroids - i * chunkSize);
             for (var c = 0u; c < thisChunkSize; c++) {
                 let d = calcDistanceSqr(point, c);
                 if (d < mind) {
@@ -101,7 +109,7 @@ fn main(
         workgroupBarrier();
     }
 
-    if (pointIndex < numPoints) {
+    if (pointIndex < uniforms.numPoints) {
         results[pointIndex] = mini;
     }
 }
@@ -143,22 +151,31 @@ class GpuCluster {
         const device = gpuDevice.app.graphicsDevice;
 
         // Check if device supports f16
-        const useF16 = !!('supportsShaderF16' in device && device.supportsShaderF16);
+        const useF16 = 'supportsShaderF16' in device && device.supportsShaderF16 as boolean
         const bytesPerFloat = useF16 ? 2 : 4;
 
+        const numPoints = points.numRows;
+        const numColumns = points.numColumns;
+
         const bindGroupFormat = new BindGroupFormat(device, [
+            new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
             new BindStorageBufferFormat('pointsBuffer', SHADERSTAGE_COMPUTE, true),
             new BindStorageBufferFormat('centroidsBuffer', SHADERSTAGE_COMPUTE, true),
             new BindStorageBufferFormat('resultsBuffer', SHADERSTAGE_COMPUTE)
         ]);
 
-        const numPoints = points.numRows;
-        const numColumns = points.numColumns;
-
         const shader = new Shader(device, {
             name: 'compute-cluster',
             shaderLanguage: SHADERLANGUAGE_WGSL,
-            cshader: clusterWgsl(numColumns, numPoints, numCentroids, useF16),
+            cshader: clusterWgsl(numColumns, useF16),
+            // @ts-ignore
+            computeUniformBufferFormats: {
+                uniforms: new UniformBufferFormat(device, [
+                    new UniformFormat('numPoints', UNIFORMTYPE_UINT),
+                    new UniformFormat('numCentroids', UNIFORMTYPE_UINT),
+                    new UniformFormat('pointBase', UNIFORMTYPE_UINT)
+                ])
+            },
             // @ts-ignore
             computeBindGroupFormat: bindGroupFormat
         });
@@ -187,10 +204,6 @@ class GpuCluster {
         const interleavedPoints = interleaveData(points, useF16);
         pointsBuffer.write(0, interleavedPoints, 0, interleavedPoints.length);
 
-        compute.setParameter('columns', numColumns);
-        compute.setParameter('points', numPoints);
-        compute.setParameter('centroids', numCentroids);
-
         compute.setParameter('pointsBuffer', pointsBuffer);
         compute.setParameter('centroidsBuffer', centroidsBuffer);
         compute.setParameter('resultsBuffer', resultsBuffer);
@@ -200,20 +213,31 @@ class GpuCluster {
             const interleavedCentroids = interleaveData(centroids, useF16);
             centroidsBuffer.write(0, interleavedCentroids, 0, interleavedCentroids.length);
 
-            // calculate the workgroup layout to minimize the number of empty workgroups
-            const groups = Math.ceil(points.numRows / 64);
-            const height = Math.ceil(groups / 65536);
-            const width = Math.ceil(groups / height);
+            compute.setParameter('numPoints', points.numRows);
+            compute.setParameter('numCentroids', centroids.numRows);
 
-            // start compute job
-            compute.setupDispatch(width, height);
-            device.computeDispatch([compute], 'cluster-dispatch');
+            // execute in batches of 1024 worksgroups
+            const workgroupSize = 64;
+            const workgroupsPerBatch = 1024;
+            const batchSize = workgroupsPerBatch * workgroupSize;
+            const numBatches = Math.ceil(numPoints / batchSize);
+
+            for (let batch = 0; batch < numBatches; batch++) {
+                const currentBatchSize = Math.min(numPoints - batch * batchSize, batchSize);
+                const groups = Math.ceil(currentBatchSize / 64);
+
+                compute.setParameter('pointBase', batch * batchSize);
+
+                // start compute job
+                compute.setupDispatch(groups);
+                device.computeDispatch([compute], `cluster-dispatch-${batch}`);
+
+                // @ts-ignore
+                device.submit();
+            }
 
             // read results from gpu
-            // await resultsBuffer.read(0, undefined, labels, true);
-
-            // use internal read function until immediate flag is available (see https://github.com/playcanvas/engine/pull/7843)
-            await (device as WebgpuGraphicsDevice).readStorageBuffer(resultsBuffer.impl, 0, resultsBuffer.byteSize, labels, true);
+            await resultsBuffer.read(0, undefined, labels, true);
         };
 
         this.destroy = () => {

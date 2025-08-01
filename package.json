@@ -40,7 +40,7 @@
     "@typescript-eslint/parser": "^8.38.0",
     "eslint": "^9.31.0",
     "eslint-import-resolver-typescript": "^4.4.4",
-    "playcanvas": "^2.9.2",
+    "playcanvas": "^2.10.3",
     "rollup": "^4.45.1",
     "tslib": "^2.8.1",
     "typescript": "^5.8.3"
