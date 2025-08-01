@@ -140,7 +140,7 @@ const kmeans = async (points: DataTable, k: number, iterations: number, device?:
 
     while (!converged) {
         if (gpuClustering) {
-            await gpuClustering.execute(points,centroids, labels);
+            await gpuClustering.execute(points, centroids, labels);
         } else {
             clusterKdTreeCpu(points, centroids, labels);
         }

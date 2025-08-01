@@ -225,17 +225,10 @@ class GpuClustering {
                 compute.setupDispatch(groups);
                 device.computeDispatch([compute], `cluster-dispatch-${batch}`);
 
-                // FIXME: submit call is required, but not public API
-                // @ts-ignore
-                device.submit();
-
                 // read results from gpu and store in labels
                 await resultsBuffer.read(0, currentBatchSize * 4, resultsData, true);
                 labels.set(resultsData.subarray(0, currentBatchSize), batch * batchSize);
             }
-
-            // read results from gpu
-            // await resultsBuffer.read(0, undefined, labels, true);
         };
 
         this.destroy = () => {
