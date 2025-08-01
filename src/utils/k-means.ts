@@ -130,7 +130,7 @@ const kmeans = async (points: DataTable, k: number, iterations: number, device?:
     const centroids = new DataTable(points.columns.map(c => new Column(c.name, new Float32Array(k))));
     initializeCentroids(points, centroids, row);
 
-    const gpuCluster = device && new GpuCluster(device, points, k);
+    const gpuCluster = device && new GpuCluster(device, points.numColumns, k);
     const labels = new Uint32Array(points.numRows);
 
     let converged = false;
@@ -140,7 +140,7 @@ const kmeans = async (points: DataTable, k: number, iterations: number, device?:
 
     while (!converged) {
         if (gpuCluster) {
-            await gpuCluster.execute(centroids, labels);
+            await gpuCluster.execute(points,centroids, labels);
         } else {
             clusterKdTreeCpu(points, centroids, labels);
         }

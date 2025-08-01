@@ -26,8 +26,7 @@ ${useF16 ? 'enable f16;' : ''}
 
 struct Uniforms {
     numPoints: u32,
-    numCentroids: u32,
-    pointBase: u32
+    numCentroids: u32
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -60,7 +59,7 @@ fn main(
     @builtin(num_workgroups) num_workgroups: vec3u
 ) {
     // calculate row index for this thread point
-    let pointIndex = uniforms.pointBase + global_id.x + global_id.y * num_workgroups.x * 64u;
+    let pointIndex = global_id.x + global_id.y * num_workgroups.x * 64u;
 
     // copy the point data from global memory
     var point: array<${floatType}, numColumns>;
@@ -143,18 +142,19 @@ const interleaveData = (dataTable: DataTable, useF16: boolean) => {
 };
 
 class GpuCluster {
-    execute: (centroids: DataTable, labels: Uint32Array) => Promise<void>;
+    execute: (points: DataTable, centroids: DataTable, labels: Uint32Array) => Promise<void>;
     destroy: () => void;
 
-    constructor(gpuDevice: GpuDevice, points: DataTable, numCentroids: number) {
+    constructor(gpuDevice: GpuDevice, numColumns: number, numCentroids: number) {
         const device = gpuDevice.app.graphicsDevice;
 
         // Check if device supports f16
         const useF16 = 'supportsShaderF16' in device && device.supportsShaderF16 as boolean;
         const bytesPerFloat = useF16 ? 2 : 4;
 
-        const numPoints = points.numRows;
-        const numColumns = points.numColumns;
+        const workgroupSize = 64;
+        const workgroupsPerBatch = 1024;
+        const batchSize = workgroupsPerBatch * workgroupSize;
 
         const bindGroupFormat = new BindGroupFormat(device, [
             new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
@@ -171,8 +171,7 @@ class GpuCluster {
             computeUniformBufferFormats: {
                 uniforms: new UniformBufferFormat(device, [
                     new UniformFormat('numPoints', UNIFORMTYPE_UINT),
-                    new UniformFormat('numCentroids', UNIFORMTYPE_UINT),
-                    new UniformFormat('pointBase', UNIFORMTYPE_UINT)
+                    new UniformFormat('numCentroids', UNIFORMTYPE_UINT)
                 ])
             },
             // @ts-ignore
@@ -183,7 +182,7 @@ class GpuCluster {
 
         const pointsBuffer = new StorageBuffer(
             device,
-            useF16 ? roundUp(numColumns * numPoints, 2) * 2 : numColumns * numPoints * 4,
+            useF16 ? roundUp(numColumns * batchSize, 2) * 2 : numColumns * batchSize * 4,
             BUFFERUSAGE_COPY_DST
         );
 
@@ -195,37 +194,35 @@ class GpuCluster {
 
         const resultsBuffer = new StorageBuffer(
             device,
-            numPoints * 4,
+            batchSize * 4,
             BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST
         );
-
-        // interleave the points table data and write to gpu
-        const interleavedPoints = interleaveData(points, useF16);
-        pointsBuffer.write(0, interleavedPoints, 0, interleavedPoints.length);
 
         compute.setParameter('pointsBuffer', pointsBuffer);
         compute.setParameter('centroidsBuffer', centroidsBuffer);
         compute.setParameter('resultsBuffer', resultsBuffer);
 
-        this.execute = async (centroids: DataTable, labels: Uint32Array) => {
+        this.execute = async (points: DataTable, centroids: DataTable, labels: Uint32Array) => {
             // interleave centroids and write to gpu
             const interleavedCentroids = interleaveData(centroids, useF16);
             centroidsBuffer.write(0, interleavedCentroids, 0, interleavedCentroids.length);
 
-            compute.setParameter('numPoints', points.numRows);
-            compute.setParameter('numCentroids', centroids.numRows);
+            const numPoints = points.numRows;
 
             // execute in batches of 1024 worksgroups
-            const workgroupSize = 64;
-            const workgroupsPerBatch = 1024;
-            const batchSize = workgroupsPerBatch * workgroupSize;
             const numBatches = Math.ceil(numPoints / batchSize);
 
+            compute.setParameter('numCentroids', centroids.numRows);
+
             for (let batch = 0; batch < numBatches; batch++) {
+                // interleave the points table data and write to gpu
+                const interleavedPoints = interleaveData(points, useF16);
+                pointsBuffer.write(0, interleavedPoints, 0, interleavedPoints.length);
+
                 const currentBatchSize = Math.min(numPoints - batch * batchSize, batchSize);
                 const groups = Math.ceil(currentBatchSize / 64);
 
-                compute.setParameter('pointBase', batch * batchSize);
+                compute.setParameter('numPoints', currentBatchSize);
 
                 // start compute job
                 compute.setupDispatch(groups);
