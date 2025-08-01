@@ -118,7 +118,7 @@ const roundUp = (value: number, multiple: number) => {
     return Math.ceil(value / multiple) * multiple;
 };
 
-const interleaveData = (result: Uint16Array | Float32Array, dataTable: DataTable, numRows = dataTable.numRows) => {
+const interleaveData = (result: Uint16Array | Float32Array, dataTable: DataTable, numRows: number, rowOffset: number) => {
     const { numColumns } = dataTable;
 
     if (result instanceof Uint16Array) {
@@ -126,7 +126,7 @@ const interleaveData = (result: Uint16Array | Float32Array, dataTable: DataTable
         for (let c = 0; c < numColumns; ++c) {
             const column = dataTable.columns[c];
             for (let r = 0; r < numRows; ++r) {
-                result[r * numColumns + c] = FloatPacking.float2Half(column.data[r]);
+                result[r * numColumns + c] = FloatPacking.float2Half(column.data[rowOffset + r]);
             }
         }
     } else {
@@ -134,7 +134,7 @@ const interleaveData = (result: Uint16Array | Float32Array, dataTable: DataTable
         for (let c = 0; c < numColumns; ++c) {
             const column = dataTable.columns[c];
             for (let r = 0; r < numRows; ++r) {
-                result[r * numColumns + c] = column.data[r];
+                result[r * numColumns + c] = column.data[rowOffset + r];
             }
         }
     }
@@ -208,7 +208,7 @@ class GpuClustering {
             const numBatches = Math.ceil(numPoints / batchSize);
 
             // upload centroid data to gpu
-            interleaveData(interleavedCentroids, centroids);
+            interleaveData(interleavedCentroids, centroids, numCentroids, 0);
             centroidsBuffer.write(0, interleavedCentroids, 0, interleavedCentroids.length);
             compute.setParameter('numCentroids', numCentroids);
 
@@ -217,7 +217,7 @@ class GpuClustering {
                 const groups = Math.ceil(currentBatchSize / 64);
 
                 // write this batch of point data to gpu
-                interleaveData(interleavedPoints, points, currentBatchSize);
+                interleaveData(interleavedPoints, points, currentBatchSize, batch * batchSize);
                 pointsBuffer.write(0, interleavedPoints, 0, roundUp(numColumns * currentBatchSize, 2));
                 compute.setParameter('numPoints', currentBatchSize);
 
@@ -230,7 +230,7 @@ class GpuClustering {
                 device.submit();
 
                 // read results from gpu and store in labels
-                await resultsBuffer.read(0, roundUp(currentBatchSize, 2), resultsData, true);
+                await resultsBuffer.read(0, currentBatchSize * 4, resultsData, true);
                 labels.set(resultsData.subarray(0, currentBatchSize), batch * batchSize);
             }
 
