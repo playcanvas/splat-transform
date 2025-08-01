@@ -161,7 +161,9 @@ const kmeans = async (points: DataTable, k: number, iterations: number, device?:
         stdout.write('#');
     }
 
-    gpuClustering.destroy();
+    if (gpuClustering) {
+        gpuClustering.destroy();
+    }
 
     console.log(' done 🎉');
 
