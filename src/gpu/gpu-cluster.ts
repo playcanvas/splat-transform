@@ -231,6 +231,7 @@ class GpuCluster {
                 compute.setupDispatch(groups);
                 device.computeDispatch([compute], `cluster-dispatch-${batch}`);
 
+                // FIXME: submit call is required, but not public API
                 // @ts-ignore
                 device.submit();
             }
