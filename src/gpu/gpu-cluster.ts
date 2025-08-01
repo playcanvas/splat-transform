@@ -12,8 +12,7 @@ import {
     Shader,
     StorageBuffer,
     UniformBufferFormat,
-    UniformFormat,
-    WebgpuGraphicsDevice
+    UniformFormat
 } from 'playcanvas/debug';
 
 import { DataTable } from '../data-table.js';
@@ -131,16 +130,16 @@ const interleaveData = (dataTable: DataTable, useF16: boolean) => {
             }
         }
         return result;
-    } else {
-        const result = new Float32Array(numColumns * numRows);
-        for (let c = 0; c < numColumns; ++c) {
-            const column = dataTable.columns[c];
-            for (let r = 0; r < numRows; ++r) {
-                result[r * numColumns + c] = column.data[r];
-            }
-        }
-        return result;
     }
+
+    const result = new Float32Array(numColumns * numRows);
+    for (let c = 0; c < numColumns; ++c) {
+        const column = dataTable.columns[c];
+        for (let r = 0; r < numRows; ++r) {
+            result[r * numColumns + c] = column.data[r];
+        }
+    }
+    return result;
 };
 
 class GpuCluster {
@@ -151,7 +150,7 @@ class GpuCluster {
         const device = gpuDevice.app.graphicsDevice;
 
         // Check if device supports f16
-        const useF16 = 'supportsShaderF16' in device && device.supportsShaderF16 as boolean
+        const useF16 = 'supportsShaderF16' in device && device.supportsShaderF16 as boolean;
         const bytesPerFloat = useF16 ? 2 : 4;
 
         const numPoints = points.numRows;
