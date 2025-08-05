@@ -2,7 +2,7 @@ import { FileHandle } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 import sharp from 'sharp';
-import archiver from 'archiver';
+import * as archiver from 'archiver';
 
 import { DataTable } from '../data-table';
 import { createDevice } from '../gpu/gpu-device';
@@ -53,7 +53,7 @@ const identity = (index: number, width: number) => {
 
 const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFilename: string, shIterations = 10, shMethod: 'cpu' | 'gpu') => {
     // initialize the zip archive in bundle mode
-    const zip = outputFilename.toLocaleLowerCase().endsWith('.sog') && archiver('zip', { zlib: { level: 9 } });
+    const zip = outputFilename.toLocaleLowerCase().endsWith('.sog') && archiver.create('zip', { zlib: { level: 9 } });
     const out = zip && fileHandle.createWriteStream();
     const zipDone = zip && new Promise<void>((resolve, reject) => {
         out.on("close", resolve);
