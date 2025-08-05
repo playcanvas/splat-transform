@@ -18,6 +18,16 @@ type Scale = {
     value: number;
 };
 
+type Camera = {
+    kind: 'camera';
+    value: Vec3;
+};
+
+type Target = {
+    kind: 'target';
+    value: Vec3;
+};
+
 type FilterNaN = {
     kind: 'filterNaN';
 };
@@ -34,7 +44,7 @@ type FilterBands = {
     value: 0 | 1 | 2 | 3;
 };
 
-type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands;
+type ProcessAction = Translate | Rotate | Scale | Camera | Target | FilterNaN | FilterByValue | FilterBands;
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
