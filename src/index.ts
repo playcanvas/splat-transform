@@ -330,7 +330,7 @@ SUPPORTED INPUTS
     .ply   .splat   .ksplat
 
 SUPPORTED OUTPUTS
-    .ply   .compressed.ply   meta.json (SOGS)   .csv
+    .ply   .compressed.ply   meta.json (SOG)   .sog   .csv
 
 ACTIONS (can be repeated, in any order)
     -t, --translate  x,y,z                  Translate splats by (x, y, z)
