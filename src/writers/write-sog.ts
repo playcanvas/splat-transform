@@ -1,8 +1,8 @@
 import { FileHandle } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
-import sharp from 'sharp';
 import * as archiver from 'archiver';
+import sharp from 'sharp';
 
 import { DataTable } from '../data-table';
 import { createDevice } from '../gpu/gpu-device';
@@ -56,8 +56,8 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     const zip = outputFilename.toLocaleLowerCase().endsWith('.sog') && archiver.create('zip', { zlib: { level: 9 } });
     const out = zip && fileHandle.createWriteStream();
     const zipDone = zip && new Promise<void>((resolve, reject) => {
-        out.on("close", resolve);
-        zip.on("error", reject);
+        out.on('close', resolve);
+        zip.on('error', reject);
     });
     if (zip) {
         zip.pipe(out);
