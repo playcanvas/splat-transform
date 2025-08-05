@@ -1,13 +1,13 @@
-import { FileHandle, open } from 'node:fs/promises';
+import { FileHandle } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
+import * as archiver from 'archiver';
 import sharp from 'sharp';
 
 import { DataTable } from '../data-table';
 import { createDevice } from '../gpu/gpu-device';
 import { generateOrdering } from '../ordering';
 import { kmeans } from '../utils/k-means';
-
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
@@ -51,7 +51,17 @@ const identity = (index: number, width: number) => {
     return index;
 };
 
-const writeSogs = async (fileHandle: FileHandle, dataTable: DataTable, outputFilename: string, shIterations = 10, shMethod: 'cpu' | 'gpu') => {
+const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFilename: string, shIterations = 10, shMethod: 'cpu' | 'gpu') => {
+    // initialize the zip archive in bundle mode
+    const zip = outputFilename.toLowerCase().endsWith('.sog') ? archiver.create('zip', { zlib: { level: 9 } }) : null;
+    const out = zip ? fileHandle.createWriteStream() : null;
+    const zipDone = zip ? new Promise<void>((resolve, reject) => {
+        out.on('close', resolve);
+        zip.on('error', reject);
+    }) : null;
+    if (zip) {
+        zip.pipe(out);
+    }
 
     // generate an optimal ordering
     const sortIndices = generateOrdering(dataTable);
@@ -61,12 +71,15 @@ const writeSogs = async (fileHandle: FileHandle, dataTable: DataTable, outputFil
     const height = Math.ceil(numRows / width / 16) * 16;
     const channels = 4;
 
-    const write = (filename: string, data: Uint8Array, w = width, h = height) => {
+    const write = async (filename: string, data: Uint8Array, w = width, h = height) => {
         const pathname = resolve(dirname(outputFilename), filename);
         console.log(`writing '${pathname}'...`);
-        return sharp(data, { raw: { width: w, height: h, channels } })
-        .webp({ lossless: true })
-        .toFile(pathname);
+        const webp = sharp(data, { raw: { width: w, height: h, channels } }).webp({ lossless: true });
+        if (zip) {
+            zip.append(await webp.toBuffer(), { name: filename });
+        } else {
+            await webp.toFile(pathname);
+        }
     };
 
     // the layout function determines how the data is packed into the output texture.
@@ -288,7 +301,15 @@ const writeSogs = async (fileHandle: FileHandle, dataTable: DataTable, outputFil
         };
     }
 
-    await fileHandle.write((new TextEncoder()).encode(JSON.stringify(meta, null, 4)));
+    if (zip) {
+        // write bundled sog
+        zip.append(JSON.stringify(meta, null, 4), { name: 'meta.json' });
+        await zip.finalize();
+        await zipDone;
+    } else {
+        // write meta.json
+        await fileHandle.write((new TextEncoder()).encode(JSON.stringify(meta, null, 4)));
+    }
 };
 
-export { writeSogs };
+export { writeSog };

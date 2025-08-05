@@ -1,6 +1,7 @@
 import resolve from '@rollup/plugin-node-resolve';
 import typescript from '@rollup/plugin-typescript';
 import json from '@rollup/plugin-json';
+import commonjs from '@rollup/plugin-commonjs';
 
 const application = {
     input: 'src/index.ts',
@@ -15,6 +16,7 @@ const application = {
         typescript(),
         resolve(),
         json(),
+        commonjs(),
     ],
     cache: false
 };
