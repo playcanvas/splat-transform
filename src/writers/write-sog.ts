@@ -302,7 +302,7 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     }
 
     if (zip) {
-        // write the zip bundle to zip
+        // write bundled sog
         zip.append(JSON.stringify(meta, null, 4), { name: 'meta.json' });
         await zip.finalize();
         await zipDone;
