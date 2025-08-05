@@ -53,12 +53,12 @@ const identity = (index: number, width: number) => {
 
 const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFilename: string, shIterations = 10, shMethod: 'cpu' | 'gpu') => {
     // initialize the zip archive in bundle mode
-    const zip = outputFilename.toLocaleLowerCase().endsWith('.sog') && archiver.create('zip', { zlib: { level: 9 } });
-    const out = zip && fileHandle.createWriteStream();
-    const zipDone = zip && new Promise<void>((resolve, reject) => {
+    const zip = outputFilename.toLowerCase().endsWith('.sog') ? archiver.create('zip', { zlib: { level: 9 } }) : null;
+    const out = zip ? fileHandle.createWriteStream() : null;
+    const zipDone = zip ? new Promise<void>((resolve, reject) => {
         out.on('close', resolve);
         zip.on('error', reject);
-    });
+    }) : null;
     if (zip) {
         zip.pipe(out);
     }
