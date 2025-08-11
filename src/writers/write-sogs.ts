@@ -1,4 +1,4 @@
-import { FileHandle, open } from 'node:fs/promises';
+import { FileHandle } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 import sharp from 'sharp';
@@ -8,16 +8,15 @@ import { createDevice } from '../gpu/gpu-device';
 import { generateOrdering } from '../ordering';
 import { kmeans } from '../utils/k-means';
 
-
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
-const calcMinMax = (dataTable: DataTable, columnNames: string[]) => {
+const calcMinMax = (dataTable: DataTable, columnNames: string[], indices: Uint32Array) => {
     const columns = columnNames.map(name => dataTable.getColumnByName(name));
     const minMax = columnNames.map(() => [Infinity, -Infinity]);
     const row = {};
 
-    for (let i = 0; i < dataTable.numRows; ++i) {
-        const r = dataTable.getRow(i, row, columns);
+    for (let i = 0; i < indices.length; ++i) {
+        const r = dataTable.getRow(indices[i], row, columns);
 
         for (let j = 0; j < columnNames.length; ++j) {
             const value = r[columnNames[j]];
@@ -51,12 +50,17 @@ const identity = (index: number, width: number) => {
     return index;
 };
 
-const writeSogs = async (fileHandle: FileHandle, dataTable: DataTable, outputFilename: string, shIterations = 10, shMethod: 'cpu' | 'gpu') => {
+const generateIndices = (dataTable: DataTable) => {
+    const result = new Uint32Array(dataTable.numRows);
+    for (let i = 0; i < result.length; ++i) {
+        result[i] = i;
+    }
+    generateOrdering(dataTable, result);
+    return result;
+};
 
-    // generate an optimal ordering
-    const sortIndices = generateOrdering(dataTable);
-
-    const numRows = dataTable.numRows;
+const writeSogs = async (fileHandle: FileHandle, dataTable: DataTable, outputFilename: string, shIterations = 10, shMethod: 'cpu' | 'gpu', indices = generateIndices(dataTable)) => {
+    const numRows = indices.length;
     const width = Math.ceil(Math.sqrt(numRows) / 16) * 16;
     const height = Math.ceil(numRows / width / 16) * 16;
     const channels = 4;
@@ -78,10 +82,10 @@ const writeSogs = async (fileHandle: FileHandle, dataTable: DataTable, outputFil
     const meansL = new Uint8Array(width * height * channels);
     const meansU = new Uint8Array(width * height * channels);
     const meansNames = ['x', 'y', 'z'];
-    const meansMinMax = calcMinMax(dataTable, meansNames).map(v => v.map(logTransform));
+    const meansMinMax = calcMinMax(dataTable, meansNames, indices).map(v => v.map(logTransform));
     const meansColumns = meansNames.map(name => dataTable.getColumnByName(name));
-    for (let i = 0; i < dataTable.numRows; ++i) {
-        dataTable.getRow(sortIndices[i], row, meansColumns);
+    for (let i = 0; i < indices.length; ++i) {
+        dataTable.getRow(indices[i], row, meansColumns);
 
         const x = 65535 * (logTransform(row.x) - meansMinMax[0][0]) / (meansMinMax[0][1] - meansMinMax[0][0]);
         const y = 65535 * (logTransform(row.y) - meansMinMax[1][0]) / (meansMinMax[1][1] - meansMinMax[1][0]);
@@ -107,8 +111,8 @@ const writeSogs = async (fileHandle: FileHandle, dataTable: DataTable, outputFil
     const quatNames = ['rot_0', 'rot_1', 'rot_2', 'rot_3'];
     const quatColumns = quatNames.map(name => dataTable.getColumnByName(name));
     const q = [0, 0, 0, 0];
-    for (let i = 0; i < dataTable.numRows; ++i) {
-        dataTable.getRow(sortIndices[i], row, quatColumns);
+    for (let i = 0; i < indices.length; ++i) {
+        dataTable.getRow(indices[i], row, quatColumns);
 
         q[0] = row.rot_0;
         q[1] = row.rot_1;
@@ -158,9 +162,9 @@ const writeSogs = async (fileHandle: FileHandle, dataTable: DataTable, outputFil
     const scales = new Uint8Array(width * height * channels);
     const scaleNames = ['scale_0', 'scale_1', 'scale_2'];
     const scaleColumns = scaleNames.map(name => dataTable.getColumnByName(name));
-    const scaleMinMax = calcMinMax(dataTable, scaleNames);
-    for (let i = 0; i < dataTable.numRows; ++i) {
-        dataTable.getRow(sortIndices[i], row, scaleColumns);
+    const scaleMinMax = calcMinMax(dataTable, scaleNames, indices);
+    for (let i = 0; i < indices.length; ++i) {
+        dataTable.getRow(indices[i], row, scaleColumns);
 
         const ti = layout(i, width);
 
@@ -175,9 +179,9 @@ const writeSogs = async (fileHandle: FileHandle, dataTable: DataTable, outputFil
     const sh0 = new Uint8Array(width * height * channels);
     const sh0Names = ['f_dc_0', 'f_dc_1', 'f_dc_2', 'opacity'];
     const sh0Columns = sh0Names.map(name => dataTable.getColumnByName(name));
-    const sh0MinMax = calcMinMax(dataTable, sh0Names);
-    for (let i = 0; i < dataTable.numRows; ++i) {
-        dataTable.getRow(sortIndices[i], row, sh0Columns);
+    const sh0MinMax = calcMinMax(dataTable, sh0Names, indices);
+    for (let i = 0; i < indices.length; ++i) {
+        dataTable.getRow(indices[i], row, sh0Columns);
 
         const ti = layout(i, width);
 
@@ -234,7 +238,7 @@ const writeSogs = async (fileHandle: FileHandle, dataTable: DataTable, outputFil
         // create a table with just spherical harmonics data
         const shDataTable = new DataTable(shColumns);
 
-        const paletteSize = Math.min(64, 2 ** Math.floor(Math.log2(dataTable.numRows / 1024))) * 1024;
+        const paletteSize = Math.min(64, 2 ** Math.floor(Math.log2(indices.length / 1024))) * 1024;
 
         // calculate kmeans
         const gpuDevice = shMethod === 'gpu' ? await createDevice() : null;
@@ -242,7 +246,7 @@ const writeSogs = async (fileHandle: FileHandle, dataTable: DataTable, outputFil
 
         // write centroids
         const centroidsBuf = new Uint8Array(64 * shCoeffs * Math.ceil(centroids.numRows / 64) * channels);
-        const centroidsMinMax = calcMinMax(shDataTable, shColumnNames);
+        const centroidsMinMax = calcMinMax(shDataTable, shColumnNames, indices);
         const centroidsMin = centroidsMinMax.map(v => v[0]).reduce((a, b) => Math.min(a, b));
         const centroidsMax = centroidsMinMax.map(v => v[1]).reduce((a, b) => Math.max(a, b));
         const centroidsRow: any = {};
@@ -264,8 +268,8 @@ const writeSogs = async (fileHandle: FileHandle, dataTable: DataTable, outputFil
 
         // write labels
         const labelsBuf = new Uint8Array(width * height * channels);
-        for (let i = 0; i < dataTable.numRows; ++i) {
-            const label = labels[sortIndices[i]];
+        for (let i = 0; i < indices.length; ++i) {
+            const label = labels[indices[i]];
 
             const ti = layout(i, width);
             labelsBuf[ti * 4] = label & 0xff;
@@ -276,7 +280,7 @@ const writeSogs = async (fileHandle: FileHandle, dataTable: DataTable, outputFil
         await write('shN_labels.webp', labelsBuf);
 
         meta.shN = {
-            shape: [dataTable.numRows, shCoeffs],
+            shape: [indices.length, shCoeffs],
             dtype: 'float32',
             mins: centroidsMin,
             maxs: centroidsMax,

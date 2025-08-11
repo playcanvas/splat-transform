@@ -2,6 +2,7 @@ import { DataTable } from '../data-table';
 
 interface KdTreeNode {
     index: number;
+    count: number;          // self + children indices
     left?: KdTreeNode;
     right?: KdTreeNode;
 }
@@ -11,12 +12,46 @@ class KdTree {
     root: KdTreeNode;
 
     constructor(centroids: DataTable) {
+        const build = (indices: Uint32Array, depth: number): KdTreeNode => {
+            const { centroids } = this;
+            const values = centroids.columns[depth % centroids.numColumns].data;
+            indices.sort((a, b) => values[a] - values[b]);
+
+            if (indices.length === 1) {
+                return {
+                    index: indices[0],
+                    count: 1
+                };
+            } else if (indices.length === 2) {
+                return {
+                    index: indices[0],
+                    count: 2,
+                    right: {
+                        index: indices[1],
+                        count: 1
+                    }
+                };
+            }
+
+            const mid = indices.length >> 1;
+            const left = build(indices.subarray(0, mid), depth + 1);
+            const right = build(indices.subarray(mid + 1), depth + 1);
+
+            return {
+                index: indices[mid],
+                count: 1 + left.count + right.count,
+                left,
+                right
+            };
+        }
+
         const indices = new Uint32Array(centroids.numRows);
-        indices.forEach((v, i) => {
+        for (let i = 0; i < indices.length; ++i) {
             indices[i] = i;
-        });
+        }
+
         this.centroids = centroids;
-        this.root = this.build(indices, 0);
+        this.root = build(indices, 0);
     }
 
     findNearest(point: Float32Array, filterFunc?: (index: number) => boolean) {
@@ -69,34 +104,6 @@ class KdTree {
 
         return { index: mini, distanceSqr: mind, cnt };
     }
-
-    private build(indices: Uint32Array, depth: number): KdTreeNode {
-        const { centroids } = this;
-        const values = centroids.columns[depth % centroids.numColumns].data;
-        indices.sort((a, b) => values[a] - values[b]);
-
-        if (indices.length === 1) {
-            return {
-                index: indices[0]
-            };
-        } else if (indices.length === 2) {
-            return {
-                index: indices[0],
-                right: {
-                    index: indices[1]
-                }
-            };
-        }
-
-        const mid = indices.length >> 1;
-        const left = this.build(indices.subarray(0, mid), depth + 1);
-        const right = this.build(indices.subarray(mid + 1), depth + 1);
-        return {
-            index: indices[mid],
-            left,
-            right
-        };
-    }
 }
 
-export { KdTree };
+export { KdTreeNode, KdTree };

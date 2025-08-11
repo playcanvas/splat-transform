@@ -34,7 +34,12 @@ type FilterBands = {
     value: 0 | 1 | 2 | 3;
 };
 
-type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands;
+type Lod = {
+    kind: 'lod';
+    value: 0 | 1 | 2;
+};
+
+type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | Lod;
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
@@ -110,6 +115,10 @@ const process = (dataTable: DataTable, processActions: ProcessAction[]) => {
 
                     }).filter(c => c !== null));
                 }
+                break;
+            }
+            case 'lod': {
+                result.addColumn(new Column('lod', new Float32Array(result.numRows).fill(processAction.value)));
                 break;
             }
         }

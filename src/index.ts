@@ -15,6 +15,7 @@ import { writeCompressedPly } from './writers/write-compressed-ply';
 import { writeCsv } from './writers/write-csv';
 import { writePly } from './writers/write-ply';
 import { writeSogs } from './writers/write-sogs';
+import { writeLod } from './writers/write-lod';
 
 type Options = {
     overwrite: boolean,
@@ -49,7 +50,9 @@ const readFile = async (filename: string) => {
 const getOutputFormat = (filename: string) => {
     const lowerFilename = filename.toLowerCase();
 
-    if (lowerFilename.endsWith('.csv')) {
+    if (lowerFilename.endsWith('.lod.json')) {
+        return 'lod';
+    } else if (lowerFilename.endsWith('.csv')) {
         return 'csv';
     } else if (lowerFilename.endsWith('.json')) {
         return 'json';
@@ -84,6 +87,9 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
 
     // write the data
     switch (outputFormat) {
+        case 'lod':
+            await writeLod(outputFile, dataTable, filename, options.iterations, options.gpu ? 'gpu' : 'cpu');
+            break;
         case 'csv':
             await writeCsv(outputFile, dataTable);
             break;
@@ -194,13 +200,14 @@ const parseArguments = () => {
             'no-gpu': { type: 'boolean', short: 'g' },
             iterations: { type: 'string', short: 'i' },
 
-            // file options
+            // per-file options
             translate: { type: 'string', short: 't', multiple: true },
             rotate: { type: 'string', short: 'r', multiple: true },
             scale: { type: 'string', short: 's', multiple: true },
             filterNaN: { type: 'boolean', short: 'n', multiple: true },
             filterByValue: { type: 'string', short: 'c', multiple: true },
-            filterBands: { type: 'string', short: 'b', multiple: true }
+            filterBands: { type: 'string', short: 'b', multiple: true },
+            lod: { type: 'string', short: 'l', multiple: true}
         }
     });
 
@@ -296,7 +303,7 @@ const parseArguments = () => {
                     break;
                 }
                 case 'filterBands': {
-                    const shBands = parseNumber(t.value);
+                    const shBands = parseInteger(t.value);
                     if (![0, 1, 2, 3].includes(shBands)) {
                         throw new Error(`Invalid filterBands value: ${t.value}. Must be 0, 1, 2, or 3.`);
                     }
@@ -305,6 +312,17 @@ const parseArguments = () => {
                         value: shBands as 0 | 1 | 2 | 3
                     });
 
+                    break;
+                }
+                case 'lod': {
+                    const lod = parseInteger(t.value);
+                    if (![0, 1, 2].includes(lod)) {
+                        throw new Error(`Invalid lod value: ${t.value}. Must be 0, 1, or 2.`);
+                    }
+                    current.processActions.push({
+                        kind: 'lod',
+                        value: lod as 0 | 1 | 2
+                    });
                     break;
                 }
             }
@@ -340,6 +358,7 @@ ACTIONS (can be repeated, in any order)
     -c, --filterByValue name,cmp,value      Keep splats where  <name> <cmp> <value>
                                             cmp ∈ {lt,lte,gt,gte,eq,neq}
     -b, --filterBands  {0|1|2|3}            Strip spherical-harmonic bands > N
+    -l, --lod          {0|1|2}              Specify the level of detail
 
 GLOBAL OPTIONS
     -w, --overwrite                         Overwrite output file if it already exists. Default is false.
@@ -410,7 +429,7 @@ const main = async () => {
         await writeFile(resolve(outputArg.filename), dataTable, options);
     } catch (err) {
         // handle errors
-        console.error(`error: ${err.message}`);
+        console.error(err);
         exit(1);
     }
 
