@@ -236,6 +236,10 @@ const writeSogs = async (fileHandle: FileHandle, dataTable: DataTable, outputFil
         const shColumns = shColumnNames.map(name => dataTable.getColumnByName(name));
 
         // create a table with just spherical harmonics data
+        // NOTE: this step should also copy the rows referenced in indices, but that's a
+        // lot of duplicate data when it's unneeded (which is currently never). so that
+        // means k-means is clustering the full dataset, instead of the rows referenced in
+        // indices.
         const shDataTable = new DataTable(shColumns);
 
         const paletteSize = Math.min(64, 2 ** Math.floor(Math.log2(indices.length / 1024))) * 1024;

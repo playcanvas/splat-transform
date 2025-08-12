@@ -26,6 +26,7 @@ type MetaNode = {
 };
 
 type Meta = {
+    lodLevels: number,
     filenames: string[];
     tree: MetaNode;
 };
@@ -135,6 +136,7 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     const lodColumn = dataTable.getColumnByName('lod').data;
     const groupSize = 128 * 1024;
     const filenames: string[] = [];
+    let lodLevels = 0;
 
     const build = (node: KdTreeNode): MetaNode => {
         if (node.count > groupSize) {
@@ -164,19 +166,24 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
             const lastFile = fileList[fileIndex];
             const fileSize = lastFile.reduce((acc, curr) => acc + curr.length, 0);
 
+            const filename = `${lodValue}_${fileIndex}/meta.json`;
+            if (filenames.indexOf(filename) === -1) {
+                filenames.push(filename);
+            }
+
             lods[lodValue] = {
-                file: filenames.length,
+                file: filenames.indexOf(filename),
                 offset: fileSize,
                 count: indices.length
             };
-
-            filenames.push(`${lodValue}_${fileIndex}/meta.json`);
 
             lastFile.push(indices);
 
             if (fileSize + indices.length > groupSize) {
                 fileList.push([]);
             }
+
+            lodLevels = Math.max(lodLevels, lodValue + 1);
         }
 
         // combine indices from all lods so we can calcuate bound over them
@@ -192,6 +199,7 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
 
     const tree = build(kdTree.root);
     const meta: Meta = {
+        lodLevels,
         filenames,
         tree
     };
@@ -226,7 +234,7 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
             }
 
             // write file unit to sog
-            const pathname = resolve(dirname(outputFilename), `lod${lodValue}_${i}/meta.json`);
+            const pathname = resolve(dirname(outputFilename), `${lodValue}_${i}/meta.json`);
 
             // ensure output folder exists
             await mkdir(dirname(pathname), { recursive: true });
