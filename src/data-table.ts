@@ -28,18 +28,6 @@ class Column {
     clone(): Column {
         return new Column(this.name, this.data.slice());
     }
-
-    filter(length: number, filter: Uint8Array): Column {
-        const constructor = this.data.constructor as new (length: number) => TypedArray;
-        const data = new constructor(length);
-        let j = 0;
-        for (let i = 0; i < this.data.length; i++) {
-            if (filter[i]) {
-                data[j++] = this.data[i];
-            }
-        }
-        return new Column(this.name, data);
-    }
 }
 
 type Row = {
@@ -143,26 +131,21 @@ class DataTable {
         return new DataTable(this.columns.map(c => c.clone()));
     }
 
-    filter(predicate: RowPredicate): DataTable | null {
-        const flags = new Uint8Array(this.numRows);
-        const row = {};
-        let numRows = 0;
+    // return a new table containing the rows referenced in indices
+    permuteRows(indices: Uint32Array | number[]): DataTable {
+        const result = new DataTable(this.columns.map((c) => {
+            const constructor = c.data.constructor as new (length: number) => TypedArray;
+            return new Column(c.name, new constructor(indices.length));
+        }));
 
-        for (let i = 0; i < this.numRows; i++) {
-            this.getRow(i, row);
-            flags[i] = predicate(i, row) ? 1 : 0;
-            numRows += flags[i];
+        for (let i = 0; i < this.numColumns; ++i) {
+            const src = this.getColumn(i).data;
+            const dst = result.getColumn(i).data;
+            for (let j = 0; j < indices.length; j++) {
+                dst[j] = src[indices[j]];
+            }
         }
-
-        if (numRows === 0) {
-            return null;
-        }
-
-        if (numRows === this.numRows) {
-            return this;
-        }
-
-        return new DataTable(this.columns.map(c => c.filter(numRows, flags)));
+        return result;
     }
 
     permutedRows(indices: Uint32Array): DataTable {

@@ -43,6 +43,22 @@ type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | Fi
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
+const filter = (dataTable: DataTable, predicate: (row: any, rowIndex: number) => boolean): DataTable => {
+    const indices = new Uint32Array(dataTable.numRows);
+    let index = 0;
+    const row = {};
+
+    for (let i = 0; i < dataTable.numRows; i++) {
+        dataTable.getRow(i, row);
+
+        if (predicate(row, i)) {
+            indices[index++] = i;
+        }
+    }
+
+    return dataTable.permuteRows(indices.subarray(0, index));
+};
+
 // process a data table with standard options
 const process = (dataTable: DataTable, processActions: ProcessAction[]) => {
     let result = dataTable;
@@ -65,7 +81,7 @@ const process = (dataTable: DataTable, processActions: ProcessAction[]) => {
                 transform(result, Vec3.ZERO, Quat.IDENTITY, processAction.value);
                 break;
             case 'filterNaN': {
-                const predicate = (rowIndex: number, row: any) => {
+                const predicate = (row: any, rowIndex: number) => {
                     for (const key in row) {
                         if (!isFinite(row[key])) {
                             return false;
@@ -73,21 +89,21 @@ const process = (dataTable: DataTable, processActions: ProcessAction[]) => {
                     }
                     return true;
                 };
-                result = result.filter(predicate);
+                result = filter(result, predicate);
                 break;
             }
             case 'filterByValue': {
                 const { columnName, comparator, value } = processAction;
                 const Predicates = {
-                    'lt': (rowIndex: number, row: any) => row[columnName] < value,
-                    'lte': (rowIndex: number, row: any) => row[columnName] <= value,
-                    'gt': (rowIndex: number, row: any) => row[columnName] > value,
-                    'gte': (rowIndex: number, row: any) => row[columnName] >= value,
-                    'eq': (rowIndex: number, row: any) => row[columnName] === value,
-                    'neq': (rowIndex: number, row: any) => row[columnName] !== value
+                    'lt':  (row: any, rowIndex: number) => row[columnName] < value,
+                    'lte': (row: any, rowIndex: number) => row[columnName] <= value,
+                    'gt':  (row: any, rowIndex: number) => row[columnName] > value,
+                    'gte': (row: any, rowIndex: number) => row[columnName] >= value,
+                    'eq':  (row: any, rowIndex: number) => row[columnName] === value,
+                    'neq': (row: any, rowIndex: number) => row[columnName] !== value
                 };
-                const predicate = Predicates[comparator] ?? ((rowIndex: number, row: any) => true);
-                result = result.filter(predicate);
+                const predicate = Predicates[comparator] ?? ((row: any, rowIndex: number) => true);
+                result = filter(result, predicate);
                 break;
             }
             case 'filterBands': {
