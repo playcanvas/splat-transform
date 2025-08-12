@@ -131,15 +131,18 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
 
     const kdTree = new KdTree(centroidsTable);
 
-    // map of lod -> fileUnit[]
+    // approximate number of gaussians we'll place into file units
+    const binSize = 128 * 1024;
+
+    // map of lod -> fileBin[]
+    // fileBin: number[][]
     const lodFiles: Map<number, number[][][]> = new Map();
     const lodColumn = dataTable.getColumnByName('lod').data;
-    const groupSize = 128 * 1024;
     const filenames: string[] = [];
     let lodLevels = 0;
 
     const build = (node: KdTreeNode): MetaNode => {
-        if (node.count > groupSize) {
+        if (node.count > binSize) {
             const children = [
                 build(node.left),
                 build(node.right)
@@ -179,7 +182,7 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
 
             lastFile.push(indices);
 
-            if (fileSize + indices.length > groupSize) {
+            if (fileSize + indices.length > binSize) {
                 fileList.push([]);
             }
 
