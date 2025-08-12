@@ -6,7 +6,7 @@ import { TypedArray, DataTable } from '../data-table';
 import { KdTreeNode, KdTree } from '../utils/kd-tree';
 import { generateOrdering } from '../ordering';
 
-import { writeSogs } from './write-sogs.js';
+import { writeSog } from './write-sog.js';
 
 type Aabb = {
     min: number[],
@@ -246,7 +246,7 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
 
             console.log(`writing ${pathname}...`);
 
-            await writeSogs(outputFile, unitDataTable, pathname, shIterations, shMethod, indices);
+            await writeSog(outputFile, unitDataTable, pathname, shIterations, shMethod, indices);
 
             await outputFile.close();
         }

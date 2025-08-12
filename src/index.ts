@@ -14,7 +14,7 @@ import { readSplat } from './readers/read-splat';
 import { writeCompressedPly } from './writers/write-compressed-ply';
 import { writeCsv } from './writers/write-csv';
 import { writePly } from './writers/write-ply';
-import { writeSogs } from './writers/write-sogs';
+import { writeSog } from './writers/write-sog';
 import { writeLod } from './writers/write-lod';
 
 type Options = {
@@ -91,7 +91,7 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
             await writeLod(outputFile, dataTable, filename, options.iterations, options.gpu ? 'gpu' : 'cpu');
             break;
         case 'sog':
-            await writeSogs(outputFile, dataTable, filename, options.iterations, options.gpu ? 'gpu' : 'cpu');
+            await writeSog(outputFile, dataTable, filename, options.iterations, options.gpu ? 'gpu' : 'cpu');
             break;
         case 'csv':
             await writeCsv(outputFile, dataTable);
