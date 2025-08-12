@@ -13,16 +13,21 @@ type Aabb = {
     max: number[]
 };
 
-type MetaFile = {
+type MetaLod = {
     file: number;
     offset: number;
     count: number;
 };
 
-type Meta = {
+type MetaNode = {
     bound: Aabb;
-    children?: Meta[];
-    files?: { [key: number]: MetaFile };
+    children?: MetaNode[];
+    lods?: { [key: number]: MetaLod };
+};
+
+type Meta = {
+    filenames: string[];
+    tree: MetaNode;
 };
 
 const boundUnion = (result: Aabb, a: Aabb, b: Aabb) => {
@@ -126,18 +131,12 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     const kdTree = new KdTree(centroidsTable);
 
     // map of lod -> fileUnit[]
-    // fileUnit: number[][]
     const lodFiles: Map<number, number[][][]> = new Map();
     const lodColumn = dataTable.getColumnByName('lod').data;
     const groupSize = 128 * 1024;
+    const filenames: string[] = [];
 
-    // step over tree nodes parent to root
-    // - keep iterating until we reach a node with fewer than n gaussians
-    // - collect the indices of the gaussians in the node
-    // - split the indices into separate arrays for each lod
-    // - order the gaussians into morton order and calculate their bounds
-
-    const build = (node: KdTreeNode): Meta => {
+    const build = (node: KdTreeNode): MetaNode => {
         if (node.count > groupSize) {
             const children = [
                 build(node.left),
@@ -153,7 +152,7 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
             return { bound, children };
         }
 
-        const files: { [key: number]: MetaFile } = { };
+        const lods: { [key: number]: MetaLod } = { };
         const bins = binIndices(node, lodColumn);
 
         for (const [lodValue, indices] of bins) {
@@ -165,11 +164,13 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
             const lastFile = fileList[fileIndex];
             const fileSize = lastFile.reduce((acc, curr) => acc + curr.length, 0);
 
-            files[lodValue] = {
-                file: fileIndex,
+            lods[lodValue] = {
+                file: filenames.length,
                 offset: fileSize,
                 count: indices.length
             };
+
+            filenames.push(`${lodValue}_${fileIndex}/meta.json`);
 
             lastFile.push(indices);
 
@@ -186,10 +187,14 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
 
         const bound = calcBound(dataTable, allIndices);
 
-        return { bound, files };
+        return { bound, lods };
     };
 
-    const meta = build(kdTree.root);
+    const tree = build(kdTree.root);
+    const meta: Meta = {
+        filenames,
+        tree
+    };
 
     // write the meta file
     await fileHandle.write((new TextEncoder()).encode(JSON.stringify(meta, null, 4)));
