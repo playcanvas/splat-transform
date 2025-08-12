@@ -296,7 +296,7 @@ const parseArguments = () => {
                     break;
                 }
                 case 'filterBands': {
-                    const shBands = parseNumber(t.value);
+                    const shBands = parseInteger(t.value);
                     if (![0, 1, 2, 3].includes(shBands)) {
                         throw new Error(`Invalid filterBands value: ${t.value}. Must be 0, 1, 2, or 3.`);
                     }
@@ -410,7 +410,7 @@ const main = async () => {
         await writeFile(resolve(outputArg.filename), dataTable, options);
     } catch (err) {
         // handle errors
-        console.error(`error: ${err.message}`);
+        console.error(err);
         exit(1);
     }
 
