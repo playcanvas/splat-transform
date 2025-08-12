@@ -59,7 +59,7 @@ const generateIndices = (dataTable: DataTable) => {
     return result;
 };
 
-const writeSogs = async (fileHandle: FileHandle, dataTable: DataTable, outputFilename: string, shIterations = 10, shMethod: 'cpu' | 'gpu', indices = generateIndices(dataTable)) => {
+const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFilename: string, shIterations = 10, shMethod: 'cpu' | 'gpu', indices = generateIndices(dataTable)) => {
     const numRows = indices.length;
     const width = Math.ceil(Math.sqrt(numRows) / 16) * 16;
     const height = Math.ceil(numRows / width / 16) * 16;
@@ -299,4 +299,4 @@ const writeSogs = async (fileHandle: FileHandle, dataTable: DataTable, outputFil
     await fileHandle.write((new TextEncoder()).encode(JSON.stringify(meta, null, 4)));
 };
 
-export { writeSogs };
+export { writeSog };

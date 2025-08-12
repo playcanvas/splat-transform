@@ -14,7 +14,7 @@ import { readSplat } from './readers/read-splat';
 import { writeCompressedPly } from './writers/write-compressed-ply';
 import { writeCsv } from './writers/write-csv';
 import { writePly } from './writers/write-ply';
-import { writeSogs } from './writers/write-sogs';
+import { writeSog } from './writers/write-sog';
 
 type Options = {
     overwrite: boolean,
@@ -51,8 +51,8 @@ const getOutputFormat = (filename: string) => {
 
     if (lowerFilename.endsWith('.csv')) {
         return 'csv';
-    } else if (lowerFilename.endsWith('.json')) {
-        return 'json';
+    } else if (lowerFilename.endsWith('meta.json')) {
+        return 'sog';
     } else if (lowerFilename.endsWith('.compressed.ply')) {
         return 'compressed-ply';
     } else if (lowerFilename.endsWith('.ply')) {
@@ -87,8 +87,8 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
         case 'csv':
             await writeCsv(outputFile, dataTable);
             break;
-        case 'json':
-            await writeSogs(outputFile, dataTable, filename, options.iterations, options.gpu ? 'gpu' : 'cpu');
+        case 'sog':
+            await writeSog(outputFile, dataTable, filename, options.iterations, options.gpu ? 'gpu' : 'cpu');
             break;
         case 'compressed-ply':
             await writeCompressedPly(outputFile, dataTable);
