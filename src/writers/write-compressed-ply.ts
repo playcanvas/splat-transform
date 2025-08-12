@@ -55,7 +55,11 @@ const writeCompressedPly = async (fileHandle: FileHandle, dataTable: DataTable) 
     const shData = new Uint8Array(numSplats * outputSHCoeffs * 3);
 
     // sort splats into some kind of order (morton order rn)
-    const sortIndices = generateOrdering(dataTable);
+    const sortIndices = new Uint32Array(dataTable.numRows);
+    for (let i = 0; i < sortIndices.length; ++i) {
+        sortIndices[i] = i;
+    }
+    generateOrdering(dataTable, sortIndices);
 
     const row: any = {};
 

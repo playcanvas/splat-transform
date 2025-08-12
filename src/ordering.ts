@@ -1,8 +1,7 @@
 import { DataTable } from './data-table.js';
 
 // sort the compressed indices into morton order
-const generateOrdering = (dataTable: DataTable) => {
-
+const generateOrdering = (dataTable: DataTable, indices: Uint32Array) => {
     const cx = dataTable.getColumnByName('x').data;
     const cy = dataTable.getColumnByName('y').data;
     const cz = dataTable.getColumnByName('z').data;
@@ -99,11 +98,6 @@ const generateOrdering = (dataTable: DataTable) => {
             start = end;
         }
     };
-
-    const indices = new Uint32Array(dataTable.numRows);
-    for (let i = 0; i < indices.length; ++i) {
-        indices[i] = i;
-    }
 
     generate(indices);
 
