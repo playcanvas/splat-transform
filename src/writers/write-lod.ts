@@ -229,7 +229,7 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
             }
 
             // construct a new table from the ordered data
-            const unitDataTable = dataTable.permutedRows(indices);
+            const unitDataTable = dataTable.permuteRows(indices);
 
             // reset indices since we've generated ordering on the individual subunits
             for (let j = 0; j < indices.length; ++j) {

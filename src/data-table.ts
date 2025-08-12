@@ -147,22 +147,6 @@ class DataTable {
         }
         return result;
     }
-
-    permutedRows(indices: Uint32Array): DataTable {
-        const result = new DataTable(this.columns.map((c) => {
-            const constructor = c.data.constructor as new (length: number) => TypedArray;
-            return new Column(c.name, new constructor(indices.length));
-        }));
-
-        for (let i = 0; i < this.numColumns; ++i) {
-            const src = this.getColumn(i).data;
-            const dst = result.getColumn(i).data;
-            for (let j = 0; j < indices.length; j++) {
-                dst[j] = src[indices[j]];
-            }
-        }
-        return result;
-    }
 }
 
 export { Column, DataTable, TypedArray };
