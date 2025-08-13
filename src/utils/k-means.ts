@@ -148,8 +148,15 @@ const kmeans = async (points: DataTable, k: number, iterations: number, device?:
         // calculate the new centroid positions
         const groups = groupLabels(labels, k);
         for (let i = 0; i < centroids.numRows; ++i) {
-            calcAverage(points, groups[i], row);
-            centroids.setRow(i, row);
+            if (groups[i].length === 0) {
+                // re-seed this centroid to a random point to avoid zero vector
+                const idx = Math.floor(Math.random() * points.numRows);
+                points.getRow(idx, row);
+                centroids.setRow(i, row);
+            } else {
+                calcAverage(points, groups[i], row);
+                centroids.setRow(i, row);
+            }
         }
 
         steps++;
