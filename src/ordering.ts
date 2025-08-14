@@ -55,9 +55,14 @@ const generateOrdering = (dataTable: DataTable, indices: Uint32Array) => {
             return;
         }
 
-        const xmul = 1024 / xlen;
-        const ymul = 1024 / ylen;
-        const zmul = 1024 / zlen;
+        // all points are identical
+        if (xlen === 0 && ylen === 0 && zlen === 0) {
+            return;
+        }
+
+        const xmul = (xlen === 0) ? 0 : 1024 / xlen;
+        const ymul = (ylen === 0) ? 0 : 1024 / ylen;
+        const zmul = (zlen === 0) ? 0 : 1024 / zlen;
 
         const morton = new Uint32Array(indices.length);
         for (let i = 0; i < indices.length; ++i) {
