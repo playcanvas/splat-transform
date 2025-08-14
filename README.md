@@ -1,12 +1,22 @@
 # SplatTransform - 3D Gaussian Splat Converter
 
-SplatTransform is an open source CLI tool for reading gaussian splat PLY files and writing them to PLY, Compressed PLY, CSV, and SOGS format.
+[![NPM Version](https://img.shields.io/npm/v/@playcanvas/splat-transform.svg)](https://www.npmjs.com/package/@playcanvas/splat-transform)
+[![NPM Downloads](https://img.shields.io/npm/dw/@playcanvas/splat-transform)](https://npmtrends.com/@playcanvas/splat-transform)
+[![License](https://img.shields.io/npm/l/@playcanvas/splat-transform.svg)](https://github.com/playcanvas/splat-transform/blob/main/LICENSE)
 
-Multiple files may be combined and transformed before being written to the output.
+| [User Guide](https://developer.playcanvas.com/user-manual/gaussian-splatting/editing/splat-transform/) | [Blog](https://blog.playcanvas.com/) | [Forum](https://forum.playcanvas.com/) | [Discord](https://discord.gg/RSaMRzg) |
+
+SplatTransform is an open source CLI tool for converting and editing Gaussian splats. It can:
+
+📥 Read PLY, SPLAT, KSPLAT formats  
+📤 Write PLY, Compressed PLY, CSV, and SOGS formats  
+🔗 Merge multiple splats  
+🔄 Apply transformations to input splats  
+🎛️ Filter out Gaussians or spherical harmonic bands
 
 ## Installation
 
-First install the package globally:
+Install or update to the latest version:
 
 ```bash
 npm install -g @playcanvas/splat-transform
