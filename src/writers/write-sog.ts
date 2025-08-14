@@ -128,6 +128,9 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     const height = Math.ceil(numRows / width / 16) * 16;
     const channels = 4;
 
+    // the layout function determines how the data is packed into the output texture.
+    const layout = identity; // rectChunks;
+
     const write = (filename: string, data: Uint8Array, w = width, h = height) => {
         const pathname = resolve(dirname(outputFilename), filename);
         console.log(`writing '${pathname}'...`);
@@ -143,17 +146,15 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
 
         for (let i = 0; i < indices.length; ++i) {
             const idx = indices[i];
-            data[i * channels + 0] = columns[0][idx];
-            data[i * channels + 1] = numColumns > 1 ? columns[1][idx] : 0;
-            data[i * channels + 2] = numColumns > 2 ? columns[2][idx] : 0;
-            data[i * channels + 3] = numColumns > 3 ? columns[3][idx] : 255;
+            const ti = layout(i, width);
+            data[ti * channels + 0] = columns[0][idx];
+            data[ti * channels + 1] = numColumns > 1 ? columns[1][idx] : 0;
+            data[ti * channels + 2] = numColumns > 2 ? columns[2][idx] : 0;
+            data[ti * channels + 3] = numColumns > 3 ? columns[3][idx] : 255;
         }
 
         return write(filename, data, w, h);
     };
-
-    // the layout function determines how the data is packed into the output texture.
-    const layout = identity; // rectChunks;
 
     const row: any = {};
 
