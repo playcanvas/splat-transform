@@ -124,8 +124,8 @@ const codify1d = async (dataTable: DataTable, iterations: number, device?: GpuDe
 
 const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFilename: string, shIterations = 10, shMethod: 'cpu' | 'gpu', indices = generateIndices(dataTable)) => {
     const numRows = indices.length;
-    const width = Math.ceil(Math.sqrt(numRows) / 16) * 16;
-    const height = Math.ceil(numRows / width / 16) * 16;
+    const width = Math.ceil(Math.sqrt(numRows) / 4) * 4;
+    const height = Math.ceil(numRows / width / 4) * 4;
     const channels = 4;
 
     // the layout function determines how the data is packed into the output texture.
