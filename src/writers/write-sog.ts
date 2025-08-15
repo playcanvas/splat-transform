@@ -326,21 +326,21 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
         // calculate kmeans
         const { centroids, labels } = await kmeans(shDataTable, paletteSize, shIterations, gpuDevice);
 
-        // calculate centroid codebook for each band seperately
-        const codebook1Cols = shNamesForBand(shBands as 1 | 2 | 3, 1).map(name => centroids.getColumnByName(name));
-        const codebook1 = await codify1d(new DataTable(codebook1Cols), shIterations, gpuDevice);
+        // codebook for each sh coefficient
+        const codebooks = [];
+        for (let i = 0; i < shCoeffs; ++i) {
+            codebooks.push(await codify1d(
+                new DataTable([
+                    centroids.getColumn(i),
+                    centroids.getColumn(i + shCoeffs),
+                    centroids.getColumn(i + shCoeffs * 2)
+                ]),
+                shIterations,
+                gpuDevice
+            ));
+        }
 
-        const codebook2Cols = shNamesForBand(shBands as 1 | 2 | 3, 2).map(name => centroids.getColumnByName(name));
-        const codebook2 = shBands > 1 && await codify1d(new DataTable(codebook2Cols), shIterations,gpuDevice);
-
-        const codebook3Cols = shNamesForBand(shBands as 1 | 2 | 3, 3).map(name => centroids.getColumnByName(name));
-        const codebook3 = shBands > 2 && await codify1d(new DataTable(codebook3Cols), shIterations, gpuDevice);
-
-        const codebookCols = [
-            codebook1.labels.columns,
-            codebook2?.labels?.columns ?? [],
-            codebook3?.labels?.columns ?? []
-        ].filter(a => !!a).flat();
+        const codebookCols = codebooks.map(codebook => codebook.labels.columns).flat();
         const codebookCentroids = new DataTable(codebookCols);
 
         // write centroids
@@ -384,9 +384,7 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
             mins: centroidsMin,
             maxs: centroidsMax,
             quantization: 8,
-            codebook1: Array.from(codebook1.centroids.getColumn(0).data),
-            codebook2: Array.from(codebook2.centroids.getColumn(0).data),
-            codebook3: Array.from(codebook3.centroids.getColumn(0).data),
+            codebooks: codebooks.map(c => Array.from(c.centroids.getColumn(0).data)),
             files: [
                 'shN_centroids.webp',
                 'shN_labels.webp'
