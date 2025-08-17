@@ -11,6 +11,7 @@ import { ProcessAction, process } from './process';
 import { readKsplat } from './readers/read-ksplat';
 import { readPly } from './readers/read-ply';
 import { readSplat } from './readers/read-splat';
+import { decompressCompressedPlyToDataTable } from './readers/read-compressed-ply';
 import { writeCompressedPly } from './writers/write-compressed-ply';
 import { writeCsv } from './writers/write-csv';
 import { writePly } from './writers/write-ply';
@@ -36,7 +37,16 @@ const readFile = async (filename: string) => {
     } else if (lowerFilename.endsWith('.splat')) {
         fileData = await readSplat(inputFile);
     } else if (lowerFilename.endsWith('.ply')) {
-        fileData = await readPly(inputFile);
+        const ply = await readPly(inputFile);
+        const decompressed = decompressCompressedPlyToDataTable(ply);
+        if (decompressed) {
+            fileData = {
+                comments: ply.comments,
+                elements: [{ name: 'vertex', dataTable: decompressed }]
+            };
+        } else {
+            fileData = ply;
+        }
     } else {
         await inputFile.close();
         throw new Error(`Unsupported input file type: ${filename}`);
@@ -283,7 +293,7 @@ const parseArguments = () => {
                     });
                     break;
                 case 'filterByValue': {
-                    const parts = t.value.split(',').map(p => p.trim());
+                    const parts = t.value.split(',').map((p: string) => p.trim());
                     if (parts.length !== 3) {
                         throw new Error(`Invalid filterByValue value: ${t.value}`);
                     }
