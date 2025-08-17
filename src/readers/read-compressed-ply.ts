@@ -1,6 +1,14 @@
 import { Column, DataTable } from "../data-table";
 import type { PlyData } from "./read-ply";
 
+// Constants
+// Size of a chunk in the compressed PLY format (number of splats per chunk)
+const CHUNK_SIZE = 256;
+// Denominator to map an 8-bit value [0..255] to [0,1). We use 256 to avoid reaching 1.0.
+const U8_DENOM = 256;
+// Scale used to reconstruct the range of higher-order SH coefficients from quantized bytes.
+const SH_REST_SCALE = 8.0;
+
 // Detects the compressed PLY schema and returns a decompressed DataTable, or null if not compressed.
 const decompressCompressedPlyToDataTable = (ply: PlyData): DataTable | null => {
     const chunkElem = ply.elements.find((e) => e.name === "chunk");
@@ -65,7 +73,7 @@ const decompressCompressedPlyToDataTable = (ply: PlyData): DataTable | null => {
 
     const numSplats = dtVertex.numRows;
     const numChunks = min_x.length;
-    if (numChunks * 256 < numSplats) {
+    if (numChunks * CHUNK_SIZE < numSplats) {
         return null;
     }
 
@@ -141,7 +149,7 @@ const decompressCompressedPlyToDataTable = (ply: PlyData): DataTable | null => {
     const oo = out.getColumnByName("opacity")!.data as Float32Array;
 
     for (let i = 0; i < numSplats; ++i) {
-        const ci = Math.floor(i / 256);
+        const ci = Math.floor(i / CHUNK_SIZE);
 
         const p = unpack111011(packed_position[i]);
         const r = unpackRot(packed_rotation[i]);
@@ -181,8 +189,8 @@ const decompressCompressedPlyToDataTable = (ply: PlyData): DataTable | null => {
             const src = col.data as Uint8Array;
             const dst = new Float32Array(numSplats);
             for (let i = 0; i < numSplats; ++i) {
-                const n = src[i] / 256;
-                dst[i] = (n - 0.5) * 8.0;
+                const n = src[i] / U8_DENOM;
+                dst[i] = (n - 0.5) * SH_REST_SCALE;
             }
             out.addColumn(new Column(name, dst));
         }
