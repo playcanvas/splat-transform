@@ -24,6 +24,11 @@ class Aabb {
         return result;
     }
 
+    largestDim(): number {
+        const a = this.largestAxis();
+        return this.max[a] - this.min[a];
+    }
+
     fromCentroids(centroids: DataTable, indices: Uint32Array) {
         const { columns, numColumns } = centroids;
         const { min, max } = this;
@@ -39,11 +44,13 @@ class Aabb {
             min[j] = m;
             max[j] = M;
         }
+        return this;
     }
 };
 
 interface BTreeNode {
     count: number;              // number of nodes including self
+    aabb?: Aabb;
     index?: number;
     left?: BTreeNode;
     right?: BTreeNode;
@@ -54,8 +61,6 @@ class BTree {
     root: BTreeNode;
 
     constructor(centroids: DataTable) {
-        const aabb = new Aabb();
-
         const recurse = (indices: Uint32Array): BTreeNode => {
             if (indices.length === 1) {
                 return {
@@ -64,7 +69,7 @@ class BTree {
                 };
             }
 
-            aabb.fromCentroids(centroids, indices);
+            const aabb = new Aabb().fromCentroids(centroids, indices);
 
             const col = aabb.largestAxis();
             const values = centroids.columns[col].data;
@@ -76,6 +81,7 @@ class BTree {
 
             return {
                 count: 1 + left.count + right.count,
+                aabb,
                 left,
                 right
             };

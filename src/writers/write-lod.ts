@@ -135,6 +135,7 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
 
     // approximate number of gaussians we'll place into file units
     const binSize = 128 * 1024;
+    const binDim = 16;
 
     // map of lod -> fileBin[]
     // fileBin: number[][]
@@ -144,7 +145,7 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     let lodLevels = 0;
 
     const build = (node: BTreeNode): MetaNode => {
-        if (node.count > binSize) {
+        if (node.count > binSize || (node.aabb && node.aabb.largestDim() > binDim)) {
             const children = [
                 build(node.left),
                 build(node.right)
