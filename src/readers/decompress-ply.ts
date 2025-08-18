@@ -5,12 +5,9 @@ import type { PlyData } from './read-ply';
 const CHUNK_SIZE = 256;
 
 const isCompressedPly = (ply: PlyData): boolean => {
-    const hasShape = (elementName: string, columns: string[], type: string) => {
-        const elem = ply.elements.find(e => e.name === elementName);
-        if (!elem) return false;
-        const dt = elem.dataTable;
+    const hasShape = (dataTable: DataTable, columns: string[], type: string) => {
         return columns.every((name) => {
-            const col = dt.getColumnByName(name);
+            const col = dataTable.getColumnByName(name);
             return col && col.dataType === type;
         });
     };
@@ -44,26 +41,37 @@ const isCompressedPly = (ply: PlyData): boolean => {
     ];
 
     const numElements = ply.elements.length;
-
     if (numElements !== 2 && numElements !== 3) return false;
 
-    if (!hasShape('chunk', chunkProperties, 'float32')) return false;
-    if (!hasShape('vertex', vertexProperties, 'uint32')) return false;
+    const chunk = ply.elements.find(e => e.name === 'chunk');
+    if (!chunk || !hasShape(chunk.dataTable, chunkProperties, 'float32')) return false;
+
+    const vertex = ply.elements.find(e => e.name === 'vertex');
+    if (!vertex || !hasShape(vertex.dataTable, vertexProperties, 'uint32')) return false;
+
+    if (Math.ceil(vertex.dataTable.numRows / CHUNK_SIZE) !== chunk.dataTable.numRows) {
+        return false;
+    }
 
     // check optional spherical harmonics
     if (numElements === 3) {
-        const elem = ply.elements.find(e => e.name === 'sh');
-        if (!elem) {
+        const sh = ply.elements.find(e => e.name === 'sh');
+        if (!sh) {
             return false;
         }
-        if ([9, 24, 45].indexOf(elem.dataTable.numColumns) === -1) {
+        const shData = sh.dataTable;
+        if ([9, 24, 45].indexOf(shData.numColumns) === -1) {
             return false;
         }
-        for (let i = 0; i < elem.dataTable.numColumns; ++i) {
-            const col = elem.dataTable.getColumnByName(`f_rest_${i}`);
+        for (let i = 0; i < shData.numColumns; ++i) {
+            const col = shData.getColumnByName(`f_rest_${i}`);
             if (!col || col.dataType !== 'uint8') {
                 return false;
             }
+        }
+
+        if (shData.numRows !== vertex.dataTable.numRows) {
+            return false;
         }
     }
 
@@ -71,7 +79,7 @@ const isCompressedPly = (ply: PlyData): boolean => {
 };
 
 // Detects the compressed PLY schema and returns a decompressed DataTable, or null if not compressed.
-const decompressPly = (ply: PlyData): DataTable | null => {
+const decompressPly = (ply: PlyData): DataTable => {
     const chunkData = ply.elements.find(e => e.name === 'chunk').dataTable;
     const getChunk = (name: string) => chunkData.getColumnByName(name)!.data as Float32Array;
 
@@ -101,10 +109,6 @@ const decompressPly = (ply: PlyData): DataTable | null => {
     const max_b = getChunk('max_b');
 
     const numSplats = vertexData.numRows;
-    const numChunks = min_x.length;
-    if (numChunks * CHUNK_SIZE < numSplats) {
-        return null;
-    }
 
     const columns: Column[] = [
         new Column('x', new Float32Array(numSplats)),
@@ -123,7 +127,7 @@ const decompressPly = (ply: PlyData): DataTable | null => {
         new Column('scale_2', new Float32Array(numSplats))
     ];
 
-    const out = new DataTable(columns);
+    const result = new DataTable(columns);
 
     const lerp = (a: number, b: number, t: number) => a * (1 - t) + b * t;
     const unpackUnorm = (value: number, bits: number) => {
@@ -162,20 +166,20 @@ const decompressPly = (ply: PlyData): DataTable | null => {
 
     const SH_C0 = 0.28209479177387814;
 
-    const ox = out.getColumnByName('x')!.data as Float32Array;
-    const oy = out.getColumnByName('y')!.data as Float32Array;
-    const oz = out.getColumnByName('z')!.data as Float32Array;
-    const or0 = out.getColumnByName('rot_0')!.data as Float32Array;
-    const or1 = out.getColumnByName('rot_1')!.data as Float32Array;
-    const or2 = out.getColumnByName('rot_2')!.data as Float32Array;
-    const or3 = out.getColumnByName('rot_3')!.data as Float32Array;
-    const os0 = out.getColumnByName('scale_0')!.data as Float32Array;
-    const os1 = out.getColumnByName('scale_1')!.data as Float32Array;
-    const os2 = out.getColumnByName('scale_2')!.data as Float32Array;
-    const of0 = out.getColumnByName('f_dc_0')!.data as Float32Array;
-    const of1 = out.getColumnByName('f_dc_1')!.data as Float32Array;
-    const of2 = out.getColumnByName('f_dc_2')!.data as Float32Array;
-    const oo = out.getColumnByName('opacity')!.data as Float32Array;
+    const ox = result.getColumnByName('x')!.data as Float32Array;
+    const oy = result.getColumnByName('y')!.data as Float32Array;
+    const oz = result.getColumnByName('z')!.data as Float32Array;
+    const or0 = result.getColumnByName('rot_0')!.data as Float32Array;
+    const or1 = result.getColumnByName('rot_1')!.data as Float32Array;
+    const or2 = result.getColumnByName('rot_2')!.data as Float32Array;
+    const or3 = result.getColumnByName('rot_3')!.data as Float32Array;
+    const os0 = result.getColumnByName('scale_0')!.data as Float32Array;
+    const os1 = result.getColumnByName('scale_1')!.data as Float32Array;
+    const os2 = result.getColumnByName('scale_2')!.data as Float32Array;
+    const of0 = result.getColumnByName('f_dc_0')!.data as Float32Array;
+    const of1 = result.getColumnByName('f_dc_1')!.data as Float32Array;
+    const of2 = result.getColumnByName('f_dc_2')!.data as Float32Array;
+    const oo = result.getColumnByName('opacity')!.data as Float32Array;
 
     for (let i = 0; i < numSplats; ++i) {
         const ci = Math.floor(i / CHUNK_SIZE);
@@ -220,11 +224,11 @@ const decompressPly = (ply: PlyData): DataTable | null => {
                 const n = (src[i] === 0) ? 0 : (src[i] === 255) ? 1 : (src[i] + 0.5) / 256;
                 dst[i] = (n - 0.5) * 8;
             }
-            out.addColumn(new Column(col.name, dst));
+            result.addColumn(new Column(col.name, dst));
         }
     }
 
-    return out;
+    return result;
 };
 
 export { isCompressedPly, decompressPly };
