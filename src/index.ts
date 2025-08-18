@@ -8,10 +8,10 @@ import { Vec3 } from 'playcanvas';
 import { version } from '../package.json';
 import { Column, DataTable, TypedArray } from './data-table';
 import { ProcessAction, process } from './process';
+import { isCompressedPly, decompressPly } from './readers/decompress-ply';
 import { readKsplat } from './readers/read-ksplat';
 import { readPly } from './readers/read-ply';
 import { readSplat } from './readers/read-splat';
-import { decompressCompressedPlyToDataTable } from './readers/read-compressed-ply';
 import { writeCompressedPly } from './writers/write-compressed-ply';
 import { writeCsv } from './writers/write-csv';
 import { writePly } from './writers/write-ply';
@@ -38,11 +38,10 @@ const readFile = async (filename: string) => {
         fileData = await readSplat(inputFile);
     } else if (lowerFilename.endsWith('.ply')) {
         const ply = await readPly(inputFile);
-        const decompressed = decompressCompressedPlyToDataTable(ply);
-        if (decompressed) {
+        if (isCompressedPly(ply)) {
             fileData = {
                 comments: ply.comments,
-                elements: [{ name: 'vertex', dataTable: decompressed }]
+                elements: [{ name: 'vertex', dataTable: decompressPly(ply) }]
             };
         } else {
             fileData = ply;

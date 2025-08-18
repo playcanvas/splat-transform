@@ -25,12 +25,15 @@ const vertexProps = [
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
+// Size of a chunk in the compressed PLY format (number of splats per chunk)
+const CHUNK_SIZE = 256;
+
 const writeCompressedPly = async (fileHandle: FileHandle, dataTable: DataTable) => {
     const shBands = { '9': 1, '24': 2, '-1': 3 }[shNames.findIndex(v => !dataTable.hasColumn(v))] ?? 0;
     const outputSHCoeffs = [0, 3, 8, 15][shBands];
 
     const numSplats = dataTable.numRows;
-    const numChunks = Math.ceil(numSplats / 256);
+    const numChunks = Math.ceil(numSplats / CHUNK_SIZE);
 
     const shHeader = shBands ? [
         `element sh ${numSplats}`,
@@ -66,9 +69,9 @@ const writeCompressedPly = async (fileHandle: FileHandle, dataTable: DataTable) 
     const chunk = new CompressedChunk();
 
     for (let i = 0; i < numChunks; ++i) {
-        const num = Math.min(numSplats, (i + 1) * 256) - i * 256;
+        const num = Math.min(numSplats, (i + 1) * CHUNK_SIZE) - i * CHUNK_SIZE;
         for (let j = 0; j < num; ++j) {
-            const index = sortIndices[i * 256 + j];
+            const index = sortIndices[i * CHUNK_SIZE + j];
 
             // read splat data
             dataTable.getRow(index, row);
@@ -77,7 +80,7 @@ const writeCompressedPly = async (fileHandle: FileHandle, dataTable: DataTable) 
             chunk.set(j, row);
 
             // quantize and write sh data
-            let off = (i * 256 + j) * outputSHCoeffs * 3;
+            let off = (i * CHUNK_SIZE + j) * outputSHCoeffs * 3;
             for (let k = 0; k < outputSHCoeffs * 3; ++k) {
                 const nvalue = row[shNames[k]] / 8 + 0.5;
                 shData[off++] = Math.max(0, Math.min(255, Math.trunc(nvalue * 256)));
@@ -85,7 +88,7 @@ const writeCompressedPly = async (fileHandle: FileHandle, dataTable: DataTable) 
         }
 
         // repeat the last gaussian to fill the rest of the final chunk
-        for (let j = num; j < 256; ++j) {
+        for (let j = num; j < CHUNK_SIZE; ++j) {
             chunk.set(j, row);
         }
 
@@ -96,7 +99,7 @@ const writeCompressedPly = async (fileHandle: FileHandle, dataTable: DataTable) 
         chunkData.set(chunk.chunkData, i * 18);
 
         // write packed bits
-        const offset = i * 256 * 4;
+        const offset = i * CHUNK_SIZE * 4;
         for (let j = 0; j < num; ++j) {
             splatIData[offset + j * 4 + 0] = chunk.position[j];
             splatIData[offset + j * 4 + 1] = chunk.rotation[j];

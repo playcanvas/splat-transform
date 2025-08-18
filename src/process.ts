@@ -90,11 +90,11 @@ const process = (dataTable: DataTable, processActions: ProcessAction[]) => {
             case 'filterByValue': {
                 const { columnName, comparator, value } = processAction;
                 const Predicates = {
-                    'lt':  (row: any, rowIndex: number) => row[columnName] < value,
+                    'lt': (row: any, rowIndex: number) => row[columnName] < value,
                     'lte': (row: any, rowIndex: number) => row[columnName] <= value,
-                    'gt':  (row: any, rowIndex: number) => row[columnName] > value,
+                    'gt': (row: any, rowIndex: number) => row[columnName] > value,
                     'gte': (row: any, rowIndex: number) => row[columnName] >= value,
-                    'eq':  (row: any, rowIndex: number) => row[columnName] === value,
+                    'eq': (row: any, rowIndex: number) => row[columnName] === value,
                     'neq': (row: any, rowIndex: number) => row[columnName] !== value
                 };
                 const predicate = Predicates[comparator] ?? ((row: any, rowIndex: number) => true);
