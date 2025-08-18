@@ -3,7 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 import { TypedArray, DataTable } from '../data-table';
 
-import { KdTreeNode, KdTree } from '../utils/kd-tree';
+import { BTreeNode, BTree } from '../utils/b-tree';
 import { generateOrdering } from '../ordering';
 
 import { writeSog } from './write-sog.js';
@@ -95,17 +95,19 @@ const calcBound = (dataTable: DataTable, indices: number[]): Aabb => {
     return { min, max };
 };
 
-const binIndices = (parent: KdTreeNode, lod: TypedArray) => {
+const binIndices = (parent: BTreeNode, lod: TypedArray) => {
     const result = new Map<number, number[]>();
 
     // we've reached a leaf node, gather indices
-    const recurse = (node: KdTreeNode) => {
-        const lodValue = lod[node.index];
+    const recurse = (node: BTreeNode) => {
+        if (node.hasOwnProperty('index')) {
+            const lodValue = lod[node.index];
 
-        if (!result.has(lodValue)) {
-            result.set(lodValue, [node.index]);
-        } else {
-            result.get(lodValue).push(node.index);
+            if (!result.has(lodValue)) {
+                result.set(lodValue, [node.index]);
+            } else {
+                result.get(lodValue).push(node.index);
+            }
         }
 
         if (node.left) {
@@ -129,7 +131,7 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
         dataTable.getColumnByName('z')
     ]);
 
-    const kdTree = new KdTree(centroidsTable);
+    const bTree = new BTree(centroidsTable);
 
     // approximate number of gaussians we'll place into file units
     const binSize = 128 * 1024;
@@ -141,7 +143,7 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     const filenames: string[] = [];
     let lodLevels = 0;
 
-    const build = (node: KdTreeNode): MetaNode => {
+    const build = (node: BTreeNode): MetaNode => {
         if (node.count > binSize) {
             const children = [
                 build(node.left),
@@ -200,7 +202,7 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
         return { bound, lods };
     };
 
-    const tree = build(kdTree.root);
+    const tree = build(bTree.root);
     const meta: Meta = {
         lodLevels,
         filenames,
