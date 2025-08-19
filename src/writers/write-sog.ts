@@ -7,21 +7,9 @@ import { Column, DataTable } from '../data-table';
 import { createDevice, GpuDevice } from '../gpu/gpu-device';
 import { generateOrdering } from '../ordering';
 import { kmeans } from '../utils/k-means';
+import { sigmoid } from '../utils/math';
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
-
-const shNamesForBand = (numBands: 1 | 2 | 3, band: 1 | 2 | 3) => {
-    const step = [3, 8, 15][numBands - 1];
-    const base = [0, 3, 8][band - 1];
-    const size = [3, 5, 7][band - 1];
-    const result = [];
-    for (let i = 0; i < 3; ++i) {
-        for (let j = 0; j < size; ++j) {
-            result.push(shNames[j + base + i * step]);
-        }
-    }
-    return result;
-};
 
 const calcMinMax = (dataTable: DataTable, columnNames: string[], indices: Uint32Array) => {
     const columns = columnNames.map(name => dataTable.getColumnByName(name));
@@ -241,31 +229,49 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     const gpuDevice = shMethod === 'gpu' ? await createDevice() : null;
 
     // scales
-    const scaleData = await codify1d(
-        new DataTable(['scale_0', 'scale_1', 'scale_2'].map(name => dataTable.getColumnByName(name))),
-        shIterations,
-        gpuDevice
-    );
-    await writeData('scales.webp', scaleData.labels);
 
+    const scales = new Uint8Array(width * height * channels);
     const scaleNames = ['scale_0', 'scale_1', 'scale_2'];
+    const scaleColumns = scaleNames.map(name => dataTable.getColumnByName(name));
     const scaleMinMax = calcMinMax(dataTable, scaleNames, indices);
 
-    // colors
+    // clamp minimum scale to e^-6 (0.002478)
+    scaleMinMax[0][0] = Math.max(-6, scaleMinMax[0][0]);
+    scaleMinMax[1][0] = Math.max(-6, scaleMinMax[1][0]);
+    scaleMinMax[2][0] = Math.max(-6, scaleMinMax[2][0]);
+
+    // quantize scale so anything smaller than e^-6 is stored as e^-Infinity === 0
+    const quantizeScale = (v: number, m: number, M: number ) => v < m ? 0 : 1 + 254 * (v - m) / (M - m);
+
+    for (let i = 0; i < indices.length; ++i) {
+        dataTable.getRow(indices[i], row, scaleColumns);
+
+        const ti = layout(i, width);
+        scales[ti * 4]     = quantizeScale(row.scale_0, scaleMinMax[0][0], scaleMinMax[0][1]);
+        scales[ti * 4 + 1] = quantizeScale(row.scale_1, scaleMinMax[1][0], scaleMinMax[1][1]);
+        scales[ti * 4 + 2] = quantizeScale(row.scale_2, scaleMinMax[2][0], scaleMinMax[2][1]);
+        scales[ti * 4 + 3] = 0xff;
+    }
+    await write('scales.webp', scales);
+
+    // color and opacity
+
+    // apply sigma to opacity values
+    const opacity = dataTable.getColumnByName('opacity').data;
+    const opacityData = new Uint8Array(opacity.length);
+    for (let i = 0; i < numRows; ++i) {
+        opacityData[i] = Math.max(0, Math.min(255, sigmoid(opacity[i]) * 255));
+    }
+
     const colorData = await codify1d(
         new DataTable(['f_dc_0', 'f_dc_1', 'f_dc_2'].map(name => dataTable.getColumnByName(name))),
         shIterations,
         gpuDevice
     );
-    const opacityData = await codify1d(
-        new DataTable(['opacity'].map(name => dataTable.getColumnByName(name))),
-        shIterations,
-        gpuDevice
-    );
-    colorData.labels.addColumn(opacityData.labels.getColumn(0));
+    colorData.labels.addColumn(new Column('opacity', opacityData));
     await writeData('sh0.webp', colorData.labels);
 
-    const sh0Names = ['f_dc_0', 'f_dc_1', 'f_dc_2', 'opacity'];
+    const sh0Names = ['f_dc_0', 'f_dc_1', 'f_dc_2'];
     const sh0MinMax = calcMinMax(dataTable, sh0Names, indices);
 
     // write meta.json
@@ -285,7 +291,6 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
             dtype: 'float32',
             mins: scaleMinMax.map(v => v[0]),
             maxs: scaleMinMax.map(v => v[1]),
-            codebook: Array.from(scaleData.centroids.getColumn(0).data),
             files: ['scales.webp']
         },
         quats: {
@@ -300,7 +305,6 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
             mins: sh0MinMax.map(v => v[0]),
             maxs: sh0MinMax.map(v => v[1]),
             codebook: Array.from(colorData.centroids.getColumn(0).data),
-            opacityCodebook: Array.from(opacityData.centroids.getColumn(0).data),
             files: ['sh0.webp']
         }
     };
@@ -321,27 +325,10 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
         // indices.
         const shDataTable = new DataTable(shColumns);
 
-        const paletteSize = Math.min(64, 2 ** Math.floor(Math.log2(indices.length / 1024))) * 1024;
+        const paletteSize = Math.min(64, 2 ** Math.floor(Math.log2(indices.length / 4096))) * 1024;
 
         // calculate kmeans
         const { centroids, labels } = await kmeans(shDataTable, paletteSize, shIterations, gpuDevice);
-
-        // codebook for each sh coefficient
-        const codebooks = [];
-        for (let i = 0; i < shCoeffs; ++i) {
-            codebooks.push(await codify1d(
-                new DataTable([
-                    centroids.getColumn(i),
-                    centroids.getColumn(i + shCoeffs),
-                    centroids.getColumn(i + shCoeffs * 2)
-                ]),
-                shIterations,
-                gpuDevice
-            ));
-        }
-
-        const codebookCols = codebooks.map(codebook => codebook.labels.columns).flat();
-        const codebookCentroids = new DataTable(codebookCols);
 
         // write centroids
         const centroidsBuf = new Uint8Array(64 * shCoeffs * Math.ceil(centroids.numRows / 64) * channels);
@@ -350,16 +337,16 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
         const centroidsMax = centroidsMinMax.map(v => v[1]).reduce((a, b) => Math.max(a, b));
         const centroidsRow: any = {};
         for (let i = 0; i < centroids.numRows; ++i) {
-            codebookCentroids.getRow(i, centroidsRow);
+            centroids.getRow(i, centroidsRow);
 
             for (let j = 0; j < shCoeffs; ++j) {
-                const x = centroidsRow[shColumnNames[shCoeffs * 0 + j]];
-                const y = centroidsRow[shColumnNames[shCoeffs * 1 + j]];
-                const z = centroidsRow[shColumnNames[shCoeffs * 2 + j]];
+                const x = centroidsRow[shColumnNames[shCoeffs * 0 + j]] / 8 + 0.5;
+                const y = centroidsRow[shColumnNames[shCoeffs * 1 + j]] / 8 + 0.5;
+                const z = centroidsRow[shColumnNames[shCoeffs * 2 + j]] / 8 + 0.5;
 
-                centroidsBuf[i * shCoeffs * 4 + j * 4 + 0] = x;
-                centroidsBuf[i * shCoeffs * 4 + j * 4 + 1] = y;
-                centroidsBuf[i * shCoeffs * 4 + j * 4 + 2] = z;
+                centroidsBuf[i * shCoeffs * 4 + j * 4 + 0] = Math.max(0, Math.min(255, Math.trunc(x * 256)));
+                centroidsBuf[i * shCoeffs * 4 + j * 4 + 1] = Math.max(0, Math.min(255, Math.trunc(y * 256)));
+                centroidsBuf[i * shCoeffs * 4 + j * 4 + 2] = Math.max(0, Math.min(255, Math.trunc(z * 256)));
                 centroidsBuf[i * shCoeffs * 4 + j * 4 + 3] = 0xff;
             }
         }
@@ -369,10 +356,10 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
         const labelsBuf = new Uint8Array(width * height * channels);
         for (let i = 0; i < indices.length; ++i) {
             const label = labels[indices[i]];
-
             const ti = layout(i, width);
-            labelsBuf[ti * 4] = label & 0xff;
-            labelsBuf[ti * 4 + 1] = (label >> 8) & 0xff;
+
+            labelsBuf[ti * 4 + 0] = 0xff & label;
+            labelsBuf[ti * 4 + 1] = 0xff & (label >> 8);
             labelsBuf[ti * 4 + 2] = 0;
             labelsBuf[ti * 4 + 3] = 0xff;
         }
@@ -384,7 +371,6 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
             mins: centroidsMin,
             maxs: centroidsMax,
             quantization: 8,
-            codebooks: codebooks.map(c => Array.from(c.centroids.getColumn(0).data)),
             files: [
                 'shN_centroids.webp',
                 'shN_labels.webp'
