@@ -8,6 +8,7 @@ import { Vec3 } from 'playcanvas';
 import { version } from '../package.json';
 import { Column, DataTable, TypedArray } from './data-table';
 import { ProcessAction, process } from './process';
+import { isCompressedPly, decompressPly } from './readers/decompress-ply';
 import { readKsplat } from './readers/read-ksplat';
 import { readPly } from './readers/read-ply';
 import { readSplat } from './readers/read-splat';
@@ -36,7 +37,15 @@ const readFile = async (filename: string) => {
     } else if (lowerFilename.endsWith('.splat')) {
         fileData = await readSplat(inputFile);
     } else if (lowerFilename.endsWith('.ply')) {
-        fileData = await readPly(inputFile);
+        const ply = await readPly(inputFile);
+        if (isCompressedPly(ply)) {
+            fileData = {
+                comments: ply.comments,
+                elements: [{ name: 'vertex', dataTable: decompressPly(ply) }]
+            };
+        } else {
+            fileData = ply;
+        }
     } else {
         await inputFile.close();
         throw new Error(`Unsupported input file type: ${filename}`);
@@ -283,7 +292,7 @@ const parseArguments = () => {
                     });
                     break;
                 case 'filterByValue': {
-                    const parts = t.value.split(',').map(p => p.trim());
+                    const parts = t.value.split(',').map((p: string) => p.trim());
                     if (parts.length !== 3) {
                         throw new Error(`Invalid filterByValue value: ${t.value}`);
                     }
