@@ -127,7 +127,7 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
         .toFile(pathname);
     };
 
-    const writeData = (filename: string, dataTable: DataTable, w = width, h = height) => {
+    const writeTableData = (filename: string, dataTable: DataTable, w = width, h = height) => {
         const data = new Uint8Array(w * h * channels);
         const columns = dataTable.columns.map(c => c.data);
         const numColumns = columns.length;
@@ -269,16 +269,16 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
         gpuDevice
     );
     colorData.labels.addColumn(new Column('opacity', opacityData));
-    await writeData('sh0.webp', colorData.labels);
+    await writeTableData('sh0.webp', colorData.labels);
 
     const sh0Names = ['f_dc_0', 'f_dc_1', 'f_dc_2'];
     const sh0MinMax = calcMinMax(dataTable, sh0Names, indices);
 
     // write meta.json
     const meta: any = {
+        version: 2,
+        count: numRows,
         means: {
-            shape: [numRows, 3],
-            dtype: 'float32',
             mins: meansMinMax.map(v => v[0]),
             maxs: meansMinMax.map(v => v[1]),
             files: [
@@ -287,23 +287,14 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
             ]
         },
         scales: {
-            shape: [numRows, 3],
-            dtype: 'float32',
             mins: scaleMinMax.map(v => v[0]),
             maxs: scaleMinMax.map(v => v[1]),
             files: ['scales.webp']
         },
         quats: {
-            shape: [numRows, 4],
-            dtype: 'uint8',
-            encoding: 'quaternion_packed',
             files: ['quats.webp']
         },
         sh0: {
-            shape: [numRows, 1, 4],
-            dtype: 'float32',
-            mins: sh0MinMax.map(v => v[0]),
-            maxs: sh0MinMax.map(v => v[1]),
             codebook: Array.from(colorData.centroids.getColumn(0).data),
             files: ['sh0.webp']
         }
@@ -366,11 +357,8 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
         await write('shN_labels.webp', labelsBuf);
 
         meta.shN = {
-            shape: [indices.length, shCoeffs],
-            dtype: 'float32',
             mins: centroidsMin,
             maxs: centroidsMax,
-            quantization: 8,
             files: [
                 'shN_centroids.webp',
                 'shN_labels.webp'
