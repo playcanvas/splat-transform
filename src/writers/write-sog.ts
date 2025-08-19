@@ -33,19 +33,6 @@ const logTransform = (value: number) => {
     return Math.sign(value) * Math.log(Math.abs(value) + 1);
 };
 
-// pack every 256 indices into a grid of 16x16 chunks
-const rectChunks = (index: number, width: number) => {
-    const chunkWidth = width / 16;
-    const chunkIndex = Math.floor(index / 256);
-    const chunkX = chunkIndex % chunkWidth;
-    const chunkY = Math.floor(chunkIndex / chunkWidth);
-
-    const x = chunkX * 16 + (index % 16);
-    const y = chunkY * 16 + Math.floor((index % 256) / 16);
-
-    return x + y * width;
-};
-
 // no packing
 const identity = (index: number, width: number) => {
     return index;
@@ -228,8 +215,7 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
 
     const gpuDevice = shMethod === 'gpu' ? await createDevice() : null;
 
-    // scales
-
+    // convert scale
     const scales = new Uint8Array(width * height * channels);
     const scaleNames = ['scale_0', 'scale_1', 'scale_2'];
     const scaleColumns = scaleNames.map(name => dataTable.getColumnByName(name));
@@ -247,34 +233,32 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
         dataTable.getRow(indices[i], row, scaleColumns);
 
         const ti = layout(i, width);
-        scales[ti * 4]     = quantizeScale(row.scale_0, scaleMinMax[0][0], scaleMinMax[0][1]);
+        scales[ti * 4 + 0] = quantizeScale(row.scale_0, scaleMinMax[0][0], scaleMinMax[0][1]);
         scales[ti * 4 + 1] = quantizeScale(row.scale_1, scaleMinMax[1][0], scaleMinMax[1][1]);
         scales[ti * 4 + 2] = quantizeScale(row.scale_2, scaleMinMax[2][0], scaleMinMax[2][1]);
         scales[ti * 4 + 3] = 0xff;
     }
+
     await write('scales.webp', scales);
 
     // color and opacity
-
-    // apply sigma to opacity values
-    const opacity = dataTable.getColumnByName('opacity').data;
-    const opacityData = new Uint8Array(opacity.length);
-    for (let i = 0; i < numRows; ++i) {
-        opacityData[i] = Math.max(0, Math.min(255, sigmoid(opacity[i]) * 255));
-    }
-
     const colorData = await codify1d(
         new DataTable(['f_dc_0', 'f_dc_1', 'f_dc_2'].map(name => dataTable.getColumnByName(name))),
         shIterations,
         gpuDevice
     );
+
+    // generate and store sigmoid(opacity) [0..1]
+    const opacity = dataTable.getColumnByName('opacity').data;
+    const opacityData = new Uint8Array(opacity.length);
+    for (let i = 0; i < numRows; ++i) {
+        opacityData[i] = Math.max(0, Math.min(255, sigmoid(opacity[i]) * 255));
+    }
     colorData.labels.addColumn(new Column('opacity', opacityData));
+
     await writeTableData('sh0.webp', colorData.labels);
 
-    const sh0Names = ['f_dc_0', 'f_dc_1', 'f_dc_2'];
-    const sh0MinMax = calcMinMax(dataTable, sh0Names, indices);
-
-    // write meta.json
+    // construct meta.json
     const meta: any = {
         version: 2,
         count: numRows,
