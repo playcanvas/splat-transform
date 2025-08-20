@@ -221,13 +221,13 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     const scaleColumns = scaleNames.map(name => dataTable.getColumnByName(name));
     const scaleMinMax = calcMinMax(dataTable, scaleNames, indices);
 
-    // clamp minimum scale to e^-6 (0.002478)
-    scaleMinMax[0][0] = Math.max(-6, scaleMinMax[0][0]);
-    scaleMinMax[1][0] = Math.max(-6, scaleMinMax[1][0]);
-    scaleMinMax[2][0] = Math.max(-6, scaleMinMax[2][0]);
+    // clamp minimum scale to e^-10 (0.00005)
+    scaleMinMax[0][0] = Math.max(-10, scaleMinMax[0][0]);
+    scaleMinMax[1][0] = Math.max(-10, scaleMinMax[1][0]);
+    scaleMinMax[2][0] = Math.max(-10, scaleMinMax[2][0]);
 
     // quantize scale so anything smaller than e^-6 is stored as e^-Infinity === 0
-    const quantizeScale = (v: number, m: number, M: number ) => v < m ? 0 : 1 + 254 * (v - m) / (M - m);
+    const quantizeScale = (v: number, m: number, M: number) => v < m ? 0 : 1 + 254 * (v - m) / (M - m);
 
     for (let i = 0; i < indices.length; ++i) {
         dataTable.getRow(indices[i], row, scaleColumns);
@@ -287,7 +287,6 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     // spherical harmonics
     const shBands = { '9': 1, '24': 2, '-1': 3 }[shNames.findIndex(v => !dataTable.hasColumn(v))] ?? 0;
 
-    // @ts-ignore
     if (shBands > 0) {
         const shCoeffs = [0, 3, 8, 15][shBands];
         const shColumnNames = shNames.slice(0, shCoeffs * 3);
@@ -300,28 +299,28 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
         // indices.
         const shDataTable = new DataTable(shColumns);
 
-        const paletteSize = Math.min(64, 2 ** Math.floor(Math.log2(indices.length / 4096))) * 1024;
+        const paletteSize = Math.min(64, 2 ** Math.floor(Math.log2(indices.length / 1024))) * 1024;
 
         // calculate kmeans
         const { centroids, labels } = await kmeans(shDataTable, paletteSize, shIterations, gpuDevice);
 
+        // construct a codebook for all spherical harmonic coefficients
+        const codebook = await codify1d(centroids, shIterations, gpuDevice);
+
         // write centroids
         const centroidsBuf = new Uint8Array(64 * shCoeffs * Math.ceil(centroids.numRows / 64) * channels);
-        const centroidsMinMax = calcMinMax(shDataTable, shColumnNames, indices);
-        const centroidsMin = centroidsMinMax.map(v => v[0]).reduce((a, b) => Math.min(a, b));
-        const centroidsMax = centroidsMinMax.map(v => v[1]).reduce((a, b) => Math.max(a, b));
         const centroidsRow: any = {};
         for (let i = 0; i < centroids.numRows; ++i) {
-            centroids.getRow(i, centroidsRow);
+            codebook.labels.getRow(i, centroidsRow);
 
             for (let j = 0; j < shCoeffs; ++j) {
-                const x = centroidsRow[shColumnNames[shCoeffs * 0 + j]] / 8 + 0.5;
-                const y = centroidsRow[shColumnNames[shCoeffs * 1 + j]] / 8 + 0.5;
-                const z = centroidsRow[shColumnNames[shCoeffs * 2 + j]] / 8 + 0.5;
+                const x = centroidsRow[shColumnNames[shCoeffs * 0 + j]];
+                const y = centroidsRow[shColumnNames[shCoeffs * 1 + j]];
+                const z = centroidsRow[shColumnNames[shCoeffs * 2 + j]];
 
-                centroidsBuf[i * shCoeffs * 4 + j * 4 + 0] = Math.max(0, Math.min(255, Math.trunc(x * 256)));
-                centroidsBuf[i * shCoeffs * 4 + j * 4 + 1] = Math.max(0, Math.min(255, Math.trunc(y * 256)));
-                centroidsBuf[i * shCoeffs * 4 + j * 4 + 2] = Math.max(0, Math.min(255, Math.trunc(z * 256)));
+                centroidsBuf[i * shCoeffs * 4 + j * 4 + 0] = x;
+                centroidsBuf[i * shCoeffs * 4 + j * 4 + 1] = y;
+                centroidsBuf[i * shCoeffs * 4 + j * 4 + 2] = z;
                 centroidsBuf[i * shCoeffs * 4 + j * 4 + 3] = 0xff;
             }
         }
@@ -341,8 +340,7 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
         await write('shN_labels.webp', labelsBuf);
 
         meta.shN = {
-            mins: centroidsMin,
-            maxs: centroidsMax,
+            codebook: Array.from(codebook.centroids.getColumn(0).data),
             files: [
                 'shN_centroids.webp',
                 'shN_labels.webp'
