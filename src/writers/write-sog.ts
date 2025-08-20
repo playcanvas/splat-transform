@@ -216,30 +216,12 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     const gpuDevice = shMethod === 'gpu' ? await createDevice() : null;
 
     // convert scale
-    const scales = new Uint8Array(width * height * channels);
-    const scaleNames = ['scale_0', 'scale_1', 'scale_2'];
-    const scaleColumns = scaleNames.map(name => dataTable.getColumnByName(name));
-    const scaleMinMax = calcMinMax(dataTable, scaleNames, indices);
-
-    // clamp minimum scale to e^-10 (0.00005)
-    scaleMinMax[0][0] = Math.max(-10, scaleMinMax[0][0]);
-    scaleMinMax[1][0] = Math.max(-10, scaleMinMax[1][0]);
-    scaleMinMax[2][0] = Math.max(-10, scaleMinMax[2][0]);
-
-    // quantize scale so anything smaller than e^-6 is stored as e^-Infinity === 0
-    const quantizeScale = (v: number, m: number, M: number) => v < m ? 0 : 1 + 254 * (v - m) / (M - m);
-
-    for (let i = 0; i < indices.length; ++i) {
-        dataTable.getRow(indices[i], row, scaleColumns);
-
-        const ti = layout(i, width);
-        scales[ti * 4 + 0] = quantizeScale(row.scale_0, scaleMinMax[0][0], scaleMinMax[0][1]);
-        scales[ti * 4 + 1] = quantizeScale(row.scale_1, scaleMinMax[1][0], scaleMinMax[1][1]);
-        scales[ti * 4 + 2] = quantizeScale(row.scale_2, scaleMinMax[2][0], scaleMinMax[2][1]);
-        scales[ti * 4 + 3] = 0xff;
-    }
-
-    await write('scales.webp', scales);
+    const scaleData = await codify1d(
+        new DataTable(['scale_0', 'scale_1', 'scale_2'].map(name => dataTable.getColumnByName(name))),
+        shIterations,
+        gpuDevice
+    );
+    await writeTableData('scales.webp', scaleData.labels);
 
     // color and opacity
     const colorData = await codify1d(
@@ -271,8 +253,7 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
             ]
         },
         scales: {
-            mins: scaleMinMax.map(v => v[0]),
-            maxs: scaleMinMax.map(v => v[1]),
+            codebook: Array.from(scaleData.centroids.getColumn(0).data),
             files: ['scales.webp']
         },
         quats: {
