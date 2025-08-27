@@ -9,6 +9,9 @@ import { generateOrdering } from '../ordering';
 import { kmeans } from '../utils/k-means';
 import { sigmoid } from '../utils/math';
 
+import { FileWriter } from '../serialize/writer';
+import { ZipWriter } from '../serialize/zip-writer';
+
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
 const calcMinMax = (dataTable: DataTable, columnNames: string[], indices: Uint32Array) => {
@@ -52,7 +55,7 @@ const generateIndices = (dataTable: DataTable) => {
 // return
 //      - the resulting labels in a new datatable having same shape as the input
 //      - array of 256 centroids
-const codify1d = async (dataTable: DataTable, iterations: number, device?: GpuDevice) => {
+const cluster1d = async (dataTable: DataTable, iterations: number, device?: GpuDevice) => {
     const { numColumns, numRows } = dataTable;
 
     // construct 1d points from the columns of data
@@ -98,6 +101,11 @@ const codify1d = async (dataTable: DataTable, iterations: number, device?: GpuDe
 };
 
 const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFilename: string, shIterations = 10, shMethod: 'cpu' | 'gpu', indices = generateIndices(dataTable)) => {
+    // initialize output stream
+    const isBundle = outputFilename.toLowerCase().endsWith('.sog');
+    const fileWriter = isBundle && new FileWriter(fileHandle);
+    const zipWriter = fileWriter && new ZipWriter(fileWriter);
+
     const numRows = indices.length;
     const width = Math.ceil(Math.sqrt(numRows) / 4) * 4;
     const height = Math.ceil(numRows / width / 4) * 4;
@@ -106,12 +114,16 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     // the layout function determines how the data is packed into the output texture.
     const layout = identity; // rectChunks;
 
-    const write = (filename: string, data: Uint8Array, w = width, h = height) => {
+    const write = async (filename: string, data: Uint8Array, w = width, h = height) => {
         const pathname = resolve(dirname(outputFilename), filename);
         console.log(`writing '${pathname}'...`);
-        return sharp(data, { raw: { width: w, height: h, channels } })
-        .webp({ lossless: true })
-        .toFile(pathname);
+        const webp = sharp(data, { raw: { width: w, height: h, channels } }).webp({ lossless: true });
+
+        if (zipWriter) {
+            await zipWriter.file(filename, await webp.toBuffer());
+        } else {
+            await webp.toFile(pathname);
+        }
     };
 
     const writeTableData = (filename: string, dataTable: DataTable, w = width, h = height) => {
@@ -216,7 +228,7 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     const gpuDevice = shMethod === 'gpu' ? await createDevice() : null;
 
     // convert scale
-    const scaleData = await codify1d(
+    const scaleData = await cluster1d(
         new DataTable(['scale_0', 'scale_1', 'scale_2'].map(name => dataTable.getColumnByName(name))),
         shIterations,
         gpuDevice
@@ -224,7 +236,7 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     await writeTableData('scales.webp', scaleData.labels);
 
     // color and opacity
-    const colorData = await codify1d(
+    const colorData = await cluster1d(
         new DataTable(['f_dc_0', 'f_dc_1', 'f_dc_2'].map(name => dataTable.getColumnByName(name))),
         shIterations,
         gpuDevice
@@ -286,7 +298,7 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
         const { centroids, labels } = await kmeans(shDataTable, paletteSize, shIterations, gpuDevice);
 
         // construct a codebook for all spherical harmonic coefficients
-        const codebook = await codify1d(centroids, shIterations, gpuDevice);
+        const codebook = await cluster1d(centroids, shIterations, gpuDevice);
 
         // write centroids
         const centroidsBuf = new Uint8Array(64 * shCoeffs * Math.ceil(centroids.numRows / 64) * channels);
@@ -329,7 +341,15 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
         };
     }
 
-    await fileHandle.write((new TextEncoder()).encode(JSON.stringify(meta, null, 4)));
+    const metaJson = (new TextEncoder()).encode(JSON.stringify(meta));
+
+    if (zipWriter) {
+        await zipWriter.file('meta.json', metaJson);
+        await zipWriter.close();
+        await fileWriter.close();
+    } else {
+        await fileHandle.write(metaJson);
+    }
 };
 
 export { writeSog };
