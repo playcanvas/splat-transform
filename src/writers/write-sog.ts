@@ -6,11 +6,11 @@ import sharp from 'sharp';
 import { Column, DataTable } from '../data-table';
 import { createDevice, GpuDevice } from '../gpu/gpu-device';
 import { generateOrdering } from '../ordering';
+import { FileWriter } from '../serialize/writer';
+import { ZipWriter } from '../serialize/zip-writer';
 import { kmeans } from '../utils/k-means';
 import { sigmoid } from '../utils/math';
 
-import { FileWriter } from '../serialize/writer';
-import { ZipWriter } from '../serialize/zip-writer';
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
@@ -50,7 +50,7 @@ const generateIndices = (dataTable: DataTable) => {
     return result;
 };
 
-// convert a dataTable with multiple columns into a single column 
+// convert a dataTable with multiple columns into a single column
 // calculate 256 clusters using kmeans
 // return
 //      - the resulting labels in a new datatable having same shape as the input
