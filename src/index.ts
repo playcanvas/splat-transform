@@ -60,7 +60,7 @@ const getOutputFormat = (filename: string) => {
 
     if (lowerFilename.endsWith('.csv')) {
         return 'csv';
-    } else if (lowerFilename.endsWith('meta.json')) {
+    } else if (lowerFilename.endsWith('.sog') || lowerFilename.endsWith('meta.json')) {
         return 'sog';
     } else if (lowerFilename.endsWith('.compressed.ply')) {
         return 'compressed-ply';
@@ -336,10 +336,10 @@ USAGE
     interpreted as actions that modify the final result.
 
 SUPPORTED INPUTS
-    .ply   .splat   .ksplat
+    .ply   .compressed.ply   .splat   .ksplat
 
 SUPPORTED OUTPUTS
-    .ply   .compressed.ply   meta.json (SOGS)   .csv
+    .ply   .compressed.ply   meta.json (SOG)   .sog   .csv
 
 ACTIONS (can be repeated, in any order)
     -t, --translate  x,y,z                  Translate splats by (x, y, z)
