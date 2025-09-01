@@ -8,7 +8,7 @@
 
 SplatTransform is an open source CLI tool for converting and editing Gaussian splats. It can:
 
-📥 Read PLY, SPLAT, KSPLAT formats  
+📥 Read PLY, Compressed PLY, SPLAT, KSPLAT formats  
 📤 Write PLY, Compressed PLY, CSV, and SOGS formats  
 🔗 Merge multiple splats  
 🔄 Apply transformations to input splats  
@@ -25,7 +25,7 @@ npm install -g @playcanvas/splat-transform
 ## Usage
 
 ```bash
-splat-transform [GLOBAL]  <input.{ply|splat|ksplat}> [ACTIONS]  ...  <output.{ply|compressed.ply|meta.json|csv}> [ACTIONS]
+splat-transform [GLOBAL]  <input.{ply|compressed.ply|splat|ksplat}> [ACTIONS]  ...  <output.{ply|compressed.ply|meta.json|csv}> [ACTIONS]
 ```
 
 **Key points:**
@@ -36,6 +36,7 @@ splat-transform [GLOBAL]  <input.{ply|splat|ksplat}> [ACTIONS]  ...  <output.{pl
 
 **Input:**
 - `.ply` - Standard PLY format
+- `.compressed.ply` - Compressed PLY format (auto-detected and decompressed on read)
 - `.splat` - Binary splat format (antimatter15 format)
 - `.ksplat` - Compressed binary splat format (mkkellogg format)
 
@@ -85,6 +86,10 @@ splat-transform input.ksplat output.ply
 
 # Convert to compressed PLY
 splat-transform input.ply output.compressed.ply
+
+# Uncompress a compressed PLY back to standard PLY
+# (compressed .ply is detected automatically on read)
+splat-transform input.compressed.ply output.ply
 
 # Convert to SOGS format
 splat-transform input.ply output/meta.json

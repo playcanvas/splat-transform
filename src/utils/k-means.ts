@@ -19,6 +19,25 @@ const initializeCentroids = (dataTable: DataTable, centroids: DataTable, row: an
     }
 };
 
+// in the 1d case we can initialize centroids evenly over the input range
+const initializeCentroids1D = (dataTable: DataTable, centroids: DataTable) => {
+    // calculate min/max
+    let m = Infinity;
+    let M = -Infinity;
+
+    const data = dataTable.getColumn(0).data;
+    for (let i = 0; i < dataTable.numRows; ++i) {
+        const value = data[i];
+        if (value < m) m = value;
+        if (value > M) M = value;
+    }
+
+    const centroidsData = centroids.getColumn(0).data;
+    for (let i = 0; i < centroids.numRows; ++i) {
+        centroidsData[i] = m + (M - m) * i / (centroids.numRows - 1);
+    }
+};
+
 const calcAverage = (dataTable: DataTable, cluster: number[], row: any) => {
     const keys = dataTable.columnNames;
 
@@ -128,7 +147,11 @@ const kmeans = async (points: DataTable, k: number, iterations: number, device?:
 
     // construct centroids data table and assign initial values
     const centroids = new DataTable(points.columns.map(c => new Column(c.name, new Float32Array(k))));
-    initializeCentroids(points, centroids, row);
+    if (points.numColumns === 1) {
+        initializeCentroids1D(points, centroids);
+    } else {
+        initializeCentroids(points, centroids, row);
+    }
 
     const gpuClustering = device && new GpuClustering(device, points.numColumns, k);
     const labels = new Uint32Array(points.numRows);
@@ -148,8 +171,15 @@ const kmeans = async (points: DataTable, k: number, iterations: number, device?:
         // calculate the new centroid positions
         const groups = groupLabels(labels, k);
         for (let i = 0; i < centroids.numRows; ++i) {
-            calcAverage(points, groups[i], row);
-            centroids.setRow(i, row);
+            if (groups[i].length === 0) {
+                // re-seed this centroid to a random point to avoid zero vector
+                const idx = Math.floor(Math.random() * points.numRows);
+                points.getRow(idx, row);
+                centroids.setRow(i, row);
+            } else {
+                calcAverage(points, groups[i], row);
+                centroids.setRow(i, row);
+            }
         }
 
         steps++;

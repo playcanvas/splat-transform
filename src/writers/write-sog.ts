@@ -3,10 +3,14 @@ import { dirname, resolve } from 'node:path';
 
 import sharp from 'sharp';
 
-import { DataTable } from '../data-table';
-import { createDevice } from '../gpu/gpu-device';
+import { Column, DataTable } from '../data-table';
+import { createDevice, GpuDevice } from '../gpu/gpu-device';
 import { generateOrdering } from '../ordering';
+import { FileWriter } from '../serialize/writer';
+import { ZipWriter } from '../serialize/zip-writer';
 import { kmeans } from '../utils/k-means';
+import { sigmoid } from '../utils/math';
+
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
@@ -32,19 +36,6 @@ const logTransform = (value: number) => {
     return Math.sign(value) * Math.log(Math.abs(value) + 1);
 };
 
-// pack every 256 indices into a grid of 16x16 chunks
-const rectChunks = (index: number, width: number) => {
-    const chunkWidth = width / 16;
-    const chunkIndex = Math.floor(index / 256);
-    const chunkX = chunkIndex % chunkWidth;
-    const chunkY = Math.floor(chunkIndex / chunkWidth);
-
-    const x = chunkX * 16 + (index % 16);
-    const y = chunkY * 16 + Math.floor((index % 256) / 16);
-
-    return x + y * width;
-};
-
 // no packing
 const identity = (index: number, width: number) => {
     return index;
@@ -59,22 +50,98 @@ const generateIndices = (dataTable: DataTable) => {
     return result;
 };
 
-const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFilename: string, shIterations = 10, shMethod: 'cpu' | 'gpu', indices = generateIndices(dataTable)) => {
-    const numRows = indices.length;
-    const width = Math.ceil(Math.sqrt(numRows) / 16) * 16;
-    const height = Math.ceil(numRows / width / 16) * 16;
-    const channels = 4;
+// convert a dataTable with multiple columns into a single column
+// calculate 256 clusters using kmeans
+// return
+//      - the resulting labels in a new datatable having same shape as the input
+//      - array of 256 centroids
+const cluster1d = async (dataTable: DataTable, iterations: number, device?: GpuDevice) => {
+    const { numColumns, numRows } = dataTable;
 
-    const write = (filename: string, data: Uint8Array, w = width, h = height) => {
-        const pathname = resolve(dirname(outputFilename), filename);
-        console.log(`writing '${pathname}'...`);
-        return sharp(data, { raw: { width: w, height: h, channels } })
-        .webp({ lossless: true })
-        .toFile(pathname);
+    // construct 1d points from the columns of data
+    const data = new Float32Array(numRows * numColumns);
+    for (let i = 0; i < numColumns; ++i) {
+        data.set(dataTable.getColumn(i).data, i * numRows);
+    }
+
+    const src = new DataTable([new Column('data', data)]);
+
+    const { centroids, labels } = await kmeans(src, 256, iterations, device);
+
+    // order centroids smallest to largest
+    const centroidsData = centroids.getColumn(0).data;
+    const order = centroidsData.map((_, i) => i);
+    order.sort((a, b) => centroidsData[a] - centroidsData[b]);
+
+    // reorder centroids
+    const tmp = centroidsData.slice();
+    for (let i = 0; i < order.length; ++i) {
+        centroidsData[i] = tmp[order[i]];
+    }
+
+    const invOrder = [];
+    for (let i = 0; i < order.length; ++i) {
+        invOrder[order[i]] = i;
+    }
+
+    // reorder labels
+    for (let i = 0; i < labels.length; i++) {
+        labels[i] = invOrder[labels[i]];
+    }
+
+    const result = new DataTable(dataTable.columnNames.map(name => new Column(name, new Uint8Array(numRows))));
+    for (let i = 0; i < numColumns; ++i) {
+        result.getColumn(i).data.set((labels as Uint32Array).subarray(i * numRows, (i + 1) * numRows));
+    }
+
+    return {
+        centroids,
+        labels: result
     };
+};
+
+const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFilename: string, shIterations = 10, shMethod: 'cpu' | 'gpu', indices = generateIndices(dataTable)) => {
+    // initialize output stream
+    const isBundle = outputFilename.toLowerCase().endsWith('.sog');
+    const fileWriter = isBundle && new FileWriter(fileHandle);
+    const zipWriter = fileWriter && new ZipWriter(fileWriter);
+
+    const numRows = indices.length;
+    const width = Math.ceil(Math.sqrt(numRows) / 4) * 4;
+    const height = Math.ceil(numRows / width / 4) * 4;
+    const channels = 4;
 
     // the layout function determines how the data is packed into the output texture.
     const layout = identity; // rectChunks;
+
+    const write = async (filename: string, data: Uint8Array, w = width, h = height) => {
+        const pathname = resolve(dirname(outputFilename), filename);
+        console.log(`writing '${pathname}'...`);
+        const webp = sharp(data, { raw: { width: w, height: h, channels } }).webp({ lossless: true });
+
+        if (zipWriter) {
+            await zipWriter.file(filename, await webp.toBuffer());
+        } else {
+            await webp.toFile(pathname);
+        }
+    };
+
+    const writeTableData = (filename: string, dataTable: DataTable, w = width, h = height) => {
+        const data = new Uint8Array(w * h * channels);
+        const columns = dataTable.columns.map(c => c.data);
+        const numColumns = columns.length;
+
+        for (let i = 0; i < indices.length; ++i) {
+            const idx = indices[i];
+            const ti = layout(i, width);
+            data[ti * channels + 0] = columns[0][idx];
+            data[ti * channels + 1] = numColumns > 1 ? columns[1][idx] : 0;
+            data[ti * channels + 2] = numColumns > 2 ? columns[2][idx] : 0;
+            data[ti * channels + 3] = numColumns > 3 ? columns[3][idx] : 255;
+        }
+
+        return write(filename, data, w, h);
+    };
 
     const row: any = {};
 
@@ -158,45 +225,38 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     }
     await write('quats.webp', quats);
 
-    // scales
-    const scales = new Uint8Array(width * height * channels);
-    const scaleNames = ['scale_0', 'scale_1', 'scale_2'];
-    const scaleColumns = scaleNames.map(name => dataTable.getColumnByName(name));
-    const scaleMinMax = calcMinMax(dataTable, scaleNames, indices);
-    for (let i = 0; i < indices.length; ++i) {
-        dataTable.getRow(indices[i], row, scaleColumns);
+    const gpuDevice = shMethod === 'gpu' ? await createDevice() : null;
 
-        const ti = layout(i, width);
+    // convert scale
+    const scaleData = await cluster1d(
+        new DataTable(['scale_0', 'scale_1', 'scale_2'].map(name => dataTable.getColumnByName(name))),
+        shIterations,
+        gpuDevice
+    );
+    await writeTableData('scales.webp', scaleData.labels);
 
-        scales[ti * 4]     = 255 * (row.scale_0 - scaleMinMax[0][0]) / (scaleMinMax[0][1] - scaleMinMax[0][0]);
-        scales[ti * 4 + 1] = 255 * (row.scale_1 - scaleMinMax[1][0]) / (scaleMinMax[1][1] - scaleMinMax[1][0]);
-        scales[ti * 4 + 2] = 255 * (row.scale_2 - scaleMinMax[2][0]) / (scaleMinMax[2][1] - scaleMinMax[2][0]);
-        scales[ti * 4 + 3] = 0xff;
+    // color and opacity
+    const colorData = await cluster1d(
+        new DataTable(['f_dc_0', 'f_dc_1', 'f_dc_2'].map(name => dataTable.getColumnByName(name))),
+        shIterations,
+        gpuDevice
+    );
+
+    // generate and store sigmoid(opacity) [0..1]
+    const opacity = dataTable.getColumnByName('opacity').data;
+    const opacityData = new Uint8Array(opacity.length);
+    for (let i = 0; i < numRows; ++i) {
+        opacityData[i] = Math.max(0, Math.min(255, sigmoid(opacity[i]) * 255));
     }
-    await write('scales.webp', scales);
+    colorData.labels.addColumn(new Column('opacity', opacityData));
 
-    // colors
-    const sh0 = new Uint8Array(width * height * channels);
-    const sh0Names = ['f_dc_0', 'f_dc_1', 'f_dc_2', 'opacity'];
-    const sh0Columns = sh0Names.map(name => dataTable.getColumnByName(name));
-    const sh0MinMax = calcMinMax(dataTable, sh0Names, indices);
-    for (let i = 0; i < indices.length; ++i) {
-        dataTable.getRow(indices[i], row, sh0Columns);
+    await writeTableData('sh0.webp', colorData.labels);
 
-        const ti = layout(i, width);
-
-        sh0[ti * 4]     = 255 * (row.f_dc_0 - sh0MinMax[0][0]) / (sh0MinMax[0][1] - sh0MinMax[0][0]);
-        sh0[ti * 4 + 1] = 255 * (row.f_dc_1 - sh0MinMax[1][0]) / (sh0MinMax[1][1] - sh0MinMax[1][0]);
-        sh0[ti * 4 + 2] = 255 * (row.f_dc_2 - sh0MinMax[2][0]) / (sh0MinMax[2][1] - sh0MinMax[2][0]);
-        sh0[ti * 4 + 3] = 255 * (row.opacity - sh0MinMax[3][0]) / (sh0MinMax[3][1] - sh0MinMax[3][0]);
-    }
-    await write('sh0.webp', sh0);
-
-    // write meta.json
+    // construct meta.json
     const meta: any = {
+        version: 2,
+        count: numRows,
         means: {
-            shape: [numRows, 3],
-            dtype: 'float32',
             mins: meansMinMax.map(v => v[0]),
             maxs: meansMinMax.map(v => v[1]),
             files: [
@@ -205,23 +265,14 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
             ]
         },
         scales: {
-            shape: [numRows, 3],
-            dtype: 'float32',
-            mins: scaleMinMax.map(v => v[0]),
-            maxs: scaleMinMax.map(v => v[1]),
+            codebook: Array.from(scaleData.centroids.getColumn(0).data),
             files: ['scales.webp']
         },
         quats: {
-            shape: [numRows, 4],
-            dtype: 'uint8',
-            encoding: 'quaternion_packed',
             files: ['quats.webp']
         },
         sh0: {
-            shape: [numRows, 1, 4],
-            dtype: 'float32',
-            mins: sh0MinMax.map(v => v[0]),
-            maxs: sh0MinMax.map(v => v[1]),
+            codebook: Array.from(colorData.centroids.getColumn(0).data),
             files: ['sh0.webp']
         }
     };
@@ -229,7 +280,6 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     // spherical harmonics
     const shBands = { '9': 1, '24': 2, '-1': 3 }[shNames.findIndex(v => !dataTable.hasColumn(v))] ?? 0;
 
-    // @ts-ignore
     if (shBands > 0) {
         const shCoeffs = [0, 3, 8, 15][shBands];
         const shColumnNames = shNames.slice(0, shCoeffs * 3);
@@ -245,26 +295,25 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
         const paletteSize = Math.min(64, 2 ** Math.floor(Math.log2(indices.length / 1024))) * 1024;
 
         // calculate kmeans
-        const gpuDevice = shMethod === 'gpu' ? await createDevice() : null;
         const { centroids, labels } = await kmeans(shDataTable, paletteSize, shIterations, gpuDevice);
+
+        // construct a codebook for all spherical harmonic coefficients
+        const codebook = await cluster1d(centroids, shIterations, gpuDevice);
 
         // write centroids
         const centroidsBuf = new Uint8Array(64 * shCoeffs * Math.ceil(centroids.numRows / 64) * channels);
-        const centroidsMinMax = calcMinMax(shDataTable, shColumnNames, indices);
-        const centroidsMin = centroidsMinMax.map(v => v[0]).reduce((a, b) => Math.min(a, b));
-        const centroidsMax = centroidsMinMax.map(v => v[1]).reduce((a, b) => Math.max(a, b));
         const centroidsRow: any = {};
         for (let i = 0; i < centroids.numRows; ++i) {
-            centroids.getRow(i, centroidsRow);
+            codebook.labels.getRow(i, centroidsRow);
 
             for (let j = 0; j < shCoeffs; ++j) {
                 const x = centroidsRow[shColumnNames[shCoeffs * 0 + j]];
                 const y = centroidsRow[shColumnNames[shCoeffs * 1 + j]];
                 const z = centroidsRow[shColumnNames[shCoeffs * 2 + j]];
 
-                centroidsBuf[i * shCoeffs * 4 + j * 4 + 0] = 255 * ((x - centroidsMin) / (centroidsMax - centroidsMin));
-                centroidsBuf[i * shCoeffs * 4 + j * 4 + 1] = 255 * ((y - centroidsMin) / (centroidsMax - centroidsMin));
-                centroidsBuf[i * shCoeffs * 4 + j * 4 + 2] = 255 * ((z - centroidsMin) / (centroidsMax - centroidsMin));
+                centroidsBuf[i * shCoeffs * 4 + j * 4 + 0] = x;
+                centroidsBuf[i * shCoeffs * 4 + j * 4 + 1] = y;
+                centroidsBuf[i * shCoeffs * 4 + j * 4 + 2] = z;
                 centroidsBuf[i * shCoeffs * 4 + j * 4 + 3] = 0xff;
             }
         }
@@ -274,21 +323,17 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
         const labelsBuf = new Uint8Array(width * height * channels);
         for (let i = 0; i < indices.length; ++i) {
             const label = labels[indices[i]];
-
             const ti = layout(i, width);
-            labelsBuf[ti * 4] = label & 0xff;
-            labelsBuf[ti * 4 + 1] = (label >> 8) & 0xff;
+
+            labelsBuf[ti * 4 + 0] = 0xff & label;
+            labelsBuf[ti * 4 + 1] = 0xff & (label >> 8);
             labelsBuf[ti * 4 + 2] = 0;
             labelsBuf[ti * 4 + 3] = 0xff;
         }
         await write('shN_labels.webp', labelsBuf);
 
         meta.shN = {
-            shape: [indices.length, shCoeffs],
-            dtype: 'float32',
-            mins: centroidsMin,
-            maxs: centroidsMax,
-            quantization: 8,
+            codebook: Array.from(codebook.centroids.getColumn(0).data),
             files: [
                 'shN_centroids.webp',
                 'shN_labels.webp'
@@ -296,7 +341,15 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
         };
     }
 
-    await fileHandle.write((new TextEncoder()).encode(JSON.stringify(meta, null, 4)));
+    const metaJson = (new TextEncoder()).encode(JSON.stringify(meta));
+
+    if (zipWriter) {
+        await zipWriter.file('meta.json', metaJson);
+        await zipWriter.close();
+        await fileWriter.close();
+    } else {
+        await fileHandle.write(metaJson);
+    }
 };
 
 export { writeSog };
