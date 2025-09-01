@@ -59,14 +59,12 @@ const readFile = async (filename: string) => {
 const getOutputFormat = (filename: string) => {
     const lowerFilename = filename.toLowerCase();
 
-    if (lowerFilename.endsWith('lod-meta.json')) {
-        return 'lod';
-    } else if (lowerFilename.endsWith('.csv')) {
+    if (lowerFilename.endsWith('.csv')) {
         return 'csv';
     } else if (lowerFilename.endsWith('.sog') || lowerFilename.endsWith('meta.json')) {
         return 'sog';
-    } else if (lowerFilename.endsWith('.csv')) {
-        return 'csv';
+    } else if (lowerFilename.endsWith('lod-meta.json')) {
+        return 'lod';
     } else if (lowerFilename.endsWith('.compressed.ply')) {
         return 'compressed-ply';
     } else if (lowerFilename.endsWith('.ply')) {
@@ -98,14 +96,14 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
 
     // write the data
     switch (outputFormat) {
-        case 'lod':
-            await writeLod(outputFile, dataTable, filename, options.iterations, options.gpu ? 'gpu' : 'cpu');
+        case 'csv':
+            await writeCsv(outputFile, dataTable);
             break;
         case 'sog':
             await writeSog(outputFile, dataTable, filename, options.iterations, options.gpu ? 'gpu' : 'cpu');
             break;
-        case 'csv':
-            await writeCsv(outputFile, dataTable);
+        case 'lod':
+            await writeLod(outputFile, dataTable, filename, options.iterations, options.gpu ? 'gpu' : 'cpu');
             break;
         case 'compressed-ply':
             await writeCompressedPly(outputFile, dataTable);
