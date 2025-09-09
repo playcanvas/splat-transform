@@ -55,7 +55,7 @@ const filter = (dataTable: DataTable, predicate: (row: any, rowIndex: number) =>
 };
 
 // process a data table with standard options
-const process = (dataTable: DataTable, processActions: ProcessAction[]) => {
+const processDataTable = (dataTable: DataTable, processActions: ProcessAction[]) => {
     let result = dataTable;
 
     for (let i = 0; i < processActions.length; i++) {
@@ -134,4 +134,4 @@ const process = (dataTable: DataTable, processActions: ProcessAction[]) => {
     return result;
 };
 
-export { ProcessAction, process };
+export { ProcessAction, processDataTable };

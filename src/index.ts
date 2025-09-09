@@ -7,7 +7,7 @@ import { Vec3 } from 'playcanvas';
 
 import { version } from '../package.json';
 import { Column, DataTable, TypedArray } from './data-table';
-import { ProcessAction, process } from './process';
+import { ProcessAction, processDataTable } from './process';
 import { isCompressedPly, decompressPly } from './readers/decompress-ply';
 import { readKsplat } from './readers/read-ksplat';
 import { readPly } from './readers/read-ply';
@@ -404,13 +404,13 @@ const main = async () => {
                 throw new Error(`Unsupported data in file '${inputArg.filename}'`);
             }
 
-            element.dataTable = process(dataTable, inputArg.processActions);
+            element.dataTable = processDataTable(dataTable, inputArg.processActions);
 
             return file;
         }))).filter(file => file !== null);
 
         // combine inputs into a single output dataTable
-        const dataTable = process(
+        const dataTable = processDataTable(
             combine(inputFiles.map(file => file.elements[0].dataTable)),
             outputArg.processActions
         );
