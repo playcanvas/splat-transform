@@ -9,9 +9,9 @@
         "noImplicitAny": true,
         "inlineSources": true,
         "resolveJsonModule": true,
-        "allowJs": true,
+        "allowJs": false,
         "checkJs": false
     },
-    "include": ["./src/**/*.ts"],
-    "exclude": ["node_modules", "**/*.js", "dist"]
+    "include": ["./src/**/*.ts", "global.d.ts"],
+    "exclude": ["node_modules", "**/*.js", "dist", "lib/**/*.mjs"]
 }

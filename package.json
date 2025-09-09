@@ -45,8 +45,6 @@
     "typescript": "^5.9.2"
   },
   "dependencies": {
-    "canvas": "^3.1.2",
-    "jsdom": "^26.1.0",
     "webgpu": "^0.3.0"
   },
   "scripts": {

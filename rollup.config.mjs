@@ -10,9 +10,9 @@ const application = {
         sourcemap: true,
         entryFileNames: '[name].mjs'
     },
-    external: ['sharp', 'webgpu', 'jsdom'],
+    external: ['webgpu'],
     plugins: [
-        typescript(),
+        typescript({ tsconfig: './tsconfig.json' }),
         resolve(),
         json()
     ],
