@@ -9,6 +9,7 @@ jobs:
   publish:
     name: Publish
     runs-on: ubuntu-latest
+    if: github.repository_owner == 'playcanvas'
     steps:
       - name: Check out code
         uses: actions/checkout@v5
