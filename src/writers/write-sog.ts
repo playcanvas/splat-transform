@@ -99,7 +99,7 @@ const cluster1d = async (dataTable: DataTable, iterations: number, device?: GpuD
 };
 
 const writeFile = async (filename: string, data: Uint8Array) => {
-    const outputFile = await open(filename, 'wb');
+    const outputFile = await open(filename, 'w');
     outputFile.write(data);
     await outputFile.close();
 };
