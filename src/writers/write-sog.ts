@@ -100,12 +100,12 @@ const cluster1d = async (dataTable: DataTable, iterations: number, device?: GpuD
 };
 
 const writeFile = async (filename: string, data: Uint8Array) => {
-    let outputFile = await open(filename, 'w');
+    let outputFile = await open(filename, 'wb');
     outputFile.write(data);
     await outputFile.close();
 }
 
-let webpEncoder: WebpEncoder = null;
+let webpEncoder: WebpEncoder;
 
 const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFilename: string, shIterations = 10, shMethod: 'cpu' | 'gpu', indices = generateIndices(dataTable)) => {
     // initialize output stream
