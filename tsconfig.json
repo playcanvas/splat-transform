@@ -13,5 +13,5 @@
         "checkJs": false
     },
     "include": ["./src/**/*.ts"],
-    "exclude": ["node_modules", "**/*.js", "dist", "lib/**/*.mjs"]
+    "exclude": ["node_modules", "**/*.js", "dist"]
 }
