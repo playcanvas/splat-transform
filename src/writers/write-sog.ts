@@ -1,7 +1,5 @@
-import { FileHandle } from 'node:fs/promises';
+import { FileHandle, open } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-
-import sharp from 'sharp';
 
 import { Column, DataTable } from '../data-table';
 import { createDevice, GpuDevice } from '../gpu/gpu-device';
@@ -11,6 +9,7 @@ import { ZipWriter } from '../serialize/zip-writer';
 import { kmeans } from '../utils/k-means';
 import { sigmoid } from '../utils/math';
 
+import { WebpEncoder } from '../utils/webp';
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
@@ -100,6 +99,14 @@ const cluster1d = async (dataTable: DataTable, iterations: number, device?: GpuD
     };
 };
 
+const writeFile = async (filename: string, data: Uint8Array) => {
+    let outputFile = await open(filename, 'w');
+    outputFile.write(data);
+    await outputFile.close();
+}
+
+let webpEncoder: WebpEncoder = null;
+
 const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFilename: string, shIterations = 10, shMethod: 'cpu' | 'gpu', indices = generateIndices(dataTable)) => {
     // initialize output stream
     const isBundle = outputFilename.toLowerCase().endsWith('.sog');
@@ -117,12 +124,18 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     const write = async (filename: string, data: Uint8Array, w = width, h = height) => {
         const pathname = resolve(dirname(outputFilename), filename);
         console.log(`writing '${pathname}'...`);
-        const webp = sharp(data, { raw: { width: w, height: h, channels } }).webp({ lossless: true });
+
+        // construct the encoder on first use
+        if (!webpEncoder) {
+            webpEncoder = await WebpEncoder.create();
+        }
+
+        const webp = await webpEncoder.encodeLosslessRGBA(data, w, h);
 
         if (zipWriter) {
-            await zipWriter.file(filename, await webp.toBuffer());
+            await zipWriter.file(filename, webp);
         } else {
-            await webp.toFile(pathname);
+            await writeFile(pathname, webp);
         }
     };
 
@@ -218,7 +231,7 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
 
         const ti = layout(i, width);
 
-        quats[ti * 4]     = 255 * (q[idx[0]] * 0.5 + 0.5);
+        quats[ti * 4] = 255 * (q[idx[0]] * 0.5 + 0.5);
         quats[ti * 4 + 1] = 255 * (q[idx[1]] * 0.5 + 0.5);
         quats[ti * 4 + 2] = 255 * (q[idx[2]] * 0.5 + 0.5);
         quats[ti * 4 + 3] = 252 + maxComp;
