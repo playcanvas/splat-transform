@@ -231,7 +231,7 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
 
         const ti = layout(i, width);
 
-        quats[ti * 4] = 255 * (q[idx[0]] * 0.5 + 0.5);
+        quats[ti * 4]     = 255 * (q[idx[0]] * 0.5 + 0.5);
         quats[ti * 4 + 1] = 255 * (q[idx[1]] * 0.5 + 0.5);
         quats[ti * 4 + 2] = 255 * (q[idx[2]] * 0.5 + 0.5);
         quats[ti * 4 + 3] = 252 + maxComp;
