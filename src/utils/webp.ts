@@ -26,7 +26,9 @@ class WebpEncoder {
         Module.HEAPU8.set(rgba, inPtr);
 
         const ok = Module._webp_encode_lossless_rgba(inPtr, width, height, stride, outPtrPtr, outSizePtr);
-        if (!ok) throw new Error('WebP lossless encode failed');
+        if (!ok) {
+            throw new Error('WebP lossless encode failed');
+        }
 
         const outPtr = Module.HEAPU32[outPtrPtr >> 2];
         const outSize = Module.HEAPU32[outSizePtr >> 2];
