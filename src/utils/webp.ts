@@ -8,7 +8,7 @@ class WebpEncoder {
         instance.Module = await createModule({
             locateFile: (path: string) => {
                 if (path.endsWith('.wasm')) {
-                    return new URL('../lib/' + path, import.meta.url).toString();
+                    return new URL(`../lib/${path}`, import.meta.url).toString();
                 }
                 return path;
             }
@@ -16,7 +16,7 @@ class WebpEncoder {
         return instance;
     }
 
-    async encodeLosslessRGBA(rgba: Uint8Array, width: number, height: number, stride = width * 4) {
+    encodeLosslessRGBA(rgba: Uint8Array, width: number, height: number, stride = width * 4) {
         const { Module } = this;
 
         const inPtr = Module._malloc(rgba.length);

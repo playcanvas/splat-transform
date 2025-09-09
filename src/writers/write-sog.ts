@@ -8,7 +8,6 @@ import { FileWriter } from '../serialize/writer';
 import { ZipWriter } from '../serialize/zip-writer';
 import { kmeans } from '../utils/k-means';
 import { sigmoid } from '../utils/math';
-
 import { WebpEncoder } from '../utils/webp';
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
@@ -100,10 +99,10 @@ const cluster1d = async (dataTable: DataTable, iterations: number, device?: GpuD
 };
 
 const writeFile = async (filename: string, data: Uint8Array) => {
-    let outputFile = await open(filename, 'wb');
+    const outputFile = await open(filename, 'wb');
     outputFile.write(data);
     await outputFile.close();
-}
+};
 
 let webpEncoder: WebpEncoder;
 

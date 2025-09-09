@@ -32,7 +32,7 @@ const initializeGlobals = () => {
 
     // window stub
     (globalThis as any).window = {
-        navigator: { userAgent: 'node.js' },
+        navigator: { userAgent: 'node.js' }
     };
 
     // document stub
