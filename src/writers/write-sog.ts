@@ -346,6 +346,7 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
         await write('shN_labels.webp', labelsBuf);
 
         meta.shN = {
+            bands: shBands,
             codebook: Array.from(codebook.centroids.getColumn(0).data),
             files: [
                 'shN_centroids.webp',
