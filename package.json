@@ -24,7 +24,8 @@
     "url": "git+https://github.com/playcanvas/splat-transform.git"
   },
   "files": [
-    "dist/"
+    "dist/",
+    "lib/"
   ],
   "devDependencies": {
     "@playcanvas/eslint-config": "^2.1.0",
