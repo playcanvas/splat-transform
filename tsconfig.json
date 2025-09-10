@@ -9,7 +9,7 @@
         "noImplicitAny": true,
         "inlineSources": true,
         "resolveJsonModule": true,
-        "allowJs": true,
+        "allowJs": false,
         "checkJs": false
     },
     "include": ["./src/**/*.ts"],

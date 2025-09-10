@@ -1,6 +1,6 @@
+import json from '@rollup/plugin-json';
 import resolve from '@rollup/plugin-node-resolve';
 import typescript from '@rollup/plugin-typescript';
-import json from '@rollup/plugin-json';
 
 const application = {
     input: 'src/index.ts',
@@ -8,13 +8,13 @@ const application = {
         dir: 'dist',
         format: 'esm',
         sourcemap: true,
-        entryFileNames: '[name].mjs',
+        entryFileNames: '[name].mjs'
     },
-    external: ['sharp', 'webgpu', 'jsdom'],
+    external: ['webgpu'],
     plugins: [
-        typescript(),
+        typescript({ tsconfig: './tsconfig.json' }),
         resolve(),
-        json(),
+        json()
     ],
     cache: false
 };

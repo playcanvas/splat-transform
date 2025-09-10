@@ -1,6 +1,6 @@
 import { Worker } from 'node:worker_threads';
 
-import { JSDOM } from 'jsdom';
+// import { JSDOM } from 'jsdom';
 import {
     // components
     AnimComponentSystem,
@@ -27,31 +27,41 @@ import {
 } from 'playcanvas/debug';
 import { create, globals } from 'webgpu';
 
-Object.assign(globalThis, globals);
+const initializeGlobals = () => {
+    Object.assign(globalThis, globals);
 
-const jsdomSetup = () => {
-    const html = '<!DOCTYPE html><html><head></head><body></body></html>';
+    // window stub
+    (globalThis as any).window = {
+        navigator: { userAgent: 'node.js' }
+    };
 
-    const jsdom = new JSDOM(html, {
-        resources: 'usable',         // Allow the engine to load assets
-        runScripts: 'dangerously',   // Allow the engine to run scripts
-        url: 'http://localhost:3000' // Set the URL of the document
-    });
-
-    // Copy the window and document to global scope
-    // @ts-ignore
-    global.window = jsdom.window;
-    global.document = jsdom.window.document;
-
-    // Copy the DOM APIs used by the engine to global scope
-    global.ArrayBuffer = jsdom.window.ArrayBuffer;
-    global.Audio = jsdom.window.Audio;
-    global.DataView = jsdom.window.DataView;
-    global.Image = jsdom.window.Image;
-    global.KeyboardEvent = jsdom.window.KeyboardEvent;
-    global.MouseEvent = jsdom.window.MouseEvent;
-    global.XMLHttpRequest = jsdom.window.XMLHttpRequest;
+    // document stub
+    (globalThis as any).document = {
+        createElement: (type: string) => {
+            if (type === 'canvas') {
+                return {
+                    getContext: (): null => {
+                        return null;
+                    },
+                    getBoundingClientRect: () => {
+                        return {
+                            left: 0,
+                            top: 0,
+                            width: 300,
+                            height: 150,
+                            right: 300,
+                            bottom: 150
+                        };
+                    },
+                    width: 300,
+                    height: 150
+                };
+            }
+        }
+    };
 };
+
+initializeGlobals();
 
 class Application extends AppBase {
     constructor(canvas: HTMLCanvasElement, options: any = {}) {
@@ -96,8 +106,6 @@ class GpuDevice {
 }
 
 const createDevice = async () => {
-    jsdomSetup();
-
     // @ts-ignore
     globalThis.Worker = Worker;
 
