@@ -12,6 +12,7 @@ import { isCompressedPly, decompressPly } from './readers/decompress-ply';
 import { readKsplat } from './readers/read-ksplat';
 import { readPly } from './readers/read-ply';
 import { readSplat } from './readers/read-splat';
+import { readSPZ } from './readers/read-spz';
 import { writeCompressedPly } from './writers/write-compressed-ply';
 import { writeCsv } from './writers/write-csv';
 import { writePly } from './writers/write-ply';
@@ -46,6 +47,8 @@ const readFile = async (filename: string) => {
         } else {
             fileData = ply;
         }
+    } else if (lowerFilename.endsWith('.spz')) {
+        fileData = await readSPZ(inputFile);
     } else {
         await inputFile.close();
         throw new Error(`Unsupported input file type: ${filename}`);
