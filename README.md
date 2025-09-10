@@ -9,7 +9,7 @@
 SplatTransform is an open source CLI tool for converting and editing Gaussian splats. It can:
 
 📥 Read PLY, Compressed PLY, SPLAT, KSPLAT formats  
-📤 Write PLY, Compressed PLY, CSV, and SOGS formats  
+📤 Write PLY, Compressed PLY, CSV, and SOG formats  
 🔗 Merge multiple splats  
 🔄 Apply transformations to input splats  
 🎛️ Filter out Gaussians or spherical harmonic bands
@@ -33,7 +33,7 @@ npm install -g @playcanvas/splat-transform
 ## Usage
 
 ```bash
-splat-transform [GLOBAL]  <input.{ply|compressed.ply|splat|ksplat}> [ACTIONS]  ...  <output.{ply|compressed.ply|meta.json|csv}> [ACTIONS]
+splat-transform [GLOBAL]  <input.{ply|compressed.ply|splat|ksplat}> [ACTIONS]  ...  <output.{ply|compressed.ply|sog|meta.json|csv}> [ACTIONS]
 ```
 
 **Key points:**
@@ -51,7 +51,8 @@ splat-transform [GLOBAL]  <input.{ply|compressed.ply|splat|ksplat}> [ACTIONS]  .
 **Output:**
 - `.ply` - Standard PLY format
 - `.compressed.ply` - Compressed PLY format
-- `meta.json` - SOGS format (JSON + WebP images)
+- `.sog` - SOG bundled format
+- `meta.json` - SOG unbundled format (JSON + WebP images)
 - `.csv` - Comma-separated values
 
 ## Actions
@@ -99,7 +100,10 @@ splat-transform input.ply output.compressed.ply
 # (compressed .ply is detected automatically on read)
 splat-transform input.compressed.ply output.ply
 
-# Convert to SOGS format
+# Convert to SOG bundled format
+splat-transform input.ply output.sog
+
+# Convert to SOG unbundled format
 splat-transform input.ply output/meta.json
 ```
 
