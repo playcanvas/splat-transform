@@ -331,7 +331,7 @@ Apply geometric transforms & filters to Gaussian-splat point clouds
 ===================================================================
 
 USAGE
-  splat-transform [GLOBAL]  <input.{ply|splat|ksplat}> [ACTIONS]  ...  <output.{ply|compressed.ply|meta.json|csv}> [ACTIONS]
+  splat-transform [GLOBAL]  <input.{ply|splat|ksplat|spz}> [ACTIONS]  ...  <output.{ply|compressed.ply|meta.json|csv}> [ACTIONS]
 
   • Every time an input file appears, it becomes the current working set; the following
     ACTIONS are applied in the order listed.  
@@ -339,7 +339,7 @@ USAGE
     interpreted as actions that modify the final result.
 
 SUPPORTED INPUTS
-    .ply   .compressed.ply   .splat   .ksplat
+    .ply   .compressed.ply   .splat   .ksplat   .spz
 
 SUPPORTED OUTPUTS
     .ply   .compressed.ply   meta.json (SOG)   .sog   .csv

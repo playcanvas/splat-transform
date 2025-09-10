@@ -17,6 +17,7 @@ const decompressGZIP = async (fileHandle: FileHandle): Promise<Buffer<ArrayBuffe
     const stats = await fileHandle.stat();
     const zippedSize = stats.size;
     const fileBuffer = Buffer.alloc(zippedSize);
+    await fileHandle.read(fileBuffer, 0, zippedSize, 0);
 
     const blob = new Blob([fileBuffer.buffer], { type: 'application/gzip' });
     const ds = new DecompressionStream('gzip');
@@ -51,11 +52,12 @@ const readSPZ = async (fileHandle: FileHandle): Promise<SplatData> => {
     let magicView = new DataView(fileBuffer.buffer, 0, magicSize);
 
     // If file is GZip compressed, decompress it first.
+    let isGZipped = false;
     if (magicView.getUint16(0) === 0x1F8B) { // '1F 8B' is the magic for gzip: https://en.wikipedia.org/wiki/Gzip
+        isGZipped = true;
         fileBuffer = await decompressGZIP(fileHandle);
 
-        await fileHandle.read(fileBuffer, 0, magicSize, 0);
-        magicView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset, magicSize);
+        magicView = new DataView(fileBuffer.buffer, 0, magicSize);
     }
 
     const magic = magicView.getUint32(0, true);
@@ -71,7 +73,9 @@ const readSPZ = async (fileHandle: FileHandle): Promise<SplatData> => {
     }
 
     // Parse header
-    await fileHandle.read(fileBuffer, 0, totalSize, 0);
+    if (isGZipped === false) {
+        await fileHandle.read(fileBuffer, 0, totalSize, 0);
+    }
     const header = new DataView(fileBuffer.buffer, fileBuffer.byteOffset, HEADER_SIZE);
 
     const version = header.getUint32(4, true);
@@ -170,12 +174,12 @@ const readSPZ = async (fileHandle: FileHandle): Promise<SplatData> => {
         // Store opacity (convert from uint8 to float and apply inverse sigmoid)
         const epsilon = 1e-6;
         const normalizedOpacity = Math.max(epsilon, Math.min(1.0 - epsilon, opacity / 255.0));
-        (columns[9].data as Float32Array)[splatIndex] = Math.log(normalizedOpacity / (1.0 - normalizedOpacity));
+        (columns[9].data as Float32Array)[splatIndex] = opacity / 255.0;
 
         // Store rotation quaternion (convert from uint8 [0,255] to float [-1,1])
-        const rot1Norm = (rot1 / 255.0) * 2.0 - 1.0;
-        const rot2Norm = (rot2 / 255.0) * 2.0 - 1.0;
-        const rot3Norm = (rot3 / 255.0) * 2.0 - 1.0;
+        const rot1Norm = (rot1 / 127.5) - 1.0;
+        const rot2Norm = (rot2 / 127.5) - 1.0;
+        const rot3Norm = (rot3 / 127.5) - 1.0;
         const rotationDot = rot1Norm * rot1Norm + rot2Norm * rot2Norm + rot3Norm * rot3Norm;
         const rot0Norm = Math.sqrt(Math.max(0.0, 1.0 - rotationDot));
 
