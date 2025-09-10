@@ -61,10 +61,10 @@ const getOutputFormat = (filename: string) => {
 
     if (lowerFilename.endsWith('.csv')) {
         return 'csv';
-    } else if (lowerFilename.endsWith('.sog') || lowerFilename.endsWith('meta.json')) {
-        return 'sog';
     } else if (lowerFilename.endsWith('lod-meta.json')) {
         return 'lod';
+    } else if (lowerFilename.endsWith('.sog') || lowerFilename.endsWith('meta.json')) {
+        return 'sog';
     } else if (lowerFilename.endsWith('.compressed.ply')) {
         return 'compressed-ply';
     } else if (lowerFilename.endsWith('.ply')) {
