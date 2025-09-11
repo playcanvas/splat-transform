@@ -1,5 +1,5 @@
-import { open } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { mkdir, open } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
 import { exit, hrtime } from 'node:process';
 import { parseArgs } from 'node:util';
 
@@ -14,9 +14,9 @@ import { readPly } from './readers/read-ply';
 import { readSplat } from './readers/read-splat';
 import { writeCompressedPly } from './writers/write-compressed-ply';
 import { writeCsv } from './writers/write-csv';
+import { writeLod } from './writers/write-lod';
 import { writePly } from './writers/write-ply';
 import { writeSog } from './writers/write-sog';
-import { writeLod } from './writers/write-lod';
 
 type Options = {
     overwrite: boolean,
@@ -82,6 +82,8 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
     let outputFile;
 
     try {
+        // ensure output folder exists
+        await mkdir(dirname(filename), { recursive: true });
         outputFile = await open(filename, options.overwrite ? 'w' : 'wx');
     } catch (err) {
         if (err.code === 'EEXIST') {
@@ -216,7 +218,7 @@ const parseArguments = () => {
             filterNaN: { type: 'boolean', short: 'n', multiple: true },
             filterByValue: { type: 'string', short: 'c', multiple: true },
             filterBands: { type: 'string', short: 'b', multiple: true },
-            lod: { type: 'string', short: 'l', multiple: true}
+            lod: { type: 'string', short: 'l', multiple: true }
         }
     });
 
@@ -325,12 +327,12 @@ const parseArguments = () => {
                 }
                 case 'lod': {
                     const lod = parseInteger(t.value);
-                    if (![0, 1, 2].includes(lod)) {
-                        throw new Error(`Invalid lod value: ${t.value}. Must be 0, 1, or 2.`);
+                    if (lod < 0) {
+                        throw new Error(`Invalid lod value: ${t.value}. Must be a non-negative integer.`);
                     }
                     current.processActions.push({
                         kind: 'lod',
-                        value: lod as 0 | 1 | 2
+                        value: lod
                     });
                     break;
                 }
@@ -367,7 +369,7 @@ ACTIONS (can be repeated, in any order)
     -c, --filterByValue name,cmp,value      Keep splats where  <name> <cmp> <value>
                                             cmp ∈ {lt,lte,gt,gte,eq,neq}
     -b, --filterBands  {0|1|2|3}            Strip spherical-harmonic bands > N
-    -l, --lod          {0|1|2}              Specify the level of detail
+    -l, --lod          N (N >= 0)           Specify the level of detail (non-negative integer)
 
 GLOBAL OPTIONS
     -w, --overwrite                         Overwrite output file if it already exists. Default is false.

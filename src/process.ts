@@ -36,7 +36,7 @@ type FilterBands = {
 
 type Lod = {
     kind: 'lod';
-    value: 0 | 1 | 2;
+    value: number;
 };
 
 type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | Lod;
