@@ -121,7 +121,7 @@ const readSPZ = async (fileHandle: FileHandle): Promise<SplatData> => {
         new Column('f_dc_0', new Float32Array(numSplats)), // Red
         new Column('f_dc_1', new Float32Array(numSplats)), // Green
         new Column('f_dc_2', new Float32Array(numSplats)), // Blue
-        new Column('opacity', new Uint8Array(numSplats)),
+        new Column('opacity', new Float32Array(numSplats)),
 
         // Rotation quaternion
         new Column('rot_0', new Float32Array(numSplats)),
@@ -174,7 +174,7 @@ const readSPZ = async (fileHandle: FileHandle): Promise<SplatData> => {
         // Store opacity (convert from uint8 to float and apply inverse sigmoid)
         const epsilon = 1e-6;
         const normalizedOpacity = Math.max(epsilon, Math.min(1.0 - epsilon, opacity / 255.0));
-        (columns[9].data as Float32Array)[splatIndex] = opacity / 255.0;
+        (columns[9].data as Float32Array)[splatIndex] = Math.log(normalizedOpacity / (1.0 - normalizedOpacity));
 
         // Store rotation quaternion (convert from uint8 [0,255] to float [-1,1])
         const rot1Norm = (rot1 / 127.5) - 1.0;
