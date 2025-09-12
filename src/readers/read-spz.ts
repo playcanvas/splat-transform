@@ -44,6 +44,8 @@ function getFixed24(positionsView: DataView, elementIndex: number, memberIndex: 
     return fixed32;
 }
 
+const HARMONICS_COMPONENT_COUNT = [0, 9, 24, 45];
+
 const readSPZ = async (fileHandle: FileHandle): Promise<SplatData> => {
     // Load magic
     const magicSize = 4;
@@ -82,6 +84,10 @@ const readSPZ = async (fileHandle: FileHandle): Promise<SplatData> => {
     if (!(version === 2 || version === 3)) {
         throw new Error(`Unsupported version ${version}`);
     }
+    // TODO: Rotation for version 3
+    if (version === 3) {
+        throw new Error('TODO: rotation for version 3');
+    }
     const numSplats = header.getUint32(8, true);
     const shDegree = header.getUint8(12);
     const fractionalBits = header.getUint8(13);
@@ -93,10 +99,8 @@ const readSPZ = async (fileHandle: FileHandle): Promise<SplatData> => {
     const colorsByteSize = numSplats * 3; // u8 * 3
     const scalesByteSize = numSplats * 3; // u8 * 3
     const rotationsByteSize = numSplats * 3; // u8 * 3
-    const shDim = (shDegree === 0) ? 0 :
-        (shDegree === 1) ? 9 :
-            (shDegree === 2) ? 24 : 45;
-    const shByteSize =  numSplats * shDim;
+    const harmonicsComponentCount = HARMONICS_COMPONENT_COUNT[shDegree];
+    const shByteSize =  numSplats * harmonicsComponentCount;
 
     const positionsView = new DataView(fileBuffer.buffer, HEADER_SIZE, positionsByteSize);
     const alphasView =    new DataView(fileBuffer.buffer, HEADER_SIZE + positionsByteSize, alphasByteSize);
@@ -128,9 +132,12 @@ const readSPZ = async (fileHandle: FileHandle): Promise<SplatData> => {
         new Column('rot_1', new Float32Array(numSplats)),
         new Column('rot_2', new Float32Array(numSplats)),
         new Column('rot_3', new Float32Array(numSplats))
-
-        // TODO: Push spherical Harmonics columns
     ];
+
+    // Add spherical harmonics columns based on maximum degree found
+    for (let i = 0; i < harmonicsComponentCount; i++) {
+        columns.push(new Column(`f_rest_${i}`, new Float32Array(numSplats)));
+    }
 
     const scale = 1.0 / (1 << fractionalBits);
     for (let splatIndex = 0; splatIndex < numSplats; splatIndex++) {
@@ -151,6 +158,7 @@ const readSPZ = async (fileHandle: FileHandle): Promise<SplatData> => {
         const opacity = alphasView.getUint8(splatIndex);
 
         // Read rotation quaternion (4 × uint8)
+        // TODO: This is only valid on version 2. Version 3 uses smallest Three encoding
         const rot1 = rotationsView.getUint8(splatIndex * 3 + 0);
         const rot2 = rotationsView.getUint8(splatIndex * 3 + 1);
         const rot3 = rotationsView.getUint8(splatIndex * 3 + 2);
@@ -188,7 +196,30 @@ const readSPZ = async (fileHandle: FileHandle): Promise<SplatData> => {
         (columns[12].data as Float32Array)[splatIndex] = rot2Norm;
         (columns[13].data as Float32Array)[splatIndex] = rot3Norm;
 
-        // TODO: Spherical Harmonics
+        // Store spherical harmonics
+        for (let i = 0; i < harmonicsComponentCount; i++) {
+            let channel;
+            let coeff;
+
+            // band 0 is packed together, then band 1, then band 2.
+            if (i < 9) {
+                channel = Math.floor(i / 3);
+                coeff = i % 3;
+            } else if (i < 24) {
+                channel = Math.floor((i - 9) / 5);
+                coeff = (i - 9) % 5 + 3;
+            } else {
+                // don't think 3 bands are supported, but here just in case
+                channel = Math.floor((i - 24) / 7);
+                coeff = (i - 24) % 7 + 8;
+            }
+
+            const col = channel * (harmonicsComponentCount / 3) + coeff;
+
+            // Stored as 8 bit signed integer contiguously
+            const shCoef = shView.getInt8(splatIndex * harmonicsComponentCount + i);
+            (columns[14 + col].data as Float32Array)[splatIndex] = shCoef;
+        }
     }
 
     return {
