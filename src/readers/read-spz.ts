@@ -46,7 +46,7 @@ function getFixed24(positionsView: DataView, elementIndex: number, memberIndex: 
 
 const HARMONICS_COMPONENT_COUNT = [0, 9, 24, 45];
 
-const readSPZ = async (fileHandle: FileHandle): Promise<SplatData> => {
+const readSpz = async (fileHandle: FileHandle): Promise<SplatData> => {
     // Load magic
     const magicSize = 4;
     let fileBuffer = Buffer.alloc(magicSize);
@@ -256,4 +256,4 @@ const readSPZ = async (fileHandle: FileHandle): Promise<SplatData> => {
     };
 };
 
-export { SplatData, readSPZ };
+export { SplatData, readSpz };
