@@ -84,10 +84,7 @@ const readSPZ = async (fileHandle: FileHandle): Promise<SplatData> => {
     if (!(version === 2 || version === 3)) {
         throw new Error(`Unsupported version ${version}`);
     }
-    // TODO: Rotation for version 3
-    if (version === 3) {
-        throw new Error('TODO: rotation for version 3');
-    }
+
     const numSplats = header.getUint32(8, true);
     const shDegree = header.getUint8(12);
     const fractionalBits = header.getUint8(13);
@@ -158,10 +155,32 @@ const readSPZ = async (fileHandle: FileHandle): Promise<SplatData> => {
         const opacity = alphasView.getUint8(splatIndex);
 
         // Read rotation quaternion (4 × uint8)
-        // TODO: This is only valid on version 2. Version 3 uses smallest Three encoding
-        const rot1 = rotationsView.getUint8(splatIndex * 3 + 0);
-        const rot2 = rotationsView.getUint8(splatIndex * 3 + 1);
-        const rot3 = rotationsView.getUint8(splatIndex * 3 + 2);
+        const rotation = [0.0, 0.0, 0.0, 0.0];
+        if (version === 2) {
+            rotation[1] = rotationsView.getUint8(splatIndex * 3 + 0);
+            rotation[2] = rotationsView.getUint8(splatIndex * 3 + 1);
+            rotation[3] = rotationsView.getUint8(splatIndex * 3 + 2);
+        } else if (version === 3) {
+            // Copied from https://github.com/nianticlabs/spz/blob/e2101d6924b3936a6fb630cd4a881cb610c57d77/src/cc/load-spz.cc#L347
+            let packedRotation = rotationsView.getUint32(splatIndex);
+            const c_mask = (1 << 9) - 1;
+
+            const largestRotIndex = packedRotation >> 30;
+            let sum_squares = 0;
+            for (let i = 3; i >= 0; --i) {
+                if (i !== largestRotIndex) {
+                    const mag    = packedRotation & c_mask;
+                    const negbit = (packedRotation >> 9) & 1;
+                    packedRotation >>= 10;
+                    rotation[i]     = Math.SQRT1_2 * (mag) / c_mask;
+                    if (negbit === 1) {
+                        rotation[i] = -rotation[i];
+                    }
+                    sum_squares += rotation[i] * rotation[i];
+                }
+            }
+            rotation[largestRotIndex] = Math.sqrt(1.0 - sum_squares);
+        }
 
         // Store position
         (columns[0].data as Float32Array)[splatIndex] = x;
@@ -185,11 +204,17 @@ const readSPZ = async (fileHandle: FileHandle): Promise<SplatData> => {
         (columns[9].data as Float32Array)[splatIndex] = Math.log(normalizedOpacity / (1.0 - normalizedOpacity));
 
         // Store rotation quaternion (convert from uint8 [0,255] to float [-1,1])
-        const rot1Norm = (rot1 / 127.5) - 1.0;
-        const rot2Norm = (rot2 / 127.5) - 1.0;
-        const rot3Norm = (rot3 / 127.5) - 1.0;
-        const rotationDot = rot1Norm * rot1Norm + rot2Norm * rot2Norm + rot3Norm * rot3Norm;
-        const rot0Norm = Math.sqrt(Math.max(0.0, 1.0 - rotationDot));
+
+        let rot0Norm = 0.0;
+        const rot1Norm = (rotation[1] / 127.5) - 1.0;
+        const rot2Norm = (rotation[2] / 127.5) - 1.0;
+        const rot3Norm = (rotation[3] / 127.5) - 1.0;
+        if (version === 2) {
+            const rotationDot = rot1Norm * rot1Norm + rot2Norm * rot2Norm + rot3Norm * rot3Norm;
+            rot0Norm = Math.sqrt(Math.max(0.0, 1.0 - rotationDot));
+        } else if (version === 3) {
+            rot0Norm = (rotation[0] / 127.5) - 1.0;
+        }
 
         (columns[10].data as Float32Array)[splatIndex] = rot0Norm;
         (columns[11].data as Float32Array)[splatIndex] = rot1Norm;
