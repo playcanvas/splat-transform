@@ -9,7 +9,7 @@
 SplatTransform is an open source CLI tool for converting and editing Gaussian splats. It can:
 
 📥 Read PLY, Compressed PLY, SPLAT, KSPLAT formats  
-📤 Write PLY, Compressed PLY, CSV, and SOG formats  
+📤 Write PLY, Compressed PLY, CSV, SOG and HTML viewer formats  
 🔗 Merge multiple splats  
 🔄 Apply transformations to input splats  
 🎛️ Filter out Gaussians or spherical harmonic bands
@@ -33,7 +33,7 @@ npm install -g @playcanvas/splat-transform
 ## Usage
 
 ```bash
-splat-transform [GLOBAL]  <input.{ply|compressed.ply|splat|ksplat}> [ACTIONS]  ...  <output.{ply|compressed.ply|sog|meta.json|csv}> [ACTIONS]
+splat-transform [GLOBAL]  <input.{ply|compressed.ply|splat|ksplat}> [ACTIONS]  ...  <output.{ply|compressed.ply|sog|meta.json|csv|html}> [ACTIONS]
 ```
 
 **Key points:**
@@ -54,6 +54,7 @@ splat-transform [GLOBAL]  <input.{ply|compressed.ply|splat|ksplat}> [ACTIONS]  .
 - `.sog` - SOG bundled format
 - `meta.json` - SOG unbundled format (JSON + WebP images)
 - `.csv` - Comma-separated values
+- `.html` - supersplat standalone html viewer app
 
 ## Actions
 
@@ -64,6 +65,8 @@ Actions can be repeated and applied in any order:
 -r, --rotate     x,y,z                  Rotate splats by Euler angles (deg)
 -s, --scale      x                      Uniformly scale splats by factor x
 -n, --filterNaN                         Remove any Gaussian containing NaN/Inf
+-a, --camera                            Camera location ( for viewer generation )
+-e, --target                            Target location ( for viewer generation )
 -c, --filterByValue name,cmp,value      Keep splats where <name> <cmp> <value>
                                         cmp ∈ {lt,lte,gt,gte,eq,neq}
 -b, --filterBands  {0|1|2|3}            Strip spherical-harmonic bands > N
@@ -105,6 +108,9 @@ splat-transform input.ply output.sog
 
 # Convert to SOG unbundled format
 splat-transform input.ply output/meta.json
+
+# Convert to supersplat-html-viewer with target and camera location
+splat-transform -a 0,0,0 -e 0,0,10 input.ply output.html
 ```
 
 ### Transformations

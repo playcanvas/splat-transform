@@ -14,6 +14,7 @@ import { readPly } from './readers/read-ply';
 import { readSplat } from './readers/read-splat';
 import { writeCompressedPly } from './writers/write-compressed-ply';
 import { writeCsv } from './writers/write-csv';
+import { writeHtmlApp } from './writers/write-html-app';
 import { writePly } from './writers/write-ply';
 import { writeSog } from './writers/write-sog';
 
@@ -22,7 +23,9 @@ type Options = {
     help: boolean,
     version: boolean,
     gpu: boolean,
-    iterations: number
+    iterations: number,
+    camera: Vec3,
+    target: Vec3
 };
 
 const readFile = async (filename: string) => {
@@ -66,6 +69,8 @@ const getOutputFormat = (filename: string) => {
         return 'compressed-ply';
     } else if (lowerFilename.endsWith('.ply')) {
         return 'ply';
+    } else if (lowerFilename.endsWith('.html')) {
+        return 'html';
     }
 
     throw new Error(`Unsupported output file type: ${filename}`);
@@ -110,6 +115,15 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
                     dataTable: dataTable
                 }]
             });
+            break;
+        case 'html':
+            await writeHtmlApp(outputFile, {
+                comments: [],
+                elements: [{
+                    name: 'vertex',
+                    dataTable: dataTable
+                }]
+            }, options.camera, options.target);
             break;
     }
 
@@ -195,6 +209,7 @@ const parseArguments = () => {
         tokens: true,
         strict: true,
         allowPositionals: true,
+        allowNegative: true,
         options: {
             // global options
             overwrite: { type: 'boolean', short: 'w' },
@@ -207,6 +222,8 @@ const parseArguments = () => {
             translate: { type: 'string', short: 't', multiple: true },
             rotate: { type: 'string', short: 'r', multiple: true },
             scale: { type: 'string', short: 's', multiple: true },
+            camera: { type: 'string', short: 'a', multiple: true },
+            target: { type: 'string', short: 'e', multiple: true },
             filterNaN: { type: 'boolean', short: 'n', multiple: true },
             filterByValue: { type: 'string', short: 'c', multiple: true },
             filterBands: { type: 'string', short: 'b', multiple: true }
@@ -256,7 +273,9 @@ const parseArguments = () => {
         help: v.help ?? false,
         version: v.version ?? false,
         gpu: !(v['no-gpu'] ?? false),
-        iterations: parseInteger(v.iterations ?? '10')
+        iterations: parseInteger(v.iterations ?? '10'),
+        camera: parseVec3(v.camera?.[0] ?? '0,0,0'),
+        target: parseVec3(v.target?.[0] ?? '0,0,0')
     };
 
     for (const t of tokens) {
@@ -284,6 +303,18 @@ const parseArguments = () => {
                     current.processActions.push({
                         kind: 'scale',
                         value: parseNumber(t.value)
+                    });
+                    break;
+                case 'camera':
+                    current.processActions.push({
+                        kind: 'camera',
+                        value: options.camera
+                    });
+                    break;
+                case 'target':
+                    current.processActions.push({
+                        kind: 'target',
+                        value: options.target
                     });
                     break;
                 case 'filterNaN':
@@ -351,6 +382,8 @@ ACTIONS (can be repeated, in any order)
     -b, --filterBands  {0|1|2|3}            Strip spherical-harmonic bands > N
 
 GLOBAL OPTIONS
+    -a, --camera    x,y,z                     Set the camera position
+    -e, --target    x,y,z                     Set the target position
     -w, --overwrite                         Overwrite output file if it already exists. Default is false.
     -h, --help                              Show this help and exit.
     -v, --version                           Show version and exit.
@@ -363,6 +396,9 @@ EXAMPLES
 
     # Chain two inputs and write compressed output, overwriting if necessary
     splat-transform -w cloudA.ply -r 0,90,0 cloudB.ply -s 2 merged.compressed.ply
+
+    # Create a html app with a custom camera and target
+    splat-transform -a 0,0,0 -e 0,0,10 bunny.ply bunny_app.html
 `;
 
 const main = async () => {
