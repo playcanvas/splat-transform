@@ -134,7 +134,7 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     const bTree = new BTree(centroidsTable);
 
     // approximate number of gaussians we'll place into file units
-    const binSize = 128 * 1024;
+    const binSize = 512 * 1024;
     const binDim = 16;
 
     // map of lod -> fileBin[]
