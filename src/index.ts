@@ -12,9 +12,11 @@ import { isCompressedPly, decompressPly } from './readers/decompress-ply';
 import { readKsplat } from './readers/read-ksplat';
 import { readPly } from './readers/read-ply';
 import { readSplat } from './readers/read-splat';
+import { readSpz } from './readers/read-spz';
 import { writeCompressedPly } from './writers/write-compressed-ply';
 import { writeCsv } from './writers/write-csv';
 import { writeLod } from './writers/write-lod';
+import { writeHtml } from './writers/write-html';
 import { writePly } from './writers/write-ply';
 import { writeSog } from './writers/write-sog';
 
@@ -23,7 +25,9 @@ type Options = {
     help: boolean,
     version: boolean,
     gpu: boolean,
-    iterations: number
+    iterations: number,
+    cameraPos: Vec3,
+    cameraTarget: Vec3
 };
 
 const readFile = async (filename: string) => {
@@ -47,6 +51,8 @@ const readFile = async (filename: string) => {
         } else {
             fileData = ply;
         }
+    } else if (lowerFilename.endsWith('.spz')) {
+        fileData = await readSpz(inputFile);
     } else {
         await inputFile.close();
         throw new Error(`Unsupported input file type: ${filename}`);
@@ -69,6 +75,8 @@ const getOutputFormat = (filename: string) => {
         return 'compressed-ply';
     } else if (lowerFilename.endsWith('.ply')) {
         return 'ply';
+    } else if (lowerFilename.endsWith('.html')) {
+        return 'html';
     }
 
     throw new Error(`Unsupported output file type: ${filename}`);
@@ -118,6 +126,15 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
                     dataTable: dataTable
                 }]
             });
+            break;
+        case 'html':
+            await writeHtml(outputFile, {
+                comments: [],
+                elements: [{
+                    name: 'vertex',
+                    dataTable: dataTable
+                }]
+            }, options.cameraPos, options.cameraTarget);
             break;
     }
 
@@ -203,6 +220,7 @@ const parseArguments = () => {
         tokens: true,
         strict: true,
         allowPositionals: true,
+        allowNegative: true,
         options: {
             // global options
             overwrite: { type: 'boolean', short: 'w' },
@@ -210,6 +228,8 @@ const parseArguments = () => {
             version: { type: 'boolean', short: 'v' },
             'no-gpu': { type: 'boolean', short: 'g' },
             iterations: { type: 'string', short: 'i' },
+            cameraPos: { type: 'string', short: 'p' },
+            cameraTarget: { type: 'string', short: 'e' },
 
             // per-file options
             translate: { type: 'string', short: 't', multiple: true },
@@ -265,7 +285,9 @@ const parseArguments = () => {
         help: v.help ?? false,
         version: v.version ?? false,
         gpu: !(v['no-gpu'] ?? false),
-        iterations: parseInteger(v.iterations ?? '10')
+        iterations: parseInteger(v.iterations ?? '10'),
+        cameraPos: parseVec3(v.cameraPos ?? '2,2,-2'),
+        cameraTarget: parseVec3(v.cameraTarget ?? '0,0,0')
     };
 
     for (const t of tokens) {
@@ -348,15 +370,15 @@ Apply geometric transforms & filters to Gaussian-splat point clouds
 ===================================================================
 
 USAGE
-  splat-transform [GLOBAL]  <input.{ply|splat|ksplat}> [ACTIONS]  ...  <output.{ply|compressed.ply|meta.json|csv}> [ACTIONS]
+  splat-transform [GLOBAL]  <input.{ply|splat|ksplat|spz}> [ACTIONS]  ...  <output.{ply|compressed.ply|meta.json|csv}> [ACTIONS]
 
   • Every time an input file appears, it becomes the current working set; the following
-    ACTIONS are applied in the order listed.  
+    ACTIONS are applied in the order listed.
   • The last file on the command line is treated as the output; anything after it is
     interpreted as actions that modify the final result.
 
 SUPPORTED INPUTS
-    .ply   .compressed.ply   .splat   .ksplat
+    .ply   .compressed.ply   .splat   .ksplat   .spz
 
 SUPPORTED OUTPUTS
     .ply   .compressed.ply   meta.json (SOG)   .sog   .csv
@@ -377,6 +399,8 @@ GLOBAL OPTIONS
     -v, --version                           Show version and exit.
     -g, --no-gpu                            Disable gpu when compressing spherical harmonics.
     -i, --iterations  <number>              Specify the number of iterations when compressing spherical harmonics. More iterations generally lead to better results. Default is 10.
+    -p, --cameraPos     x,y,z               Specify the viewer camera position. Default is 2,2,-2.
+    -e, --cameraTarget  x,y,z               Specify the viewer target position. Default is 0,0,0.
 
 EXAMPLES
     # Simple scale-then-translate
@@ -384,6 +408,9 @@ EXAMPLES
 
     # Chain two inputs and write compressed output, overwriting if necessary
     splat-transform -w cloudA.ply -r 0,90,0 cloudB.ply -s 2 merged.compressed.ply
+
+    # Create an HTML app with a custom camera and target
+    splat-transform -a 0,0,0 -e 0,0,10 bunny.ply bunny_app.html
 `;
 
 const main = async () => {

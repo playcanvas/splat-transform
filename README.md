@@ -3,13 +3,16 @@
 [![NPM Version](https://img.shields.io/npm/v/@playcanvas/splat-transform.svg)](https://www.npmjs.com/package/@playcanvas/splat-transform)
 [![NPM Downloads](https://img.shields.io/npm/dw/@playcanvas/splat-transform)](https://npmtrends.com/@playcanvas/splat-transform)
 [![License](https://img.shields.io/npm/l/@playcanvas/splat-transform.svg)](https://github.com/playcanvas/splat-transform/blob/main/LICENSE)
+[![Discord](https://img.shields.io/badge/Discord-5865F2?style=flat&logo=discord&logoColor=white&color=black)](https://discord.gg/RSaMRzg)
+[![Reddit](https://img.shields.io/badge/Reddit-FF4500?style=flat&logo=reddit&logoColor=white&color=black)](https://www.reddit.com/r/PlayCanvas)
+[![X](https://img.shields.io/badge/X-000000?style=flat&logo=x&logoColor=white&color=black)](https://x.com/intent/follow?screen_name=playcanvas)
 
 | [User Guide](https://developer.playcanvas.com/user-manual/gaussian-splatting/editing/splat-transform/) | [Blog](https://blog.playcanvas.com/) | [Forum](https://forum.playcanvas.com/) | [Discord](https://discord.gg/RSaMRzg) |
 
 SplatTransform is an open source CLI tool for converting and editing Gaussian splats. It can:
 
-📥 Read PLY, Compressed PLY, SPLAT, KSPLAT formats  
-📤 Write PLY, Compressed PLY, CSV, and SOG formats  
+📥 Read PLY, Compressed PLY, SPLAT, KSPLAT, SPZ formats  
+📤 Write PLY, Compressed PLY, CSV, SOG and HTML viewer formats  
 🔗 Merge multiple splats  
 🔄 Apply transformations to input splats  
 🎛️ Filter out Gaussians or spherical harmonic bands
@@ -33,7 +36,7 @@ npm install -g @playcanvas/splat-transform
 ## Usage
 
 ```bash
-splat-transform [GLOBAL]  <input.{ply|compressed.ply|splat|ksplat}> [ACTIONS]  ...  <output.{ply|compressed.ply|sog|meta.json|csv}> [ACTIONS]
+splat-transform [GLOBAL]  <input.{ply|compressed.ply|splat|ksplat}> [ACTIONS]  ...  <output.{ply|compressed.ply|sog|meta.json|csv|html}> [ACTIONS]
 ```
 
 **Key points:**
@@ -42,18 +45,17 @@ splat-transform [GLOBAL]  <input.{ply|compressed.ply|splat|ksplat}> [ACTIONS]  .
 
 ## Supported Formats
 
-**Input:**
-- `.ply` - Standard PLY format
-- `.compressed.ply` - Compressed PLY format (auto-detected and decompressed on read)
-- `.splat` - Binary splat format (antimatter15 format)
-- `.ksplat` - Compressed binary splat format (mkkellogg format)
-
-**Output:**
-- `.ply` - Standard PLY format
-- `.compressed.ply` - Compressed PLY format
-- `.sog` - SOG bundled format
-- `meta.json` - SOG unbundled format (JSON + WebP images)
-- `.csv` - Comma-separated values
+| Format | Input | Output | Description |
+| ------ | ----- | ------ | ----------- |
+| `.ply` | ✅ | ✅ | Standard PLY format |
+| `.compressed.ply` | ✅ | ✅ | Compressed PLY format (auto-detected and decompressed on read) |
+| `.ksplat` | ✅ | ❌ | Compressed splat format (mkkellogg format) |
+| `.splat` | ✅ | ❌ | Compressed splat format (antimatter15 format) |
+| `.spz` | ✅ | ❌ | Compressed splat format (Niantic format) |
+| `.sog` | ❌ | ✅ | Bundled super-compressed format (recommended) |
+| `meta.json` | ❌ | ✅ | Unbundled super-compressed format (also outputs `.webp` images) |
+| `.csv` | ❌ | ✅ | Comma-separated values spreadsheet |
+| `.html` | ❌ | ✅ | Standalone HTML viewer app |
 
 ## Actions
 
@@ -77,6 +79,8 @@ Actions can be repeated and applied in any order:
 -v, --version                           Show version and exit
 -g, --no-gpu                            Disable gpu when compressing spherical harmonics.
 -i, --iterations  <number>              Specify the number of iterations when compressing spherical harmonics. More iterations generally lead to better results. Default is 10.
+-p, --cameraPos                         Specify the viewer starting position. Default is 2,2,-2.
+-e, --cameraTarget                      Specify the viewer starting target. Default is 0,0,0.
 ```
 
 ## Examples
@@ -105,6 +109,9 @@ splat-transform input.ply output.sog
 
 # Convert to SOG unbundled format
 splat-transform input.ply output/meta.json
+
+# Convert to HTML viewer with target and camera location
+splat-transform -a 0,0,0 -e 0,0,10 input.ply output.html
 ```
 
 ### Transformations
@@ -140,7 +147,7 @@ splat-transform input.ply --filterBands 2 output.ply
 splat-transform -w cloudA.ply -r 0,90,0 cloudB.ply -s 2 merged.compressed.ply
 
 # Apply final transformations to combined result
-splat-transform input1.ply input2.ply output.ply -t 0,0,10 -s 0.5
+splat-transform input1.ply input2.ply output.ply -p 0,0,10 -e 0.5
 ```
 
 ## Getting Help
