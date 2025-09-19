@@ -105,6 +105,7 @@ const writeFile = async (filename: string, data: Uint8Array) => {
 };
 
 let webpEncoder: WebpEncoder;
+let gpuDevice: GpuDevice;
 
 const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFilename: string, shIterations = 10, shMethod: 'cpu' | 'gpu', indices = generateIndices(dataTable)) => {
     // initialize output stream
@@ -237,7 +238,9 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     }
     await write('quats.webp', quats);
 
-    const gpuDevice = shMethod === 'gpu' ? await createDevice() : null;
+    if (shMethod === 'gpu' && !gpuDevice) {
+        gpuDevice = await createDevice();
+    }
 
     // convert scale
     const scaleData = await cluster1d(
