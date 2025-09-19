@@ -223,27 +223,11 @@ const readSpz = async (fileHandle: FileHandle): Promise<SplatData> => {
 
         // Store spherical harmonics
         for (let i = 0; i < harmonicsComponentCount; i++) {
-            let channel;
-            let coeff;
-
-            // band 0 is packed together, then band 1, then band 2.
-            if (i < 9) {
-                channel = Math.floor(i / 3);
-                coeff = i % 3;
-            } else if (i < 24) {
-                channel = Math.floor((i - 9) / 5);
-                coeff = (i - 9) % 5 + 3;
-            } else {
-                // don't think 3 bands are supported, but here just in case
-                channel = Math.floor((i - 24) / 7);
-                coeff = (i - 24) % 7 + 8;
-            }
-
+            const channel = i % 3;
+            const coeff = Math.floor(i / 3);
             const col = channel * (harmonicsComponentCount / 3) + coeff;
-
-            // Stored as 8 bit signed integer contiguously
-            const shCoef = shView.getInt8(splatIndex * harmonicsComponentCount + i);
-            (columns[14 + col].data as Float32Array)[splatIndex] = shCoef;
+            const shCoef = shView.getUint8(splatIndex * harmonicsComponentCount + i);
+            (columns[14 + col].data as Float32Array)[splatIndex] = (shCoef - 128) / 128;
         }
     }
 
