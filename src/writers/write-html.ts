@@ -7,8 +7,7 @@ import { Vec3 } from 'playcanvas';
 import { writeCompressedPly } from './write-compressed-ply';
 import { PlyData } from '../readers/read-ply';
 
-
-const writeHtmlApp = async (fileHandle: FileHandle, plyData: PlyData, camera: Vec3, target: Vec3) => {
+const writeHtml = async (fileHandle: FileHandle, plyData: PlyData, camera: Vec3, target: Vec3) => {
     const pad = (text: string, spaces: number) => {
         const whitespace = ' '.repeat(spaces);
         return text.split('\n').map(line => whitespace + line).join('\n');
@@ -59,4 +58,4 @@ const writeHtmlApp = async (fileHandle: FileHandle, plyData: PlyData, camera: Ve
 
 };
 
-export { writeHtmlApp };
+export { writeHtml };

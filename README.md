@@ -65,8 +65,6 @@ Actions can be repeated and applied in any order:
 -r, --rotate     x,y,z                  Rotate splats by Euler angles (deg)
 -s, --scale      x                      Uniformly scale splats by factor x
 -n, --filterNaN                         Remove any Gaussian containing NaN/Inf
--a, --camera                            Camera location ( for viewer generation )
--e, --target                            Target location ( for viewer generation )
 -c, --filterByValue name,cmp,value      Keep splats where <name> <cmp> <value>
                                         cmp ∈ {lt,lte,gt,gte,eq,neq}
 -b, --filterBands  {0|1|2|3}            Strip spherical-harmonic bands > N
@@ -80,6 +78,8 @@ Actions can be repeated and applied in any order:
 -v, --version                           Show version and exit
 -g, --no-gpu                            Disable gpu when compressing spherical harmonics.
 -i, --iterations  <number>              Specify the number of iterations when compressing spherical harmonics. More iterations generally lead to better results. Default is 10.
+-p, --cameraPos                         Specify the viewer starting position. Default is 2,2,-2.
+-e, --cameraTarget                      Specify the viewer starting target. Default is 0,0,0.
 ```
 
 ## Examples
@@ -146,7 +146,7 @@ splat-transform input.ply --filterBands 2 output.ply
 splat-transform -w cloudA.ply -r 0,90,0 cloudB.ply -s 2 merged.compressed.ply
 
 # Apply final transformations to combined result
-splat-transform input1.ply input2.ply output.ply -t 0,0,10 -s 0.5
+splat-transform input1.ply input2.ply output.ply -p 0,0,10 -e 0.5
 ```
 
 ## Getting Help

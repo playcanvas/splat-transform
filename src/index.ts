@@ -14,7 +14,7 @@ import { readPly } from './readers/read-ply';
 import { readSplat } from './readers/read-splat';
 import { writeCompressedPly } from './writers/write-compressed-ply';
 import { writeCsv } from './writers/write-csv';
-import { writeHtmlApp } from './writers/write-html-app';
+import { writeHtml } from './writers/write-html';
 import { writePly } from './writers/write-ply';
 import { writeSog } from './writers/write-sog';
 
@@ -24,8 +24,8 @@ type Options = {
     version: boolean,
     gpu: boolean,
     iterations: number,
-    camera: Vec3,
-    target: Vec3
+    cameraPos: Vec3,
+    cameraTarget: Vec3
 };
 
 const readFile = async (filename: string) => {
@@ -117,13 +117,13 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
             });
             break;
         case 'html':
-            await writeHtmlApp(outputFile, {
+            await writeHtml(outputFile, {
                 comments: [],
                 elements: [{
                     name: 'vertex',
                     dataTable: dataTable
                 }]
-            }, options.camera, options.target);
+            }, options.cameraPos, options.cameraTarget);
             break;
     }
 
@@ -217,13 +217,13 @@ const parseArguments = () => {
             version: { type: 'boolean', short: 'v' },
             'no-gpu': { type: 'boolean', short: 'g' },
             iterations: { type: 'string', short: 'i' },
+            cameraPos: { type: 'string', short: 'p' },
+            cameraTarget: { type: 'string', short: 'e' },
 
             // file options
             translate: { type: 'string', short: 't', multiple: true },
             rotate: { type: 'string', short: 'r', multiple: true },
             scale: { type: 'string', short: 's', multiple: true },
-            camera: { type: 'string', short: 'a', multiple: true },
-            target: { type: 'string', short: 'e', multiple: true },
             filterNaN: { type: 'boolean', short: 'n', multiple: true },
             filterByValue: { type: 'string', short: 'c', multiple: true },
             filterBands: { type: 'string', short: 'b', multiple: true }
@@ -274,8 +274,8 @@ const parseArguments = () => {
         version: v.version ?? false,
         gpu: !(v['no-gpu'] ?? false),
         iterations: parseInteger(v.iterations ?? '10'),
-        camera: parseVec3(v.camera?.[0] ?? '0,0,0'),
-        target: parseVec3(v.target?.[0] ?? '0,0,0')
+        cameraPos: parseVec3(v.cameraPos ?? '2,2,-2'),
+        cameraTarget: parseVec3(v.cameraTarget ?? '0,0,0')
     };
 
     for (const t of tokens) {
@@ -303,18 +303,6 @@ const parseArguments = () => {
                     current.processActions.push({
                         kind: 'scale',
                         value: parseNumber(t.value)
-                    });
-                    break;
-                case 'camera':
-                    current.processActions.push({
-                        kind: 'camera',
-                        value: options.camera
-                    });
-                    break;
-                case 'target':
-                    current.processActions.push({
-                        kind: 'target',
-                        value: options.target
                     });
                     break;
                 case 'filterNaN':
@@ -382,13 +370,13 @@ ACTIONS (can be repeated, in any order)
     -b, --filterBands  {0|1|2|3}            Strip spherical-harmonic bands > N
 
 GLOBAL OPTIONS
-    -a, --camera    x,y,z                     Set the camera position
-    -e, --target    x,y,z                     Set the target position
     -w, --overwrite                         Overwrite output file if it already exists. Default is false.
     -h, --help                              Show this help and exit.
     -v, --version                           Show version and exit.
     -g, --no-gpu                            Disable gpu when compressing spherical harmonics.
     -i, --iterations  <number>              Specify the number of iterations when compressing spherical harmonics. More iterations generally lead to better results. Default is 10.
+    -p, --cameraPos     x,y,z               Specify the viewer camera position. Default is 2,2,-2.
+    -e, --cameraTarget  x,y,z               Specify the viewer target position. Default is 0,0,0.
 
 EXAMPLES
     # Simple scale-then-translate
