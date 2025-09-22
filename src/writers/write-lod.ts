@@ -100,21 +100,25 @@ const binIndices = (parent: BTreeNode, lod: TypedArray) => {
 
     // we've reached a leaf node, gather indices
     const recurse = (node: BTreeNode) => {
-        if (node.hasOwnProperty('index')) {
-            const lodValue = lod[node.index];
+        if (node.indices) {
 
-            if (!result.has(lodValue)) {
-                result.set(lodValue, [node.index]);
-            } else {
-                result.get(lodValue).push(node.index);
+            for (let i = 0; i < node.indices.length; ++i) {
+                const v = node.indices[i];
+                const lodValue = lod[v];
+
+                if (!result.has(lodValue)) {
+                    result.set(lodValue, [v]);
+                } else {
+                    result.get(lodValue).push(v);
+                }
             }
-        }
-
-        if (node.left) {
-            recurse(node.left);
-        }
-        if (node.right) {
-            recurse(node.right);
+        } else {
+            if (node.left) {
+                recurse(node.left);
+            }
+            if (node.right) {
+                recurse(node.right);
+            }
         }
     };
 
@@ -145,7 +149,7 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     let lodLevels = 0;
 
     const build = (node: BTreeNode): MetaNode => {
-        if (node.count > binSize || (node.aabb && node.aabb.largestDim() > binDim)) {
+        if (!node.indices && (node.count > binSize || (node.aabb && node.aabb.largestDim() > binDim))) {
             const children = [
                 build(node.left),
                 build(node.right)

@@ -1,76 +1,52 @@
-import { DataTable } from '../data-table';
+import { DataTable, TypedArray } from '../data-table';
 
-function argsortHuge(values: ArrayLike<number>, indices: Uint32Array, chunkSize = 2_000_000): void {
-    const n = indices.length;
-    if (n <= 1) return;
+// partition idx indices around the k-th largest element
+const quickselect = (data: TypedArray, idx: Uint32Array, k: number): number => {
+    const valAt = (p: number) => data[idx[p]];
+    const swap = (i: number, j: number) => {
+        const t = idx[i];
+        idx[i] = idx[j];
+        idx[j] = t;
+    };
 
-    interface Run { data: Uint32Array; pos: number; }
-    const runs: Run[] = [];
+    const n = idx.length;
+    let l = 0;
+    let r = n - 1;
 
-    for (let start = 0; start < n; start += chunkSize) {
-        const end = Math.min(start + chunkSize, n);
-        const chunk = new Uint32Array(end - start);
-        chunk.set(indices.subarray(start, end));
-        chunk.sort((a, b) => values[a] - values[b]);
-        runs.push({ data: chunk, pos: 0 });
+    for (; ;) {
+        if (r <= l + 1) {
+            if (r === l + 1 && valAt(r) < valAt(l)) swap(l, r);
+            return idx[k];
+        }
+
+        // Median-of-three pivot selection (using values via idx)
+        const mid = (l + r) >>> 1;
+        swap(mid, l + 1);
+        if (valAt(l) > valAt(r)) swap(l, r);
+        if (valAt(l + 1) > valAt(r)) swap(l + 1, r);
+        if (valAt(l) > valAt(l + 1)) swap(l, l + 1);
+
+        let i = l + 1;
+        let j = r;
+        const pivotIdxVal = valAt(l + 1);
+        const pivotIdx = idx[l + 1];
+
+        // Partition around pivot
+        for (; ;) {
+            do { i++; } while (i <= r && valAt(i) < pivotIdxVal);
+            do { j--; } while (j >= l && valAt(j) > pivotIdxVal);
+            if (j < i) break;
+            swap(i, j);
+        }
+
+        // Place pivot in its final position
+        idx[l + 1] = idx[j];
+        idx[j] = pivotIdx;
+
+        // Narrow to the side containing k
+        if (j >= k) r = j - 1;
+        if (j <= k) l = i;
     }
-
-    const out = new Uint32Array(n);
-
-    const heap: number[] = [];
-    const less = (i: number, j: number) => {
-        const ai = runs[i].data[runs[i].pos];
-        const aj = runs[j].data[runs[j].pos];
-        return values[ai] < values[aj];
-    };
-    const heapSwap = (i: number, j: number) => {
-        const tmp = heap[i];
-        heap[i] = heap[j];
-        heap[j] = tmp;
-    };
-    const siftUp = (i: number) => {
-        while (i) {
-            const p = (i - 1) >> 1;
-            if (!less(i, p)) break;
-            heapSwap(i, p);
-            i = p;
-        }
-    };
-    const siftDown = (i: number) => {
-        for (;;) {
-            const l = i * 2 + 1;
-            const r = l + 1;
-            let m = i;
-            if (l < heap.length && less(l, m)) m = l;
-            if (r < heap.length && less(r, m)) m = r;
-            if (m === i) break;
-            heapSwap(i, m);
-            i = m;
-        }
-    };
-
-    for (let k = 0; k < runs.length; k++) {
-        if (runs[k].pos < runs[k].data.length) {
-            heap.push(k);
-            siftUp(heap.length - 1);
-        }
-    }
-
-    for (let i = 0; i < n; i++) {
-        const top = heap[0];
-        out[i] = runs[top].data[runs[top].pos++];
-        if (runs[top].pos === runs[top].data.length) {
-            const last = heap.pop();
-            if (heap.length) {
-                heap[0] = last as number;
-                siftDown(0);
-            }
-        } else {
-            siftDown(0);
-        }
-    }
-
-    indices.set(out);
 }
 
 class Aabb {
@@ -122,9 +98,9 @@ class Aabb {
 }
 
 interface BTreeNode {
-    count: number;              // number of nodes including self
-    aabb?: Aabb;
-    index?: number;
+    count: number;
+    aabb: Aabb;
+    indices?: Uint32Array;       // only for leaf nodes    
     left?: BTreeNode;
     right?: BTreeNode;
 }
@@ -135,40 +111,39 @@ class BTree {
 
     constructor(centroids: DataTable) {
         const recurse = (indices: Uint32Array): BTreeNode => {
-            if (indices.length === 1) {
+            const aabb = new Aabb().fromCentroids(centroids, indices);
+
+            if (indices.length <= 256) {
                 return {
-                    count: 1,
-                    index: indices[0]
+                    count: indices.length,
+                    aabb,
+                    indices
                 };
             }
 
-            const aabb = new Aabb().fromCentroids(centroids, indices);
-
             const col = aabb.largestAxis();
             const values = centroids.columns[col].data;
+            const mid = indices.length >>> 1;
 
-            // sorting code that works for smaller arrays
-            // indices.sort((a, b) => values[a] - values[b]);
+            quickselect(values, indices, mid);
 
-            // sorting code that works for larger arrays instead
-            argsortHuge(values, indices);
-
-            const mid = indices.length >> 1;
             const left = recurse(indices.subarray(0, mid));
             const right = recurse(indices.subarray(mid));
 
             return {
-                count: 1 + left.count + right.count,
+                count: left.count + right.count,
                 aabb,
                 left,
                 right
             };
         };
 
-        const indices = new Uint32Array(centroids.numRows);
-        indices.forEach((v, i) => {
+        const { numRows } = centroids;
+        const indices = new Uint32Array(numRows);
+        for (let i = 0; i < numRows; ++i) {
             indices[i] = i;
-        });
+        }
+
         this.centroids = centroids;
         this.root = recurse(indices);
     }
