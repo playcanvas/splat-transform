@@ -275,7 +275,7 @@ const parseArguments = () => {
         overwrite: v.overwrite ?? false,
         help: v.help ?? false,
         version: v.version ?? false,
-        gpu: !(v['no-gpu'] ?? false),
+        gpu: (v as any).gpu ?? true,
         iterations: parseInteger(v.iterations ?? '10'),
         cameraPos: parseVec3(v.cameraPos ?? '2,2,-2'),
         cameraTarget: parseVec3(v.cameraTarget ?? '0,0,0')
