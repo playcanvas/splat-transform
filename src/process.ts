@@ -34,7 +34,13 @@ type FilterBands = {
     value: 0 | 1 | 2 | 3;
 };
 
-type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands;
+type Param = {
+    kind: 'param';
+    name: string;
+    value: string;
+};
+
+type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | Param;
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
@@ -126,6 +132,10 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
 
                     }).filter(c => c !== null));
                 }
+                break;
+            }
+            case 'param': {
+                // skip params
                 break;
             }
         }
