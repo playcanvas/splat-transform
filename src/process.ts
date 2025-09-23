@@ -34,12 +34,18 @@ type FilterBands = {
     value: 0 | 1 | 2 | 3;
 };
 
+type Param = {
+    kind: 'param';
+    name: string;
+    value: string;
+};
+
 type Lod = {
     kind: 'lod';
     value: number;
 };
 
-type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | Lod;
+type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | Param | Lod;
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
@@ -131,6 +137,10 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
 
                     }).filter(c => c !== null));
                 }
+                break;
+            }
+            case 'param': {
+                // skip params
                 break;
             }
             case 'lod': {

@@ -10,6 +10,7 @@ import { Column, DataTable, TypedArray } from './data-table';
 import { ProcessAction, processDataTable } from './process';
 import { isCompressedPly, decompressPly } from './readers/decompress-ply';
 import { readKsplat } from './readers/read-ksplat';
+import { readMjs, Param } from './readers/read-mjs';
 import { readPly } from './readers/read-ply';
 import { readSplat } from './readers/read-splat';
 import { readSpz } from './readers/read-spz';
@@ -30,35 +31,40 @@ type Options = {
     cameraTarget: Vec3
 };
 
-const readFile = async (filename: string) => {
-    console.log(`reading '${filename}'...`);
-    const inputFile = await open(filename, 'r');
-
+const readFile = async (filename: string, params: Param[]) => {
     const lowerFilename = filename.toLowerCase();
     let fileData;
 
-    if (lowerFilename.endsWith('.ksplat')) {
-        fileData = await readKsplat(inputFile);
-    } else if (lowerFilename.endsWith('.splat')) {
-        fileData = await readSplat(inputFile);
-    } else if (lowerFilename.endsWith('.ply')) {
-        const ply = await readPly(inputFile);
-        if (isCompressedPly(ply)) {
-            fileData = {
-                comments: ply.comments,
-                elements: [{ name: 'vertex', dataTable: decompressPly(ply) }]
-            };
-        } else {
-            fileData = ply;
-        }
-    } else if (lowerFilename.endsWith('.spz')) {
-        fileData = await readSpz(inputFile);
-    } else {
-        await inputFile.close();
-        throw new Error(`Unsupported input file type: ${filename}`);
-    }
+    console.log(`reading '${filename}'...`);
 
-    await inputFile.close();
+    if (lowerFilename.endsWith('.mjs')) {
+        fileData = await readMjs(filename, params);
+    } else {
+        const inputFile = await open(filename, 'r');
+
+        if (lowerFilename.endsWith('.ksplat')) {
+            fileData = await readKsplat(inputFile);
+        } else if (lowerFilename.endsWith('.splat')) {
+            fileData = await readSplat(inputFile);
+        } else if (lowerFilename.endsWith('.ply')) {
+            const ply = await readPly(inputFile);
+            if (isCompressedPly(ply)) {
+                fileData = {
+                    comments: ply.comments,
+                    elements: [{ name: 'vertex', dataTable: decompressPly(ply) }]
+                };
+            } else {
+                fileData = ply;
+            }
+        } else if (lowerFilename.endsWith('.spz')) {
+            fileData = await readSpz(inputFile);
+        } else {
+            await inputFile.close();
+            throw new Error(`Unsupported input file type: ${filename}`);
+        }
+
+        await inputFile.close();
+    }
     return fileData;
 };
 
@@ -238,6 +244,7 @@ const parseArguments = () => {
             filterNaN: { type: 'boolean', short: 'n', multiple: true },
             filterByValue: { type: 'string', short: 'c', multiple: true },
             filterBands: { type: 'string', short: 'b', multiple: true },
+            params: { type: 'string', short: 'P', multiple: true },
             lod: { type: 'string', short: 'l', multiple: true }
         }
     });
@@ -347,6 +354,18 @@ const parseArguments = () => {
 
                     break;
                 }
+                case 'params': {
+                    const params = t.value.split(',').map((p: string) => p.trim());
+                    for (const param of params) {
+                        const parts = param.split('=').map((p: string) => p.trim());
+                        current.processActions.push({
+                            kind: 'param',
+                            name: parts[0],
+                            value: parts[1] ?? ''
+                        });
+                    }
+                    break;
+                }
                 case 'lod': {
                     const lod = parseInteger(t.value);
                     if (lod < 0) {
@@ -378,7 +397,7 @@ USAGE
     interpreted as actions that modify the final result.
 
 SUPPORTED INPUTS
-    .ply   .compressed.ply   .splat   .ksplat   .spz
+    .ply   .compressed.ply   .splat   .ksplat   .spz   .mjs
 
 SUPPORTED OUTPUTS
     .ply   .compressed.ply   meta.json (SOG)   .sog   .csv
@@ -391,6 +410,7 @@ ACTIONS (can be repeated, in any order)
     -c, --filterByValue name,cmp,value      Keep splats where  <name> <cmp> <value>
                                             cmp ∈ {lt,lte,gt,gte,eq,neq}
     -b, --filterBands  {0|1|2|3}            Strip spherical-harmonic bands > N
+    -P, --params name=value[,name=value...] Pass parameters to .mjs generator script
     -l, --lod          N (N >= 0)           Specify the level of detail (non-negative integer)
 
 GLOBAL OPTIONS
@@ -411,6 +431,10 @@ EXAMPLES
 
     # Create an HTML app with a custom camera and target
     splat-transform -a 0,0,0 -e 0,0,10 bunny.ply bunny_app.html
+
+GENERATORS (beta)
+    # Generate a grid of splats using a custom .mjs generator
+    splat-transform gen-grid.mjs -P width=500,height=500,scale=0.1 grid.ply
 `;
 
 const main = async () => {
@@ -438,7 +462,13 @@ const main = async () => {
     try {
         // read, filter, process input files
         const inputFiles = (await Promise.all(inputArgs.map(async (inputArg) => {
-            const file = await readFile(resolve(inputArg.filename));
+            // extract params
+            const params = inputArg.processActions.filter(a => a.kind === 'param').map((p) => {
+                return { name: p.name, value: p.value };
+            });
+
+            // read input
+            const file = await readFile(resolve(inputArg.filename), params);
 
             // filter out non-gs data
             if (file.elements.length !== 1 || file.elements[0].name !== 'vertex') {

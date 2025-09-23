@@ -52,6 +52,7 @@ splat-transform [GLOBAL]  <input.{ply|compressed.ply|splat|ksplat}> [ACTIONS]  .
 | `.ksplat` | ✅ | ❌ | Compressed splat format (mkkellogg format) |
 | `.splat` | ✅ | ❌ | Compressed splat format (antimatter15 format) |
 | `.spz` | ✅ | ❌ | Compressed splat format (Niantic format) |
+| `.mjs` | ✅ | ❌ | Generate a scene using an mjs script (Beta) |
 | `.sog` | ❌ | ✅ | Bundled super-compressed format (recommended) |
 | `meta.json` | ❌ | ✅ | Unbundled super-compressed format (also outputs `.webp` images) |
 | `.csv` | ❌ | ✅ | Comma-separated values spreadsheet |
@@ -69,6 +70,7 @@ Actions can be repeated and applied in any order:
 -c, --filterByValue name,cmp,value      Keep splats where <name> <cmp> <value>
                                         cmp ∈ {lt,lte,gt,gte,eq,neq}
 -b, --filterBands  {0|1|2|3}            Strip spherical-harmonic bands > N
+-P, --params name=value[,name=value...] Pass parameters to .mjs generator script
 ```
 
 ## Global Options
@@ -148,6 +150,14 @@ splat-transform -w cloudA.ply -r 0,90,0 cloudB.ply -s 2 merged.compressed.ply
 
 # Apply final transformations to combined result
 splat-transform input1.ply input2.ply output.ply -p 0,0,10 -e 0.5
+```
+
+### Generators (Beta)
+
+Generator scripts can be used to synthesize gaussian splat data. See [gen-grid.mjs](generators/gen-grid.mjs) for an example.
+
+```bash
+splat-transform gen-grid.mjs -P width=10,height=10,scale=10,color=0.1 scenes/grid.ply -w
 ```
 
 ## Getting Help
