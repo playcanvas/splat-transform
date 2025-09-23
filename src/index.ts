@@ -433,7 +433,10 @@ const main = async () => {
     try {
         // read, filter, process input files
         const inputFiles = (await Promise.all(inputArgs.map(async (inputArg) => {
+            // extract params
             const params = inputArg.processActions.filter(a => a.kind === 'param').map((p) => { return { name: p.name, value: p.value }; });
+
+            // read input
             const file = await readFile(resolve(inputArg.filename), params);
 
             // filter out non-gs data
