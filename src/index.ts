@@ -236,7 +236,7 @@ const parseArguments = () => {
             filterNaN: { type: 'boolean', short: 'n', multiple: true },
             filterByValue: { type: 'string', short: 'c', multiple: true },
             filterBands: { type: 'string', short: 'b', multiple: true },
-            param: { type: 'string', short: 'P', multiple: true }
+            params: { type: 'string', short: 'P', multiple: true }
         }
     });
 
@@ -345,13 +345,16 @@ const parseArguments = () => {
 
                     break;
                 }
-                case 'param': {
-                    const parts = t.value.split('=').map((p: string) => p.trim());
-                    current.processActions.push({
-                        kind: 'param',
-                        name: parts[0],
-                        value: parts[1] ?? ''
-                    });
+                case 'params': {
+                    const params = t.value.split(',').map((p: string) => p.trim());
+                    for (const param of params) {
+                        const parts = param.split('=').map((p: string) => p.trim());
+                        current.processActions.push({
+                            kind: 'param',
+                            name: parts[0],
+                            value: parts[1] ?? ''
+                        });
+                    }
                     break;
                 }
             }
