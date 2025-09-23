@@ -1,4 +1,4 @@
-import { randomBytes } from "crypto";
+import { randomBytes } from 'crypto';
 import { lstat, open, rename } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { exit, hrtime } from 'node:process';
@@ -36,12 +36,12 @@ const fileExists = async (filename: string) => {
         await lstat(filename);
         return true;
     } catch (e: any) {
-        if (e?.code === "ENOENT") {
+        if (e?.code === 'ENOENT') {
             return false;
         }
         throw e; // real error (permissions, etc)
     }
-}
+};
 
 const readFile = async (filename: string, params: Param[]) => {
     const lowerFilename = filename.toLowerCase();
@@ -105,7 +105,7 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
     console.log(`writing '${filename}'...`);
 
     // write to a temporary file and rename on success
-    const tmpFilename = `.${basename(filename)}.${process.pid}.${Date.now()}.${randomBytes(6).toString("hex")}.tmp`;
+    const tmpFilename = `.${basename(filename)}.${process.pid}.${Date.now()}.${randomBytes(6).toString('hex')}.tmp`;
     const tmpPathname = join(dirname(filename), tmpFilename);
 
     // open the tmp output file
