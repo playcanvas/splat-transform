@@ -377,7 +377,7 @@ USAGE
     interpreted as actions that modify the final result.
 
 SUPPORTED INPUTS
-    .ply   .compressed.ply   .splat   .ksplat   .spz
+    .ply   .compressed.ply   .splat   .ksplat   .spz   .mjs
 
 SUPPORTED OUTPUTS
     .ply   .compressed.ply   meta.json (SOG)   .sog   .csv
@@ -390,6 +390,7 @@ ACTIONS (can be repeated, in any order)
     -c, --filterByValue name,cmp,value      Keep splats where  <name> <cmp> <value>
                                             cmp ∈ {lt,lte,gt,gte,eq,neq}
     -b, --filterBands  {0|1|2|3}            Strip spherical-harmonic bands > N
+    -P, --params name=value[,name=value...] Pass parameters to .mjs generator script
 
 GLOBAL OPTIONS
     -w, --overwrite                         Overwrite output file if it already exists. Default is false.
@@ -409,6 +410,10 @@ EXAMPLES
 
     # Create an HTML app with a custom camera and target
     splat-transform -a 0,0,0 -e 0,0,10 bunny.ply bunny_app.html
+
+GENERATORS (beta)
+    # Generate a grid of splats using a custom .mjs generator
+    splat-transform gen-grid.mjs -P width=500,height=500,scale=0.1 grid.ply
 `;
 
 const main = async () => {

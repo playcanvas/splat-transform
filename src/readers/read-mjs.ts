@@ -25,7 +25,7 @@ const readMjs = async (filename: string, params: Param[]): Promise<SplatData> =>
         throw new Error(`Failed to load module: ${filename}`);
     }
 
-    const generator = await (module.Generator?.create(params) as Generator);
+    const generator = (await module.Generator?.create(params)) as Generator;
 
     if (!generator) {
         throw new Error(`Failed to create Generator instance: ${filename}`);
