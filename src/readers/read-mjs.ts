@@ -14,7 +14,6 @@ type Param = {
 };
 
 type Generator = {
-    constructor(params: Param[]): void;
     count: number;
     columnNames: string[];
     getRow: (index: number, row: any) => void;
