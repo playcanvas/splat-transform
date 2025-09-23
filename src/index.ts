@@ -1,5 +1,6 @@
-import { mkdir, open } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { randomBytes } from 'crypto';
+import { lstat, mkdir, open, rename } from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
 import { exit, hrtime } from 'node:process';
 import { parseArgs } from 'node:util';
 
@@ -29,6 +30,18 @@ type Options = {
     iterations: number,
     cameraPos: Vec3,
     cameraTarget: Vec3
+};
+
+const fileExists = async (filename: string) => {
+    try {
+        await lstat(filename);
+        return true;
+    } catch (e: any) {
+        if (e?.code === 'ENOENT') {
+            return false;
+        }
+        throw e; // real error (permissions, etc)
+    }
 };
 
 const readFile = async (filename: string, params: Param[]) => {
@@ -89,62 +102,61 @@ const getOutputFormat = (filename: string) => {
 };
 
 const writeFile = async (filename: string, dataTable: DataTable, options: Options) => {
-
+    // get the output format, throws on failure
     const outputFormat = getOutputFormat(filename);
-
-    // open the output file
-    let outputFile;
-
-    try {
-        // ensure output folder exists
-        await mkdir(dirname(filename), { recursive: true });
-        outputFile = await open(filename, options.overwrite ? 'w' : 'wx');
-    } catch (err) {
-        if (err.code === 'EEXIST') {
-            console.error(`File '${filename}' already exists. Use -w option to overwrite.`);
-            exit(1);
-        } else {
-            throw err;
-        }
-    }
 
     console.log(`writing '${filename}'...`);
 
-    // write the data
-    switch (outputFormat) {
-        case 'csv':
-            await writeCsv(outputFile, dataTable);
-            break;
-        case 'sog':
-            await writeSog(outputFile, dataTable, filename, options.iterations, options.gpu ? 'gpu' : 'cpu');
-            break;
-        case 'lod':
-            await writeLod(outputFile, dataTable, filename, options.iterations, options.gpu ? 'gpu' : 'cpu');
-            break;
-        case 'compressed-ply':
-            await writeCompressedPly(outputFile, dataTable);
-            break;
-        case 'ply':
-            await writePly(outputFile, {
-                comments: [],
-                elements: [{
-                    name: 'vertex',
-                    dataTable: dataTable
-                }]
-            });
-            break;
-        case 'html':
-            await writeHtml(outputFile, {
-                comments: [],
-                elements: [{
-                    name: 'vertex',
-                    dataTable: dataTable
-                }]
-            }, options.cameraPos, options.cameraTarget);
-            break;
+    // write to a temporary file and rename on success
+    const tmpFilename = `.${basename(filename)}.${process.pid}.${Date.now()}.${randomBytes(6).toString('hex')}.tmp`;
+    const tmpPathname = join(dirname(filename), tmpFilename);
+
+    // open the tmp output file
+    const outputFile = await open(tmpPathname, 'wx');
+
+    try {
+        // write the file data
+        switch (outputFormat) {
+            case 'csv':
+                await writeCsv(outputFile, dataTable);
+                break;
+            case 'sog':
+                await writeSog(outputFile, dataTable, filename, options.iterations, options.gpu ? 'gpu' : 'cpu');
+                break;
+            case 'lod':
+                await writeLod(outputFile, dataTable, filename, options.iterations, options.gpu ? 'gpu' : 'cpu');
+                break;
+            case 'compressed-ply':
+                await writeCompressedPly(outputFile, dataTable);
+                break;
+            case 'ply':
+                await writePly(outputFile, {
+                    comments: [],
+                    elements: [{
+                        name: 'vertex',
+                        dataTable: dataTable
+                    }]
+                });
+                break;
+            case 'html':
+                await writeHtml(outputFile, {
+                    comments: [],
+                    elements: [{
+                        name: 'vertex',
+                        dataTable: dataTable
+                    }]
+                }, options.cameraPos, options.cameraTarget);
+                break;
+        }
+
+        // flush to disk
+        await outputFile.sync();
+    } finally {
+        await outputFile.close().catch(() => { /* ignore */ });
     }
 
-    await outputFile.close();
+    // atomically rename to target filename
+    await rename(tmpPathname, filename);
 };
 
 // combine multiple tables into one
@@ -458,6 +470,12 @@ const main = async () => {
 
     const inputArgs = files.slice(0, -1);
     const outputArg = files[files.length - 1];
+
+    // check overwrite before doing any work
+    if (!options.overwrite && await fileExists(outputArg.filename)) {
+        console.error(`File '${outputArg.filename}' already exists. Use -w option to overwrite.`);
+        exit(1);
+    }
 
     try {
         // read, filter, process input files
