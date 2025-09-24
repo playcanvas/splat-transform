@@ -128,6 +128,9 @@ const binIndices = (parent: BTreeNode, lod: TypedArray) => {
 };
 
 const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFilename: string, shIterations = 10, shMethod: 'cpu' | 'gpu') => {
+    // ensure top-level output folder exists
+    await mkdir(dirname(outputFilename), { recursive: true });
+
     // construct a kd-tree based on centroids from all lods
     const centroidsTable = new DataTable([
         dataTable.getColumnByName('x'),
@@ -197,7 +200,7 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
         }
 
         // combine indices from all lods so we can calcuate bound over them
-        let allIndices: number[] = []
+        let allIndices: number[] = [];
         for (const [lodValue, indices] of bins) {
             allIndices = allIndices.concat(indices);
         }
@@ -226,6 +229,10 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
                 continue;
             }
 
+            // ensure output folder exists before any files are written
+            const pathname = resolve(dirname(outputFilename), `${lodValue}_${i}/meta.json`);
+            await mkdir(dirname(pathname), { recursive: true });
+
             // generate an ordering for each subunit and append it to the unit's indices
             const totalIndices = fileUnit.reduce((acc, curr) => acc + curr.length, 0);
             const indices = new Uint32Array(totalIndices);
@@ -244,11 +251,6 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
             }
 
             // write file unit to sog
-            const pathname = resolve(dirname(outputFilename), `${lodValue}_${i}/meta.json`);
-
-            // ensure output folder exists
-            await mkdir(dirname(pathname), { recursive: true });
-
             const outputFile = await open(pathname, 'w');
 
             console.log(`writing ${pathname}...`);
