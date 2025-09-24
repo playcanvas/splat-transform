@@ -119,7 +119,7 @@ const createDevice = async () => {
 
     const graphicsDevice = new WebgpuGraphicsDevice(canvas, {
         antialias: false,
-        depth: true,
+        depth: false,
         stencil: false
     });
 
