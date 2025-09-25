@@ -211,7 +211,7 @@ const readSog = async (fileHandle: FileHandle, sourceName?: string): Promise<Sog
         opCol[i] = sigmoidInv(c0[o + 3] / 255);
     }
 
-    // Note: SH higher bands (shN) are currently not reconstructed into columns, matching writer omission.
+    // Note: If present, SH higher bands (shN) are reconstructed into columns below.
     // Higher-order SH (optional)
     if (meta.shN) {
         const { bands, count: paletteCount } = meta.shN;
