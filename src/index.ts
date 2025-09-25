@@ -13,6 +13,7 @@ import { isCompressedPly, decompressPly } from './readers/decompress-ply';
 import { readKsplat } from './readers/read-ksplat';
 import { readMjs, Param } from './readers/read-mjs';
 import { readPly } from './readers/read-ply';
+import { readSog } from './readers/read-sog';
 import { readSplat } from './readers/read-splat';
 import { readSpz } from './readers/read-spz';
 import { writeCompressedPly } from './writers/write-compressed-ply';
@@ -58,6 +59,8 @@ const readFile = async (filename: string, params: Param[]) => {
             fileData = await readKsplat(inputFile);
         } else if (lowerFilename.endsWith('.splat')) {
             fileData = await readSplat(inputFile);
+        } else if (lowerFilename.endsWith('.sog') || lowerFilename.endsWith('meta.json')) {
+            fileData = await readSog(inputFile, filename);
         } else if (lowerFilename.endsWith('.ply')) {
             const ply = await readPly(inputFile);
             if (isCompressedPly(ply)) {
