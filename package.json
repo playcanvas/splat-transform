@@ -46,7 +46,7 @@
   },
   "dependencies": {
     "@playcanvas/supersplat-viewer": "^1.5.0",
-    "webgpu": "^0.3.7"
+    "webgpu": "^0.3.8"
   },
   "scripts": {
     "build": "rollup -c",
