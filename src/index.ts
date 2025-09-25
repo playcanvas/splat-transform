@@ -245,6 +245,8 @@ const parseArguments = () => {
 
             // file options
             translate: { type: 'string', short: 't', multiple: true },
+            filterBox: { type: 'string', short: 'x', multiple: true },
+            filterSphere: { type: 'string', short: 'o', multiple: true },
             rotate: { type: 'string', short: 'r', multiple: true },
             scale: { type: 'string', short: 's', multiple: true },
             filterNaN: { type: 'boolean', short: 'n', multiple: true },
@@ -359,6 +361,32 @@ const parseArguments = () => {
 
                     break;
                 }
+                case 'filterBox': {
+                    const parts = t.value.split(':').map((p: string) => p.trim());
+                    if (parts.length !== 2 && parts.length !== 3) {
+                        throw new Error(`Invalid filterBox value: ${t.value}`);
+                    }
+                    current.processActions.push({
+                        kind: 'filterBox',
+                        value: parseVec3(parts[0]),
+                        dimensions: parseVec3(parts[1]),
+                        invert: parts.length === 3 && parts[2].includes('!')
+                    });
+                    break;
+                }
+                case 'filterSphere': {
+                    const parts = t.value.split(':').map((p: string) => p.trim());
+                    if (parts.length !== 2 && parts.length !== 3) {
+                        throw new Error(`Invalid filterSphere value: ${t.value}`);
+                    }
+                    current.processActions.push({
+                        kind: 'filterSphere',
+                        value: parseVec3(parts[0]),
+                        radius: parseNumber(parts[1]),
+                        invert: parts.length === 3 && parts[2].includes('!')
+                    });
+                    break;
+                }
                 case 'params': {
                     const params = t.value.split(',').map((p: string) => p.trim());
                     for (const param of params) {
@@ -403,6 +431,8 @@ ACTIONS (can be repeated, in any order)
     -n, --filterNaN                         Remove any Gaussian containing NaN/Inf
     -c, --filterByValue name,cmp,value      Keep splats where  <name> <cmp> <value>
                                             cmp ∈ {lt,lte,gt,gte,eq,neq}
+    -x, --filterBox topLeft:dimensions:invert Filter gaussian within a box starting a topLeft corner and given dimension
+    -o, --filterSphere center:radius:invert Filter gaussians within a sphere centered at center with certain radius
     -b, --filterBands  {0|1|2|3}            Strip spherical-harmonic bands > N
     -P, --params name=value[,name=value...] Pass parameters to .mjs generator script
 

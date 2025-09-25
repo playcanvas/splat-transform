@@ -34,13 +34,28 @@ type FilterBands = {
     value: 0 | 1 | 2 | 3;
 };
 
+type FilterBox = {
+    kind: 'filterBox';
+    value: Vec3;
+    dimensions: Vec3;
+    invert: boolean;
+};
+
+type FilterSphere = {
+    kind: 'filterSphere';
+    value: Vec3;
+    radius: number;
+    invert: boolean;
+};
+
 type Param = {
     kind: 'param';
     name: string;
     value: string;
 };
 
-type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | Param;
+type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | Param | FilterBox | FilterSphere;
+
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
@@ -132,6 +147,30 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
 
                     }).filter(c => c !== null));
                 }
+                break;
+            }
+            case 'filterBox': {
+                const predicate = (row: any, rowIndex: number) => {
+                    const x = row.x;
+                    const y = row.y;
+                    const z = row.z;
+                    // Box is defined by a top-left starting points and dimensions
+                    const result = x >= processAction.value.x && x <= processAction.value.x + processAction.dimensions.x && y >= processAction.value.y && y <= processAction.value.y + processAction.dimensions.y && z >= processAction.value.z && z <= processAction.value.z + processAction.dimensions.z;
+                    return processAction.invert ? !result : result;
+                };
+                result = filter(result, predicate);
+                break;
+            }
+            case 'filterSphere': {
+                const predicate = (row: any, rowIndex: number) => {
+                    const x = row.x;
+                    const y = row.y;
+                    const z = row.z;
+                    // Distance from center < radius
+                    const result = Math.sqrt((x - processAction.value.x) ** 2 + (y - processAction.value.y) ** 2 + (z - processAction.value.z) ** 2) < processAction.radius;
+                    return processAction.invert ? !result : result;
+                };
+                result =  filter(result, predicate);
                 break;
             }
             case 'param': {
