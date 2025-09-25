@@ -11,8 +11,8 @@
 
 SplatTransform is an open source CLI tool for converting and editing Gaussian splats. It can:
 
-📥 Read PLY, Compressed PLY, SPLAT, KSPLAT, SPZ formats  
-📤 Write PLY, Compressed PLY, CSV, SOG and HTML viewer formats  
+📥 Read PLY, Compressed PLY, SPLAT, KSPLAT, SPZ, SOG (bundled .sog or unbundled meta.json) formats  
+📤 Write PLY, Compressed PLY, CSV, SOG (bundled or unbundled) and HTML viewer formats  
 🔗 Merge multiple splats  
 🔄 Apply transformations to input splats  
 🎛️ Filter out Gaussians or spherical harmonic bands
@@ -36,7 +36,7 @@ npm install -g @playcanvas/splat-transform
 ## Usage
 
 ```bash
-splat-transform [GLOBAL]  <input.{ply|compressed.ply|splat|ksplat}> [ACTIONS]  ...  <output.{ply|compressed.ply|sog|meta.json|csv|html}> [ACTIONS]
+splat-transform [GLOBAL]  <input.{ply|compressed.ply|splat|ksplat|spz|sog|meta.json|mjs}> [ACTIONS]  ...  <output.{ply|compressed.ply|sog|meta.json|csv|html}> [ACTIONS]
 ```
 
 **Key points:**
@@ -53,8 +53,8 @@ splat-transform [GLOBAL]  <input.{ply|compressed.ply|splat|ksplat}> [ACTIONS]  .
 | `.splat` | ✅ | ❌ | Compressed splat format (antimatter15 format) |
 | `.spz` | ✅ | ❌ | Compressed splat format (Niantic format) |
 | `.mjs` | ✅ | ❌ | Generate a scene using an mjs script (Beta) |
-| `.sog` | ❌ | ✅ | Bundled super-compressed format (recommended) |
-| `meta.json` | ❌ | ✅ | Unbundled super-compressed format (also outputs `.webp` images) |
+| `.sog` | ✅ | ✅ | Bundled super-compressed format (recommended) |
+| `meta.json` | ✅ | ✅ | Unbundled super-compressed format (accompanied by `.webp` textures) |
 | `.csv` | ❌ | ✅ | Comma-separated values spreadsheet |
 | `.html` | ❌ | ✅ | Standalone HTML viewer app |
 ## Actions
@@ -110,6 +110,12 @@ splat-transform input.ply output.sog
 
 # Convert to SOG unbundled format
 splat-transform input.ply output/meta.json
+
+# Convert from SOG (bundled) back to PLY
+splat-transform scene.sog restored.ply
+
+# Convert from SOG (unbundled folder) back to PLY
+splat-transform output/meta.json restored.ply
 
 # Convert to HTML viewer with target and camera location
 splat-transform -a 0,0,0 -e 0,0,10 input.ply output.html
