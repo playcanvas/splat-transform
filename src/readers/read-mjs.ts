@@ -20,7 +20,7 @@ type Generator = {
 };
 
 const readMjs = async (filename: string, params: Param[]): Promise<SplatData> => {
-    const module = await import(filename);
+    const module = await import(`file://${filename}`);
     if (!module) {
         throw new Error(`Failed to load module: ${filename}`);
     }
