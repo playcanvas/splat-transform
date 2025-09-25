@@ -111,6 +111,9 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
     const tmpFilename = `.${basename(filename)}.${process.pid}.${Date.now()}.${randomBytes(6).toString('hex')}.tmp`;
     const tmpPathname = join(dirname(filename), tmpFilename);
 
+    // ensure the target directory exists before opening the temporary file
+    await mkdir(dirname(filename), { recursive: true });
+
     // open the tmp output file
     const outputFile = await open(tmpPathname, 'wx');
 
