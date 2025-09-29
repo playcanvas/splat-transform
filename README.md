@@ -25,14 +25,6 @@ Install or update to the latest version:
 npm install -g @playcanvas/splat-transform
 ```
 
-> [!IMPORTANT]
-> **Windows Users:** You must have the debug version of the Microsoft Visual C++ runtime installed. This is because splat-transform currently depends on [Dawn](https://dawn.googlesource.com/dawn) which is built against the debug VC runtime. We have logged an [issue](https://issues.chromium.org/issues/443906265) against the Dawn project.
->
-> In the meantime, to work around this problem, you need to install the debug VC runtime as follows:
->
-> 1. Install [Visual Studio 2022 Community](https://visualstudio.microsoft.com/vs/community/)
-> 2. In the installer, select "Desktop development with C++"
-
 ## Usage
 
 ```bash

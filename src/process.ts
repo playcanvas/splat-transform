@@ -82,9 +82,16 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
                 transform(result, Vec3.ZERO, Quat.IDENTITY, processAction.value);
                 break;
             case 'filterNaN': {
+                const infOk = new Set(['opacity']);
+                const negInfOk = new Set(['scale_0', 'scale_1', 'scale_2']);
+                const columnNames = dataTable.columnNames;
+
                 const predicate = (row: any, rowIndex: number) => {
-                    for (const key in row) {
-                        if (!isFinite(row[key])) {
+                    for (const key of columnNames) {
+                        const value = row[key];
+                        if (!isFinite(value)) {
+                            if (value === -Infinity && (infOk.has(key) || negInfOk.has(key))) continue;
+                            if (value === Infinity && infOk.has(key)) continue;
                             return false;
                         }
                     }
