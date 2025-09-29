@@ -40,13 +40,13 @@
     "eslint-import-resolver-typescript": "^4.4.4",
     "playcanvas": "^2.11.8",
     "publint": "^0.3.13",
-    "rollup": "^4.52.2",
+    "rollup": "^4.52.3",
     "tslib": "^2.8.1",
     "typescript": "^5.9.2"
   },
   "dependencies": {
-    "@playcanvas/supersplat-viewer": "^1.5.0",
-    "webgpu": "^0.3.7"
+    "@playcanvas/supersplat-viewer": "^1.6.2",
+    "webgpu": "^0.3.8"
   },
   "scripts": {
     "build": "rollup -c",
