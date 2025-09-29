@@ -84,6 +84,11 @@ const calcBound = (dataTable: DataTable, indices: number[]): Aabb => {
         const m = b.getMin();
         const M = b.getMax();
 
+        if (!isFinite(m.x) || !isFinite(m.y) || !isFinite(m.z) || !isFinite(M.x) || !isFinite(M.y) || !isFinite(M.z)) {
+            console.warn('Skipping invalid bounding box:', { m, M, index });
+            continue;
+        }
+
         min[0] = Math.min(min[0], m.x);
         min[1] = Math.min(min[1], m.y);
         min[2] = Math.min(min[2], m.z);
