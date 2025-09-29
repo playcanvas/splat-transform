@@ -40,13 +40,13 @@ splat-transform [GLOBAL]  <input.{ply|compressed.ply|splat|ksplat|spz|sog|meta.j
 | Format | Input | Output | Description |
 | ------ | ----- | ------ | ----------- |
 | `.ply` | ✅ | ✅ | Standard PLY format |
+| `.sog` | ✅ | ✅ | Bundled super-compressed format (recommended) |
+| `meta.json` | ✅ | ✅ | Unbundled super-compressed format (accompanied by `.webp` textures) |
 | `.compressed.ply` | ✅ | ✅ | Compressed PLY format (auto-detected and decompressed on read) |
 | `.ksplat` | ✅ | ❌ | Compressed splat format (mkkellogg format) |
 | `.splat` | ✅ | ❌ | Compressed splat format (antimatter15 format) |
 | `.spz` | ✅ | ❌ | Compressed splat format (Niantic format) |
 | `.mjs` | ✅ | ❌ | Generate a scene using an mjs script (Beta) |
-| `.sog` | ✅ | ✅ | Bundled super-compressed format (recommended) |
-| `meta.json` | ✅ | ✅ | Unbundled super-compressed format (accompanied by `.webp` textures) |
 | `.csv` | ❌ | ✅ | Comma-separated values spreadsheet |
 | `.html` | ❌ | ✅ | Standalone HTML viewer app |
 ## Actions
