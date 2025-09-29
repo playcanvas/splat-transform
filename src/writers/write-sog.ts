@@ -8,7 +8,7 @@ import { FileWriter } from '../serialize/writer';
 import { ZipWriter } from '../serialize/zip-writer';
 import { kmeans } from '../utils/k-means';
 import { sigmoid } from '../utils/math';
-import { WebpEncoder } from '../utils/webp';
+import { WebPCodec } from '../utils/webp-codec';
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
@@ -104,7 +104,7 @@ const writeFile = async (filename: string, data: Uint8Array) => {
     await outputFile.close();
 };
 
-let webpEncoder: WebpEncoder;
+let webPCodec: WebPCodec;
 let gpuDevice: GpuDevice;
 
 const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFilename: string, shIterations = 10, shMethod: 'cpu' | 'gpu', indices = generateIndices(dataTable)) => {
@@ -126,11 +126,11 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
         console.log(`writing '${pathname}'...`);
 
         // construct the encoder on first use
-        if (!webpEncoder) {
-            webpEncoder = await WebpEncoder.create();
+        if (!webPCodec) {
+            webPCodec = await WebPCodec.create();
         }
 
-        const webp = await webpEncoder.encodeLosslessRGBA(data, w, h);
+        const webp = await webPCodec.encodeLosslessRGBA(data, w, h);
 
         if (zipWriter) {
             await zipWriter.file(filename, webp);

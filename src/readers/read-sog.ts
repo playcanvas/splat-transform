@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 
 import { Column, DataTable } from '../data-table';
 import { ZipReader } from '../serialize/zip-reader';
-import { WebpDecoder } from '../utils/webp-decode';
+import { WebPCodec } from '../utils/webp-codec';
 
 type SogData = {
     comments: string[];
@@ -85,7 +85,7 @@ const sigmoidInv = (y: number) => {
 };
 
 const readSog = async (fileHandle: FileHandle, sourceName?: string): Promise<SogData> => {
-    const decoder = await WebpDecoder.create();
+    const decoder = await WebPCodec.create();
     const stat = await fileHandle.stat();
 
     // Helper to read from bundle or folder
@@ -254,7 +254,10 @@ const readSog = async (fileHandle: FileHandle, sourceName?: string): Promise<Sog
 
     return {
         comments: [],
-        elements: [{ name: 'vertex', dataTable: new DataTable(columns) }]
+        elements: [{
+            name: 'vertex',
+            dataTable: new DataTable(columns)
+        }]
     };
 };
 
