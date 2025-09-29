@@ -34,6 +34,18 @@ type FilterBands = {
     value: 0 | 1 | 2 | 3;
 };
 
+type FilterBox = {
+    kind: 'filterBox';
+    min: Vec3;
+    max: Vec3;
+};
+
+type FilterSphere = {
+    kind: 'filterSphere';
+    center: Vec3;
+    radius: number;
+};
+
 type Param = {
     kind: 'param';
     name: string;
@@ -45,7 +57,7 @@ type Lod = {
     value: number;
 };
 
-type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | Param | Lod;
+type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | Param | Lod;
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
@@ -144,6 +156,25 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
 
                     }).filter(c => c !== null));
                 }
+                break;
+            }
+            case 'filterBox': {
+                const { min, max } = processAction;
+                const predicate = (row: any, rowIndex: number) => {
+                    const { x, y, z } = row;
+                    return x >= min.x && x <= max.x && y >= min.y && y <= max.y && z >= min.z && z <= max.z;
+                };
+                result = filter(result, predicate);
+                break;
+            }
+            case 'filterSphere': {
+                const { center, radius } = processAction;
+                const radiusSq = radius * radius;
+                const predicate = (row: any, rowIndex: number) => {
+                    const { x, y, z } = row;
+                    return (x - center.x) ** 2 + (y - center.y) ** 2 + (z - center.z) ** 2 < radiusSq;
+                };
+                result = filter(result, predicate);
                 break;
             }
             case 'param': {

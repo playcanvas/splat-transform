@@ -40,13 +40,13 @@ splat-transform [GLOBAL]  <input.{ply|compressed.ply|splat|ksplat|spz|sog|meta.j
 | Format | Input | Output | Description |
 | ------ | ----- | ------ | ----------- |
 | `.ply` | ✅ | ✅ | Standard PLY format |
+| `.sog` | ✅ | ✅ | Bundled super-compressed format (recommended) |
+| `meta.json` | ✅ | ✅ | Unbundled super-compressed format (accompanied by `.webp` textures) |
 | `.compressed.ply` | ✅ | ✅ | Compressed PLY format (auto-detected and decompressed on read) |
 | `.ksplat` | ✅ | ❌ | Compressed splat format (mkkellogg format) |
 | `.splat` | ✅ | ❌ | Compressed splat format (antimatter15 format) |
 | `.spz` | ✅ | ❌ | Compressed splat format (Niantic format) |
 | `.mjs` | ✅ | ❌ | Generate a scene using an mjs script (Beta) |
-| `.sog` | ✅ | ✅ | Bundled super-compressed format (recommended) |
-| `meta.json` | ✅ | ✅ | Unbundled super-compressed format (accompanied by `.webp` textures) |
 | `.csv` | ❌ | ✅ | Comma-separated values spreadsheet |
 | `.html` | ❌ | ✅ | Standalone HTML viewer app |
 
@@ -55,26 +55,28 @@ splat-transform [GLOBAL]  <input.{ply|compressed.ply|splat|ksplat|spz|sog|meta.j
 Actions can be repeated and applied in any order:
 
 ```bash
--t, --translate  x,y,z                  Translate splats by (x, y, z)
--r, --rotate     x,y,z                  Rotate splats by Euler angles (deg)
--s, --scale      x                      Uniformly scale splats by factor x
--n, --filterNaN                         Remove any Gaussian containing NaN/Inf
+-t, --translate     x,y,z               Translate splats by (x, y, z)
+-r, --rotate        x,y,z               Rotate splats by euler angles (x, y, z), in degrees.
+-s, --scale         x                   Uniformly scale splats by factor x.
+-n, --filterNaN                         Remove any Gaussian containing any NaN or Inf values.
 -c, --filterByValue name,cmp,value      Keep splats where <name> <cmp> <value>
                                         cmp ∈ {lt,lte,gt,gte,eq,neq}
--b, --filterBands  {0|1|2|3}            Strip spherical-harmonic bands > N
--P, --params name=value[,name=value...] Pass parameters to .mjs generator script
+-b, --filterBands   n {0|1|2|3}         Strip spherical-harmonic bands > n.
+-x, --filterBox     mx,my,mz,Mx,My,Mz   Remove gaussians outside the bounding box given its min (mx, my, mz) and max (Mx, My, Mz).
+-o, --filterSphere  x,y,z,radius        Remove gaussians outside the bounding sphere centered at (x, y, z) with size radius.
+-P, --params name=value[,name=value...] Pass parameters to .mjs generator script.
 ```
 
 ## Global Options
 
 ```bash
--w, --overwrite                         Overwrite output file if it already exists
--h, --help                              Show help and exit
--v, --version                           Show version and exit
+-h, --help                              Show help and exit.
+-v, --version                           Show version and exit.
+-w, --overwrite                         Overwrite output file if it already exists.
 -g, --no-gpu                            Disable gpu when compressing spherical harmonics.
--i, --iterations  <number>              Specify the number of iterations when compressing spherical harmonics. More iterations generally lead to better results. Default is 10.
--p, --cameraPos                         Specify the viewer starting position. Default is 2,2,-2.
--e, --cameraTarget                      Specify the viewer starting target. Default is 0,0,0.
+-i, --iterations    n                   Specify the number of iterations n when compressing spherical harmonics. More iterations generally lead to better results. Default is 10.
+-p, --cameraPos     x,y,z               Specify the viewer starting position. Default is (2, 2, -2).
+-e, --cameraTarget  x,y,z               Specify the viewer starting target. Default is (0, 0, 0).
 ```
 
 ## Examples
