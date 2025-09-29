@@ -253,6 +253,8 @@ const parseArguments = () => {
             filterNaN: { type: 'boolean', short: 'n', multiple: true },
             filterByValue: { type: 'string', short: 'c', multiple: true },
             filterBands: { type: 'string', short: 'b', multiple: true },
+            filterBox: { type: 'string', short: 'x', multiple: true },
+            filterSphere: { type: 'string', short: 'o', multiple: true },
             params: { type: 'string', short: 'P', multiple: true }
         }
     });
@@ -274,7 +276,7 @@ const parseArguments = () => {
     };
 
     const parseVec3 = (value: string): Vec3 => {
-        const parts = value.split(',').map(Number);
+        const parts = value.split(',').map(parseNumber);
         if (parts.length !== 3 || parts.some(isNaN)) {
             throw new Error(`Invalid Vec3 value: ${value}`);
         }
@@ -362,6 +364,42 @@ const parseArguments = () => {
 
                     break;
                 }
+                case 'filterBox': {
+                    const parts = t.value.split(',').map((p: string) => p.trim());
+                    if (parts.length !== 6) {
+                        throw new Error(`Invalid filterBox value: ${t.value}`);
+                    }
+
+                    const defaults = [-Infinity, -Infinity, -Infinity, Infinity, Infinity, Infinity];
+                    const values: number[] = [];
+                    for (let i = 0; i < 6; ++i) {
+                        if (parts[i] === '' || parts[i] === '-') {
+                            values[i] = defaults[i];
+                        } else {
+                            values[i] = parseNumber(parts[i]);
+                        }
+                    }
+
+                    current.processActions.push({
+                        kind: 'filterBox',
+                        min: new Vec3(values[0], values[1], values[2]),
+                        max: new Vec3(values[3], values[4], values[5])
+                    });
+                    break;
+                }
+                case 'filterSphere': {
+                    const parts = t.value.split(',').map((p: string) => p.trim());
+                    if (parts.length !== 4) {
+                        throw new Error(`Invalid filterSphere value: ${t.value}`);
+                    }
+                    const values = parts.map(parseNumber);
+                    current.processActions.push({
+                        kind: 'filterSphere',
+                        center: new Vec3(values[0], values[1], values[2]),
+                        radius: values[4]
+                    });
+                    break;
+                }
                 case 'params': {
                     const params = t.value.split(',').map((p: string) => p.trim());
                     for (const param of params) {
@@ -394,29 +432,31 @@ USAGE
     interpreted as actions that modify the final result.
 
 SUPPORTED INPUTS
-    .ply   .compressed.ply   .splat   .ksplat   .spz   .mjs
+    .ply   .compressed.ply   .splat   .ksplat   .spz   .sog   meta.json   .mjs
 
 SUPPORTED OUTPUTS
-    .ply   .compressed.ply   meta.json (SOG)   .sog   .csv
+    .ply   .compressed.ply   .sog   meta.json   .csv   .html
 
 ACTIONS (can be repeated, in any order)
-    -t, --translate  x,y,z                  Translate splats by (x, y, z)
-    -r, --rotate     x,y,z                  Rotate splats by Euler angles (deg)
-    -s, --scale      x                      Uniformly scale splats by factor x
-    -n, --filterNaN                         Remove any Gaussian containing NaN/Inf
+    -t, --translate     x,y,z               Translate splats by (x, y, z).
+    -r, --rotate        x,y,z               Rotate splats by euler angles (x, y, z), in degrees.
+    -s, --scale         x                   Uniformly scale splats by factor x.
+    -n, --filterNaN                         Remove gaussians containing any NaN or Inf values.
     -c, --filterByValue name,cmp,value      Keep splats where  <name> <cmp> <value>
                                             cmp ∈ {lt,lte,gt,gte,eq,neq}
-    -b, --filterBands  {0|1|2|3}            Strip spherical-harmonic bands > N
-    -P, --params name=value[,name=value...] Pass parameters to .mjs generator script
+    -b, --filterBands   n {0|1|2|3}         Remove spherical-harmonic bands > n.
+    -x, --filterBox     mx,my,mz,Mx,My,Mz   Remove gaussians outside the bounding box given its min (mx, my, mz) and max (Mx, My, Mz).
+    -o, --filterSphere  x,y,z,radius        Remove gaussians outside the bounding sphere centered at (x, y, z) with size radius.
+    -P, --params name=value[,name=value...] Pass parameters to .mjs generator script.
 
 GLOBAL OPTIONS
-    -w, --overwrite                         Overwrite output file if it already exists. Default is false.
     -h, --help                              Show this help and exit.
     -v, --version                           Show version and exit.
+    -w, --overwrite                         Overwrite output file if it already exists.
     -g, --no-gpu                            Disable gpu when compressing spherical harmonics.
-    -i, --iterations  <number>              Specify the number of iterations when compressing spherical harmonics. More iterations generally lead to better results. Default is 10.
-    -p, --cameraPos     x,y,z               Specify the viewer camera position. Default is 2,2,-2.
-    -e, --cameraTarget  x,y,z               Specify the viewer target position. Default is 0,0,0.
+    -i, --iterations    n                   Specify the number of iterations when compressing spherical harmonics. More iterations generally lead to better results. Default is 10.
+    -p, --cameraPos     x,y,z               Specify the viewer camera position. Default is (2, 2, -2).
+    -e, --cameraTarget  x,y,z               Specify the viewer target position. Default is (0, 0, 0).
 
 EXAMPLES
     # Simple scale-then-translate
@@ -494,6 +534,12 @@ const main = async () => {
             combine(inputFiles.map(file => file.elements[0].dataTable)),
             outputArg.processActions
         );
+
+        if (dataTable.numRows === 0) {
+            throw new Error('No splats to write');
+        }
+
+        console.log(`Loaded ${dataTable.numRows} gaussians`);
 
         // write file
         await writeFile(resolve(outputArg.filename), dataTable, options);
