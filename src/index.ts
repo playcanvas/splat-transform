@@ -396,7 +396,7 @@ const parseArguments = () => {
                     current.processActions.push({
                         kind: 'filterSphere',
                         center: new Vec3(values[0], values[1], values[2]),
-                        radius: values[4]
+                        radius: values[3]
                     });
                     break;
                 }
