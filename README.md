@@ -28,12 +28,12 @@ npm install -g @playcanvas/splat-transform
 ## Usage
 
 ```bash
-splat-transform [GLOBAL]  <input.{ply|compressed.ply|splat|ksplat|spz|sog|meta.json|mjs}> [ACTIONS]  ...  <output.{ply|compressed.ply|sog|meta.json|csv|html}> [ACTIONS]
+splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 ```
 
 **Key points:**
-- Every time an `*.ply*` appears, it becomes the current working set; the following ACTIONS are applied in the order listed
-- The last file on the command line is treated as the output; anything after it is interpreted as actions that modify the final result
+- Input files become the working set; ACTIONS are applied in order
+- The last file is the output; actions after it modify the final result
 
 ## Supported Formats
 
@@ -54,28 +54,28 @@ splat-transform [GLOBAL]  <input.{ply|compressed.ply|splat|ksplat|spz|sog|meta.j
 Actions can be repeated and applied in any order:
 
 ```bash
--t, --translate        x,y,z               Translate splats by (x, y, z)
--r, --rotate           x,y,z               Rotate splats by euler angles (x, y, z), in degrees.
--s, --scale            x                   Uniformly scale splats by factor x.
--N, --filter-nan                           Remove any Gaussian containing any NaN or Inf values.
--V, --filter-value     name,cmp,value      Keep splats where <name> <cmp> <value>
+-t, --translate        <x,y,z>             Translate splats by (x, y, z).
+-r, --rotate           <x,y,z>             Rotate splats by euler angles (x, y, z), in degrees.
+-s, --scale            <factor>            Uniformly scale splats by factor.
+-N, --filter-nan                           Remove Gaussians with NaN or Inf values.
+-V, --filter-value     <name,cmp,value>    Keep splats where <name> <cmp> <value>
                                            cmp ∈ {lt,lte,gt,gte,eq,neq}
--H, --filter-harmonics n {0|1|2|3}         Strip spherical-harmonic bands > n.
--B, --filter-box       mx,my,mz,Mx,My,Mz   Remove gaussians outside the bounding box given its min (mx, my, mz) and max (Mx, My, Mz).
--S, --filter-sphere    x,y,z,radius        Remove gaussians outside the bounding sphere centered at (x, y, z) with size radius.
--p, --params           name=value[,name=value...] Pass parameters to .mjs generator script.
+-H, --filter-harmonics <0|1|2|3>           Remove spherical harmonic bands > n.
+-B, --filter-box       <mx,my,mz,Mx,My,Mz> Remove Gaussians outside bounding box.
+-S, --filter-sphere    <x,y,z,radius>      Remove Gaussians outside sphere.
+-p, --params           <key=val,...>       Pass parameters to .mjs generator script.
 ```
 
 ## Global Options
 
 ```bash
--h, --help                              Show help and exit.
+-h, --help                              Show this help and exit.
 -v, --version                           Show version and exit.
--w, --overwrite                         Overwrite output file if it already exists.
--c, --cpu                               Use CPU instead of GPU when compressing spherical harmonics.
--i, --iterations       n                Specify the number of iterations n when compressing spherical harmonics. More iterations generally lead to better results. Default is 10.
--C, --camera-pos       x,y,z            Specify the viewer starting position. Default is (2, 2, -2).
--T, --camera-target    x,y,z            Specify the viewer starting target. Default is (0, 0, 0).
+-w, --overwrite                         Overwrite output file if it exists.
+-c, --cpu                               Use CPU for spherical harmonic compression.
+-i, --iterations       <n>              Iterations for SH compression (more = better). Default: 10.
+-C, --camera-pos       <x,y,z>          HTML viewer camera position. Default: (2, 2, -2).
+-T, --camera-target    <x,y,z>          HTML viewer target position. Default: (0, 0, 0).
 ```
 
 ## Examples
