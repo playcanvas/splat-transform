@@ -55,7 +55,7 @@ Actions can be repeated and applied in any order:
 
 ```bash
 -t, --translate        <x,y,z>             Translate splats by (x, y, z).
--r, --rotate           <x,y,z>             Rotate splats by euler angles (x, y, z), in degrees.
+-r, --rotate           <x,y,z>             Rotate splats by Euler angles (x, y, z), in degrees.
 -s, --scale            <factor>            Uniformly scale splats by factor.
 -N, --filter-nan                           Remove Gaussians with NaN or Inf values.
 -V, --filter-value     <name,cmp,value>    Keep splats where <name> <cmp> <value>
