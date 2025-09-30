@@ -69,13 +69,13 @@ Actions can be repeated and applied in any order:
 ## Global Options
 
 ```bash
--h, --help                              Show this help and exit.
--v, --version                           Show version and exit.
--w, --overwrite                         Overwrite output file if it exists.
--c, --cpu                               Use CPU for spherical harmonic compression.
--i, --iterations       <n>              Iterations for SH compression (more = better). Default: 10.
--C, --camera-pos       <x,y,z>          HTML viewer camera position. Default: (2, 2, -2).
--T, --camera-target    <x,y,z>          HTML viewer target position. Default: (0, 0, 0).
+-h, --help                                 Show this help and exit.
+-v, --version                              Show version and exit.
+-w, --overwrite                            Overwrite output file if it exists.
+-c, --cpu                                  Use CPU for spherical harmonic compression.
+-i, --iterations       <n>                 Iterations for SH compression (more = better). Default: 10.
+-C, --camera-pos       <x,y,z>             HTML viewer camera position. Default: (2, 2, -2).
+-T, --camera-target    <x,y,z>             HTML viewer target position. Default: (0, 0, 0).
 ```
 
 ## Examples
