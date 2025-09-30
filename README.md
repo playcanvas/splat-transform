@@ -61,8 +61,8 @@ Actions can be repeated and applied in any order:
 -V, --filter-value     <name,cmp,value>    Keep splats where <name> <cmp> <value>
                                            cmp ∈ {lt,lte,gt,gte,eq,neq}
 -H, --filter-harmonics <0|1|2|3>           Remove spherical harmonic bands > n.
--B, --filter-box       <mx,my,mz,Mx,My,Mz> Remove Gaussians outside bounding box.
--S, --filter-sphere    <x,y,z,radius>      Remove Gaussians outside sphere.
+-B, --filter-box       <mx,my,mz,Mx,My,Mz> Remove Gaussians outside box (min, max corners).
+-S, --filter-sphere    <x,y,z,radius>      Remove Gaussians outside sphere (center, radius).
 -p, --params           <key=val,...>       Pass parameters to .mjs generator script.
 ```
 
