@@ -27,7 +27,7 @@ type Options = {
     overwrite: boolean,
     help: boolean,
     version: boolean,
-    gpu: boolean,
+    cpu: boolean,
     iterations: number,
     cameraPos: Vec3,
     cameraTarget: Vec3
@@ -127,7 +127,7 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
                 await writeCsv(outputFile, dataTable);
                 break;
             case 'sog':
-                await writeSog(outputFile, dataTable, filename, options.iterations, options.gpu ? 'gpu' : 'cpu');
+                await writeSog(outputFile, dataTable, filename, options.iterations, options.cpu ? 'cpu' : 'gpu');
                 break;
             case 'lod':
                 await writeLod(outputFile, dataTable, filename, options.iterations, options.gpu ? 'gpu' : 'cpu');
@@ -250,21 +250,21 @@ const parseArguments = () => {
             overwrite: { type: 'boolean', short: 'w' },
             help: { type: 'boolean', short: 'h' },
             version: { type: 'boolean', short: 'v' },
-            'no-gpu': { type: 'boolean', short: 'g' },
+            cpu: { type: 'boolean', short: 'c' },
             iterations: { type: 'string', short: 'i' },
-            cameraPos: { type: 'string', short: 'p' },
-            cameraTarget: { type: 'string', short: 'e' },
+            'camera-pos': { type: 'string', short: 'C' },
+            'camera-target': { type: 'string', short: 'T' },
 
             // per-file options
             translate: { type: 'string', short: 't', multiple: true },
             rotate: { type: 'string', short: 'r', multiple: true },
             scale: { type: 'string', short: 's', multiple: true },
-            filterNaN: { type: 'boolean', short: 'n', multiple: true },
-            filterByValue: { type: 'string', short: 'c', multiple: true },
-            filterBands: { type: 'string', short: 'b', multiple: true },
-            filterBox: { type: 'string', short: 'x', multiple: true },
-            filterSphere: { type: 'string', short: 'o', multiple: true },
-            params: { type: 'string', short: 'P', multiple: true },
+            'filter-nan': { type: 'boolean', short: 'N', multiple: true },
+            'filter-value': { type: 'string', short: 'V', multiple: true },
+            'filter-harmonics': { type: 'string', short: 'H', multiple: true },
+            'filter-box': { type: 'string', short: 'B', multiple: true },
+            'filter-sphere': { type: 'string', short: 'S', multiple: true },
+            params: { type: 'string', short: 'p', multiple: true },
             lod: { type: 'string', short: 'l', multiple: true }
         }
     });
@@ -311,10 +311,10 @@ const parseArguments = () => {
         overwrite: v.overwrite ?? false,
         help: v.help ?? false,
         version: v.version ?? false,
-        gpu: (v as any).gpu ?? true,
+        cpu: v.cpu ?? false,
         iterations: parseInteger(v.iterations ?? '10'),
-        cameraPos: parseVec3(v.cameraPos ?? '2,2,-2'),
-        cameraTarget: parseVec3(v.cameraTarget ?? '0,0,0')
+        cameraPos: parseVec3((v as any)['camera-pos'] ?? '2,2,-2'),
+        cameraTarget: parseVec3((v as any)['camera-target'] ?? '0,0,0')
     };
 
     for (const t of tokens) {
@@ -344,15 +344,15 @@ const parseArguments = () => {
                         value: parseNumber(t.value)
                     });
                     break;
-                case 'filterNaN':
+                case 'filter-nan':
                     current.processActions.push({
                         kind: 'filterNaN'
                     });
                     break;
-                case 'filterByValue': {
+                case 'filter-value': {
                     const parts = t.value.split(',').map((p: string) => p.trim());
                     if (parts.length !== 3) {
-                        throw new Error(`Invalid filterByValue value: ${t.value}`);
+                        throw new Error(`Invalid filter-value value: ${t.value}`);
                     }
                     current.processActions.push({
                         kind: 'filterByValue',
@@ -362,10 +362,10 @@ const parseArguments = () => {
                     });
                     break;
                 }
-                case 'filterBands': {
+                case 'filter-harmonics': {
                     const shBands = parseInteger(t.value);
                     if (![0, 1, 2, 3].includes(shBands)) {
-                        throw new Error(`Invalid filterBands value: ${t.value}. Must be 0, 1, 2, or 3.`);
+                        throw new Error(`Invalid filter-harmonics value: ${t.value}. Must be 0, 1, 2, or 3.`);
                     }
                     current.processActions.push({
                         kind: 'filterBands',
@@ -374,10 +374,10 @@ const parseArguments = () => {
 
                     break;
                 }
-                case 'filterBox': {
+                case 'filter-box': {
                     const parts = t.value.split(',').map((p: string) => p.trim());
                     if (parts.length !== 6) {
-                        throw new Error(`Invalid filterBox value: ${t.value}`);
+                        throw new Error(`Invalid filter-box value: ${t.value}`);
                     }
 
                     const defaults = [-Infinity, -Infinity, -Infinity, Infinity, Infinity, Infinity];
@@ -397,16 +397,16 @@ const parseArguments = () => {
                     });
                     break;
                 }
-                case 'filterSphere': {
+                case 'filter-sphere': {
                     const parts = t.value.split(',').map((p: string) => p.trim());
                     if (parts.length !== 4) {
-                        throw new Error(`Invalid filterSphere value: ${t.value}`);
+                        throw new Error(`Invalid filter-sphere value: ${t.value}`);
                     }
                     const values = parts.map(parseNumber);
                     current.processActions.push({
                         kind: 'filterSphere',
                         center: new Vec3(values[0], values[1], values[2]),
-                        radius: values[4]
+                        radius: values[3]
                     });
                     break;
                 }
@@ -441,58 +441,56 @@ const parseArguments = () => {
 };
 
 const usage = `
-Apply geometric transforms & filters to Gaussian-splat point clouds
-===================================================================
+Transform & filter Gaussian splats
+===================================
 
 USAGE
-  splat-transform [GLOBAL]  <input.{ply|splat|ksplat|spz}> [ACTIONS]  ...  <output.{ply|compressed.ply|meta.json|csv}> [ACTIONS]
+  splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 
-  • Every time an input file appears, it becomes the current working set; the following
-    ACTIONS are applied in the order listed.
-  • The last file on the command line is treated as the output; anything after it is
-    interpreted as actions that modify the final result.
+  • Input files become the working set; ACTIONS are applied in order.
+  • The last file is the output; actions after it modify the final result.
 
 SUPPORTED INPUTS
-    .ply   .compressed.ply   .splat   .ksplat   .spz   .sog   meta.json   .mjs
+    .ply   .compressed.ply   .sog   meta.json   .ksplat   .splat   .spz   .mjs
 
 SUPPORTED OUTPUTS
     .ply   .compressed.ply   .sog   meta.json   .csv   .html
 
 ACTIONS (can be repeated, in any order)
-    -t, --translate     x,y,z               Translate splats by (x, y, z).
-    -r, --rotate        x,y,z               Rotate splats by euler angles (x, y, z), in degrees.
-    -s, --scale         x                   Uniformly scale splats by factor x.
-    -n, --filterNaN                         Remove gaussians containing any NaN or Inf values.
-    -c, --filterByValue name,cmp,value      Keep splats where  <name> <cmp> <value>
-                                            cmp ∈ {lt,lte,gt,gte,eq,neq}
-    -b, --filterBands   n {0|1|2|3}         Remove spherical-harmonic bands > n.
-    -x, --filterBox     mx,my,mz,Mx,My,Mz   Remove gaussians outside the bounding box given its min (mx, my, mz) and max (Mx, My, Mz).
-    -o, --filterSphere  x,y,z,radius        Remove gaussians outside the bounding sphere centered at (x, y, z) with size radius.
-    -P, --params name=value[,name=value...] Pass parameters to .mjs generator script.
-    -l, --lod           n                   Specify the level of detail. n >= 0.
+    -t, --translate        <x,y,z>             Translate splats by (x, y, z).
+    -r, --rotate           <x,y,z>             Rotate splats by Euler angles (x, y, z), in degrees.
+    -s, --scale            <factor>            Uniformly scale splats by factor.
+    -N, --filter-nan                           Remove Gaussians with NaN or Inf values.
+    -V, --filter-value     <name,cmp,value>    Keep splats where <name> <cmp> <value>
+                                               cmp ∈ {lt,lte,gt,gte,eq,neq}
+    -H, --filter-harmonics <0|1|2|3>           Remove spherical harmonic bands > n.
+    -B, --filter-box       <mx,my,mz,Mx,My,Mz> Remove Gaussians outside box (min, max corners).
+    -S, --filter-sphere    <x,y,z,radius>      Remove Gaussians outside sphere (center, radius).
+    -p, --params           <key=val,...>       Pass parameters to .mjs generator script.
+    -l, --lod              <n>                 Specify the level of detail, n >= 0.
 
 GLOBAL OPTIONS
-    -h, --help                              Show this help and exit.
-    -v, --version                           Show version and exit.
-    -w, --overwrite                         Overwrite output file if it already exists.
-    -g, --no-gpu                            Disable gpu when compressing spherical harmonics.
-    -i, --iterations    n                   Specify the number of iterations when compressing spherical harmonics. More iterations generally lead to better results. Default is 10.
-    -p, --cameraPos     x,y,z               Specify the viewer camera position. Default is (2, 2, -2).
-    -e, --cameraTarget  x,y,z               Specify the viewer target position. Default is (0, 0, 0).
+    -h, --help                                 Show this help and exit.
+    -v, --version                              Show version and exit.
+    -w, --overwrite                            Overwrite output file if it exists.
+    -c, --cpu                                  Use CPU for spherical harmonic compression.
+    -i, --iterations       <n>                 Iterations for SOG SH compression (more = better). Default: 10.
+    -C, --camera-pos       <x,y,z>             HTML viewer camera position. Default: (2, 2, -2).
+    -T, --camera-target    <x,y,z>             HTML viewer target position. Default: (0, 0, 0).
 
 EXAMPLES
-    # Simple scale-then-translate
+    # Scale then translate
     splat-transform bunny.ply -s 0.5 -t 0,0,10 bunny_scaled.ply
 
-    # Chain two inputs and write compressed output, overwriting if necessary
+    # Merge two files with transforms
     splat-transform -w cloudA.ply -r 0,90,0 cloudB.ply -s 2 merged.compressed.ply
 
-    # Create an HTML app with a custom camera and target
-    splat-transform -a 0,0,0 -e 0,0,10 bunny.ply bunny_app.html
+    # HTML viewer with custom camera
+    splat-transform -C 0,0,0 -T 0,0,10 bunny.ply bunny_app.html
 
 GENERATORS (beta)
-    # Generate a grid of splats using a custom .mjs generator
-    splat-transform gen-grid.mjs -P width=500,height=500,scale=0.1 grid.ply
+    # Generate synthetic splats
+    splat-transform gen-grid.mjs -p width=500,height=500,scale=0.1 grid.ply
 `;
 
 const main = async () => {

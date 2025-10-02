@@ -28,12 +28,12 @@ npm install -g @playcanvas/splat-transform
 ## Usage
 
 ```bash
-splat-transform [GLOBAL]  <input.{ply|compressed.ply|splat|ksplat|spz|sog|meta.json|mjs}> [ACTIONS]  ...  <output.{ply|compressed.ply|sog|meta.json|csv|html}> [ACTIONS]
+splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 ```
 
 **Key points:**
-- Every time an `*.ply*` appears, it becomes the current working set; the following ACTIONS are applied in the order listed
-- The last file on the command line is treated as the output; anything after it is interpreted as actions that modify the final result
+- Input files become the working set; ACTIONS are applied in order
+- The last file is the output; actions after it modify the final result
 
 ## Supported Formats
 
@@ -55,28 +55,28 @@ splat-transform [GLOBAL]  <input.{ply|compressed.ply|splat|ksplat|spz|sog|meta.j
 Actions can be repeated and applied in any order:
 
 ```bash
--t, --translate     x,y,z               Translate splats by (x, y, z)
--r, --rotate        x,y,z               Rotate splats by euler angles (x, y, z), in degrees.
--s, --scale         x                   Uniformly scale splats by factor x.
--n, --filterNaN                         Remove any Gaussian containing any NaN or Inf values.
--c, --filterByValue name,cmp,value      Keep splats where <name> <cmp> <value>
-                                        cmp ∈ {lt,lte,gt,gte,eq,neq}
--b, --filterBands   n {0|1|2|3}         Strip spherical-harmonic bands > n.
--x, --filterBox     mx,my,mz,Mx,My,Mz   Remove gaussians outside the bounding box given its min (mx, my, mz) and max (Mx, My, Mz).
--o, --filterSphere  x,y,z,radius        Remove gaussians outside the bounding sphere centered at (x, y, z) with size radius.
--P, --params name=value[,name=value...] Pass parameters to .mjs generator script.
+-t, --translate        <x,y,z>             Translate splats by (x, y, z).
+-r, --rotate           <x,y,z>             Rotate splats by Euler angles (x, y, z), in degrees.
+-s, --scale            <factor>            Uniformly scale splats by factor.
+-N, --filter-nan                           Remove Gaussians with NaN or Inf values.
+-V, --filter-value     <name,cmp,value>    Keep splats where <name> <cmp> <value>
+                                           cmp ∈ {lt,lte,gt,gte,eq,neq}
+-H, --filter-harmonics <0|1|2|3>           Remove spherical harmonic bands > n.
+-B, --filter-box       <mx,my,mz,Mx,My,Mz> Remove Gaussians outside box (min, max corners).
+-S, --filter-sphere    <x,y,z,radius>      Remove Gaussians outside sphere (center, radius).
+-p, --params           <key=val,...>       Pass parameters to .mjs generator script.
 ```
 
 ## Global Options
 
 ```bash
--h, --help                              Show help and exit.
--v, --version                           Show version and exit.
--w, --overwrite                         Overwrite output file if it already exists.
--g, --no-gpu                            Disable gpu when compressing spherical harmonics.
--i, --iterations    n                   Specify the number of iterations n when compressing spherical harmonics. More iterations generally lead to better results. Default is 10.
--p, --cameraPos     x,y,z               Specify the viewer starting position. Default is (2, 2, -2).
--e, --cameraTarget  x,y,z               Specify the viewer starting target. Default is (0, 0, 0).
+-h, --help                                 Show this help and exit.
+-v, --version                              Show version and exit.
+-w, --overwrite                            Overwrite output file if it exists.
+-c, --cpu                                  Use CPU for spherical harmonic compression.
+-i, --iterations       <n>                 Iterations for SOG SH compression (more = better). Default: 10.
+-C, --camera-pos       <x,y,z>             HTML viewer camera position. Default: (2, 2, -2).
+-T, --camera-target    <x,y,z>             HTML viewer target position. Default: (0, 0, 0).
 ```
 
 ## Examples
@@ -113,7 +113,7 @@ splat-transform scene.sog restored.ply
 splat-transform output/meta.json restored.ply
 
 # Convert to HTML viewer with target and camera location
-splat-transform -a 0,0,0 -e 0,0,10 input.ply output.html
+splat-transform -C 0,0,0 -T 0,0,10 input.ply output.html
 ```
 
 ### Transformations
@@ -133,13 +133,13 @@ splat-transform input.ply -s 2 -t 1,0,0 -r 0,0,45 output.ply
 
 ```bash
 # Remove entries containing NaN and Inf
-splat-transform input.ply --filterNaN output.ply
+splat-transform input.ply --filter-nan output.ply
 
 # Filter by opacity values (keep only splats with opacity > 0.5)
-splat-transform input.ply -c opacity,gt,0.5 output.ply
+splat-transform input.ply -V opacity,gt,0.5 output.ply
 
 # Strip spherical harmonic bands higher than 2
-splat-transform input.ply --filterBands 2 output.ply
+splat-transform input.ply --filter-harmonics 2 output.ply
 ```
 
 ### Advanced Usage
@@ -149,7 +149,7 @@ splat-transform input.ply --filterBands 2 output.ply
 splat-transform -w cloudA.ply -r 0,90,0 cloudB.ply -s 2 merged.compressed.ply
 
 # Apply final transformations to combined result
-splat-transform input1.ply input2.ply output.ply -p 0,0,10 -e 0.5
+splat-transform input1.ply input2.ply output.ply -t 0,0,10 -s 0.5
 ```
 
 ### Generators (Beta)
@@ -157,7 +157,7 @@ splat-transform input1.ply input2.ply output.ply -p 0,0,10 -e 0.5
 Generator scripts can be used to synthesize gaussian splat data. See [gen-grid.mjs](generators/gen-grid.mjs) for an example.
 
 ```bash
-splat-transform gen-grid.mjs -P width=10,height=10,scale=10,color=0.1 scenes/grid.ply -w
+splat-transform gen-grid.mjs -p width=10,height=10,scale=10,color=0.1 scenes/grid.ply -w
 ```
 
 ## Getting Help
