@@ -130,7 +130,7 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
                 await writeSog(outputFile, dataTable, filename, options.iterations, options.cpu ? 'cpu' : 'gpu');
                 break;
             case 'lod':
-                await writeLod(outputFile, dataTable, filename, options.iterations, options.gpu ? 'gpu' : 'cpu');
+                await writeLod(outputFile, dataTable, filename, options.iterations, options.cpu ? 'cpu' : 'gpu');
                 break;
             case 'compressed-ply':
                 await writeCompressedPly(outputFile, dataTable);
