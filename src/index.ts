@@ -114,9 +114,6 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
     const tmpFilename = `.${basename(filename)}.${process.pid}.${Date.now()}.${randomBytes(6).toString('hex')}.tmp`;
     const tmpPathname = join(dirname(filename), tmpFilename);
 
-    // ensure the target directory exists before opening the temporary file
-    await mkdir(dirname(filename), { recursive: true });
-
     // open the tmp output file
     const outputFile = await open(tmpPathname, 'wx');
 
@@ -515,10 +512,17 @@ const main = async () => {
     const inputArgs = files.slice(0, -1);
     const outputArg = files[files.length - 1];
 
-    // check overwrite before doing any work
-    if (!options.overwrite && await fileExists(outputArg.filename)) {
-        console.error(`File '${outputArg.filename}' already exists. Use -w option to overwrite.`);
-        exit(1);
+    const outputFilename = resolve(outputArg.filename);
+
+    if (options.overwrite) {
+        // ensure target directory exists when using -w
+        await mkdir(dirname(outputFilename), { recursive: true });
+    } else {
+        // check overwrite before doing any work
+        if (await fileExists(outputFilename)) {
+            console.error(`File '${outputFilename}' already exists. Use -w option to overwrite.`);
+            exit(1);
+        }
     }
 
     try {
@@ -562,7 +566,7 @@ const main = async () => {
         console.log(`Loaded ${dataTable.numRows} gaussians`);
 
         // write file
-        await writeFile(resolve(outputArg.filename), dataTable, options);
+        await writeFile(outputFilename, dataTable, options);
     } catch (err) {
         // handle errors
         console.error(err);
