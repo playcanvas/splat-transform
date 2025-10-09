@@ -222,8 +222,15 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
         tree
     };
 
-    // write the meta file
-    await fileHandle.write((new TextEncoder()).encode(JSON.stringify(meta, null, 4)));
+    // write the meta file with float precision quantization (approx. 32-bit float => ~7 significant digits)
+    const replacer = (_key: string, value: any) => {
+        if (typeof value === 'number') {
+            if (!Number.isFinite(value)) return value;
+            return Number.isInteger(value) ? value : +value.toPrecision(7);
+        }
+        return value;
+    };
+    await fileHandle.write((new TextEncoder()).encode(JSON.stringify(meta, replacer)));
 
     // write file units
     for (const [lodValue, fileUnits] of lodFiles) {
