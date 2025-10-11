@@ -54,7 +54,7 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 
 Actions can be repeated and applied in any order:
 
-```bash
+```none
 -t, --translate        <x,y,z>             Translate splats by (x, y, z).
 -r, --rotate           <x,y,z>             Rotate splats by Euler angles (x, y, z), in degrees.
 -s, --scale            <factor>            Uniformly scale splats by factor.
@@ -69,15 +69,17 @@ Actions can be repeated and applied in any order:
 
 ## Global Options
 
-```bash
+```none
 -h, --help                                 Show this help and exit.
 -v, --version                              Show version and exit.
 -w, --overwrite                            Overwrite output file if it exists.
--c, --cpu                                  Use CPU for spherical harmonic compression.
+-c, --cpu                                  Use CPU for SOG SH compression.
 -i, --iterations       <n>                 Iterations for SOG SH compression (more = better). Default: 10.
--C, --camera-pos       <x,y,z>             HTML viewer camera position. Default: (2, 2, -2).
--T, --camera-target    <x,y,z>             HTML viewer target position. Default: (0, 0, 0).
+-E, --viewer-settings  <settings.json>     HTML viewer settings JSON file.
 ```
+
+> [!NOTE]
+> See the [SuperSplat Viewer Settings Schema](https://github.com/playcanvas/supersplat-viewer?tab=readme-ov-file#settings-schema) for details on how to pass data to the `-E` option.
 
 ## Examples
 
@@ -112,8 +114,11 @@ splat-transform scene.sog restored.ply
 # Convert from SOG (unbundled folder) back to PLY
 splat-transform output/meta.json restored.ply
 
-# Convert to HTML viewer with target and camera location
-splat-transform -C 0,0,0 -T 0,0,10 input.ply output.html
+# Convert to standalone HTML viewer
+splat-transform input.ply output.html
+
+# Convert to HTML viewer with custom settings
+splat-transform -E settings.json input.ply output.html
 ```
 
 ### Transformations
