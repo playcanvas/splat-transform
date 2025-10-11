@@ -56,27 +56,27 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 Actions can be repeated and applied in any order:
 
 ```none
--t, --translate        <x,y,z>          Translate splats by (x, y, z).
--r, --rotate           <x,y,z>          Rotate splats by Euler angles (x, y, z), in degrees.
--s, --scale            <factor>         Uniformly scale splats by factor.
--H, --filter-harmonics <0|1|2|3>        Remove spherical harmonic bands > n.
--N, --filter-nan                        Remove Gaussians with NaN or Inf values.
--B, --filter-box       <x,y,z,X,Y,Z>    Remove Gaussians outside box (min, max corners).
--S, --filter-sphere    <x,y,z,radius>   Remove Gaussians outside sphere (center, radius).
+-t, --translate        <x,y,z>          Translate splats by (x, y, z)
+-r, --rotate           <x,y,z>          Rotate splats by Euler angles (x, y, z) in degrees
+-s, --scale            <factor>         Uniformly scale splats by factor
+-H, --filter-harmonics <0|1|2|3>        Remove spherical harmonic bands > n
+-N, --filter-nan                        Remove Gaussians with NaN or Inf values
+-B, --filter-box       <x,y,z,X,Y,Z>    Remove Gaussians outside box (min, max corners)
+-S, --filter-sphere    <x,y,z,radius>   Remove Gaussians outside sphere (center, radius)
 -V, --filter-value     <name,cmp,value> Keep splats where <name> <cmp> <value>
                                           cmp ∈ {lt,lte,gt,gte,eq,neq}
--p, --params           <key=val,...>    Pass parameters to .mjs generator script.
+-p, --params           <key=val,...>    Pass parameters to .mjs generator script
 ```
 
 ## Global Options
 
 ```none
--h, --help                              Show this help and exit.
--v, --version                           Show version and exit.
--w, --overwrite                         Overwrite output file if it exists.
--c, --cpu                               Use CPU for SOG spherical harmonic compression.
--i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10.
--E, --viewer-settings  <settings.json>  HTML viewer settings JSON file.
+-h, --help                              Show this help and exit
+-v, --version                           Show version and exit
+-w, --overwrite                         Overwrite output file if it exists
+-c, --cpu                               Use CPU for SOG spherical harmonic compression
+-i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10
+-E, --viewer-settings  <settings.json>  HTML viewer settings JSON file
 ```
 
 > [!NOTE]
