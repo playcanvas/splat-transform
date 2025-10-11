@@ -4,7 +4,7 @@ import os from 'node:os';
 import { html, css, js } from '@playcanvas/supersplat-viewer';
 import { Vec3 } from 'playcanvas';
 
-import { writeSog } from './write-sog';
+import { writeCompressedPly } from './write-compressed-ply';
 import { PlyData } from '../readers/read-ply';
 
 const writeHtml = async (fileHandle: FileHandle, plyData: PlyData, camera: Vec3, target: Vec3) => {
@@ -35,14 +35,13 @@ const writeHtml = async (fileHandle: FileHandle, plyData: PlyData, camera: Vec3,
         animTracks: [] as unknown[]
     };
 
-    const tempSogPath = `${os.tmpdir()}/temp.sog`;
-    const tempSog = await open(tempSogPath, 'w+');
-    await writeSog(tempSog, plyData.elements[0].dataTable, tempSogPath, 10, 'gpu');
-    await tempSog.close();
-    const openSog = await open(tempSogPath, 'r');
-    const sogData = encodeBase64(await openSog.readFile());
-    await openSog.close();
-    await unlink(tempSogPath);
+    const tempPlyPath = `${os.tmpdir()}/temp.ply`;
+    const tempPly = await open(tempPlyPath, 'w+');
+    await writeCompressedPly(tempPly, plyData.elements[0].dataTable);
+    const openPly = await open(tempPlyPath, 'r');
+    const compressedPly = encodeBase64(await openPly.readFile());
+    await openPly.close();
+    await unlink(tempPlyPath);
 
     const style = '<link rel="stylesheet" href="./index.css">';
     const script = '<script type="module" src="./index.js"></script>';
@@ -53,8 +52,7 @@ const writeHtml = async (fileHandle: FileHandle, plyData: PlyData, camera: Vec3,
     .replace(style, `<style>\n${pad(css, 12)}\n        </style>`)
     .replace(script, `<script type="module">\n${pad(js, 12)}\n        </script>`)
     .replace(settings, `settings: ${JSON.stringify(experienceSettings)}`)
-    .replace(content, `fetch("data:application/octet-stream;base64,${sogData}")`)
-    .replace('.compressed.ply', '.sog');
+    .replace(content, `fetch("data:application/ply;base64,${compressedPly}")`);
 
     await fileHandle.write(new TextEncoder().encode(generatedHtml));
 
