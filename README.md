@@ -48,7 +48,8 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 | `.spz` | ✅ | ❌ | Compressed splat format (Niantic format) |
 | `.mjs` | ✅ | ❌ | Generate a scene using an mjs script (Beta) |
 | `.csv` | ❌ | ✅ | Comma-separated values spreadsheet |
-| `.html` | ❌ | ✅ | Standalone HTML viewer app |
+| `.html` | ❌ | ✅ | Standalone HTML viewer app (embeds SOG format) |
+
 ## Actions
 
 Actions can be repeated and applied in any order:
