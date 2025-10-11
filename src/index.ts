@@ -136,13 +136,7 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
                 });
                 break;
             case 'html':
-                await writeHtml(outputFile, {
-                    comments: [],
-                    elements: [{
-                        name: 'vertex',
-                        dataTable: dataTable
-                    }]
-                }, options.cameraPos, options.cameraTarget);
+                await writeHtml(outputFile, dataTable, options.cameraPos, options.cameraTarget, options.iterations, options.cpu ? 'cpu' : 'gpu');
                 break;
         }
 
