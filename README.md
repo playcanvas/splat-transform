@@ -15,7 +15,8 @@ SplatTransform is an open source CLI tool for converting and editing Gaussian sp
 📤 Write PLY, Compressed PLY, SOG, CSV and HTML viewer formats  
 🔗 Merge multiple splats  
 🔄 Apply transformations to input splats  
-🎛️ Filter out Gaussians or spherical harmonic bands
+🎛️ Filter out Gaussians or spherical harmonic bands  
+⚙️ Procedurally generate splats using JavaScript generators
 
 ## Installation
 
