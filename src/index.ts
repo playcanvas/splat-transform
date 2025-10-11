@@ -428,37 +428,36 @@ SUPPORTED OUTPUTS
     .ply   .compressed.ply   .sog   meta.json   .csv   .html
 
 ACTIONS (can be repeated, in any order)
-    -t, --translate        <x,y,z>             Translate splats by (x, y, z).
-    -r, --rotate           <x,y,z>             Rotate splats by Euler angles (x, y, z), in degrees.
-    -s, --scale            <factor>            Uniformly scale splats by factor.
-    -N, --filter-nan                           Remove Gaussians with NaN or Inf values.
-    -V, --filter-value     <name,cmp,value>    Keep splats where <name> <cmp> <value>
-                                               cmp ∈ {lt,lte,gt,gte,eq,neq}
-    -H, --filter-harmonics <0|1|2|3>           Remove spherical harmonic bands > n.
-    -B, --filter-box       <mx,my,mz,Mx,My,Mz> Remove Gaussians outside box (min, max corners).
-    -S, --filter-sphere    <x,y,z,radius>      Remove Gaussians outside sphere (center, radius).
-    -p, --params           <key=val,...>       Pass parameters to .mjs generator script.
+    -t, --translate        <x,y,z>          Translate splats by (x, y, z).
+    -r, --rotate           <x,y,z>          Rotate splats by Euler angles (x, y, z), in degrees.
+    -s, --scale            <factor>         Uniformly scale splats by factor.
+    -H, --filter-harmonics <0|1|2|3>        Remove spherical harmonic bands > n.
+    -N, --filter-nan                        Remove Gaussians with NaN or Inf values.
+    -B, --filter-box       <x,y,z,X,Y,Z>    Remove Gaussians outside box (min, max corners).
+    -S, --filter-sphere    <x,y,z,radius>   Remove Gaussians outside sphere (center, radius).
+    -V, --filter-value     <name,cmp,value> Keep splats where <name> <cmp> <value>
+                                              cmp ∈ {lt,lte,gt,gte,eq,neq}
+    -p, --params           <key=val,...>    Pass parameters to .mjs generator script.
 
 GLOBAL OPTIONS
-    -h, --help                                 Show this help and exit.
-    -v, --version                              Show version and exit.
-    -w, --overwrite                            Overwrite output file if it exists.
-    -c, --cpu                                  Use CPU for spherical harmonic compression.
-    -i, --iterations       <n>                 Iterations for SOG SH compression (more = better). Default: 10.
-    -E, --viewer-settings  <settings.json>     HTML viewer settings JSON file.
+    -h, --help                              Show this help and exit.
+    -v, --version                           Show version and exit.
+    -w, --overwrite                         Overwrite output file if it exists.
+    -c, --cpu                               Use CPU for spherical harmonic compression.
+    -i, --iterations       <n>              Iterations for SOG SH compression (more = better). Default: 10.
+    -E, --viewer-settings  <settings.json>  HTML viewer settings JSON file.
 
 EXAMPLES
     # Scale then translate
     splat-transform bunny.ply -s 0.5 -t 0,0,10 bunny-scaled.ply
 
-    # Merge two files with transforms
-    splat-transform -w cloudA.ply -r 0,90,0 cloudB.ply -s 2 merged.compressed.ply
+    # Merge two files with transforms and compress to SOG format
+    splat-transform -w cloudA.ply -r 0,90,0 cloudB.ply -s 2 merged.sog
 
     # Generate HTML viewer with custom settings
     splat-transform -E settings.json bunny.ply bunny-viewer.html
 
-GENERATORS (beta)
-    # Generate synthetic splats
+    # Generate synthetic splats using a generator script
     splat-transform gen-grid.mjs -p width=500,height=500,scale=0.1 grid.ply
 `;
 
