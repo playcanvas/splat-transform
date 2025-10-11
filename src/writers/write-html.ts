@@ -4,10 +4,10 @@ import os from 'node:os';
 import { html, css, js } from '@playcanvas/supersplat-viewer';
 import { Vec3 } from 'playcanvas';
 
-import { writeCompressedPly } from './write-compressed-ply';
-import { PlyData } from '../readers/read-ply';
+import { DataTable } from '../data-table';
+import { writeSog } from './write-sog';
 
-const writeHtml = async (fileHandle: FileHandle, plyData: PlyData, camera: Vec3, target: Vec3) => {
+const writeHtml = async (fileHandle: FileHandle, dataTable: DataTable, camera: Vec3, target: Vec3, iterations: number, shMethod: 'cpu' | 'gpu') => {
     const pad = (text: string, spaces: number) => {
         const whitespace = ' '.repeat(spaces);
         return text.split('\n').map(line => whitespace + line).join('\n');
@@ -35,13 +35,14 @@ const writeHtml = async (fileHandle: FileHandle, plyData: PlyData, camera: Vec3,
         animTracks: [] as unknown[]
     };
 
-    const tempPlyPath = `${os.tmpdir()}/temp.ply`;
-    const tempPly = await open(tempPlyPath, 'w+');
-    await writeCompressedPly(tempPly, plyData.elements[0].dataTable);
-    const openPly = await open(tempPlyPath, 'r');
-    const compressedPly = encodeBase64(await openPly.readFile());
-    await openPly.close();
-    await unlink(tempPlyPath);
+    const tempSogPath = `${os.tmpdir()}/temp.sog`;
+    const tempSog = await open(tempSogPath, 'w+');
+    await writeSog(tempSog, dataTable, tempSogPath, iterations, shMethod);
+    await tempSog.close();
+    const openSog = await open(tempSogPath, 'r');
+    const sogData = encodeBase64(await openSog.readFile());
+    await openSog.close();
+    await unlink(tempSogPath);
 
     const style = '<link rel="stylesheet" href="./index.css">';
     const script = '<script type="module" src="./index.js"></script>';
@@ -52,7 +53,8 @@ const writeHtml = async (fileHandle: FileHandle, plyData: PlyData, camera: Vec3,
     .replace(style, `<style>\n${pad(css, 12)}\n        </style>`)
     .replace(script, `<script type="module">\n${pad(js, 12)}\n        </script>`)
     .replace(settings, `settings: ${JSON.stringify(experienceSettings)}`)
-    .replace(content, `fetch("data:application/ply;base64,${compressedPly}")`);
+    .replace(content, `fetch("data:application/octet-stream;base64,${sogData}")`)
+    .replace('.compressed.ply', '.sog');
 
     await fileHandle.write(new TextEncoder().encode(generatedHtml));
 
