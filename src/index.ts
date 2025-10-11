@@ -135,13 +135,7 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
                 });
                 break;
             case 'html':
-                await writeHtml(
-                    outputFile,
-                    dataTable,
-                    options.iterations,
-                    options.cpu ? 'cpu' : 'gpu',
-                    options.viewerSettingsPath
-                );
+                await writeHtml(outputFile, dataTable, options.iterations, options.cpu ? 'cpu' : 'gpu', options.viewerSettingsPath);
                 break;
         }
 
