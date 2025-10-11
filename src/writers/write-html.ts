@@ -76,7 +76,6 @@ const writeHtml = async (fileHandle: FileHandle, dataTable: DataTable, iteration
     .replace('.compressed.ply', '.sog');
 
     await fileHandle.write(new TextEncoder().encode(generatedHtml));
-
 };
 
 export { writeHtml };
