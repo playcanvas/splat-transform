@@ -11,8 +11,8 @@
 
 SplatTransform is an open source CLI tool for converting and editing Gaussian splats. It can:
 
-📥 Read PLY, Compressed PLY, SPLAT, KSPLAT, SPZ, SOG (bundled .sog or unbundled meta.json) formats  
-📤 Write PLY, Compressed PLY, CSV, SOG (bundled or unbundled) and HTML viewer formats  
+📥 Read PLY, Compressed PLY, SOG, SPLAT, KSPLAT and SPZ formats  
+📤 Write PLY, Compressed PLY, SOG, CSV and HTML viewer formats  
 🔗 Merge multiple splats  
 🔄 Apply transformations to input splats  
 🎛️ Filter out Gaussians or spherical harmonic bands
