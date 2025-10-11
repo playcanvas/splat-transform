@@ -75,7 +75,7 @@ Actions can be repeated and applied in any order:
 -v, --version                           Show version and exit.
 -w, --overwrite                         Overwrite output file if it exists.
 -c, --cpu                               Use CPU for SOG spherical harmonic compression.
--i, --iterations       <n>              Iterations for SOG SH compression (more = better). Default: 10.
+-i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10.
 -E, --viewer-settings  <settings.json>  HTML viewer settings JSON file.
 ```
 
