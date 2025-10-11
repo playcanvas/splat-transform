@@ -455,16 +455,16 @@ GLOBAL OPTIONS
 
 EXAMPLES
     # Scale then translate
-    splat-transform bunny.ply -s 0.5 -t 0,0,10 bunny_scaled.ply
+    splat-transform bunny.ply -s 0.5 -t 0,0,10 bunny-scaled.ply
 
     # Merge two files with transforms
     splat-transform -w cloudA.ply -r 0,90,0 cloudB.ply -s 2 merged.compressed.ply
 
     # HTML viewer with default settings
-    splat-transform bunny.ply bunny_app.html
+    splat-transform bunny.ply bunny-viewer.html
 
     # HTML viewer with custom settings
-    splat-transform -E settings.json bunny.ply bunny_app.html
+    splat-transform -E settings.json bunny.ply bunny-viewer.html
 
 GENERATORS (beta)
     # Generate synthetic splats
