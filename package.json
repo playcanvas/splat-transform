@@ -33,7 +33,7 @@
     "@rollup/plugin-node-resolve": "16.0.2",
     "@rollup/plugin-typescript": "12.1.4",
     "@types/jsdom": "27.0.0",
-    "@types/node": "24.7.1",
+    "@types/node": "24.7.2",
     "@typescript-eslint/eslint-plugin": "8.46.0",
     "@typescript-eslint/parser": "8.46.0",
     "eslint": "9.37.0",
