@@ -12,14 +12,6 @@ const writeHtml = async (fileHandle: FileHandle, dataTable: DataTable, camera: V
         const whitespace = ' '.repeat(spaces);
         return text.split('\n').map(line => whitespace + line).join('\n');
     };
-    const encodeBase64 = (bytes: Uint8Array) => {
-        let binary = '';
-        const len = bytes.byteLength;
-        for (let i = 0; i < len; i++) {
-            binary += String.fromCharCode(bytes[i]);
-        }
-        return Buffer.from(binary, 'binary').toString('base64');
-    };
 
     const experienceSettings = {
         camera: {
@@ -40,7 +32,7 @@ const writeHtml = async (fileHandle: FileHandle, dataTable: DataTable, camera: V
     await writeSog(tempSog, dataTable, tempSogPath, iterations, shMethod);
     await tempSog.close();
     const openSog = await open(tempSogPath, 'r');
-    const sogData = encodeBase64(await openSog.readFile());
+    const sogData = Buffer.from(await openSog.readFile()).toString('base64');
     await openSog.close();
     await unlink(tempSogPath);
 
