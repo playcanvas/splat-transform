@@ -45,7 +45,7 @@
     "typescript": "5.9.3"
   },
   "dependencies": {
-    "@playcanvas/supersplat-viewer": "^1.6.2",
+    "@playcanvas/supersplat-viewer": "^1.7.0",
     "webgpu": "^0.3.8"
   },
   "scripts": {
