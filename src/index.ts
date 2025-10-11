@@ -454,10 +454,7 @@ EXAMPLES
     # Merge two files with transforms
     splat-transform -w cloudA.ply -r 0,90,0 cloudB.ply -s 2 merged.compressed.ply
 
-    # HTML viewer with default settings
-    splat-transform bunny.ply bunny-viewer.html
-
-    # HTML viewer with custom settings
+    # Generate HTML viewer with custom settings
     splat-transform -E settings.json bunny.ply bunny-viewer.html
 
 GENERATORS (beta)
