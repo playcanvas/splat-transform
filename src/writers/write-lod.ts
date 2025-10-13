@@ -205,10 +205,7 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
         }
 
         // combine indices from all lods so we can calcuate bound over them
-        let allIndices: number[] = [];
-        for (const [lodValue, indices] of bins) {
-            allIndices = allIndices.concat(indices);
-        }
+        const allIndices: number[] = Array.from(bins.values()).flat();
 
         const bound = calcBound(dataTable, allIndices);
 

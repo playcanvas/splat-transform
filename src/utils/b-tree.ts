@@ -13,7 +13,7 @@ const quickselect = (data: TypedArray, idx: Uint32Array, k: number): number => {
     let l = 0;
     let r = n - 1;
 
-    for (; ;) {
+    while (true) {
         if (r <= l + 1) {
             if (r === l + 1 && valAt(r) < valAt(l)) swap(l, r);
             return idx[k];
@@ -32,7 +32,7 @@ const quickselect = (data: TypedArray, idx: Uint32Array, k: number): number => {
         const pivotIdx = idx[l + 1];
 
         // Partition around pivot
-        for (; ;) {
+        while (true) {
             do {
                 i++;
             } while (i <= r && valAt(i) < pivotIdxVal);
