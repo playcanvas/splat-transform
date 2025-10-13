@@ -1,47 +1,67 @@
-import { open, unlink, FileHandle } from 'node:fs/promises';
+import { open, readFile, unlink, FileHandle } from 'node:fs/promises';
 import os from 'node:os';
 
 import { html, css, js } from '@playcanvas/supersplat-viewer';
-import { Vec3 } from 'playcanvas';
 
-import { writeCompressedPly } from './write-compressed-ply';
-import { PlyData } from '../readers/read-ply';
+import { DataTable } from '../data-table';
+import { writeSog } from './write-sog';
 
-const writeHtml = async (fileHandle: FileHandle, plyData: PlyData, camera: Vec3, target: Vec3) => {
+type ViewerSettings = {
+    camera?: {
+        fov?: number;
+        position?: [number, number, number];
+        target?: [number, number, number];
+        startAnim?: string;
+        animTrack?: string;
+    };
+    background?: {
+        color?: [number, number, number];
+    };
+    animTracks?: unknown[];
+};
+
+const writeHtml = async (fileHandle: FileHandle, dataTable: DataTable, iterations: number, shMethod: 'cpu' | 'gpu', viewerSettingsPath?: string) => {
     const pad = (text: string, spaces: number) => {
         const whitespace = ' '.repeat(spaces);
         return text.split('\n').map(line => whitespace + line).join('\n');
     };
-    const encodeBase64 = (bytes: Uint8Array) => {
-        let binary = '';
-        const len = bytes.byteLength;
-        for (let i = 0; i < len; i++) {
-            binary += String.fromCharCode(bytes[i]);
-        }
-        return Buffer.from(binary, 'binary').toString('base64');
-    };
 
-    const experienceSettings = {
+    // Load viewer settings from file if provided
+    let viewerSettings: ViewerSettings = {};
+    if (viewerSettingsPath) {
+        const content = await readFile(viewerSettingsPath, 'utf-8');
+        try {
+            viewerSettings = JSON.parse(content);
+        } catch (e) {
+            throw new Error(`Failed to parse viewer settings JSON file: ${viewerSettingsPath}`);
+        }
+    }
+
+    // Merge provided settings with defaults
+    const mergedSettings = {
         camera: {
             fov: 50,
-            position: [camera.x, camera.y, camera.z],
-            target: [target.x, target.y, target.z],
+            position: [2, 2, -2] as [number, number, number],
+            target: [0, 0, 0] as [number, number, number],
             startAnim: 'none',
-            animTrack: undefined as unknown as string | undefined
+            animTrack: undefined as string | undefined,
+            ...viewerSettings.camera
         },
         background: {
-            color: [0.4, 0.4, 0.4]
+            color: [0.4, 0.4, 0.4] as [number, number, number],
+            ...viewerSettings.background
         },
-        animTracks: [] as unknown[]
+        animTracks: viewerSettings.animTracks ?? []
     };
 
-    const tempPlyPath = `${os.tmpdir()}/temp.ply`;
-    const tempPly = await open(tempPlyPath, 'w+');
-    await writeCompressedPly(tempPly, plyData.elements[0].dataTable);
-    const openPly = await open(tempPlyPath, 'r');
-    const compressedPly = encodeBase64(await openPly.readFile());
-    await openPly.close();
-    await unlink(tempPlyPath);
+    const tempSogPath = `${os.tmpdir()}/temp.sog`;
+    const tempSog = await open(tempSogPath, 'w+');
+    await writeSog(tempSog, dataTable, tempSogPath, iterations, shMethod);
+    await tempSog.close();
+    const openSog = await open(tempSogPath, 'r');
+    const sogData = Buffer.from(await openSog.readFile()).toString('base64');
+    await openSog.close();
+    await unlink(tempSogPath);
 
     const style = '<link rel="stylesheet" href="./index.css">';
     const script = '<script type="module" src="./index.js"></script>';
@@ -51,11 +71,11 @@ const writeHtml = async (fileHandle: FileHandle, plyData: PlyData, camera: Vec3,
     const generatedHtml = html
     .replace(style, `<style>\n${pad(css, 12)}\n        </style>`)
     .replace(script, `<script type="module">\n${pad(js, 12)}\n        </script>`)
-    .replace(settings, `settings: ${JSON.stringify(experienceSettings)}`)
-    .replace(content, `fetch("data:application/ply;base64,${compressedPly}")`);
+    .replace(settings, `settings: ${JSON.stringify(mergedSettings)}`)
+    .replace(content, `fetch("data:application/octet-stream;base64,${sogData}")`)
+    .replace('.compressed.ply', '.sog');
 
     await fileHandle.write(new TextEncoder().encode(generatedHtml));
-
 };
 
 export { writeHtml };

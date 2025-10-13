@@ -7,15 +7,16 @@
 [![Reddit](https://img.shields.io/badge/Reddit-FF4500?style=flat&logo=reddit&logoColor=white&color=black)](https://www.reddit.com/r/PlayCanvas)
 [![X](https://img.shields.io/badge/X-000000?style=flat&logo=x&logoColor=white&color=black)](https://x.com/intent/follow?screen_name=playcanvas)
 
-| [User Guide](https://developer.playcanvas.com/user-manual/gaussian-splatting/editing/splat-transform/) | [Blog](https://blog.playcanvas.com/) | [Forum](https://forum.playcanvas.com/) | [Discord](https://discord.gg/RSaMRzg) |
+| [User Guide](https://developer.playcanvas.com/user-manual/gaussian-splatting/editing/splat-transform/) | [Blog](https://blog.playcanvas.com/) | [Forum](https://forum.playcanvas.com/) |
 
 SplatTransform is an open source CLI tool for converting and editing Gaussian splats. It can:
 
-📥 Read PLY, Compressed PLY, SPLAT, KSPLAT, SPZ, SOG (bundled .sog or unbundled meta.json) formats  
-📤 Write PLY, Compressed PLY, CSV, SOG (bundled or unbundled) and HTML viewer formats  
+📥 Read PLY, Compressed PLY, SOG, SPLAT, KSPLAT and SPZ formats  
+📤 Write PLY, Compressed PLY, SOG, CSV and HTML viewer formats  
 🔗 Merge multiple splats  
 🔄 Apply transformations to input splats  
-🎛️ Filter out Gaussians or spherical harmonic bands
+🎛️ Filter out Gaussians or spherical harmonic bands  
+⚙️ Procedurally generate splats using JavaScript generators
 
 ## Installation
 
@@ -48,36 +49,38 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 | `.spz` | ✅ | ❌ | Compressed splat format (Niantic format) |
 | `.mjs` | ✅ | ❌ | Generate a scene using an mjs script (Beta) |
 | `.csv` | ❌ | ✅ | Comma-separated values spreadsheet |
-| `.html` | ❌ | ✅ | Standalone HTML viewer app |
+| `.html` | ❌ | ✅ | Standalone HTML viewer app (embeds SOG format) |
 
 ## Actions
 
 Actions can be repeated and applied in any order:
 
-```bash
--t, --translate        <x,y,z>             Translate splats by (x, y, z).
--r, --rotate           <x,y,z>             Rotate splats by Euler angles (x, y, z), in degrees.
--s, --scale            <factor>            Uniformly scale splats by factor.
--N, --filter-nan                           Remove Gaussians with NaN or Inf values.
--V, --filter-value     <name,cmp,value>    Keep splats where <name> <cmp> <value>
-                                           cmp ∈ {lt,lte,gt,gte,eq,neq}
--H, --filter-harmonics <0|1|2|3>           Remove spherical harmonic bands > n.
--B, --filter-box       <mx,my,mz,Mx,My,Mz> Remove Gaussians outside box (min, max corners).
--S, --filter-sphere    <x,y,z,radius>      Remove Gaussians outside sphere (center, radius).
--p, --params           <key=val,...>       Pass parameters to .mjs generator script.
+```none
+-t, --translate        <x,y,z>          Translate splats by (x, y, z)
+-r, --rotate           <x,y,z>          Rotate splats by Euler angles (x, y, z) in degrees
+-s, --scale            <factor>         Uniformly scale splats by factor
+-H, --filter-harmonics <0|1|2|3>        Remove spherical harmonic bands > n
+-N, --filter-nan                        Remove Gaussians with NaN or Inf values
+-B, --filter-box       <x,y,z,X,Y,Z>    Remove Gaussians outside box (min, max corners)
+-S, --filter-sphere    <x,y,z,radius>   Remove Gaussians outside sphere (center, radius)
+-V, --filter-value     <name,cmp,value> Keep splats where <name> <cmp> <value>
+                                          cmp ∈ {lt,lte,gt,gte,eq,neq}
+-p, --params           <key=val,...>    Pass parameters to .mjs generator script
 ```
 
 ## Global Options
 
-```bash
--h, --help                                 Show this help and exit.
--v, --version                              Show version and exit.
--w, --overwrite                            Overwrite output file if it exists.
--c, --cpu                                  Use CPU for spherical harmonic compression.
--i, --iterations       <n>                 Iterations for SOG SH compression (more = better). Default: 10.
--C, --camera-pos       <x,y,z>             HTML viewer camera position. Default: (2, 2, -2).
--T, --camera-target    <x,y,z>             HTML viewer target position. Default: (0, 0, 0).
+```none
+-h, --help                              Show this help and exit
+-v, --version                           Show version and exit
+-w, --overwrite                         Overwrite output file if it exists
+-c, --cpu                               Use CPU for SOG spherical harmonic compression
+-i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10
+-E, --viewer-settings  <settings.json>  HTML viewer settings JSON file
 ```
+
+> [!NOTE]
+> See the [SuperSplat Viewer Settings Schema](https://github.com/playcanvas/supersplat-viewer?tab=readme-ov-file#settings-schema) for details on how to pass data to the `-E` option.
 
 ## Examples
 
@@ -112,8 +115,11 @@ splat-transform scene.sog restored.ply
 # Convert from SOG (unbundled folder) back to PLY
 splat-transform output/meta.json restored.ply
 
-# Convert to HTML viewer with target and camera location
-splat-transform -C 0,0,0 -T 0,0,10 input.ply output.html
+# Convert to standalone HTML viewer
+splat-transform input.ply output.html
+
+# Convert to HTML viewer with custom settings
+splat-transform -E settings.json input.ply output.html
 ```
 
 ### Transformations
