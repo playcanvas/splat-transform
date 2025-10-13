@@ -24,7 +24,7 @@ import {
     AppOptions,
     Texture,
     WebgpuGraphicsDevice
-} from 'playcanvas/debug';
+} from 'playcanvas';
 import { create, globals } from 'webgpu';
 
 const initializeGlobals = () => {
@@ -124,6 +124,10 @@ const createDevice = async () => {
     });
 
     await graphicsDevice.createDevice();
+
+    // print gpu info
+    const info = (graphicsDevice as any).gpuAdapter.info;
+    console.log(`Created gpu device="${info.device || '-'}" arch="${info.architecture || '-'}" descr="${info.description || '-'}"`);
 
     // create the application
     const app = new Application(canvas, { graphicsDevice });

@@ -13,7 +13,7 @@ import {
     StorageBuffer,
     UniformBufferFormat,
     UniformFormat
-} from 'playcanvas/debug';
+} from 'playcanvas';
 
 import { DataTable } from '../data-table.js';
 import { GpuDevice } from './gpu-device.js';
