@@ -33,8 +33,12 @@ const quickselect = (data: TypedArray, idx: Uint32Array, k: number): number => {
 
         // Partition around pivot
         for (; ;) {
-            do { i++; } while (i <= r && valAt(i) < pivotIdxVal);
-            do { j--; } while (j >= l && valAt(j) > pivotIdxVal);
+            do {
+                i++;
+            } while (i <= r && valAt(i) < pivotIdxVal);
+            do {
+                j--;
+            } while (j >= l && valAt(j) > pivotIdxVal);
             if (j < i) break;
             swap(i, j);
         }
@@ -47,7 +51,7 @@ const quickselect = (data: TypedArray, idx: Uint32Array, k: number): number => {
         if (j >= k) r = j - 1;
         if (j <= k) l = i;
     }
-}
+};
 
 class Aabb {
     min: number[];
@@ -100,7 +104,7 @@ class Aabb {
 interface BTreeNode {
     count: number;
     aabb: Aabb;
-    indices?: Uint32Array;       // only for leaf nodes    
+    indices?: Uint32Array;       // only for leaf nodes
     left?: BTreeNode;
     right?: BTreeNode;
 }

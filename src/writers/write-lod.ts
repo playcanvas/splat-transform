@@ -1,12 +1,12 @@
 import { FileHandle, mkdir, open } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+
 import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
+
 import { TypedArray, DataTable } from '../data-table';
-
-import { BTreeNode, BTree } from '../utils/b-tree';
 import { generateOrdering } from '../ordering';
-
 import { writeSog } from './write-sog.js';
+import { BTreeNode, BTree } from '../utils/b-tree';
 
 type Aabb = {
     min: number[],

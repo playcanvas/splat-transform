@@ -43,7 +43,7 @@ class KdTree {
                 left,
                 right
             };
-        }
+        };
 
         const indices = new Uint32Array(centroids.numRows);
         for (let i = 0; i < indices.length; ++i) {

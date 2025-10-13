@@ -18,8 +18,8 @@ import { readSplat } from './readers/read-splat';
 import { readSpz } from './readers/read-spz';
 import { writeCompressedPly } from './writers/write-compressed-ply';
 import { writeCsv } from './writers/write-csv';
-import { writeLod } from './writers/write-lod';
 import { writeHtml } from './writers/write-html';
+import { writeLod } from './writers/write-lod';
 import { writePly } from './writers/write-ply';
 import { writeSog } from './writers/write-sog';
 
