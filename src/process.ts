@@ -52,7 +52,12 @@ type Param = {
     value: string;
 };
 
-type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | Param;
+type Lod = {
+    kind: 'lod';
+    value: number;
+};
+
+type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | Param | Lod;
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
@@ -174,6 +179,10 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
             }
             case 'param': {
                 // skip params
+                break;
+            }
+            case 'lod': {
+                result.addColumn(new Column('lod', new Float32Array(result.numRows).fill(processAction.value)));
                 break;
             }
         }

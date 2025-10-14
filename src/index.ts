@@ -1,5 +1,5 @@
 import { randomBytes } from 'crypto';
-import { lstat, open, rename } from 'node:fs/promises';
+import { lstat, mkdir, open, rename } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { exit, hrtime } from 'node:process';
 import { parseArgs } from 'node:util';
@@ -19,6 +19,7 @@ import { readSpz } from './readers/read-spz';
 import { writeCompressedPly } from './writers/write-compressed-ply';
 import { writeCsv } from './writers/write-csv';
 import { writeHtml } from './writers/write-html';
+import { writeLod } from './writers/write-lod';
 import { writePly } from './writers/write-ply';
 import { writeSog } from './writers/write-sog';
 
@@ -87,6 +88,8 @@ const getOutputFormat = (filename: string) => {
 
     if (lowerFilename.endsWith('.csv')) {
         return 'csv';
+    } else if (lowerFilename.endsWith('lod-meta.json')) {
+        return 'lod';
     } else if (lowerFilename.endsWith('.sog') || lowerFilename.endsWith('meta.json')) {
         return 'sog';
     } else if (lowerFilename.endsWith('.compressed.ply')) {
@@ -121,6 +124,9 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
                 break;
             case 'sog':
                 await writeSog(outputFile, dataTable, filename, options.iterations, options.cpu ? 'cpu' : 'gpu');
+                break;
+            case 'lod':
+                await writeLod(outputFile, dataTable, filename, options.iterations, options.cpu ? 'cpu' : 'gpu');
                 break;
             case 'compressed-ply':
                 await writeCompressedPly(outputFile, dataTable);
@@ -238,7 +244,7 @@ const parseArguments = () => {
             iterations: { type: 'string', short: 'i' },
             'viewer-settings': { type: 'string', short: 'E' },
 
-            // file options
+            // per-file options
             translate: { type: 'string', short: 't', multiple: true },
             rotate: { type: 'string', short: 'r', multiple: true },
             scale: { type: 'string', short: 's', multiple: true },
@@ -247,7 +253,8 @@ const parseArguments = () => {
             'filter-harmonics': { type: 'string', short: 'H', multiple: true },
             'filter-box': { type: 'string', short: 'B', multiple: true },
             'filter-sphere': { type: 'string', short: 'S', multiple: true },
-            params: { type: 'string', short: 'p', multiple: true }
+            params: { type: 'string', short: 'p', multiple: true },
+            lod: { type: 'string', short: 'l', multiple: true }
         }
     });
 
@@ -404,6 +411,17 @@ const parseArguments = () => {
                     }
                     break;
                 }
+                case 'lod': {
+                    const lod = parseInteger(t.value);
+                    if (lod < 0) {
+                        throw new Error(`Invalid lod value: ${t.value}. Must be a non-negative integer.`);
+                    }
+                    current.processActions.push({
+                        kind: 'lod',
+                        value: lod
+                    });
+                    break;
+                }
             }
         }
     }
@@ -438,6 +456,7 @@ ACTIONS (can be repeated, in any order)
     -V, --filter-value     <name,cmp,value> Keep splats where <name> <cmp> <value>
                                               cmp ∈ {lt,lte,gt,gte,eq,neq}
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
+    -l, --lod              <n>              Specify the level of detail, n >= 0.
 
 GLOBAL OPTIONS
     -h, --help                              Show this help and exit
@@ -483,10 +502,17 @@ const main = async () => {
     const inputArgs = files.slice(0, -1);
     const outputArg = files[files.length - 1];
 
-    // check overwrite before doing any work
-    if (!options.overwrite && await fileExists(outputArg.filename)) {
-        console.error(`File '${outputArg.filename}' already exists. Use -w option to overwrite.`);
-        exit(1);
+    const outputFilename = resolve(outputArg.filename);
+
+    if (options.overwrite) {
+        // ensure target directory exists when using -w
+        await mkdir(dirname(outputFilename), { recursive: true });
+    } else {
+        // check overwrite before doing any work
+        if (await fileExists(outputFilename)) {
+            console.error(`File '${outputFilename}' already exists. Use -w option to overwrite.`);
+            exit(1);
+        }
     }
 
     try {
@@ -530,7 +556,7 @@ const main = async () => {
         console.log(`Loaded ${dataTable.numRows} gaussians`);
 
         // write file
-        await writeFile(resolve(outputArg.filename), dataTable, options);
+        await writeFile(outputFilename, dataTable, options);
     } catch (err) {
         // handle errors
         console.error(err);
