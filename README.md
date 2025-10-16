@@ -77,6 +77,8 @@ Actions can be repeated and applied in any order:
 -c, --cpu                               Use CPU for SOG spherical harmonic compression
 -i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10
 -E, --viewer-settings  <settings.json>  HTML viewer settings JSON file
+ -G, --lod-chunk-gaussians <N|Nk>       Approx. Gaussians per LOD chunk (K = ×1024). Default: 512K
+ -M, --lod-max-node-size  <units>       Max node AABB size before split (world units). Default: 16
 ```
 
 > [!NOTE]
@@ -156,6 +158,9 @@ splat-transform -w cloudA.ply -r 0,90,0 cloudB.ply -s 2 merged.compressed.ply
 
 # Apply final transformations to combined result
 splat-transform input1.ply input2.ply output.ply -t 0,0,10 -s 0.5
+
+# Generate LOD with custom chunk size and node split size
+splat-transform input.ply output/lod-meta.json --lod-chunk-gaussians 512K --lod-max-node-size 16
 ```
 
 ### Generators (Beta)

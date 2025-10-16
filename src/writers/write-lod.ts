@@ -132,7 +132,15 @@ const binIndices = (parent: BTreeNode, lod: TypedArray) => {
     return result;
 };
 
-const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFilename: string, shIterations = 10, shMethod: 'cpu' | 'gpu') => {
+const writeLod = async (
+    fileHandle: FileHandle,
+    dataTable: DataTable,
+    outputFilename: string,
+    shIterations = 10,
+    shMethod: 'cpu' | 'gpu',
+    chunkGaussians = 512 * 1024,
+    maxNodeSize = 16
+) => {
     // ensure top-level output folder exists
     await mkdir(dirname(outputFilename), { recursive: true });
 
@@ -146,8 +154,8 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     const bTree = new BTree(centroidsTable);
 
     // approximate number of gaussians we'll place into file units
-    const binSize = 512 * 1024;
-    const binDim = 16;
+    const binSize = chunkGaussians;
+    const binDim = maxNodeSize;
 
     // map of lod -> fileBin[]
     // fileBin: number[][]

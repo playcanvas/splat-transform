@@ -29,7 +29,9 @@ type Options = {
     version: boolean,
     cpu: boolean,
     iterations: number,
-    viewerSettingsPath?: string
+    viewerSettingsPath?: string,
+    lodChunkGaussians?: number,
+    lodMaxNodeSize?: number
 };
 
 const fileExists = async (filename: string) => {
@@ -117,6 +119,13 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
     const outputFile = await open(tmpPathname, 'wx');
 
     try {
+        // validate LOD-only flags are used only with LOD output
+        if (outputFormat !== 'lod') {
+            if (options.lodChunkGaussians !== undefined || options.lodMaxNodeSize !== undefined) {
+                throw new Error('--lod-chunk-gaussians and --lod-max-node-size are only valid when output is lod-meta.json');
+            }
+        }
+
         // write the file data
         switch (outputFormat) {
             case 'csv':
@@ -126,7 +135,15 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
                 await writeSog(outputFile, dataTable, filename, options.iterations, options.cpu ? 'cpu' : 'gpu');
                 break;
             case 'lod':
-                await writeLod(outputFile, dataTable, filename, options.iterations, options.cpu ? 'cpu' : 'gpu');
+                await writeLod(
+                    outputFile,
+                    dataTable,
+                    filename,
+                    options.iterations,
+                    options.cpu ? 'cpu' : 'gpu',
+                    options.lodChunkGaussians ?? 512 * 1024,
+                    options.lodMaxNodeSize ?? 16
+                );
                 break;
             case 'compressed-ply':
                 await writeCompressedPly(outputFile, dataTable);
@@ -243,6 +260,8 @@ const parseArguments = () => {
             cpu: { type: 'boolean', short: 'c' },
             iterations: { type: 'string', short: 'i' },
             'viewer-settings': { type: 'string', short: 'E' },
+            'lod-chunk-gaussians': { type: 'string', short: 'G' },
+            'lod-max-node-size': { type: 'string', short: 'M' },
 
             // per-file options
             translate: { type: 'string', short: 't', multiple: true },
@@ -270,6 +289,21 @@ const parseArguments = () => {
         const result = parseInt(value, 10);
         if (isNaN(result)) {
             throw new Error(`Invalid integer value: ${value}`);
+        }
+        return result;
+    };
+
+    const parseKilo = (value: string): number => {
+        const trimmed = value.trim();
+        const match = /^(\d+)\s*(k)?$/i.exec(trimmed);
+        if (!match) {
+            throw new Error(`Invalid value: ${value}. Expected integer optionally suffixed with K`);
+        }
+        const base = parseInt(match[1], 10);
+        const isK = !!match[2];
+        const result = isK ? base * 1024 : base;
+        if (!(result > 0)) {
+            throw new Error(`Invalid value: ${value}. Must be > 0`);
         }
         return result;
     };
@@ -305,6 +339,17 @@ const parseArguments = () => {
         iterations: parseInteger(v.iterations ?? '10'),
         viewerSettingsPath: (v as any)['viewer-settings']
     };
+
+    if ((v as any)['lod-chunk-gaussians'] !== undefined) {
+        options.lodChunkGaussians = parseKilo((v as any)['lod-chunk-gaussians']);
+    }
+    if ((v as any)['lod-max-node-size'] !== undefined) {
+        const value = Number((v as any)['lod-max-node-size']);
+        if (!isFinite(value) || value <= 0) {
+            throw new Error(`Invalid --lod-max-node-size value: ${(v as any)['lod-max-node-size']}. Must be a positive number.`);
+        }
+        options.lodMaxNodeSize = value;
+    }
 
     for (const t of tokens) {
         if (t.kind === 'positional') {
@@ -465,6 +510,8 @@ GLOBAL OPTIONS
     -c, --cpu                               Use CPU for SOG spherical harmonic compression
     -i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10
     -E, --viewer-settings  <settings.json>  HTML viewer settings JSON file
+    -G, --lod-chunk-gaussians <N|Nk>        Approx. Gaussians per LOD chunk (K = ×1024). Default: 512K
+    -M, --lod-max-node-size  <units>        Max node AABB size before split (world units). Default: 16
 
 EXAMPLES
     # Scale then translate

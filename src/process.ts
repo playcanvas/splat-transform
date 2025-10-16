@@ -57,7 +57,17 @@ type Lod = {
     value: number;
 };
 
-type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | Param | Lod;
+type LodChunkGaussians = {
+    kind: 'lodChunkGaussians';
+    value: number;
+};
+
+type LodMaxNodeSize = {
+    kind: 'lodMaxNodeSize';
+    value: number;
+};
+
+type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | Param | Lod | LodChunkGaussians | LodMaxNodeSize;
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
@@ -183,6 +193,11 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
             }
             case 'lod': {
                 result.addColumn(new Column('lod', new Float32Array(result.numRows).fill(processAction.value)));
+                break;
+            }
+            case 'lodChunkGaussians':
+            case 'lodMaxNodeSize': {
+                // writer-only options; ignored during data processing
                 break;
             }
         }
