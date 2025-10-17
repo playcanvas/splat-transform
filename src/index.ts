@@ -122,7 +122,7 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
         // validate LOD-only flags are used only with LOD output
         if (outputFormat !== 'lod') {
             if (options.lodChunkGaussians !== undefined || options.lodMaxNodeSize !== undefined) {
-                throw new Error('--lod-chunk-gaussians and --lod-max-node-size are only valid when output is lod-meta.json');
+                throw new Error('--lod-chunk-size and --lod-max-extent are only valid when output is lod-meta.json');
             }
         }
 
@@ -260,8 +260,8 @@ const parseArguments = () => {
             cpu: { type: 'boolean', short: 'c' },
             iterations: { type: 'string', short: 'i' },
             'viewer-settings': { type: 'string', short: 'E' },
-            'lod-chunk-gaussians': { type: 'string', short: 'G' },
-            'lod-max-node-size': { type: 'string', short: 'M' },
+            'lod-chunk-size': { type: 'string', short: 'C' },
+            'lod-max-extent': { type: 'string', short: 'X' },
 
             // per-file options
             translate: { type: 'string', short: 't', multiple: true },
@@ -340,13 +340,13 @@ const parseArguments = () => {
         viewerSettingsPath: (v as any)['viewer-settings']
     };
 
-    if ((v as any)['lod-chunk-gaussians'] !== undefined) {
-        options.lodChunkGaussians = parseKilo((v as any)['lod-chunk-gaussians']);
+    if ((v as any)['lod-chunk-size'] !== undefined) {
+        options.lodChunkGaussians = parseKilo((v as any)['lod-chunk-size']);
     }
-    if ((v as any)['lod-max-node-size'] !== undefined) {
-        const value = Number((v as any)['lod-max-node-size']);
+    if ((v as any)['lod-max-extent'] !== undefined) {
+        const value = Number((v as any)['lod-max-extent']);
         if (!isFinite(value) || value <= 0) {
-            throw new Error(`Invalid --lod-max-node-size value: ${(v as any)['lod-max-node-size']}. Must be a positive number.`);
+            throw new Error(`Invalid --lod-max-extent value: ${(v as any)['lod-max-extent']}. Must be a positive number.`);
         }
         options.lodMaxNodeSize = value;
     }
@@ -510,8 +510,8 @@ GLOBAL OPTIONS
     -c, --cpu                               Use CPU for SOG spherical harmonic compression
     -i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10
     -E, --viewer-settings  <settings.json>  HTML viewer settings JSON file
-    -G, --lod-chunk-gaussians <N|Nk>        Approx. Gaussians per LOD chunk (K = ×1024). Default: 512K
-    -M, --lod-max-node-size  <units>        Max node AABB size before split (world units). Default: 16
+    -C, --lod-chunk-size     <N|Nk>         Target splats per LOD chunk (K = ×1024). Default: 512K
+    -X, --lod-max-extent     <units>        Max AABB extent before node split (world units). Default: 16
 
 EXAMPLES
     # Scale then translate

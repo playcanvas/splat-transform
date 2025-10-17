@@ -77,8 +77,8 @@ Actions can be repeated and applied in any order:
 -c, --cpu                               Use CPU for SOG spherical harmonic compression
 -i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10
 -E, --viewer-settings  <settings.json>  HTML viewer settings JSON file
- -G, --lod-chunk-gaussians <N|Nk>       Approx. Gaussians per LOD chunk (K = ×1024). Default: 512K
- -M, --lod-max-node-size  <units>       Max node AABB size before split (world units). Default: 16
+ -C, --lod-chunk-size     <N|Nk>        Target splats per LOD chunk (K = ×1024). Default: 512K
+ -X, --lod-max-extent     <units>       Max AABB extent before node split (world units). Default: 16
 ```
 
 > [!NOTE]
