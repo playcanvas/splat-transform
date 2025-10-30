@@ -11,6 +11,7 @@ import { Column, DataTable, TypedArray } from './data-table';
 import { ProcessAction, processDataTable } from './process';
 import { isCompressedPly, decompressPly } from './readers/decompress-ply';
 import { readKsplat } from './readers/read-ksplat';
+import { readLcc } from './readers/read-lcc';
 import { readMjs, Param } from './readers/read-mjs';
 import { readPly } from './readers/read-ply';
 import { readSog } from './readers/read-sog';
@@ -32,6 +33,10 @@ type Options = {
     viewerSettingsPath?: string
 };
 
+type InputFormat = 'mjs' | 'ksplat' | 'splat' | 'sog' | 'ply' | 'spz' | 'lcc';
+
+type OutputFormat = 'csv' | 'sog' | 'lod' | 'compressed-ply' | 'ply' | 'html';
+
 const fileExists = async (filename: string) => {
     try {
         await lstat(filename);
@@ -44,46 +49,29 @@ const fileExists = async (filename: string) => {
     }
 };
 
-const readFile = async (filename: string, params: Param[]) => {
+const getInputFormat = (filename: string): InputFormat => {
     const lowerFilename = filename.toLowerCase();
-    let fileData;
-
-    console.log(`reading '${filename}'...`);
 
     if (lowerFilename.endsWith('.mjs')) {
-        fileData = await readMjs(filename, params);
-    } else {
-        const inputFile = await open(filename, 'r');
-
-        if (lowerFilename.endsWith('.ksplat')) {
-            fileData = await readKsplat(inputFile);
-        } else if (lowerFilename.endsWith('.splat')) {
-            fileData = await readSplat(inputFile);
-        } else if (lowerFilename.endsWith('.sog') || lowerFilename.endsWith('meta.json')) {
-            fileData = await readSog(inputFile, filename);
-        } else if (lowerFilename.endsWith('.ply')) {
-            const ply = await readPly(inputFile);
-            if (isCompressedPly(ply)) {
-                fileData = {
-                    comments: ply.comments,
-                    elements: [{ name: 'vertex', dataTable: decompressPly(ply) }]
-                };
-            } else {
-                fileData = ply;
-            }
-        } else if (lowerFilename.endsWith('.spz')) {
-            fileData = await readSpz(inputFile);
-        } else {
-            await inputFile.close();
-            throw new Error(`Unsupported input file type: ${filename}`);
-        }
-
-        await inputFile.close();
+        return 'mjs';
+    } else if (lowerFilename.endsWith('.ksplat')) {
+        return 'ksplat';
+    } else if (lowerFilename.endsWith('.splat')) {
+        return 'splat';
+    } else if (lowerFilename.endsWith('.sog') || lowerFilename.endsWith('meta.json')) {
+        return 'sog';
+    } else if (lowerFilename.endsWith('.ply')) {
+        return 'ply';
+    } else if (lowerFilename.endsWith('.spz')) {
+        return 'spz';
+    } else if (lowerFilename.endsWith('.lcc')) {
+        return 'lcc';
     }
-    return fileData;
+
+    throw new Error(`Unsupported input file type: ${filename}`);
 };
 
-const getOutputFormat = (filename: string) => {
+const getOutputFormat = (filename: string): OutputFormat => {
     const lowerFilename = filename.toLowerCase();
 
     if (lowerFilename.endsWith('.csv')) {
@@ -101,6 +89,45 @@ const getOutputFormat = (filename: string) => {
     }
 
     throw new Error(`Unsupported output file type: ${filename}`);
+};
+
+const readFile = async (filename: string, params: Param[]): Promise<DataTable[]> => {
+    const inputFormat = getInputFormat(filename);
+    let result: DataTable[];
+
+    console.log(`reading '${filename}'...`);
+
+    if (inputFormat === 'mjs') {
+        result = [await readMjs(filename, params)];
+    } else {
+        const inputFile = await open(filename, 'r');
+
+        if (inputFormat === 'ksplat') {
+            result = [await readKsplat(inputFile)];
+        } else if (inputFormat === 'splat') {
+            result = [await readSplat(inputFile)];
+        } else if (inputFormat === 'sog') {
+            result = [await readSog(inputFile, filename)];
+        } else if (inputFormat === 'ply') {
+            const ply = await readPly(inputFile);
+            if (isCompressedPly(ply)) {
+                result = [decompressPly(ply)];
+            } else {
+                if (ply.elements.length !== 1 || ply.elements[0].name !== 'vertex') {
+                    throw new Error(`Unsupported data in file '${filename}'`);
+                }
+                result = [ply.elements[0].dataTable];
+            }
+        } else if (inputFormat === 'spz') {
+            result = [await readSpz(inputFile)];
+        } else if (inputFormat === 'lcc') {
+            result = await readLcc(inputFile, filename);
+        }
+
+        await inputFile.close();
+    }
+
+    return result;
 };
 
 const writeFile = async (filename: string, dataTable: DataTable, options: Options) => {
@@ -517,35 +544,31 @@ const main = async () => {
 
     try {
         // read, filter, process input files
-        const inputFiles = (await Promise.all(inputArgs.map(async (inputArg) => {
+        const inputDataTables = (await Promise.all(inputArgs.map(async (inputArg) => {
             // extract params
             const params = inputArg.processActions.filter(a => a.kind === 'param').map((p) => {
                 return { name: p.name, value: p.value };
             });
 
             // read input
-            const file = await readFile(resolve(inputArg.filename), params);
+            const dataTables = await readFile(resolve(inputArg.filename), params);
 
-            // filter out non-gs data
-            if (file.elements.length !== 1 || file.elements[0].name !== 'vertex') {
-                throw new Error(`Unsupported data in file '${inputArg.filename}'`);
+            for (let i = 0; i < dataTables.length; ++i) {
+                const dataTable = dataTables[i];
+
+                if (dataTable.numRows === 0 || !isGSDataTable(dataTable)) {
+                    throw new Error(`Unsupported data in file '${inputArg.filename}'`);
+                }
+
+                dataTables[i] = processDataTable(dataTable, inputArg.processActions);
             }
 
-            const element = file.elements[0];
-
-            const { dataTable } = element;
-            if (dataTable.numRows === 0 || !isGSDataTable(dataTable)) {
-                throw new Error(`Unsupported data in file '${inputArg.filename}'`);
-            }
-
-            element.dataTable = processDataTable(dataTable, inputArg.processActions);
-
-            return file;
-        }))).filter(file => file !== null);
+            return dataTables;
+        }))).flat(1).filter(dataTable => dataTable !== null);
 
         // combine inputs into a single output dataTable
         const dataTable = processDataTable(
-            combine(inputFiles.map(file => file.elements[0].dataTable)),
+            combine(inputDataTables),
             outputArg.processActions
         );
 

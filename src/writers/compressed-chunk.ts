@@ -1,6 +1,6 @@
 import { Quat } from 'playcanvas';
 
-import { sigmoid } from './utils/math';
+import { sigmoid } from '../utils/math';
 
 const q = new Quat();
 
