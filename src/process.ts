@@ -182,7 +182,10 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
                 break;
             }
             case 'lod': {
-                result.addColumn(new Column('lod', new Float32Array(result.numRows).fill(processAction.value)));
+                if (!result.getColumnByName('lod')) {
+                    result.addColumn(new Column('lod', new Float32Array(result.numRows)));
+                }
+                result.getColumnByName('lod').data.fill(processAction.value);
                 break;
             }
         }

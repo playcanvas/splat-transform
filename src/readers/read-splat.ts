@@ -3,14 +3,6 @@ import { FileHandle } from 'node:fs/promises';
 
 import { Column, DataTable } from '../data-table';
 
-type SplatData = {
-    comments: string[];
-    elements: {
-        name: string,
-        dataTable: DataTable
-    }[];
-};
-
 const readSplat = async (fileHandle: FileHandle): Promise<DataTable> => {
     // Get file size to determine number of splats
     const fileStats = await fileHandle.stat();
@@ -141,4 +133,4 @@ const readSplat = async (fileHandle: FileHandle): Promise<DataTable> => {
     return new DataTable(columns);
 };
 
-export { SplatData, readSplat };
+export { readSplat };

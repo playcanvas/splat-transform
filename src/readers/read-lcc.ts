@@ -2,7 +2,10 @@ import { Buffer } from 'node:buffer';
 import { FileHandle, open } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
+import { Vec3 } from 'playcanvas';
+
 import { Column, DataTable } from '../data-table';
+import { Options } from '../types';
 
 const kSH_C0 = 0.28209479177387814;
 const SQRT_2 = 1.414213562373095;
@@ -21,12 +24,6 @@ type LccUnitInfo = {
     x: number;          // x index
     y: number;          // y index
     lods: Array<LccLod>;    //  lods
-}
-
-type Vec3 = {
-    x: number,
-    y: number,
-    z: number
 }
 
 // Used to decompress scale in data.bin and sh in shcoef.bin
@@ -61,7 +58,6 @@ type ProcessUnitContext = {
 }
 
 const readPart = async (fh: FileHandle, start: number, end: number): Promise<Uint8Array> => {
-    console.log(`Reading bytes ${start} to ${end} from file size ${ (await fh.stat()).size }`);
     const buf = Buffer.alloc(end - start);
     await fh.read(buf, 0, end - start, start);
     return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
@@ -95,10 +91,10 @@ const parseMeta = (obj: any): CompressInfo => {
     const shMax = attributes.shcoef.max;
 
     const compressInfo: CompressInfo = {
-        compressedScaleMin: { x: scaleMin[0], y: scaleMin[1], z: scaleMin[2] },
-        compressedScaleMax: { x: scaleMax[0], y: scaleMax[1], z: scaleMax[2] },
-        compressedSHMin: { x: shMin[0], y: shMin[1], z: shMin[2] },
-        compressedSHMax: { x: shMax[0], y: shMax[1], z: shMax[2] }
+        compressedScaleMin: new Vec3(scaleMin[0], scaleMin[1], scaleMin[2]),
+        compressedScaleMax: new Vec3(scaleMax[0], scaleMax[1], scaleMax[2]),
+        compressedSHMin: new Vec3(shMin[0], shMin[1], shMin[2]),
+        compressedSHMax: new Vec3(shMax[0], shMax[1], shMax[2])
     };
 
     return compressInfo;
@@ -166,19 +162,19 @@ const mix = (min: number, max: number, s: number): number => {
 };
 
 const mixVec3 = (min: Vec3, max: Vec3, v: Vec3): Vec3 => {
-    return {
-        x: mix(min.x, max.x, v.x),
-        y: mix(min.y, max.y, v.y),
-        z: mix(min.z, max.z, v.z)
-    };
+    return new Vec3(
+        mix(min.x, max.x, v.x),
+        mix(min.y, max.y, v.y),
+        mix(min.z, max.z, v.z)
+    );
 };
 
 const DecodePacked_11_10_11 = (enc: number): Vec3 => {
-    return {
-        x: (enc & 0x7FF) / 2047.0,
-        y: ((enc >> 11) & 0x3FF) / 1023.0,
-        z: ((enc >> 21) & 0x7FF) / 2047.0
-    };
+    return new Vec3(
+        (enc & 0x7FF) / 2047.0,
+        ((enc >> 11) & 0x3FF) / 1023.0,
+        ((enc >> 21) & 0x7FF) / 2047.0
+    );
 };
 
 const decodeRotation = (v: number) => {
@@ -246,8 +242,8 @@ const decodeSplat = (
     unitProperties.property_opacity[i] = InvSigmoid(dataView.getUint8(off + 15) / 255.0);
 
     // decode scale
-    const scaleMin: Vec3 = compressInfo.compressedScaleMin;
-    const scaleMax: Vec3 = compressInfo.compressedScaleMax;
+    const scaleMin = compressInfo.compressedScaleMin;
+    const scaleMax = compressInfo.compressedScaleMax;
     unitProperties.property_scale_0[i] = InvLinearScale(mix(scaleMin.x, scaleMax.x, dataView.getUint16(off + 16, true) / 65535.0));
     unitProperties.property_scale_1[i] = InvLinearScale(mix(scaleMin.y, scaleMax.y, dataView.getUint16(off + 18, true) / 65535.0));
     unitProperties.property_scale_2[i] = InvLinearScale(mix(scaleMin.z, scaleMax.z, dataView.getUint16(off + 20, true) / 65535.0));
@@ -357,14 +353,13 @@ const deserializeFromLcc = async (param: LccParam) => {
 
     const columns = [
         ...floatProps.map(name => new Column(name, properties[`property_${name}`])),
-        ...(properties_f_rest ? properties_f_rest.map((storage, i) => new Column(`f_rest_${i}`, storage)) : []),
-        new Column('lod', new Float32Array(totalSplats).fill(targetLod))
+        ...(properties_f_rest ? properties_f_rest.map((storage, i) => new Column(`f_rest_${i}`, storage)) : [])
     ];
 
     return new DataTable(columns);
 };
 
-const readLcc = async (fileHandle: FileHandle, sourceName?: string): Promise<DataTable[]> => {
+const readLcc = async (fileHandle: FileHandle, sourceName: string, options: Options): Promise<DataTable[]> => {
     const lccData = await read(fileHandle);
     const lccText = new TextDecoder().decode(lccData);
     const lccJson = JSON.parse(lccText);
@@ -381,18 +376,35 @@ const readLcc = async (fileHandle: FileHandle, sourceName?: string): Promise<Dat
 
     const unitInfos: LccUnitInfo[] = parseIndexBin(indexData.buffer as ArrayBuffer, lccJson);
 
+    // build table of input -> output lods
+    const lods = options.lodSelect.length > 0 ?
+        options.lodSelect.filter(lod => lod >= 0 && lod < splats.length) :
+        new Array(splats.length).fill(0).map((_, i) => i);
+
+    if (lods.length === 0) {
+        throw new Error('No valid LODs selected for LCC input');
+    }
+
     const result = [];
 
-    for (let i = 0; i < splats.length; i++) {
-        result.push(await deserializeFromLcc({
-            totalSplats: splats[i],
+    for (let i = 0; i < lods.length; i++) {
+        const inputLod = lods[i];
+        const outputLod = i;
+        const totalSplats = splats[inputLod];
+
+        const dataTable = await deserializeFromLcc({
+            totalSplats,
             unitInfos,
-            targetLod: i,
+            targetLod: outputLod,
             isHasSH: isHasSH && !!shFile,
             dataFile,
             shFile,
             compressInfo
-        }));
+        });
+
+        dataTable.addColumn(new Column('lod', new Float32Array(totalSplats).fill(outputLod)));
+
+        result.push(dataTable);
     }
 
     // cleanup

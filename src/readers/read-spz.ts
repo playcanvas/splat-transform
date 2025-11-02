@@ -5,14 +5,6 @@ import { Column, DataTable } from '../data-table';
 
 // See https://github.com/nianticlabs/spz for reference implementation
 
-type SplatData = {
-    comments: string[];
-    elements: {
-        name: string,
-        dataTable: DataTable
-    }[];
-};
-
 const decompressGZIP = async (fileHandle: FileHandle): Promise<Buffer<ArrayBuffer>> => {
     const stats = await fileHandle.stat();
     const zippedSize = stats.size;
@@ -234,4 +226,4 @@ const readSpz = async (fileHandle: FileHandle): Promise<DataTable> => {
     return new DataTable(columns);
 };
 
-export { SplatData, readSpz };
+export { readSpz };

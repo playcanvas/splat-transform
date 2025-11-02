@@ -6,7 +6,9 @@ import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 import { TypedArray, DataTable } from '../data-table';
 import { generateOrdering } from '../ordering';
 import { writeSog } from './write-sog.js';
+import { Options } from '../types';
 import { BTreeNode, BTree } from '../utils/b-tree';
+
 
 type Aabb = {
     min: number[],
@@ -132,7 +134,7 @@ const binIndices = (parent: BTreeNode, lod: TypedArray) => {
     return result;
 };
 
-const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFilename: string, shIterations = 10, shMethod: 'cpu' | 'gpu') => {
+const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFilename: string, options: Options) => {
     // ensure top-level output folder exists
     await mkdir(dirname(outputFilename), { recursive: true });
 
@@ -146,8 +148,8 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     const bTree = new BTree(centroidsTable);
 
     // approximate number of gaussians we'll place into file units
-    const binSize = 512 * 1024;
-    const binDim = 16;
+    const binSize = options.lodChunkCount * 1024;
+    const binDim = options.lodChunkExtents;
 
     // map of lod -> fileBin[]
     // fileBin: number[][]
@@ -264,7 +266,7 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
 
             console.log(`writing ${pathname}...`);
 
-            await writeSog(outputFile, unitDataTable, pathname, shIterations, shMethod, indices);
+            await writeSog(outputFile, unitDataTable, pathname, options, indices);
 
             await outputFile.close();
         }

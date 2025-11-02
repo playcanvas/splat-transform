@@ -1,17 +1,5 @@
 import { Column, DataTable } from '../data-table';
-
-type SplatData = {
-    comments: string[];
-    elements: {
-        name: string,
-        dataTable: DataTable
-    }[];
-};
-
-type Param = {
-    name: string;
-    value: string;
-};
+import { Param } from '../types';
 
 type Generator = {
     count: number;
@@ -46,4 +34,4 @@ const readMjs = async (filename: string, params: Param[]): Promise<DataTable> =>
     return new DataTable(columns);
 };
 
-export { Param, readMjs };
+export { readMjs };

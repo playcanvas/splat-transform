@@ -12,26 +12,18 @@ import { ProcessAction, processDataTable } from './process';
 import { isCompressedPly, decompressPly } from './readers/decompress-ply';
 import { readKsplat } from './readers/read-ksplat';
 import { readLcc } from './readers/read-lcc';
-import { readMjs, Param } from './readers/read-mjs';
+import { readMjs } from './readers/read-mjs';
 import { readPly } from './readers/read-ply';
 import { readSog } from './readers/read-sog';
 import { readSplat } from './readers/read-splat';
 import { readSpz } from './readers/read-spz';
+import { Options, Param } from './types';
 import { writeCompressedPly } from './writers/write-compressed-ply';
 import { writeCsv } from './writers/write-csv';
 import { writeHtml } from './writers/write-html';
 import { writeLod } from './writers/write-lod';
 import { writePly } from './writers/write-ply';
 import { writeSog } from './writers/write-sog';
-
-type Options = {
-    overwrite: boolean,
-    help: boolean,
-    version: boolean,
-    cpu: boolean,
-    iterations: number,
-    viewerSettingsPath?: string
-};
 
 type InputFormat = 'mjs' | 'ksplat' | 'splat' | 'sog' | 'ply' | 'spz' | 'lcc';
 
@@ -91,7 +83,7 @@ const getOutputFormat = (filename: string): OutputFormat => {
     throw new Error(`Unsupported output file type: ${filename}`);
 };
 
-const readFile = async (filename: string, params: Param[]): Promise<DataTable[]> => {
+const readFile = async (filename: string, options: Options, params: Param[]): Promise<DataTable[]> => {
     const inputFormat = getInputFormat(filename);
     let result: DataTable[];
 
@@ -121,7 +113,7 @@ const readFile = async (filename: string, params: Param[]): Promise<DataTable[]>
         } else if (inputFormat === 'spz') {
             result = [await readSpz(inputFile)];
         } else if (inputFormat === 'lcc') {
-            result = await readLcc(inputFile, filename);
+            result = await readLcc(inputFile, filename, options);
         }
 
         await inputFile.close();
@@ -150,10 +142,10 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
                 await writeCsv(outputFile, dataTable);
                 break;
             case 'sog':
-                await writeSog(outputFile, dataTable, filename, options.iterations, options.cpu ? 'cpu' : 'gpu');
+                await writeSog(outputFile, dataTable, filename, options);
                 break;
             case 'lod':
-                await writeLod(outputFile, dataTable, filename, options.iterations, options.cpu ? 'cpu' : 'gpu');
+                await writeLod(outputFile, dataTable, filename, options);
                 break;
             case 'compressed-ply':
                 await writeCompressedPly(outputFile, dataTable);
@@ -168,7 +160,7 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
                 });
                 break;
             case 'html':
-                await writeHtml(outputFile, dataTable, options.iterations, options.cpu ? 'cpu' : 'gpu', options.viewerSettingsPath);
+                await writeHtml(outputFile, dataTable, options);
                 break;
         }
 
@@ -264,12 +256,15 @@ const parseArguments = () => {
         allowNegative: true,
         options: {
             // global options
-            overwrite: { type: 'boolean', short: 'w' },
-            help: { type: 'boolean', short: 'h' },
-            version: { type: 'boolean', short: 'v' },
-            cpu: { type: 'boolean', short: 'c' },
-            iterations: { type: 'string', short: 'i' },
-            'viewer-settings': { type: 'string', short: 'E' },
+            overwrite: { type: 'boolean', short: 'w', default: false },
+            help: { type: 'boolean', short: 'h', default: false },
+            version: { type: 'boolean', short: 'v', default: false },
+            cpu: { type: 'boolean', short: 'c', default: false },
+            iterations: { type: 'string', short: 'i', default: '10' },
+            'lod-select': { type: 'string', default: '' },
+            'viewer-settings': { type: 'string', short: 'E', default: '' },
+            'lod-chunk-count': { type: 'string', default: '512' },
+            'lod-chunk-extents': { type: 'string', default: '16' },
 
             // per-file options
             translate: { type: 'string', short: 't', multiple: true },
@@ -325,12 +320,15 @@ const parseArguments = () => {
     const files: File[] = [];
 
     const options: Options = {
-        overwrite: v.overwrite ?? false,
-        help: v.help ?? false,
-        version: v.version ?? false,
-        cpu: v.cpu ?? false,
-        iterations: parseInteger(v.iterations ?? '10'),
-        viewerSettingsPath: (v as any)['viewer-settings']
+        overwrite: v.overwrite,
+        help: v.help,
+        version: v.version,
+        cpu: v.cpu,
+        iterations: parseInteger(v.iterations),
+        lodSelect: v['lod-select'].split(',').filter(v => !!v).map(parseInteger).filter(n => n !== null),
+        viewerSettingsPath: v['viewer-settings'],
+        lodChunkCount: parseInteger(v['lod-chunk-count']),
+        lodChunkExtents: parseInteger(v['lod-chunk-extents'])
     };
 
     for (const t of tokens) {
@@ -467,7 +465,7 @@ USAGE
   • The last file is the output; actions after it modify the final result.
 
 SUPPORTED INPUTS
-    .ply   .compressed.ply   .sog   meta.json   .ksplat   .splat   .spz   .mjs
+    .ply   .compressed.ply   .sog   meta.json   .ksplat   .splat   .spz   .mjs.   .lcc
 
 SUPPORTED OUTPUTS
     .ply   .compressed.ply   .sog   meta.json   .csv   .html
@@ -551,7 +549,7 @@ const main = async () => {
             });
 
             // read input
-            const dataTables = await readFile(resolve(inputArg.filename), params);
+            const dataTables = await readFile(resolve(inputArg.filename), options, params);
 
             for (let i = 0; i < dataTables.length; ++i) {
                 const dataTable = dataTables[i];
