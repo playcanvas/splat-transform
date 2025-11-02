@@ -325,7 +325,7 @@ const parseArguments = () => {
         version: v.version,
         cpu: v.cpu,
         iterations: parseInteger(v.iterations),
-        lodSelect: v['lod-select'].split(',').filter(v => !!v).map(parseInteger).filter(n => n !== null),
+        lodSelect: v['lod-select'].split(',').filter(v => !!v).map(parseInteger),
         viewerSettingsPath: v['viewer-settings'],
         lodChunkCount: parseInteger(v['lod-chunk-count']),
         lodChunkExtent: parseInteger(v['lod-chunk-extent'])
@@ -465,7 +465,7 @@ USAGE
   • The last file is the output; actions after it modify the final result.
 
 SUPPORTED INPUTS
-    .ply   .compressed.ply   .sog   meta.json   .ksplat   .splat   .spz   .mjs.   .lcc
+    .ply   .compressed.ply   .sog   meta.json   .ksplat   .splat   .spz   .mjs   .lcc
 
 SUPPORTED OUTPUTS
     .ply   .compressed.ply   .sog   meta.json   .csv   .html

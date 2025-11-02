@@ -38,7 +38,6 @@ type CompressInfo = {
 type LccParam = {
     totalSplats: number;
     targetLod: number;
-    isHasSH: boolean;
     compressInfo: CompressInfo;
     unitInfos: Array<LccUnitInfo>;
     dataFile: FileHandle;
@@ -48,7 +47,6 @@ type LccParam = {
 type ProcessUnitContext = {
     info: LccUnitInfo;
     targetLod: number;
-    isHasSH: boolean;
     dataFile: FileHandle;
     shFile?: FileHandle;
     compressInfo: CompressInfo;
@@ -225,8 +223,7 @@ const decodeSplat = (
     i: number,
     compressInfo: CompressInfo,
     unitProperties: Record<string, Float32Array>,
-    unitProperties_f_rest: Float32Array[] | null,
-    isHasSH: boolean
+    unitProperties_f_rest: Float32Array[] | null
 ) => {
     const off = i * 32;
 
@@ -261,7 +258,7 @@ const decodeSplat = (
     unitProperties.property_nz[i] = dataView.getUint16(off + 30, true);
 
     // SH
-    if (isHasSH && shDataView && unitProperties_f_rest) {
+    if (shDataView && unitProperties_f_rest) {
         const shOff = off * 2;
         const SHValues = Array.from({ length: 15 }, (_, idx) => shDataView.getUint32(shOff + idx * 4, true));
         const { compressedSHMin, compressedSHMax } = compressInfo;
@@ -279,7 +276,6 @@ const processUnit = async (ctx: ProcessUnitContext) => {
     const {
         info,
         targetLod,
-        isHasSH,
         dataFile,
         shFile,
         compressInfo,
@@ -302,24 +298,24 @@ const processUnit = async (ctx: ProcessUnitContext) => {
     const dataView = new DataView(dataSource.buffer);
 
     // load sh data
-    let shDataView: DataView;
-    if (isHasSH) {
+    let shDataView: DataView | null = null;
+    if (shFile) {
         const shSource = await readPart(shFile, offset * 2, offset * 2 + size * 2);
         shDataView = new DataView(shSource.buffer);
     }
 
     const unitProperties = initProperties(unitSplats);
-    const unitProperties_f_rest = isHasSH ? Array.from({ length: 45 }, () => new Float32Array(unitSplats)) : null;
+    const unitProperties_f_rest = shFile ? Array.from({ length: 45 }, () => new Float32Array(unitSplats)) : null;
 
     for (let i = 0; i < unitSplats; i++) {
-        decodeSplat(dataView, shDataView, i, compressInfo, unitProperties, unitProperties_f_rest, isHasSH);
+        decodeSplat(dataView, shDataView, i, compressInfo, unitProperties, unitProperties_f_rest);
     }
 
     for (const key of floatProps) {
         properties[`property_${key}`].set(unitProperties[`property_${key}`], propertyOffset);
     }
 
-    if (isHasSH && properties_f_rest && unitProperties_f_rest) {
+    if (unitProperties_f_rest) {
         for (let j = 0; j < 45; j++) {
             properties_f_rest[j].set(unitProperties_f_rest[j], propertyOffset);
         }
@@ -330,18 +326,17 @@ const processUnit = async (ctx: ProcessUnitContext) => {
 
 // this function would stream data directly into GSplatData buffers
 const deserializeFromLcc = async (param: LccParam) => {
-    const { totalSplats, unitInfos, targetLod, isHasSH, dataFile, shFile, compressInfo } = param;
+    const { totalSplats, unitInfos, targetLod, dataFile, shFile, compressInfo } = param;
 
     // properties to GSplatData
     const properties: Record<string, Float32Array> = initProperties(totalSplats);
-    const properties_f_rest = isHasSH ? Array.from({ length: 45 }, () => createStorage(totalSplats)) : null;
+    const properties_f_rest = shFile ? Array.from({ length: 45 }, () => createStorage(totalSplats)) : null;
 
     let propertyOffset = 0;
     for (const info of unitInfos) {
         propertyOffset = await processUnit({
             info,
             targetLod,
-            isHasSH,
             dataFile,
             shFile,
             compressInfo,
@@ -398,7 +393,6 @@ const readLcc = async (fileHandle: FileHandle, sourceName: string, options: Opti
             totalSplats,
             unitInfos,
             targetLod: inputLod,
-            isHasSH: isHasSH && !!shFile,
             dataFile,
             shFile,
             compressInfo
