@@ -13,7 +13,7 @@ type Options = {
 
     // lod output options
     lodChunkCount: number;
-    lodChunkExtents: number;
+    lodChunkExtent: number;
 
 };
 

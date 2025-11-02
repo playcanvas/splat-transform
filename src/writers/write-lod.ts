@@ -149,7 +149,7 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
 
     // approximate number of gaussians we'll place into file units
     const binSize = options.lodChunkCount * 1024;
-    const binDim = options.lodChunkExtents;
+    const binDim = options.lodChunkExtent;
 
     // map of lod -> fileBin[]
     // fileBin: number[][]

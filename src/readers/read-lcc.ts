@@ -378,11 +378,13 @@ const readLcc = async (fileHandle: FileHandle, sourceName: string, options: Opti
 
     // build table of input -> output lods
     const lods = options.lodSelect.length > 0 ?
-        options.lodSelect.filter(lod => lod >= 0 && lod < splats.length) :
+        options.lodSelect
+        .map(lod => (lod < 0 ? splats.length + lod : lod))    // negative indices map from the end of lod
+        .filter(lod => lod >= 0 && lod < splats.length) :
         new Array(splats.length).fill(0).map((_, i) => i);
 
     if (lods.length === 0) {
-        throw new Error('No valid LODs selected for LCC input');
+        throw new Error(`No valid LODs selected for LCC input file: ${sourceName} lods: ${JSON.stringify(lods)}`);
     }
 
     const result = [];
@@ -395,7 +397,7 @@ const readLcc = async (fileHandle: FileHandle, sourceName: string, options: Opti
         const dataTable = await deserializeFromLcc({
             totalSplats,
             unitInfos,
-            targetLod: outputLod,
+            targetLod: inputLod,
             isHasSH: isHasSH && !!shFile,
             dataFile,
             shFile,

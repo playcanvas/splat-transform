@@ -261,10 +261,10 @@ const parseArguments = () => {
             version: { type: 'boolean', short: 'v', default: false },
             cpu: { type: 'boolean', short: 'c', default: false },
             iterations: { type: 'string', short: 'i', default: '10' },
-            'lod-select': { type: 'string', default: '' },
+            'lod-select': { type: 'string', short: 'O', default: '' },
             'viewer-settings': { type: 'string', short: 'E', default: '' },
-            'lod-chunk-count': { type: 'string', default: '512' },
-            'lod-chunk-extents': { type: 'string', default: '16' },
+            'lod-chunk-count': { type: 'string', short: 'C', default: '512' },
+            'lod-chunk-extent': { type: 'string', short: 'X', default: '16' },
 
             // per-file options
             translate: { type: 'string', short: 't', multiple: true },
@@ -289,8 +289,8 @@ const parseArguments = () => {
     };
 
     const parseInteger = (value: string): number => {
-        const result = parseInt(value, 10);
-        if (isNaN(result)) {
+        const result = parseNumber(value);
+        if (!Number.isInteger(result)) {
             throw new Error(`Invalid integer value: ${value}`);
         }
         return result;
@@ -328,7 +328,7 @@ const parseArguments = () => {
         lodSelect: v['lod-select'].split(',').filter(v => !!v).map(parseInteger).filter(n => n !== null),
         viewerSettingsPath: v['viewer-settings'],
         lodChunkCount: parseInteger(v['lod-chunk-count']),
-        lodChunkExtents: parseInteger(v['lod-chunk-extents'])
+        lodChunkExtent: parseInteger(v['lod-chunk-extent'])
     };
 
     for (const t of tokens) {
@@ -489,7 +489,10 @@ GLOBAL OPTIONS
     -w, --overwrite                         Overwrite output file if it exists
     -c, --cpu                               Use CPU for SOG spherical harmonic compression
     -i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10
+    -O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC input
     -E, --viewer-settings  <settings.json>  HTML viewer settings JSON file
+    -C, --lod-chunk-count  <n>              Approximate number of gaussians per LOD chunk in K. Default: 512
+    -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (meters). Default: 16
 
 EXAMPLES
     # Scale then translate
@@ -503,6 +506,9 @@ EXAMPLES
 
     # Generate synthetic splats using a generator script
     splat-transform gen-grid.mjs -p width=500,height=500,scale=0.1 grid.ply
+
+    # Generate LOD with custom chunk size and node split size
+    splat-transform -O 0,1,2 -C 1024 -X 32 input.lcc output/lod-meta.json
 `;
 
 const main = async () => {
