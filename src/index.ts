@@ -489,10 +489,10 @@ GLOBAL OPTIONS
     -w, --overwrite                         Overwrite output file if it exists
     -c, --cpu                               Use CPU for SOG spherical harmonic compression
     -i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10
-    -O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC input
     -E, --viewer-settings  <settings.json>  HTML viewer settings JSON file
-    -C, --lod-chunk-count  <n>              Approximate number of gaussians per LOD chunk in K. Default: 512
-    -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (meters). Default: 16
+    -O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC input
+    -C, --lod-chunk-count  <n>              Approx number of Gaussians per LOD chunk in K. Default: 512
+    -X, --lod-chunk-extent <n>              Approx size of an LOD chunk in world units (m). Default: 16
 
 EXAMPLES
     # Scale then translate
