@@ -2,6 +2,7 @@ type Options = {
     overwrite: boolean;
     help: boolean;
     version: boolean;
+    quiet: boolean;
     cpu: boolean;
     iterations: number;
 

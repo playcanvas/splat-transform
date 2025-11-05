@@ -1,5 +1,7 @@
 import { Worker } from 'node:worker_threads';
 
+import { logger } from '../logger';
+
 // import { JSDOM } from 'jsdom';
 import {
     // components
@@ -132,7 +134,7 @@ const createDevice = async () => {
 
     // print gpu info
     const info = (graphicsDevice as any).gpuAdapter.info;
-    console.log(`Created gpu device="${info.device || '-'}" arch="${info.architecture || '-'}" descr="${info.description || '-'}"`);
+    logger.debug(`Created gpu device="${info.device || '-'}" arch="${info.architecture || '-'}" descr="${info.description || '-'}"`);
 
     // create the application
     const app = new Application(canvas, { graphicsDevice });

@@ -74,6 +74,7 @@ Actions can be repeated and applied in any order:
 ```none
 -h, --help                              Show this help and exit
 -v, --version                           Show version and exit
+-q, --quiet                             Suppress non-error output
 -w, --overwrite                         Overwrite output file if it exists
 -c, --cpu                               Use CPU for SOG spherical harmonic compression
 -i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10

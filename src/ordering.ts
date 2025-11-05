@@ -1,4 +1,5 @@
 import { DataTable } from './data-table.js';
+import { logger } from './logger';
 
 // sort the compressed indices into morton order
 const generateOrdering = (dataTable: DataTable, indices: Uint32Array) => {
@@ -51,7 +52,7 @@ const generateOrdering = (dataTable: DataTable, indices: Uint32Array) => {
         const zlen = Mz - mz;
 
         if (!isFinite(xlen) || !isFinite(ylen) || !isFinite(zlen)) {
-            console.log('invalid extents', xlen, ylen, zlen);
+            logger.debug('invalid extents', xlen, ylen, zlen);
             return;
         }
 
@@ -96,7 +97,7 @@ const generateOrdering = (dataTable: DataTable, indices: Uint32Array) => {
             }
 
             if (end - start > 256) {
-                // console.log('sorting', end - start);
+                // logger.debug('sorting', end - start);
                 generate(indices.subarray(start, end));
             }
 

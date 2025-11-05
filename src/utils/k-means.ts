@@ -1,6 +1,5 @@
-import { stdout } from 'node:process';
-
 import { Column, DataTable } from '../data-table';
+import { logger } from '../logger';
 import { KdTree } from './kd-tree';
 import { GpuClustering } from '../gpu/gpu-clustering';
 import { GpuDevice } from '../gpu/gpu-device';
@@ -159,7 +158,7 @@ const kmeans = async (points: DataTable, k: number, iterations: number, device?:
     let converged = false;
     let steps = 0;
 
-    console.log(`Running k-means clustering: dims=${points.numColumns} points=${points.numRows} clusters=${k} iterations=${iterations}...`);
+    logger.debug(`Running k-means clustering: dims=${points.numColumns} points=${points.numRows} clusters=${k} iterations=${iterations}...`);
 
     while (!converged) {
         if (gpuClustering) {
@@ -188,14 +187,14 @@ const kmeans = async (points: DataTable, k: number, iterations: number, device?:
             converged = true;
         }
 
-        stdout.write('#');
+        logger.progress('#');
     }
 
     if (gpuClustering) {
         gpuClustering.destroy();
     }
 
-    console.log(' done 🎉');
+    logger.debug(' done 🎉');
 
     return { centroids, labels };
 };

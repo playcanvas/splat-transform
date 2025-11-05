@@ -5,6 +5,7 @@ import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { TypedArray, DataTable } from '../data-table';
 import { generateOrdering } from '../ordering';
+import { logger } from '../logger';
 import { writeSog } from './write-sog.js';
 import { Options } from '../types';
 import { BTreeNode, BTree } from '../utils/b-tree';
@@ -87,7 +88,7 @@ const calcBound = (dataTable: DataTable, indices: number[]): Aabb => {
         const M = b.getMax();
 
         if (!isFinite(m.x) || !isFinite(m.y) || !isFinite(m.z) || !isFinite(M.x) || !isFinite(M.y) || !isFinite(M.z)) {
-            console.warn('Skipping invalid bounding box:', { m, M, index });
+            logger.warn('Skipping invalid bounding box:', { m, M, index });
             continue;
         }
 
@@ -264,7 +265,7 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
             // write file unit to sog
             const outputFile = await open(pathname, 'w');
 
-            console.log(`writing ${pathname}...`);
+            logger.info(`writing ${pathname}...`);
 
             await writeSog(outputFile, unitDataTable, pathname, options, indices);
 
