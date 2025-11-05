@@ -5,14 +5,6 @@ import { Column, DataTable } from '../data-table';
 
 // See https://github.com/nianticlabs/spz for reference implementation
 
-type SplatData = {
-    comments: string[];
-    elements: {
-        name: string,
-        dataTable: DataTable
-    }[];
-};
-
 const decompressGZIP = async (fileHandle: FileHandle): Promise<Buffer<ArrayBuffer>> => {
     const stats = await fileHandle.stat();
     const zippedSize = stats.size;
@@ -46,7 +38,7 @@ function getFixed24(positionsView: DataView, elementIndex: number, memberIndex: 
 
 const HARMONICS_COMPONENT_COUNT = [0, 9, 24, 45];
 
-const readSpz = async (fileHandle: FileHandle): Promise<SplatData> => {
+const readSpz = async (fileHandle: FileHandle): Promise<DataTable> => {
     // Load magic
     const magicSize = 4;
     let fileBuffer = Buffer.alloc(magicSize);
@@ -231,13 +223,7 @@ const readSpz = async (fileHandle: FileHandle): Promise<SplatData> => {
         }
     }
 
-    return {
-        comments: [],
-        elements: [{
-            name: 'vertex',
-            dataTable: new DataTable(columns)
-        }]
-    };
+    return new DataTable(columns);
 };
 
-export { SplatData, readSpz };
+export { readSpz };

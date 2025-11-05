@@ -11,11 +11,13 @@ import { Column, DataTable, TypedArray } from './data-table';
 import { ProcessAction, processDataTable } from './process';
 import { isCompressedPly, decompressPly } from './readers/decompress-ply';
 import { readKsplat } from './readers/read-ksplat';
-import { readMjs, Param } from './readers/read-mjs';
+import { readLcc } from './readers/read-lcc';
+import { readMjs } from './readers/read-mjs';
 import { readPly } from './readers/read-ply';
 import { readSog } from './readers/read-sog';
 import { readSplat } from './readers/read-splat';
 import { readSpz } from './readers/read-spz';
+import { Options, Param } from './types';
 import { writeCompressedPly } from './writers/write-compressed-ply';
 import { writeCsv } from './writers/write-csv';
 import { writeHtml } from './writers/write-html';
@@ -23,14 +25,9 @@ import { writeLod } from './writers/write-lod';
 import { writePly } from './writers/write-ply';
 import { writeSog } from './writers/write-sog';
 
-type Options = {
-    overwrite: boolean,
-    help: boolean,
-    version: boolean,
-    cpu: boolean,
-    iterations: number,
-    viewerSettingsPath?: string
-};
+type InputFormat = 'mjs' | 'ksplat' | 'splat' | 'sog' | 'ply' | 'spz' | 'lcc';
+
+type OutputFormat = 'csv' | 'sog' | 'lod' | 'compressed-ply' | 'ply' | 'html';
 
 const fileExists = async (filename: string) => {
     try {
@@ -44,46 +41,29 @@ const fileExists = async (filename: string) => {
     }
 };
 
-const readFile = async (filename: string, params: Param[]) => {
+const getInputFormat = (filename: string): InputFormat => {
     const lowerFilename = filename.toLowerCase();
-    let fileData;
-
-    console.log(`reading '${filename}'...`);
 
     if (lowerFilename.endsWith('.mjs')) {
-        fileData = await readMjs(filename, params);
-    } else {
-        const inputFile = await open(filename, 'r');
-
-        if (lowerFilename.endsWith('.ksplat')) {
-            fileData = await readKsplat(inputFile);
-        } else if (lowerFilename.endsWith('.splat')) {
-            fileData = await readSplat(inputFile);
-        } else if (lowerFilename.endsWith('.sog') || lowerFilename.endsWith('meta.json')) {
-            fileData = await readSog(inputFile, filename);
-        } else if (lowerFilename.endsWith('.ply')) {
-            const ply = await readPly(inputFile);
-            if (isCompressedPly(ply)) {
-                fileData = {
-                    comments: ply.comments,
-                    elements: [{ name: 'vertex', dataTable: decompressPly(ply) }]
-                };
-            } else {
-                fileData = ply;
-            }
-        } else if (lowerFilename.endsWith('.spz')) {
-            fileData = await readSpz(inputFile);
-        } else {
-            await inputFile.close();
-            throw new Error(`Unsupported input file type: ${filename}`);
-        }
-
-        await inputFile.close();
+        return 'mjs';
+    } else if (lowerFilename.endsWith('.ksplat')) {
+        return 'ksplat';
+    } else if (lowerFilename.endsWith('.splat')) {
+        return 'splat';
+    } else if (lowerFilename.endsWith('.sog') || lowerFilename.endsWith('meta.json')) {
+        return 'sog';
+    } else if (lowerFilename.endsWith('.ply')) {
+        return 'ply';
+    } else if (lowerFilename.endsWith('.spz')) {
+        return 'spz';
+    } else if (lowerFilename.endsWith('.lcc')) {
+        return 'lcc';
     }
-    return fileData;
+
+    throw new Error(`Unsupported input file type: ${filename}`);
 };
 
-const getOutputFormat = (filename: string) => {
+const getOutputFormat = (filename: string): OutputFormat => {
     const lowerFilename = filename.toLowerCase();
 
     if (lowerFilename.endsWith('.csv')) {
@@ -101,6 +81,45 @@ const getOutputFormat = (filename: string) => {
     }
 
     throw new Error(`Unsupported output file type: ${filename}`);
+};
+
+const readFile = async (filename: string, options: Options, params: Param[]): Promise<DataTable[]> => {
+    const inputFormat = getInputFormat(filename);
+    let result: DataTable[];
+
+    console.log(`reading '${filename}'...`);
+
+    if (inputFormat === 'mjs') {
+        result = [await readMjs(filename, params)];
+    } else {
+        const inputFile = await open(filename, 'r');
+
+        if (inputFormat === 'ksplat') {
+            result = [await readKsplat(inputFile)];
+        } else if (inputFormat === 'splat') {
+            result = [await readSplat(inputFile)];
+        } else if (inputFormat === 'sog') {
+            result = [await readSog(inputFile, filename)];
+        } else if (inputFormat === 'ply') {
+            const ply = await readPly(inputFile);
+            if (isCompressedPly(ply)) {
+                result = [decompressPly(ply)];
+            } else {
+                if (ply.elements.length !== 1 || ply.elements[0].name !== 'vertex') {
+                    throw new Error(`Unsupported data in file '${filename}'`);
+                }
+                result = [ply.elements[0].dataTable];
+            }
+        } else if (inputFormat === 'spz') {
+            result = [await readSpz(inputFile)];
+        } else if (inputFormat === 'lcc') {
+            result = await readLcc(inputFile, filename, options);
+        }
+
+        await inputFile.close();
+    }
+
+    return result;
 };
 
 const writeFile = async (filename: string, dataTable: DataTable, options: Options) => {
@@ -123,10 +142,10 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
                 await writeCsv(outputFile, dataTable);
                 break;
             case 'sog':
-                await writeSog(outputFile, dataTable, filename, options.iterations, options.cpu ? 'cpu' : 'gpu');
+                await writeSog(outputFile, dataTable, filename, options);
                 break;
             case 'lod':
-                await writeLod(outputFile, dataTable, filename, options.iterations, options.cpu ? 'cpu' : 'gpu');
+                await writeLod(outputFile, dataTable, filename, options);
                 break;
             case 'compressed-ply':
                 await writeCompressedPly(outputFile, dataTable);
@@ -141,7 +160,7 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
                 });
                 break;
             case 'html':
-                await writeHtml(outputFile, dataTable, options.iterations, options.cpu ? 'cpu' : 'gpu', options.viewerSettingsPath);
+                await writeHtml(outputFile, dataTable, options);
                 break;
         }
 
@@ -237,12 +256,15 @@ const parseArguments = () => {
         allowNegative: true,
         options: {
             // global options
-            overwrite: { type: 'boolean', short: 'w' },
-            help: { type: 'boolean', short: 'h' },
-            version: { type: 'boolean', short: 'v' },
-            cpu: { type: 'boolean', short: 'c' },
-            iterations: { type: 'string', short: 'i' },
-            'viewer-settings': { type: 'string', short: 'E' },
+            overwrite: { type: 'boolean', short: 'w', default: false },
+            help: { type: 'boolean', short: 'h', default: false },
+            version: { type: 'boolean', short: 'v', default: false },
+            cpu: { type: 'boolean', short: 'c', default: false },
+            iterations: { type: 'string', short: 'i', default: '10' },
+            'lod-select': { type: 'string', short: 'O', default: '' },
+            'viewer-settings': { type: 'string', short: 'E', default: '' },
+            'lod-chunk-count': { type: 'string', short: 'C', default: '512' },
+            'lod-chunk-extent': { type: 'string', short: 'X', default: '16' },
 
             // per-file options
             translate: { type: 'string', short: 't', multiple: true },
@@ -267,8 +289,8 @@ const parseArguments = () => {
     };
 
     const parseInteger = (value: string): number => {
-        const result = parseInt(value, 10);
-        if (isNaN(result)) {
+        const result = parseNumber(value);
+        if (!Number.isInteger(result)) {
             throw new Error(`Invalid integer value: ${value}`);
         }
         return result;
@@ -298,12 +320,15 @@ const parseArguments = () => {
     const files: File[] = [];
 
     const options: Options = {
-        overwrite: v.overwrite ?? false,
-        help: v.help ?? false,
-        version: v.version ?? false,
-        cpu: v.cpu ?? false,
-        iterations: parseInteger(v.iterations ?? '10'),
-        viewerSettingsPath: (v as any)['viewer-settings']
+        overwrite: v.overwrite,
+        help: v.help,
+        version: v.version,
+        cpu: v.cpu,
+        iterations: parseInteger(v.iterations),
+        lodSelect: v['lod-select'].split(',').filter(v => !!v).map(parseInteger),
+        viewerSettingsPath: v['viewer-settings'],
+        lodChunkCount: parseInteger(v['lod-chunk-count']),
+        lodChunkExtent: parseInteger(v['lod-chunk-extent'])
     };
 
     for (const t of tokens) {
@@ -440,7 +465,7 @@ USAGE
   • The last file is the output; actions after it modify the final result.
 
 SUPPORTED INPUTS
-    .ply   .compressed.ply   .sog   meta.json   .ksplat   .splat   .spz   .mjs
+    .ply   .compressed.ply   .sog   meta.json   .ksplat   .splat   .spz   .mjs   .lcc
 
 SUPPORTED OUTPUTS
     .ply   .compressed.ply   .sog   meta.json   .csv   .html
@@ -465,6 +490,9 @@ GLOBAL OPTIONS
     -c, --cpu                               Use CPU for SOG spherical harmonic compression
     -i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10
     -E, --viewer-settings  <settings.json>  HTML viewer settings JSON file
+    -O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC input
+    -C, --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
+    -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
 
 EXAMPLES
     # Scale then translate
@@ -478,6 +506,9 @@ EXAMPLES
 
     # Generate synthetic splats using a generator script
     splat-transform gen-grid.mjs -p width=500,height=500,scale=0.1 grid.ply
+
+    # Generate LOD with custom chunk size and node split size
+    splat-transform -O 0,1,2 -C 1024 -X 32 input.lcc output/lod-meta.json
 `;
 
 const main = async () => {
@@ -517,35 +548,31 @@ const main = async () => {
 
     try {
         // read, filter, process input files
-        const inputFiles = (await Promise.all(inputArgs.map(async (inputArg) => {
+        const inputDataTables = (await Promise.all(inputArgs.map(async (inputArg) => {
             // extract params
             const params = inputArg.processActions.filter(a => a.kind === 'param').map((p) => {
                 return { name: p.name, value: p.value };
             });
 
             // read input
-            const file = await readFile(resolve(inputArg.filename), params);
+            const dataTables = await readFile(resolve(inputArg.filename), options, params);
 
-            // filter out non-gs data
-            if (file.elements.length !== 1 || file.elements[0].name !== 'vertex') {
-                throw new Error(`Unsupported data in file '${inputArg.filename}'`);
+            for (let i = 0; i < dataTables.length; ++i) {
+                const dataTable = dataTables[i];
+
+                if (dataTable.numRows === 0 || !isGSDataTable(dataTable)) {
+                    throw new Error(`Unsupported data in file '${inputArg.filename}'`);
+                }
+
+                dataTables[i] = processDataTable(dataTable, inputArg.processActions);
             }
 
-            const element = file.elements[0];
-
-            const { dataTable } = element;
-            if (dataTable.numRows === 0 || !isGSDataTable(dataTable)) {
-                throw new Error(`Unsupported data in file '${inputArg.filename}'`);
-            }
-
-            element.dataTable = processDataTable(dataTable, inputArg.processActions);
-
-            return file;
-        }))).filter(file => file !== null);
+            return dataTables;
+        }))).flat(1).filter(dataTable => dataTable !== null);
 
         // combine inputs into a single output dataTable
         const dataTable = processDataTable(
-            combine(inputFiles.map(file => file.elements[0].dataTable)),
+            combine(inputDataTables),
             outputArg.processActions
         );
 

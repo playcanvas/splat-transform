@@ -6,14 +6,6 @@ import { Column, DataTable } from '../data-table';
 import { ZipReader } from '../serialize/zip-reader';
 import { WebPCodec } from '../utils/webp-codec';
 
-type SogData = {
-    comments: string[];
-    elements: {
-        name: string,
-        dataTable: DataTable
-    }[];
-};
-
 type Meta = {
     version: number;
     count: number;
@@ -84,7 +76,7 @@ const sigmoidInv = (y: number) => {
     return Math.log(e / (1 - e));
 };
 
-const readSog = async (fileHandle: FileHandle, sourceName?: string): Promise<SogData> => {
+const readSog = async (fileHandle: FileHandle, sourceName?: string): Promise<DataTable> => {
     const decoder = await WebPCodec.create();
     const stat = await fileHandle.stat();
 
@@ -252,13 +244,7 @@ const readSog = async (fileHandle: FileHandle, sourceName?: string): Promise<Sog
         }
     }
 
-    return {
-        comments: [],
-        elements: [{
-            name: 'vertex',
-            dataTable: new DataTable(columns)
-        }]
-    };
+    return new DataTable(columns);
 };
 
-export { readSog, SogData };
+export { readSog };

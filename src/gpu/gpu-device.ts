@@ -103,6 +103,11 @@ class GpuDevice {
         this.app = app;
         this.backbuffer = backbuffer;
     }
+
+    destroy() {
+        this.backbuffer.destroy();
+        this.app.destroy();
+    }
 }
 
 const createDevice = async () => {
@@ -143,8 +148,6 @@ const createDevice = async () => {
 
     // @ts-ignore
     graphicsDevice.externalBackbuffer = backbuffer;
-
-    app.start();
 
     return new GpuDevice(app, backbuffer);
 };

@@ -1,7 +1,7 @@
 import { FileHandle } from 'node:fs/promises';
 
+import { CompressedChunk } from './compressed-chunk';
 import { version } from '../../package.json';
-import { CompressedChunk } from '../compressed-chunk';
 import { DataTable } from '../data-table';
 import { generateOrdering } from '../ordering';
 

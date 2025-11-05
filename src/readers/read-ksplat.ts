@@ -3,14 +3,6 @@ import { FileHandle } from 'node:fs/promises';
 
 import { Column, DataTable } from '../data-table';
 
-type KsplatFileData = {
-    comments: string[];
-    elements: {
-        name: string,
-        dataTable: DataTable
-    }[];
-};
-
 // Format configuration for different compression modes
 interface CompressionConfig {
     centerBytes: number;
@@ -100,7 +92,7 @@ const COMPRESSION_MODES: CompressionConfig[] = [
 
 const HARMONICS_COMPONENT_COUNT = [0, 9, 24, 45];
 
-const readKsplat = async (fileHandle: FileHandle): Promise<KsplatFileData> => {
+const readKsplat = async (fileHandle: FileHandle): Promise<DataTable> => {
     const stats = await fileHandle.stat();
     const totalSize = stats.size;
 
@@ -372,15 +364,7 @@ const readKsplat = async (fileHandle: FileHandle): Promise<KsplatFileData> => {
         throw new Error(`Splat count mismatch: expected ${numSplats}, processed ${splatIndex}`);
     }
 
-    const resultTable = new DataTable(columns);
-
-    return {
-        comments: [],
-        elements: [{
-            name: 'vertex',
-            dataTable: resultTable
-        }]
-    };
+    return new DataTable(columns);
 };
 
 export { readKsplat };

@@ -50,6 +50,7 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 | `.mjs` | ✅ | ❌ | Generate a scene using an mjs script (Beta) |
 | `.csv` | ❌ | ✅ | Comma-separated values spreadsheet |
 | `.html` | ❌ | ✅ | Standalone HTML viewer app (embeds SOG format) |
+| `.lcc` | ✅ | ❌ | LCC file format (XGRIDS) |
 
 ## Actions
 
@@ -77,6 +78,9 @@ Actions can be repeated and applied in any order:
 -c, --cpu                               Use CPU for SOG spherical harmonic compression
 -i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10
 -E, --viewer-settings  <settings.json>  HTML viewer settings JSON file
+-O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC input
+-C, --lod-chunk-count  <n>              Approx number of Gaussians per LOD chunk in K. Default: 512
+-X, --lod-chunk-extent <n>              Approx size of an LOD chunk in world units (m). Default: 16
 ```
 
 > [!NOTE]

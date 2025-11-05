@@ -1,17 +1,5 @@
 import { Column, DataTable } from '../data-table';
-
-type SplatData = {
-    comments: string[];
-    elements: {
-        name: string,
-        dataTable: DataTable
-    }[];
-};
-
-type Param = {
-    name: string;
-    value: string;
-};
+import { Param } from '../types';
 
 type Generator = {
     count: number;
@@ -19,7 +7,7 @@ type Generator = {
     getRow: (index: number, row: any) => void;
 };
 
-const readMjs = async (filename: string, params: Param[]): Promise<SplatData> => {
+const readMjs = async (filename: string, params: Param[]): Promise<DataTable> => {
     const module = await import(`file://${filename}`);
     if (!module) {
         throw new Error(`Failed to load module: ${filename}`);
@@ -43,13 +31,7 @@ const readMjs = async (filename: string, params: Param[]): Promise<SplatData> =>
         });
     }
 
-    return {
-        comments: [],
-        elements: [{
-            name: 'vertex',
-            dataTable: new DataTable(columns)
-        }]
-    };
+    return new DataTable(columns);
 };
 
-export { Param, readMjs };
+export { readMjs };
