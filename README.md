@@ -11,8 +11,8 @@
 
 SplatTransform is an open source CLI tool for converting and editing Gaussian splats. It can:
 
-📥 Read PLY, Compressed PLY, SOG, SPLAT, KSPLAT and SPZ formats  
-📤 Write PLY, Compressed PLY, SOG, CSV and HTML viewer formats  
+📥 Read PLY, Compressed PLY, SOG, SPLAT, KSPLAT, SPZ and LCC formats  
+📤 Write PLY, Compressed PLY, SOG, CSV, HTML Viewer and LOD (streaming) formats  
 🔗 Merge multiple splats  
 🔄 Apply transformations to input splats  
 🎛️ Filter out Gaussians or spherical harmonic bands  
@@ -44,13 +44,13 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 | `.sog` | ✅ | ✅ | Bundled super-compressed format (recommended) |
 | `meta.json` | ✅ | ✅ | Unbundled super-compressed format (accompanied by `.webp` textures) |
 | `.compressed.ply` | ✅ | ✅ | Compressed PLY format (auto-detected and decompressed on read) |
+| `.lcc` | ✅ | ❌ | LCC file format (XGRIDS) |
 | `.ksplat` | ✅ | ❌ | Compressed splat format (mkkellogg format) |
 | `.splat` | ✅ | ❌ | Compressed splat format (antimatter15 format) |
 | `.spz` | ✅ | ❌ | Compressed splat format (Niantic format) |
 | `.mjs` | ✅ | ❌ | Generate a scene using an mjs script (Beta) |
 | `.csv` | ❌ | ✅ | Comma-separated values spreadsheet |
 | `.html` | ❌ | ✅ | Standalone HTML viewer app (embeds SOG format) |
-| `.lcc` | ✅ | ❌ | LCC file format (XGRIDS) |
 
 ## Actions
 
