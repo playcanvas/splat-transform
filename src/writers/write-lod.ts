@@ -4,8 +4,8 @@ import { dirname, resolve } from 'node:path';
 import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { TypedArray, DataTable } from '../data-table';
-import { generateOrdering } from '../ordering';
 import { logger } from '../logger';
+import { generateOrdering } from '../ordering';
 import { writeSog } from './write-sog.js';
 import { Options } from '../types';
 import { BTreeNode, BTree } from '../utils/b-tree';

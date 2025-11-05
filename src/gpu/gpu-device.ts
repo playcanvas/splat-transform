@@ -1,6 +1,5 @@
 import { Worker } from 'node:worker_threads';
 
-import { logger } from '../logger';
 
 // import { JSDOM } from 'jsdom';
 import {
@@ -28,6 +27,8 @@ import {
     WebgpuGraphicsDevice
 } from 'playcanvas';
 import { create, globals } from 'webgpu';
+
+import { logger } from '../logger';
 
 const initializeGlobals = () => {
     Object.assign(globalThis, globals);
