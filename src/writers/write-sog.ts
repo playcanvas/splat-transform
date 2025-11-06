@@ -3,6 +3,7 @@ import { dirname, resolve } from 'node:path';
 
 import { Column, DataTable } from '../data-table';
 import { createDevice, GpuDevice } from '../gpu/gpu-device';
+import { logger } from '../logger';
 import { generateOrdering } from '../ordering';
 import { FileWriter } from '../serialize/writer';
 import { ZipWriter } from '../serialize/zip-writer';
@@ -125,7 +126,7 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
 
     const write = async (filename: string, data: Uint8Array, w = width, h = height) => {
         const pathname = resolve(dirname(outputFilename), filename);
-        console.log(`writing '${pathname}'...`);
+        logger.info(`writing '${pathname}'...`);
 
         // construct the encoder on first use
         if (!webPCodec) {

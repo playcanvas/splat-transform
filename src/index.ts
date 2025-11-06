@@ -8,6 +8,7 @@ import { Vec3 } from 'playcanvas';
 
 import { version } from '../package.json';
 import { Column, DataTable, TypedArray } from './data-table';
+import { logger } from './logger';
 import { ProcessAction, processDataTable } from './process';
 import { isCompressedPly, decompressPly } from './readers/decompress-ply';
 import { readKsplat } from './readers/read-ksplat';
@@ -87,7 +88,7 @@ const readFile = async (filename: string, options: Options, params: Param[]): Pr
     const inputFormat = getInputFormat(filename);
     let result: DataTable[];
 
-    console.log(`reading '${filename}'...`);
+    logger.info(`reading '${filename}'...`);
 
     if (inputFormat === 'mjs') {
         result = [await readMjs(filename, params)];
@@ -126,7 +127,7 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
     // get the output format, throws on failure
     const outputFormat = getOutputFormat(filename);
 
-    console.log(`writing '${filename}'...`);
+    logger.info(`writing '${filename}'...`);
 
     // write to a temporary file and rename on success
     const tmpFilename = `.${basename(filename)}.${process.pid}.${Date.now()}.${randomBytes(6).toString('hex')}.tmp`;
@@ -259,6 +260,7 @@ const parseArguments = () => {
             overwrite: { type: 'boolean', short: 'w', default: false },
             help: { type: 'boolean', short: 'h', default: false },
             version: { type: 'boolean', short: 'v', default: false },
+            quiet: { type: 'boolean', short: 'q', default: false },
             cpu: { type: 'boolean', short: 'c', default: false },
             iterations: { type: 'string', short: 'i', default: '10' },
             'lod-select': { type: 'string', short: 'O', default: '' },
@@ -323,6 +325,7 @@ const parseArguments = () => {
         overwrite: v.overwrite,
         help: v.help,
         version: v.version,
+        quiet: v.quiet,
         cpu: v.cpu,
         iterations: parseInteger(v.iterations),
         lodSelect: v['lod-select'].split(',').filter(v => !!v).map(parseInteger),
@@ -486,6 +489,7 @@ ACTIONS (can be repeated, in any order)
 GLOBAL OPTIONS
     -h, --help                              Show this help and exit
     -v, --version                           Show version and exit
+    -q, --quiet                             Suppress non-error output
     -w, --overwrite                         Overwrite output file if it exists
     -c, --cpu                               Use CPU for SOG spherical harmonic compression
     -i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10
@@ -512,12 +516,15 @@ EXAMPLES
 `;
 
 const main = async () => {
-    console.log(`splat-transform v${version}`);
-
     const startTime = hrtime();
 
     // read args
     const { files, options } = parseArguments();
+
+    // configure logger
+    logger.setQuiet(options.quiet);
+
+    logger.info(`splat-transform v${version}`);
 
     // show version and exit
     if (options.version) {
@@ -526,7 +533,7 @@ const main = async () => {
 
     // invalid args or show help
     if (files.length < 2 || options.help) {
-        console.error(usage);
+        logger.error(usage);
         exit(1);
     }
 
@@ -541,7 +548,7 @@ const main = async () => {
     } else {
         // check overwrite before doing any work
         if (await fileExists(outputFilename)) {
-            console.error(`File '${outputFilename}' already exists. Use -w option to overwrite.`);
+            logger.error(`File '${outputFilename}' already exists. Use -w option to overwrite.`);
             exit(1);
         }
     }
@@ -580,19 +587,19 @@ const main = async () => {
             throw new Error('No splats to write');
         }
 
-        console.log(`Loaded ${dataTable.numRows} gaussians`);
+        logger.info(`Loaded ${dataTable.numRows} gaussians`);
 
         // write file
         await writeFile(outputFilename, dataTable, options);
     } catch (err) {
         // handle errors
-        console.error(err);
+        logger.error(err);
         exit(1);
     }
 
     const endTime = hrtime(startTime);
 
-    console.log(`done in ${endTime[0] + endTime[1] / 1e9}s`);
+    logger.info(`done in ${endTime[0] + endTime[1] / 1e9}s`);
 
     // something in webgpu seems to keep the process alive after returning
     // from main so force exit
