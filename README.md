@@ -67,6 +67,7 @@ Actions can be repeated and applied in any order:
 -V, --filter-value     <name,cmp,value> Keep splats where <name> <cmp> <value>
                                           cmp ∈ {lt,lte,gt,gte,eq,neq}
 -p, --params           <key=val,...>    Pass parameters to .mjs generator script
+-l, --lod              <n>              Specify the level of detail of this model, n >= 0.
 ```
 
 ## Global Options
