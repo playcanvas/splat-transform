@@ -1,6 +1,6 @@
 import { Mat3, Mat4, Quat, Vec3 } from 'playcanvas';
 
-import { DataTable } from './data-table';
+import { Column, DataTable } from './data-table';
 import { RotateSH } from './utils/rotate-sh';
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
@@ -64,5 +64,47 @@ const transform = (dataTable: DataTable, t: Vec3, r: Quat, s: number) => {
     }
 };
 
+const V_THRESHOLD = 1e-12;
+const LOG_OPACITY_TARGET = -15.0;
 
-export { transform };
+const sig = (v: number) => 1 / (1 + Math.exp(-v));
+const isig = (v: number) => -1 * Math.log(1 / v - 1);
+const area = (a: number, b: number, c: number) => Math.min(a, Math.min(b, c)) * Math.max(a, Math.max(b, c));
+
+const blur = (dataTable: DataTable, radius: number) => {
+    const hasData = ['scale_0', 'scale_1', 'scale_2', 'opacity'].every(c => dataTable.hasColumn(c));
+    if (!hasData) throw new Error('Required fields for blurring missing');
+
+    const row: any = {};
+    const indices = new Uint32Array(dataTable.numRows);
+    let scale_0, scale_1, scale_2, density, opa: number;
+    let index = 0;
+
+    for (let i = 0; i < dataTable.numRows; ++i) {
+        dataTable.getRow(i, row);
+
+        scale_0 = Math.exp(row.scale_0);
+        scale_1 = Math.exp(row.scale_1);
+        scale_2 = Math.exp(row.scale_2);
+
+        density = area(scale_0, scale_1, scale_2);
+
+        scale_0 += radius;
+        scale_1 += radius;
+        scale_2 += radius;
+
+        row.scale_0 = Math.log(scale_0);
+        row.scale_1 = Math.log(scale_1);
+        row.scale_2 = Math.log(scale_2);
+        opa = sig(row.opacity) * density / area(scale_0, scale_1, scale_2);
+        row.opacity = isig(opa);
+        if (opa >= 0.01) indices[index++] = i;
+
+        dataTable.setRow(i, row);
+    }
+
+    return dataTable.permuteRows(indices.subarray(0, index));
+};
+
+
+export { transform, blur };
