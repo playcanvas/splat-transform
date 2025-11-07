@@ -2,7 +2,7 @@ import { DataTable } from './data-table';
 
 // This density function multiplies only the smallest and the greatest dimension to stay related to the
 // quadratic screen-area which is what is later blended on screen. Calculating the cubic volume did not work well.
-const density = (a: number, b: number, c: number) => Math.min(a, Math.min(b, c)) * Math.max(a, Math.max(b, c));
+const density = (a: number, b: number, c: number) => (a * b + a * c + b * c) / 3;
 
 const sigmoid = (v: number) => 1 / (1 + Math.exp(-v));
 const invSigmoid = (v: number) => -1 * Math.log(1 / v - 1);
