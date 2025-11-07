@@ -1,7 +1,8 @@
 import { Quat, Vec3 } from 'playcanvas';
 
 import { Column, DataTable } from './data-table';
-import { transform, blur as blurData } from './transform';
+import { blur } from './effect';
+import { transform } from './transform';
 
 type Translate = {
     kind: 'translate';
@@ -104,7 +105,7 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
                 transform(result, Vec3.ZERO, Quat.IDENTITY, processAction.value);
                 break;
             case 'blur': {
-                result = blurData(result, processAction.value);
+                result = blur(result, processAction.value);
                 break;
             }
             case 'filterNaN': {
