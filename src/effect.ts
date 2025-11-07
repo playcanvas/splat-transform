@@ -23,23 +23,25 @@ const blur = (dataTable: DataTable, radius: number, cutOff: number = 0.01) => {
         scale_1 = Math.exp(row.scale_1);
         scale_2 = Math.exp(row.scale_2);
 
-        oldDensity = density(scale_0, scale_1, scale_2);
+        if ((scale_0 + scale_1 + scale_2) > 3 * radius) {
+            oldDensity = density(scale_0, scale_1, scale_2);
 
-        scale_0 += radius;
-        scale_1 += radius;
-        scale_2 += radius;
+            scale_0 += radius;
+            scale_1 += radius;
+            scale_2 += radius;
 
-        newOpacity = sigmoid(row.opacity) * oldDensity / density(scale_0, scale_1, scale_2);
+            newOpacity = sigmoid(row.opacity) * oldDensity / density(scale_0, scale_1, scale_2);
 
-        if (newOpacity >= cutOff) {
-            indices[index++] = i;
+            if (newOpacity >= cutOff) {
+                indices[index++] = i;
 
-            row.scale_0 = Math.log(scale_0);
-            row.scale_1 = Math.log(scale_1);
-            row.scale_2 = Math.log(scale_2);
-            row.opacity = invSigmoid(newOpacity);
+                row.scale_0 = Math.log(scale_0);
+                row.scale_1 = Math.log(scale_1);
+                row.scale_2 = Math.log(scale_2);
+                row.opacity = invSigmoid(newOpacity);
 
-            dataTable.setRow(i, row);
+                dataTable.setRow(i, row);
+            }
         }
     }
 
