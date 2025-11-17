@@ -28,10 +28,14 @@ type LccUnitInfo = {
 
 // Used to decompress scale in data.bin and sh in shcoef.bin
 type CompressInfo = {
-    compressedScaleMin: Vec3;   // min scale
-    compressedScaleMax: Vec3;   // max scale
-    compressedSHMin: Vec3;      // min sh
-    compressedSHMax: Vec3;      // max sh
+    scaleMin: Vec3;         // min scale
+    scaleMax: Vec3;         // max scale
+    shMin: Vec3;            // min sh
+    shMax: Vec3;            // max sh
+    envScaleMin: Vec3;      // min environment scale
+    envScaleMax: Vec3;      // max environment scale
+    envShMin: Vec3;         // min environment sh
+    envShMax: Vec3;         // max environment sh
 }
 
 // parameters used to convert LCC data into GSplatData
@@ -83,16 +87,25 @@ const parseMeta = (obj: any): CompressInfo => {
     obj.attributes.forEach((attr: any) => {
         attributes[attr.name] = attr;
     });
-    const scaleMin = attributes.scale.min;
-    const scaleMax = attributes.scale.max;
-    const shMin = attributes.shcoef.min;
-    const shMax = attributes.shcoef.max;
+
+    const scaleMin = new Vec3(attributes.scale.min);
+    const scaleMax = new Vec3(attributes.scale.max);
+    const shMin = new Vec3(attributes.shcoef.min);
+    const shMax = new Vec3(attributes.shcoef.max);
+    const envScaleMin = new Vec3(attributes.envscale.min);
+    const envScaleMax = new Vec3(attributes.envscale.max);
+    const envShMin = new Vec3(attributes.envshcoef.min);
+    const envShMax = new Vec3(attributes.envshcoef.max);
 
     const compressInfo: CompressInfo = {
-        compressedScaleMin: new Vec3(scaleMin[0], scaleMin[1], scaleMin[2]),
-        compressedScaleMax: new Vec3(scaleMax[0], scaleMax[1], scaleMax[2]),
-        compressedSHMin: new Vec3(shMin[0], shMin[1], shMin[2]),
-        compressedSHMax: new Vec3(shMax[0], shMax[1], shMax[2])
+        scaleMin,
+        scaleMax,
+        shMin,
+        shMax,
+        envScaleMin,
+        envScaleMax,
+        envShMin,
+        envShMax
     };
 
     return compressInfo;
@@ -143,15 +156,15 @@ const parseIndexBin = (raw: ArrayBuffer, meta: any): Array<LccUnitInfo> => {
     return infos;
 };
 
-const InvSigmoid = (v: number): number => {
+const invSigmoid = (v: number): number => {
     return -Math.log((1.0 - v) / v);
 };
 
-const InvSH0ToColor = (v: number): number => {
+const invSH0ToColor = (v: number): number => {
     return (v - 0.5) / kSH_C0;
 };
 
-const InvLinearScale = (v: number): number => {
+const invLinearScale = (v: number): number => {
     return Math.log(v);
 };
 
@@ -167,12 +180,10 @@ const mixVec3 = (min: Vec3, max: Vec3, v: Vec3): Vec3 => {
     );
 };
 
-const DecodePacked_11_10_11 = (enc: number): Vec3 => {
-    return new Vec3(
-        (enc & 0x7FF) / 2047.0,
-        ((enc >> 11) & 0x3FF) / 1023.0,
-        ((enc >> 21) & 0x7FF) / 2047.0
-    );
+const decodePacked_11_10_11 = (res: Vec3, enc: number) => {
+    res.x = (enc & 0x7FF) / 2047.0;
+    res.y = ((enc >> 11) & 0x3FF) / 1023.0;
+    res.z = ((enc >> 21) & 0x7FF) / 2047.0;
 };
 
 const decodeRotation = (v: number) => {
@@ -233,17 +244,17 @@ const decodeSplat = (
     unitProperties.property_z[i] = dataView.getFloat32(off + 8, true);
 
     // decode color
-    unitProperties.property_f_dc_0[i] = InvSH0ToColor(dataView.getUint8(off + 12) / 255.0);
-    unitProperties.property_f_dc_1[i] = InvSH0ToColor(dataView.getUint8(off + 13) / 255.0);
-    unitProperties.property_f_dc_2[i] = InvSH0ToColor(dataView.getUint8(off + 14) / 255.0);
-    unitProperties.property_opacity[i] = InvSigmoid(dataView.getUint8(off + 15) / 255.0);
+    unitProperties.property_f_dc_0[i] = invSH0ToColor(dataView.getUint8(off + 12) / 255.0);
+    unitProperties.property_f_dc_1[i] = invSH0ToColor(dataView.getUint8(off + 13) / 255.0);
+    unitProperties.property_f_dc_2[i] = invSH0ToColor(dataView.getUint8(off + 14) / 255.0);
+    unitProperties.property_opacity[i] = invSigmoid(dataView.getUint8(off + 15) / 255.0);
 
     // decode scale
-    const scaleMin = compressInfo.compressedScaleMin;
-    const scaleMax = compressInfo.compressedScaleMax;
-    unitProperties.property_scale_0[i] = InvLinearScale(mix(scaleMin.x, scaleMax.x, dataView.getUint16(off + 16, true) / 65535.0));
-    unitProperties.property_scale_1[i] = InvLinearScale(mix(scaleMin.y, scaleMax.y, dataView.getUint16(off + 18, true) / 65535.0));
-    unitProperties.property_scale_2[i] = InvLinearScale(mix(scaleMin.z, scaleMax.z, dataView.getUint16(off + 20, true) / 65535.0));
+    const scaleMin = compressInfo.scaleMin;
+    const scaleMax = compressInfo.scaleMax;
+    unitProperties.property_scale_0[i] = invLinearScale(mix(scaleMin.x, scaleMax.x, dataView.getUint16(off + 16, true) / 65535.0));
+    unitProperties.property_scale_1[i] = invLinearScale(mix(scaleMin.y, scaleMax.y, dataView.getUint16(off + 18, true) / 65535.0));
+    unitProperties.property_scale_2[i] = invLinearScale(mix(scaleMin.z, scaleMax.z, dataView.getUint16(off + 20, true) / 65535.0));
 
     // decode rotation
     const q = decodeRotation(dataView.getUint32(off + 22, true));
@@ -257,12 +268,17 @@ const decodeSplat = (
     unitProperties.property_ny[i] = dataView.getUint16(off + 28, true);
     unitProperties.property_nz[i] = dataView.getUint16(off + 30, true);
 
+    const vec3 = new Vec3();
+
     // SH
     if (shDataView && unitProperties_f_rest) {
         const shOff = off * 2;
         const SHValues = Array.from({ length: 15 }, (_, idx) => shDataView.getUint32(shOff + idx * 4, true));
-        const { compressedSHMin, compressedSHMax } = compressInfo;
-        const vecSHValues = SHValues.map(sh => mixVec3(compressedSHMin, compressedSHMax, DecodePacked_11_10_11(sh)));
+        const { shMin, shMax } = compressInfo;
+        const vecSHValues = SHValues.map((sh) => {
+            decodePacked_11_10_11(vec3, sh);
+            return mixVec3(shMin, shMax, vec3);
+        });
 
         for (let j = 0; j < 15; j++) {
             unitProperties_f_rest[j][i] = vecSHValues[j].x;
@@ -354,20 +370,82 @@ const deserializeFromLcc = async (param: LccParam) => {
     return new DataTable(columns);
 };
 
+const deserializeEnvironment = (raw: Uint8Array, compressInfo: CompressInfo, hasSH: boolean) => {
+    const stride = hasSH ? 96 : 32;
+
+    const numGaussians = raw.length / stride;
+
+    if (!Number.isInteger(numGaussians)) {
+        throw new Error('Invalid environment data size');
+    }
+
+    const columns = [
+        'x', 'y', 'z',
+        'f_dc_0', 'f_dc_1', 'f_dc_2', 'opacity',
+        'scale_0', 'scale_1', 'scale_2',
+        'rot_0', 'rot_1', 'rot_2', 'rot_3'
+    ].concat(hasSH ? new Array(45).fill('').map((_, i) => `f_rest_${i}`) : []).map(name => new Column(name, new Float32Array(numGaussians)));
+
+    const scaleMin = compressInfo.envScaleMin;
+    const scaleMax = compressInfo.envScaleMax;
+    const shMin = compressInfo.envShMin;
+    const shMax = compressInfo.envShMax;
+
+    // fill data
+    const dataView = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
+    for (let i = 0; i < numGaussians; i++) {
+        const off = i * stride;
+
+        columns[0].data[i] = dataView.getFloat32(off + 0, true);   // x
+        columns[1].data[i] = dataView.getFloat32(off + 4, true);   // y
+        columns[2].data[i] = dataView.getFloat32(off + 8, true);   // z
+
+        columns[3].data[i] = invSH0ToColor(dataView.getUint8(off + 12) / 255.0);   // f_dc_0
+        columns[4].data[i] = invSH0ToColor(dataView.getUint8(off + 13) / 255.0);   // f_dc_1
+        columns[5].data[i] = invSH0ToColor(dataView.getUint8(off + 14) / 255.0);   // f_dc_2
+        columns[6].data[i] = invSigmoid(dataView.getUint8(off + 15) / 255.0);      // opacity
+
+        columns[7].data[i] = invLinearScale(mix(scaleMin.x, scaleMax.x, dataView.getUint16(off + 16, true) / 65535.0)); // scale_0
+        columns[8].data[i] = invLinearScale(mix(scaleMin.y, scaleMax.y, dataView.getUint16(off + 18, true) / 65535.0)); // scale_1
+        columns[9].data[i] = invLinearScale(mix(scaleMin.z, scaleMax.z, dataView.getUint16(off + 20, true) / 65535.0)); // scale_2
+
+        const q = decodeRotation(dataView.getUint32(off + 22, true));
+        columns[10].data[i] = q[3]; // rot_0 (w)
+        columns[11].data[i] = q[0]; // rot_1 (x)
+        columns[12].data[i] = q[1]; // rot_2 (y)
+        columns[13].data[i] = q[2]; // rot_3 (z)
+
+        // skip normal 26-32
+
+        if (hasSH) {
+            const vec3 = new Vec3();
+            for (let j = 0; j < 15; ++j) {
+                decodePacked_11_10_11(vec3, dataView.getUint32(off + 32 + j * 4, true));
+
+                columns[14 + j].data[i] = mix(shMin.x, shMax.x, vec3.x);
+                columns[14 + j + 15].data[i] = mix(shMin.y, shMax.y, vec3.y);
+                columns[14 + j + 30].data[i] = mix(shMin.z, shMax.z, vec3.z);
+            }
+        }
+    }
+
+    return new DataTable(columns);
+};
+
 const readLcc = async (fileHandle: FileHandle, sourceName: string, options: Options): Promise<DataTable[]> => {
     const lccData = await read(fileHandle);
     const lccText = new TextDecoder().decode(lccData);
     const lccJson = JSON.parse(lccText);
 
-    const isHasSH: boolean = lccJson.fileType === 'Quality';
-    const compressInfo: CompressInfo = parseMeta(lccJson);
-    const splats: number[] = lccJson.splats;
+    const hasSH = lccJson.fileType === 'Quality';
+    const compressInfo = parseMeta(lccJson);
+    const splats = lccJson.splats;
 
     const relatedFilename = (name: string) => join(dirname(sourceName ?? ''), name);
 
     const indexData = await openAndRead(relatedFilename('index.bin'));
     const dataFile = await open(relatedFilename('data.bin'), 'r');
-    const shFile = isHasSH ? await open(relatedFilename('shcoef.bin'), 'r') : null;
+    const shFile = hasSH ? await open(relatedFilename('shcoef.bin'), 'r') : null;
 
     const unitInfos: LccUnitInfo[] = parseIndexBin(indexData.buffer as ArrayBuffer, lccJson);
 
@@ -407,6 +485,16 @@ const readLcc = async (fileHandle: FileHandle, sourceName: string, options: Opti
     await dataFile.close();
     if (shFile) {
         await shFile.close();
+    }
+
+    // load environment in lod -1
+    try {
+        const envData = await openAndRead(relatedFilename('environment.bin'));
+        const envDataTable  = await deserializeEnvironment(envData, compressInfo, hasSH);
+        envDataTable.addColumn(new Column('lod', new Float32Array(envDataTable.numRows).fill(-1)));
+        result.push(envDataTable);
+    } catch (err) {
+        console.warn('Failed to loading environment.bin', err);
     }
 
     return result;

@@ -10,7 +10,6 @@ import { writeSog } from './write-sog.js';
 import { Options } from '../types';
 import { BTreeNode, BTree } from '../utils/b-tree';
 
-
 type Aabb = {
     min: number[],
     max: number[]
@@ -30,6 +29,7 @@ type MetaNode = {
 
 type Meta = {
     lodLevels: number,
+    environment?: string;
     filenames: string[];
     tree: MetaNode;
 };
@@ -135,9 +135,27 @@ const binIndices = (parent: BTreeNode, lod: TypedArray) => {
     return result;
 };
 
-const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFilename: string, options: Options) => {
+const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, envDataTable: DataTable | null, outputFilename: string, options: Options) => {
+    const outputDir = dirname(outputFilename);
+
     // ensure top-level output folder exists
-    await mkdir(dirname(outputFilename), { recursive: true });
+    await mkdir(outputDir, { recursive: true });
+
+    // write the environment sog
+    if (envDataTable?.numRows > 0) {
+        const pathname = resolve(outputDir, `env/meta.json`);
+
+        // ensure output folder exists before any files are written
+        await mkdir(dirname(pathname), { recursive: true });
+
+        const outputFile = await open(pathname, 'w');
+
+        logger.info(`writing ${pathname}...`);
+
+        await writeSog(outputFile, envDataTable, pathname, options);
+
+        await outputFile.close();
+    }
 
     // construct a kd-tree based on centroids from all lods
     const centroidsTable = new DataTable([
@@ -218,6 +236,7 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     const tree = build(bTree.root);
     const meta: Meta = {
         lodLevels,
+        environment: envDataTable && envDataTable.numRows > 0 ? `env/meta.json` : null,
         filenames,
         tree
     };
@@ -242,7 +261,7 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
             }
 
             // ensure output folder exists before any files are written
-            const pathname = resolve(dirname(outputFilename), `${lodValue}_${i}/meta.json`);
+            const pathname = resolve(outputDir, `${lodValue}_${i}/meta.json`);
             await mkdir(dirname(pathname), { recursive: true });
 
             // generate an ordering for each subunit and append it to the unit's indices
