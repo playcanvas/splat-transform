@@ -34,8 +34,6 @@ type Row = {
     [colName: string]: number;
 };
 
-type RowPredicate = (rowIndex: number, row: Row) => boolean;
-
 class DataTable {
     columns: Column[];
 

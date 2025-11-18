@@ -123,7 +123,7 @@ const readFile = async (filename: string, options: Options, params: Param[]): Pr
     return result;
 };
 
-const writeFile = async (filename: string, dataTable: DataTable, options: Options) => {
+const writeFile = async (filename: string, dataTable: DataTable, envDataTable: DataTable | null, options: Options) => {
     // get the output format, throws on failure
     const outputFormat = getOutputFormat(filename);
 
@@ -146,7 +146,7 @@ const writeFile = async (filename: string, dataTable: DataTable, options: Option
                 await writeSog(outputFile, dataTable, filename, options);
                 break;
             case 'lod':
-                await writeLod(outputFile, dataTable, filename, options);
+                await writeLod(outputFile, dataTable, envDataTable, filename, options);
                 break;
             case 'compressed-ply':
                 await writeCompressedPly(outputFile, dataTable);
@@ -577,20 +577,29 @@ const main = async () => {
             return dataTables;
         }))).flat(1).filter(dataTable => dataTable !== null);
 
+        // special-case the environment dataTable
+        const envDataTables = inputDataTables.filter(dt => dt.hasColumn('lod') && dt.getColumnByName('lod').data.every(v => v === -1));
+        const nonEnvDataTables = inputDataTables.filter(dt => !dt.hasColumn('lod') || dt.getColumnByName('lod').data.some(v => v !== -1));
+
         // combine inputs into a single output dataTable
-        const dataTable = processDataTable(
-            combine(inputDataTables),
+        const dataTable = nonEnvDataTables.length > 0 && processDataTable(
+            combine(nonEnvDataTables),
             outputArg.processActions
         );
 
-        if (dataTable.numRows === 0) {
+        if (!dataTable || dataTable.numRows === 0) {
             throw new Error('No splats to write');
         }
+
+        const envDataTable = envDataTables.length > 0 && processDataTable(
+            combine(envDataTables),
+            outputArg.processActions
+        );
 
         logger.info(`Loaded ${dataTable.numRows} gaussians`);
 
         // write file
-        await writeFile(outputFilename, dataTable, options);
+        await writeFile(outputFilename, dataTable, envDataTable, options);
     } catch (err) {
         // handle errors
         logger.error(err);

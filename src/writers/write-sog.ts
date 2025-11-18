@@ -1,6 +1,7 @@
 import { FileHandle, open } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
+import { version } from '../../package.json';
 import { Column, DataTable } from '../data-table';
 import { createDevice, GpuDevice } from '../gpu/gpu-device';
 import { logger } from '../logger';
@@ -11,7 +12,6 @@ import { Options } from '../types';
 import { kmeans } from '../utils/k-means';
 import { sigmoid } from '../utils/math';
 import { WebPCodec } from '../utils/webp-codec';
-
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
@@ -273,6 +273,9 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     // construct meta.json
     const meta: any = {
         version: 2,
+        asset: {
+            generator: `splat-transform v${version}`
+        },
         count: numRows,
         means: {
             mins: meansMinMax.map(v => v[0]),
