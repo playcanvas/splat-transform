@@ -487,7 +487,7 @@ const readLcc = async (fileHandle: FileHandle, sourceName: string, options: Opti
         await shFile.close();
     }
 
-    // load environment in lod -1
+    // load environment and tag as lod -1
     try {
         const envData = await openAndRead(relatedFilename('environment.bin'));
         const envDataTable  = await deserializeEnvironment(envData, compressInfo, hasSH);

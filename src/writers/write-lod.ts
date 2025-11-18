@@ -27,7 +27,7 @@ type MetaNode = {
     lods?: { [key: number]: MetaLod };
 };
 
-type Meta = {
+type LodMeta = {
     lodLevels: number,
     environment?: string;
     filenames: string[];
@@ -234,7 +234,7 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, envDataTab
     };
 
     const tree = build(bTree.root);
-    const meta: Meta = {
+    const meta: LodMeta = {
         lodLevels,
         environment: (envDataTable?.numRows > 0) ? `env/meta.json` : null,
         filenames,

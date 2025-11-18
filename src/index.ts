@@ -592,11 +592,11 @@ const main = async () => {
             outputArg.processActions
         );
 
-        if (dataTable.numRows + envDataTable.numRows === 0) {
+        if (dataTable.numRows === 0) {
             throw new Error('No splats to write');
         }
 
-        logger.info(`Loaded ${dataTable.numRows + envDataTable.numRows} gaussians`);
+        logger.info(`Loaded ${dataTable.numRows} gaussians`);
 
         // write file
         await writeFile(outputFilename, dataTable, envDataTable, options);
