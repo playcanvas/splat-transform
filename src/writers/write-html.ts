@@ -70,11 +70,11 @@ const writeHtml = async (fileHandle: FileHandle, dataTable: DataTable, options: 
     const content = 'fetch(contentUrl)';
 
     const generatedHtml = html
-        .replace(style, `<style>\n${pad(css, 12)}\n        </style>`)
-        .replace(script, js)
-        .replace(settings, `settings: ${JSON.stringify(mergedSettings)}`)
-        .replace(content, `fetch("data:application/octet-stream;base64,${sogData}")`)
-        .replace('.compressed.ply', '.sog');
+    .replace(style, `<style>\n${pad(css, 12)}\n        </style>`)
+    .replace(script, js)
+    .replace(settings, `settings: ${JSON.stringify(mergedSettings)}`)
+    .replace(content, `fetch("data:application/octet-stream;base64,${sogData}")`)
+    .replace('.compressed.ply', '.sog');
 
     await fileHandle.write(new TextEncoder().encode(generatedHtml));
 };
