@@ -65,16 +65,16 @@ const writeHtml = async (fileHandle: FileHandle, dataTable: DataTable, options: 
     await unlink(tempSogPath);
 
     const style = '<link rel="stylesheet" href="./index.css">';
-    const script = '<script type="module" src="./index.js"></script>';
+    const script = 'import { main } from \'./index.js\';';
     const settings = 'settings: fetch(settingsUrl).then(response => response.json())';
     const content = 'fetch(contentUrl)';
 
     const generatedHtml = html
-    .replace(style, `<style>\n${pad(css, 12)}\n        </style>`)
-    .replace(script, `<script type="module">\n${pad(js, 12)}\n        </script>`)
-    .replace(settings, `settings: ${JSON.stringify(mergedSettings)}`)
-    .replace(content, `fetch("data:application/octet-stream;base64,${sogData}")`)
-    .replace('.compressed.ply', '.sog');
+        .replace(style, `<style>\n${pad(css, 12)}\n        </style>`)
+        .replace(script, js)
+        .replace(settings, `settings: ${JSON.stringify(mergedSettings)}`)
+        .replace(content, `fetch("data:application/octet-stream;base64,${sogData}")`)
+        .replace('.compressed.ply', '.sog');
 
     await fileHandle.write(new TextEncoder().encode(generatedHtml));
 };

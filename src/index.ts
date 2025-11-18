@@ -582,19 +582,19 @@ const main = async () => {
         const nonEnvDataTables = inputDataTables.filter(dt => !dt.hasColumn('lod') || dt.getColumnByName('lod').data.some(v => v !== -1));
 
         // combine inputs into a single output dataTable
-        const dataTable = processDataTable(
+        const dataTable = nonEnvDataTables.length > 0 && processDataTable(
             combine(nonEnvDataTables),
             outputArg.processActions
         );
 
-        const envDataTable = processDataTable(
+        if (!dataTable || dataTable.numRows === 0) {
+            throw new Error('No splats to write');
+        }
+
+        const envDataTable = envDataTables.length > 0 && processDataTable(
             combine(envDataTables),
             outputArg.processActions
         );
-
-        if (dataTable.numRows === 0) {
-            throw new Error('No splats to write');
-        }
 
         logger.info(`Loaded ${dataTable.numRows} gaussians`);
 
