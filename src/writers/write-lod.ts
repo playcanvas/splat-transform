@@ -236,7 +236,7 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, envDataTab
     const tree = build(bTree.root);
     const meta: Meta = {
         lodLevels,
-        environment: envDataTable && envDataTable.numRows > 0 ? `env/meta.json` : null,
+        environment: (envDataTable?.numRows > 0) ? `env/meta.json` : null,
         filenames,
         tree
     };
