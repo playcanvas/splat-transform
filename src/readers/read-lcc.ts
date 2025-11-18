@@ -228,6 +228,8 @@ const initProperties = (length: number): Record<string, Float32Array> => {
     return props;
 };
 
+const vec3 = new Vec3();
+
 const decodeSplat = (
     dataView: DataView,
     shDataView: DataView | null,
@@ -267,8 +269,6 @@ const decodeSplat = (
     unitProperties.property_nx[i] = dataView.getUint16(off + 26, true);
     unitProperties.property_ny[i] = dataView.getUint16(off + 28, true);
     unitProperties.property_nz[i] = dataView.getUint16(off + 30, true);
-
-    const vec3 = new Vec3();
 
     // SH
     if (shDataView && unitProperties_f_rest) {
@@ -418,7 +418,6 @@ const deserializeEnvironment = (raw: Uint8Array, compressInfo: CompressInfo, has
         // skip normal 26-32
 
         if (hasSH) {
-            const vec3 = new Vec3();
             for (let j = 0; j < 15; ++j) {
                 decodePacked_11_10_11(vec3, dataView.getUint32(off + 32 + j * 4, true));
 
@@ -494,7 +493,7 @@ const readLcc = async (fileHandle: FileHandle, sourceName: string, options: Opti
         envDataTable.addColumn(new Column('lod', new Float32Array(envDataTable.numRows).fill(-1)));
         result.push(envDataTable);
     } catch (err) {
-        console.warn('Failed to loading environment.bin', err);
+        console.warn('Failed to load environment.bin', err);
     }
 
     return result;
