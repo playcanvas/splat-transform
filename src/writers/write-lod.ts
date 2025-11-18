@@ -143,7 +143,7 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, envDataTab
 
     // write the environment sog
     if (envDataTable?.numRows > 0) {
-        const pathname = resolve(outputDir, `env/meta.json`);
+        const pathname = resolve(outputDir, 'env/meta.json');
 
         // ensure output folder exists before any files are written
         await mkdir(dirname(pathname), { recursive: true });
@@ -236,7 +236,7 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, envDataTab
     const tree = build(bTree.root);
     const meta: LodMeta = {
         lodLevels,
-        environment: (envDataTable?.numRows > 0) ? `env/meta.json` : null,
+        environment: (envDataTable?.numRows > 0) ? 'env/meta.json' : null,
         filenames,
         tree
     };
