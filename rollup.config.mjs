@@ -19,6 +19,28 @@ const application = {
     cache: false
 };
 
+const library = {
+    input: 'src/lib.ts',
+    output: {
+        dir: 'dist',
+        format: 'esm',
+        sourcemap: true,
+        entryFileNames: '[name].mjs'
+    },
+    external: ['webgpu'],
+    plugins: [
+        typescript({
+            tsconfig: './tsconfig.json',
+            declaration: true,
+            declarationDir: './dist'
+        }),
+        resolve(),
+        json()
+    ],
+    cache: false
+};
+
 export default [
-    application
+    application,
+    library
 ];
