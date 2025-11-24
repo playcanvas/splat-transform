@@ -436,7 +436,10 @@ const readLcc = async (fileHandle: FileHandle, sourceName: string, options: Opti
     const lccText = new TextDecoder().decode(lccData);
     const lccJson = JSON.parse(lccText);
 
-    const hasSH = lccJson.fileType === 'Quality';
+    // FIXME: it seems some meta.lcc files at https://developer.xgrids.com/#/download?page=sampledata do not have
+    // 'fileType' field, but do appear to contain spherical harmonics data. So for now assume presence of SH when
+    // the field is missing.
+    const hasSH = lccJson.fileType !== 'Portable';
     const compressInfo = parseMeta(lccJson);
     const splats = lccJson.splats;
 
