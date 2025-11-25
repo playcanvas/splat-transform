@@ -92,10 +92,10 @@ const parseMeta = (obj: any): CompressInfo => {
     const scaleMax = new Vec3(attributes.scale.max);
     const shMin = new Vec3(attributes.shcoef.min);
     const shMax = new Vec3(attributes.shcoef.max);
-    const envScaleMin = new Vec3(attributes.envscale.min);
-    const envScaleMax = new Vec3(attributes.envscale.max);
-    const envShMin = new Vec3(attributes.envshcoef.min);
-    const envShMax = new Vec3(attributes.envshcoef.max);
+    const envScaleMin = new Vec3(attributes.envscale?.min ?? attributes.scale.min);
+    const envScaleMax = new Vec3(attributes.envscale?.max ?? attributes.scale.max);
+    const envShMin = new Vec3(attributes.envshcoef?.min ?? attributes.shcoef?.min);
+    const envShMax = new Vec3(attributes.envshcoef?.max ?? attributes.shcoef?.max);
 
     const compressInfo: CompressInfo = {
         scaleMin,
@@ -436,11 +436,24 @@ const readLcc = async (fileHandle: FileHandle, sourceName: string, options: Opti
     const lccText = new TextDecoder().decode(lccData);
     const lccJson = JSON.parse(lccText);
 
+    const determineSH = () => {
+        if (lccJson.fileType === 'Portable') {
+            return false;
+        }
+
+        if (lccJson.fileType === 'Quality') {
+            return true;
+        }
+
+        // check attributes to determine whether SH is present or not
+        return lccJson.attributes.findIndex((attr: any) => attr.name === 'shcoef') !== -1;
+    };
+
     // FIXME: it seems some meta.lcc files at https://developer.xgrids.com/#/download?page=sampledata do not have
     // 'fileType' field, but do appear to contain spherical harmonics data. So for now assume presence of SH when
     // the field is missing.
     // See https://github.com/xgrids/LCCWhitepaper/issues/3
-    const hasSH = lccJson.fileType !== 'Portable';
+    const hasSH = determineSH();
     const compressInfo = parseMeta(lccJson);
     const splats = lccJson.splats;
 
