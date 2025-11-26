@@ -445,7 +445,7 @@ const readLcc = async (fileHandle: FileHandle, sourceName: string, options: Opti
             return true;
         }
 
-        // check attributes to determine whether SH is present or not
+        // before version 4 sh seems to have always been present, but we test for shcoef attribute anyway
         return lccJson.attributes.findIndex((attr: any) => attr.name === 'shcoef') !== -1;
     };
 
