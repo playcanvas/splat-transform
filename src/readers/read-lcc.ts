@@ -94,8 +94,8 @@ const parseMeta = (obj: any): CompressInfo => {
     const shMax = new Vec3(attributes.shcoef.max);
     const envScaleMin = new Vec3(attributes.envscale?.min ?? attributes.scale.min);
     const envScaleMax = new Vec3(attributes.envscale?.max ?? attributes.scale.max);
-    const envShMin = new Vec3(attributes.envshcoef?.min ?? attributes.shcoef?.min);
-    const envShMax = new Vec3(attributes.envshcoef?.max ?? attributes.shcoef?.max);
+    const envShMin = new Vec3(attributes.envshcoef?.min ?? attributes.shcoef.min);
+    const envShMax = new Vec3(attributes.envshcoef?.max ?? attributes.shcoef.max);
 
     const compressInfo: CompressInfo = {
         scaleMin,
