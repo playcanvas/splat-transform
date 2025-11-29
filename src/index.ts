@@ -508,9 +508,6 @@ EXAMPLES
     # Merge two files with transforms and compress to SOG format
     splat-transform -w cloudA.ply -r 0,90,0 cloudB.ply -s 2 merged.sog
 
-    # Generate HTML viewer with custom settings
-    splat-transform -E settings.json bunny.ply bunny-viewer.html
-
     # Generate unbundled HTML viewer with separate CSS, JS, and SOG files
     splat-transform -U bunny.ply bunny-viewer.html
 
