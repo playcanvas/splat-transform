@@ -50,7 +50,7 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 | `.spz` | ✅ | ❌ | Compressed splat format (Niantic format) |
 | `.mjs` | ✅ | ❌ | Generate a scene using an mjs script (Beta) |
 | `.csv` | ❌ | ✅ | Comma-separated values spreadsheet |
-| `.html` | ❌ | ✅ | Standalone HTML viewer app (bundled or unbundled) |
+| `.html` | ❌ | ✅ | HTML viewer app (single-page or unbundled) based on SOG |
 
 ## Actions
 
