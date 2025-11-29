@@ -547,6 +547,7 @@ const main = async () => {
     const outputArg = files[files.length - 1];
 
     const outputFilename = resolve(outputArg.filename);
+    const outputFormat = getOutputFormat(outputFilename);
 
     if (options.overwrite) {
         // ensure target directory exists when using -w
@@ -556,6 +557,24 @@ const main = async () => {
         if (await fileExists(outputFilename)) {
             logger.error(`File '${outputFilename}' already exists. Use -w option to overwrite.`);
             exit(1);
+        }
+
+        // for unbundled HTML, also check for additional files
+        if (outputFormat === 'html' && options.unbundled) {
+            const outputDir = dirname(outputFilename);
+            const baseFilename = basename(outputFilename, '.html');
+            const filesToCheck = [
+                join(outputDir, 'index.css'),
+                join(outputDir, 'index.js'),
+                join(outputDir, `${baseFilename}.sog`)
+            ];
+
+            for (const file of filesToCheck) {
+                if (await fileExists(file)) {
+                    logger.error(`File '${file}' already exists. Use -w option to overwrite.`);
+                    exit(1);
+                }
+            }
         }
     }
 
