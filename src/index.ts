@@ -460,8 +460,8 @@ const parseArguments = () => {
 };
 
 const usage = `
-Transform & filter Gaussian splats
-===================================
+Transform and Filter Gaussian Splats
+====================================
 
 USAGE
   splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
