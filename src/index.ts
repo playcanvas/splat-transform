@@ -161,7 +161,7 @@ const writeFile = async (filename: string, dataTable: DataTable, envDataTable: D
                 });
                 break;
             case 'html':
-                await writeHtml(outputFile, dataTable, options);
+                await writeHtml(outputFile, dataTable, filename, options);
                 break;
         }
 
@@ -267,6 +267,7 @@ const parseArguments = () => {
             'viewer-settings': { type: 'string', short: 'E', default: '' },
             'lod-chunk-count': { type: 'string', short: 'C', default: '512' },
             'lod-chunk-extent': { type: 'string', short: 'X', default: '16' },
+            unbundled: { type: 'boolean', short: 'U', default: false },
 
             // per-file options
             translate: { type: 'string', short: 't', multiple: true },
@@ -330,6 +331,7 @@ const parseArguments = () => {
         iterations: parseInteger(v.iterations),
         lodSelect: v['lod-select'].split(',').filter(v => !!v).map(parseInteger),
         viewerSettingsPath: v['viewer-settings'],
+        unbundled: v.unbundled,
         lodChunkCount: parseInteger(v['lod-chunk-count']),
         lodChunkExtent: parseInteger(v['lod-chunk-extent'])
     };
@@ -494,6 +496,7 @@ GLOBAL OPTIONS
     -c, --cpu                               Use CPU for SOG spherical harmonic compression
     -i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10
     -E, --viewer-settings  <settings.json>  HTML viewer settings JSON file
+    -U, --unbundled                         Generate unbundled HTML viewer with separate files
     -O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC input
     -C, --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
     -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
@@ -507,6 +510,9 @@ EXAMPLES
 
     # Generate HTML viewer with custom settings
     splat-transform -E settings.json bunny.ply bunny-viewer.html
+
+    # Generate unbundled HTML viewer with separate CSS, JS, and SOG files
+    splat-transform -U bunny.ply bunny-viewer.html
 
     # Generate synthetic splats using a generator script
     splat-transform gen-grid.mjs -p width=500,height=500,scale=0.1 grid.ply
