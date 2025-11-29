@@ -1,6 +1,6 @@
 import { open, readFile, unlink, writeFile, FileHandle } from 'node:fs/promises';
-import { dirname, basename, join } from 'node:path';
 import os from 'node:os';
+import { dirname, basename, join } from 'node:path';
 
 import { html, css, js } from '@playcanvas/supersplat-viewer';
 
@@ -83,9 +83,9 @@ const writeHtml = async (fileHandle: FileHandle, dataTable: DataTable, outputFil
         const content = 'fetch(contentUrl)';
 
         generatedHtml = html
-            .replace(settings, `settings: ${JSON.stringify(mergedSettings)}`)
-            .replace(content, `fetch("${sogFilename}")`)
-            .replace('.compressed.ply', '.sog');
+        .replace(settings, `settings: ${JSON.stringify(mergedSettings)}`)
+        .replace(content, `fetch("${sogFilename}")`)
+        .replace('.compressed.ply', '.sog');
     } else {
         // Bundled mode: embed everything in the HTML
         const tempSogPath = `${os.tmpdir()}/temp.sog`;
@@ -103,11 +103,11 @@ const writeHtml = async (fileHandle: FileHandle, dataTable: DataTable, outputFil
         const content = 'fetch(contentUrl)';
 
         generatedHtml = html
-            .replace(style, `<style>\n${pad(css, 12)}\n        </style>`)
-            .replace(script, js)
-            .replace(settings, `settings: ${JSON.stringify(mergedSettings)}`)
-            .replace(content, `fetch("data:application/octet-stream;base64,${sogData}")`)
-            .replace('.compressed.ply', '.sog');
+        .replace(style, `<style>\n${pad(css, 12)}\n        </style>`)
+        .replace(script, js)
+        .replace(settings, `settings: ${JSON.stringify(mergedSettings)}`)
+        .replace(content, `fetch("data:application/octet-stream;base64,${sogData}")`)
+        .replace('.compressed.ply', '.sog');
     }
 
     await fileHandle.write(new TextEncoder().encode(generatedHtml));
