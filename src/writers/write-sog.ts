@@ -124,7 +124,7 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     // the layout function determines how the data is packed into the output texture.
     const layout = identity; // rectChunks;
 
-    const write = async (filename: string, data: Uint8Array, w = width, h = height) => {
+    const writeWebp = async (filename: string, data: Uint8Array, w = width, h = height) => {
         const pathname = resolve(dirname(outputFilename), filename);
         logger.info(`writing '${pathname}'...`);
 
@@ -156,152 +156,131 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
             data[ti * channels + 3] = numColumns > 3 ? columns[3][idx] : 255;
         }
 
-        return write(filename, data, w, h);
+        return writeWebp(filename, data, w, h);
     };
 
     const row: any = {};
 
-    // convert position/means
-    const meansL = new Uint8Array(width * height * channels);
-    const meansU = new Uint8Array(width * height * channels);
-    const meansNames = ['x', 'y', 'z'];
-    const meansMinMax = calcMinMax(dataTable, meansNames, indices).map(v => v.map(logTransform));
-    const meansColumns = meansNames.map(name => dataTable.getColumnByName(name));
-    for (let i = 0; i < indices.length; ++i) {
-        dataTable.getRow(indices[i], row, meansColumns);
+    const writeMeans = async () => {
+        const meansL = new Uint8Array(width * height * channels);
+        const meansU = new Uint8Array(width * height * channels);
+        const meansNames = ['x', 'y', 'z'];
+        const meansMinMax = calcMinMax(dataTable, meansNames, indices).map(v => v.map(logTransform));
+        const meansColumns = meansNames.map(name => dataTable.getColumnByName(name));
+        for (let i = 0; i < indices.length; ++i) {
+            dataTable.getRow(indices[i], row, meansColumns);
 
-        const x = 65535 * (logTransform(row.x) - meansMinMax[0][0]) / (meansMinMax[0][1] - meansMinMax[0][0]);
-        const y = 65535 * (logTransform(row.y) - meansMinMax[1][0]) / (meansMinMax[1][1] - meansMinMax[1][0]);
-        const z = 65535 * (logTransform(row.z) - meansMinMax[2][0]) / (meansMinMax[2][1] - meansMinMax[2][0]);
+            const x = 65535 * (logTransform(row.x) - meansMinMax[0][0]) / (meansMinMax[0][1] - meansMinMax[0][0]);
+            const y = 65535 * (logTransform(row.y) - meansMinMax[1][0]) / (meansMinMax[1][1] - meansMinMax[1][0]);
+            const z = 65535 * (logTransform(row.z) - meansMinMax[2][0]) / (meansMinMax[2][1] - meansMinMax[2][0]);
 
-        const ti = layout(i, width);
+            const ti = layout(i, width);
 
-        meansL[ti * 4] = x & 0xff;
-        meansL[ti * 4 + 1] = y & 0xff;
-        meansL[ti * 4 + 2] = z & 0xff;
-        meansL[ti * 4 + 3] = 0xff;
+            meansL[ti * 4] = x & 0xff;
+            meansL[ti * 4 + 1] = y & 0xff;
+            meansL[ti * 4 + 2] = z & 0xff;
+            meansL[ti * 4 + 3] = 0xff;
 
-        meansU[ti * 4] = (x >> 8) & 0xff;
-        meansU[ti * 4 + 1] = (y >> 8) & 0xff;
-        meansU[ti * 4 + 2] = (z >> 8) & 0xff;
-        meansU[ti * 4 + 3] = 0xff;
-    }
-    await write('means_l.webp', meansL);
-    await write('means_u.webp', meansU);
-
-    // convert quaternions
-    const quats = new Uint8Array(width * height * channels);
-    const quatNames = ['rot_0', 'rot_1', 'rot_2', 'rot_3'];
-    const quatColumns = quatNames.map(name => dataTable.getColumnByName(name));
-    const q = [0, 0, 0, 0];
-    for (let i = 0; i < indices.length; ++i) {
-        dataTable.getRow(indices[i], row, quatColumns);
-
-        q[0] = row.rot_0;
-        q[1] = row.rot_1;
-        q[2] = row.rot_2;
-        q[3] = row.rot_3;
-
-        const l = Math.sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
-
-        // normalize
-        q.forEach((v, j) => {
-            q[j] = v / l;
-        });
-
-        // find max component
-        const maxComp = q.reduce((v, _, i) => (Math.abs(q[i]) > Math.abs(q[v]) ? i : v), 0);
-
-        // invert if max component is negative
-        if (q[maxComp] < 0) {
-            q.forEach((v, j) => {
-                q[j] *= -1;
-            });
+            meansU[ti * 4] = (x >> 8) & 0xff;
+            meansU[ti * 4 + 1] = (y >> 8) & 0xff;
+            meansU[ti * 4 + 2] = (z >> 8) & 0xff;
+            meansU[ti * 4 + 3] = 0xff;
         }
+        await writeWebp('means_l.webp', meansL);
+        await writeWebp('means_u.webp', meansU);
 
-        // scale by sqrt(2) to fit in [-1, 1] range
-        const sqrt2 = Math.sqrt(2);
-        q.forEach((v, j) => {
-            q[j] *= sqrt2;
-        });
-
-        const idx = [
-            [1, 2, 3],
-            [0, 2, 3],
-            [0, 1, 3],
-            [0, 1, 2]
-        ][maxComp];
-
-        const ti = layout(i, width);
-
-        quats[ti * 4]     = 255 * (q[idx[0]] * 0.5 + 0.5);
-        quats[ti * 4 + 1] = 255 * (q[idx[1]] * 0.5 + 0.5);
-        quats[ti * 4 + 2] = 255 * (q[idx[2]] * 0.5 + 0.5);
-        quats[ti * 4 + 3] = 252 + maxComp;
-    }
-    await write('quats.webp', quats);
-
-    if (!options.cpu && !gpuDevice) {
-        gpuDevice = await createDevice();
-    }
-
-    // convert scale
-    const scaleData = await cluster1d(
-        new DataTable(['scale_0', 'scale_1', 'scale_2'].map(name => dataTable.getColumnByName(name))),
-        options.iterations,
-        gpuDevice
-    );
-    await writeTableData('scales.webp', scaleData.labels);
-
-    // color and opacity
-    const colorData = await cluster1d(
-        new DataTable(['f_dc_0', 'f_dc_1', 'f_dc_2'].map(name => dataTable.getColumnByName(name))),
-        options.iterations,
-        gpuDevice
-    );
-
-    // generate and store sigmoid(opacity) [0..1]
-    const opacity = dataTable.getColumnByName('opacity').data;
-    const opacityData = new Uint8Array(opacity.length);
-    for (let i = 0; i < numRows; ++i) {
-        opacityData[i] = Math.max(0, Math.min(255, sigmoid(opacity[i]) * 255));
-    }
-    colorData.labels.addColumn(new Column('opacity', opacityData));
-
-    await writeTableData('sh0.webp', colorData.labels);
-
-    // construct meta.json
-    const meta: any = {
-        version: 2,
-        asset: {
-            generator: `splat-transform v${version}`
-        },
-        count: numRows,
-        means: {
+        return {
             mins: meansMinMax.map(v => v[0]),
-            maxs: meansMinMax.map(v => v[1]),
-            files: [
-                'means_l.webp',
-                'means_u.webp'
-            ]
-        },
-        scales: {
-            codebook: Array.from(scaleData.centroids.getColumn(0).data),
-            files: ['scales.webp']
-        },
-        quats: {
-            files: ['quats.webp']
-        },
-        sh0: {
-            codebook: Array.from(colorData.centroids.getColumn(0).data),
-            files: ['sh0.webp']
-        }
+            maxs: meansMinMax.map(v => v[1])
+        };
     };
 
-    // spherical harmonics
-    const shBands = { '9': 1, '24': 2, '-1': 3 }[shNames.findIndex(v => !dataTable.hasColumn(v))] ?? 0;
+    const writeQuaternions = async () => {
+        const quats = new Uint8Array(width * height * channels);
+        const quatNames = ['rot_0', 'rot_1', 'rot_2', 'rot_3'];
+        const quatColumns = quatNames.map(name => dataTable.getColumnByName(name));
+        const q = [0, 0, 0, 0];
+        for (let i = 0; i < indices.length; ++i) {
+            dataTable.getRow(indices[i], row, quatColumns);
 
-    if (shBands > 0) {
+            q[0] = row.rot_0;
+            q[1] = row.rot_1;
+            q[2] = row.rot_2;
+            q[3] = row.rot_3;
+
+            const l = Math.sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+
+            // normalize
+            q.forEach((v, j) => {
+                q[j] = v / l;
+            });
+
+            // find max component
+            const maxComp = q.reduce((v, _, i) => (Math.abs(q[i]) > Math.abs(q[v]) ? i : v), 0);
+
+            // invert if max component is negative
+            if (q[maxComp] < 0) {
+                q.forEach((v, j) => {
+                    q[j] *= -1;
+                });
+            }
+
+            // scale by sqrt(2) to fit in [-1, 1] range
+            const sqrt2 = Math.sqrt(2);
+            q.forEach((v, j) => {
+                q[j] *= sqrt2;
+            });
+
+            const idx = [
+                [1, 2, 3],
+                [0, 2, 3],
+                [0, 1, 3],
+                [0, 1, 2]
+            ][maxComp];
+
+            const ti = layout(i, width);
+
+            quats[ti * 4]     = 255 * (q[idx[0]] * 0.5 + 0.5);
+            quats[ti * 4 + 1] = 255 * (q[idx[1]] * 0.5 + 0.5);
+            quats[ti * 4 + 2] = 255 * (q[idx[2]] * 0.5 + 0.5);
+            quats[ti * 4 + 3] = 252 + maxComp;
+        }
+        await writeWebp('quats.webp', quats);
+    };
+
+    const writeScales = async () => {
+        const scaleData = await cluster1d(
+            new DataTable(['scale_0', 'scale_1', 'scale_2'].map(name => dataTable.getColumnByName(name))),
+            options.iterations,
+            gpuDevice
+        );
+
+        await writeTableData('scales.webp', scaleData.labels);
+
+        return Array.from(scaleData.centroids.getColumn(0).data);
+    };
+
+    const writeColors = async () => {
+        const colorData = await cluster1d(
+            new DataTable(['f_dc_0', 'f_dc_1', 'f_dc_2'].map(name => dataTable.getColumnByName(name))),
+            options.iterations,
+            gpuDevice
+        );
+
+        // generate and store sigmoid(opacity) [0..1]
+        const opacity = dataTable.getColumnByName('opacity').data;
+        const opacityData = new Uint8Array(opacity.length);
+        for (let i = 0; i < numRows; ++i) {
+            opacityData[i] = Math.max(0, Math.min(255, sigmoid(opacity[i]) * 255));
+        }
+        colorData.labels.addColumn(new Column('opacity', opacityData));
+
+        await writeTableData('sh0.webp', colorData.labels);
+
+        return Array.from(colorData.centroids.getColumn(0).data);
+    };
+
+    const writeSH = async (shBands: number) => {
         const shCoeffs = [0, 3, 8, 15][shBands];
         const shColumnNames = shNames.slice(0, shCoeffs * 3);
         const shColumns = shColumnNames.map(name => dataTable.getColumnByName(name));
@@ -338,7 +317,7 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
                 centroidsBuf[i * shCoeffs * 4 + j * 4 + 3] = 0xff;
             }
         }
-        await write('shN_centroids.webp', centroidsBuf, 64 * shCoeffs, Math.ceil(centroids.numRows / 64));
+        await writeWebp('shN_centroids.webp', centroidsBuf, 64 * shCoeffs, Math.ceil(centroids.numRows / 64));
 
         // write labels
         const labelsBuf = new Uint8Array(width * height * channels);
@@ -351,9 +330,9 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
             labelsBuf[ti * 4 + 2] = 0;
             labelsBuf[ti * 4 + 3] = 0xff;
         }
-        await write('shN_labels.webp', labelsBuf);
+        await writeWebp('shN_labels.webp', labelsBuf);
 
-        meta.shN = {
+        return {
             count: paletteSize,
             bands: shBands,
             codebook: Array.from(codebook.centroids.getColumn(0).data),
@@ -362,7 +341,50 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
                 'shN_labels.webp'
             ]
         };
+    };
+
+    // lazy construct the gpu device
+    if (!options.cpu && !gpuDevice) {
+        gpuDevice = await createDevice();
     }
+
+    const shBands = { '9': 1, '24': 2, '-1': 3 }[shNames.findIndex(v => !dataTable.hasColumn(v))] ?? 0;
+
+    // convert and write attributes
+    const meansMinMax = await writeMeans();
+    await writeQuaternions();
+    const scalesCodebook = await writeScales();
+    const colorsCodebook = await writeColors();
+    const shN = shBands > 0 ? await writeSH(shBands) : null;
+
+    // construct meta.json
+    const meta: any = {
+        version: 2,
+        asset: {
+            generator: `splat-transform v${version}`
+        },
+        count: numRows,
+        means: {
+            mins: meansMinMax.mins,
+            maxs: meansMinMax.maxs,
+            files: [
+                'means_l.webp',
+                'means_u.webp'
+            ]
+        },
+        scales: {
+            codebook: scalesCodebook,
+            files: ['scales.webp']
+        },
+        quats: {
+            files: ['quats.webp']
+        },
+        sh0: {
+            codebook: colorsCodebook,
+            files: ['sh0.webp']
+        },
+        ...(shN ? { shN } : {})
+    };
 
     const metaJson = (new TextEncoder()).encode(JSON.stringify(meta));
 
