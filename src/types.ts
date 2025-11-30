@@ -11,6 +11,7 @@ type Options = {
 
     // html output options
     viewerSettingsPath: string;
+    unbundled: boolean;
 
     // lod output options
     lodChunkCount: number;

@@ -161,7 +161,7 @@ const writeFile = async (filename: string, dataTable: DataTable, envDataTable: D
                 });
                 break;
             case 'html':
-                await writeHtml(outputFile, dataTable, options);
+                await writeHtml(outputFile, dataTable, filename, options);
                 break;
         }
 
@@ -267,6 +267,7 @@ const parseArguments = () => {
             'viewer-settings': { type: 'string', short: 'E', default: '' },
             'lod-chunk-count': { type: 'string', short: 'C', default: '512' },
             'lod-chunk-extent': { type: 'string', short: 'X', default: '16' },
+            unbundled: { type: 'boolean', short: 'U', default: false },
 
             // per-file options
             translate: { type: 'string', short: 't', multiple: true },
@@ -330,6 +331,7 @@ const parseArguments = () => {
         iterations: parseInteger(v.iterations),
         lodSelect: v['lod-select'].split(',').filter(v => !!v).map(parseInteger),
         viewerSettingsPath: v['viewer-settings'],
+        unbundled: v.unbundled,
         lodChunkCount: parseInteger(v['lod-chunk-count']),
         lodChunkExtent: parseInteger(v['lod-chunk-extent'])
     };
@@ -458,8 +460,8 @@ const parseArguments = () => {
 };
 
 const usage = `
-Transform & filter Gaussian splats
-===================================
+Transform and Filter Gaussian Splats
+====================================
 
 USAGE
   splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
@@ -494,6 +496,7 @@ GLOBAL OPTIONS
     -c, --cpu                               Use CPU for SOG spherical harmonic compression
     -i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10
     -E, --viewer-settings  <settings.json>  HTML viewer settings JSON file
+    -U, --unbundled                         Generate unbundled HTML viewer with separate files
     -O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC input
     -C, --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
     -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
@@ -505,8 +508,8 @@ EXAMPLES
     # Merge two files with transforms and compress to SOG format
     splat-transform -w cloudA.ply -r 0,90,0 cloudB.ply -s 2 merged.sog
 
-    # Generate HTML viewer with custom settings
-    splat-transform -E settings.json bunny.ply bunny-viewer.html
+    # Generate unbundled HTML viewer with separate CSS, JS and SOG files
+    splat-transform -U bunny.ply bunny-viewer.html
 
     # Generate synthetic splats using a generator script
     splat-transform gen-grid.mjs -p width=500,height=500,scale=0.1 grid.ply
@@ -541,6 +544,7 @@ const main = async () => {
     const outputArg = files[files.length - 1];
 
     const outputFilename = resolve(outputArg.filename);
+    const outputFormat = getOutputFormat(outputFilename);
 
     if (options.overwrite) {
         // ensure target directory exists when using -w
@@ -550,6 +554,24 @@ const main = async () => {
         if (await fileExists(outputFilename)) {
             logger.error(`File '${outputFilename}' already exists. Use -w option to overwrite.`);
             exit(1);
+        }
+
+        // for unbundled HTML, also check for additional files
+        if (outputFormat === 'html' && options.unbundled) {
+            const outputDir = dirname(outputFilename);
+            const baseFilename = basename(outputFilename, '.html');
+            const filesToCheck = [
+                join(outputDir, 'index.css'),
+                join(outputDir, 'index.js'),
+                join(outputDir, `${baseFilename}.sog`)
+            ];
+
+            for (const file of filesToCheck) {
+                if (await fileExists(file)) {
+                    logger.error(`File '${file}' already exists. Use -w option to overwrite.`);
+                    exit(1);
+                }
+            }
         }
     }
 

@@ -50,7 +50,7 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 | `.spz` | ✅ | ❌ | Compressed splat format (Niantic format) |
 | `.mjs` | ✅ | ❌ | Generate a scene using an mjs script (Beta) |
 | `.csv` | ❌ | ✅ | Comma-separated values spreadsheet |
-| `.html` | ❌ | ✅ | Standalone HTML viewer app (embeds SOG format) |
+| `.html` | ❌ | ✅ | HTML viewer app (single-page or unbundled) based on SOG |
 
 ## Actions
 
@@ -80,6 +80,7 @@ Actions can be repeated and applied in any order:
 -c, --cpu                               Use CPU for SOG spherical harmonic compression
 -i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10
 -E, --viewer-settings  <settings.json>  HTML viewer settings JSON file
+-U, --unbundled                         Generate unbundled HTML viewer with separate files
 -O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC input
 -C, --lod-chunk-count  <n>              Approx number of Gaussians per LOD chunk in K. Default: 512
 -X, --lod-chunk-extent <n>              Approx size of an LOD chunk in world units (m). Default: 16
@@ -121,8 +122,11 @@ splat-transform scene.sog restored.ply
 # Convert from SOG (unbundled folder) back to PLY
 splat-transform output/meta.json restored.ply
 
-# Convert to standalone HTML viewer
+# Convert to standalone HTML viewer (bundled, single file)
 splat-transform input.ply output.html
+
+# Convert to unbundled HTML viewer (separate CSS, JS, and SOG files)
+splat-transform -U input.ply output.html
 
 # Convert to HTML viewer with custom settings
 splat-transform -E settings.json input.ply output.html
