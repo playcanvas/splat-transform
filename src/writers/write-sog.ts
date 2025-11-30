@@ -3,7 +3,7 @@ import { dirname, resolve } from 'node:path';
 
 import { version } from '../../package.json';
 import { Column, DataTable } from '../data-table';
-import { createDevice, GpuDevice } from '../gpu/gpu-device';
+import { createDevice, enumerateAdapters, GpuDevice } from '../gpu/gpu-device';
 import { logger } from '../logger';
 import { generateOrdering } from '../ordering';
 import { FileWriter } from '../serialize/writer';
@@ -241,8 +241,22 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     }
     await write('quats.webp', quats);
 
-    if (!options.cpu && !gpuDevice) {
-        gpuDevice = await createDevice();
+    // Initialize GPU device if not using CPU mode
+    // device: -1 = auto, -2 = CPU, 0+ = specific GPU index
+    if (options.device !== -2 && !gpuDevice) {
+        let adapterName: string | undefined;
+
+        if (options.device >= 0) {
+            const adapters = await enumerateAdapters();
+            const adapter = adapters[options.device];
+            if (adapter) {
+                adapterName = adapter.name;
+            } else {
+                logger.warn(`GPU adapter index ${options.device} not found, using default`);
+            }
+        }
+
+        gpuDevice = await createDevice(adapterName);
     }
 
     // convert scale

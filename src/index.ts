@@ -8,6 +8,7 @@ import { Vec3 } from 'playcanvas';
 
 import { version } from '../package.json';
 import { Column, DataTable, TypedArray } from './data-table';
+import { enumerateAdapters } from './gpu/gpu-device';
 import { logger } from './logger';
 import { ProcessAction, processDataTable } from './process';
 import { isCompressedPly, decompressPly } from './readers/decompress-ply';
@@ -261,8 +262,9 @@ const parseArguments = () => {
             help: { type: 'boolean', short: 'h', default: false },
             version: { type: 'boolean', short: 'v', default: false },
             quiet: { type: 'boolean', short: 'q', default: false },
-            cpu: { type: 'boolean', short: 'c', default: false },
             iterations: { type: 'string', short: 'i', default: '10' },
+            'list-gpus': { type: 'boolean', short: 'L', default: false },
+            gpu: { type: 'string', short: 'g', default: '-1' },
             'lod-select': { type: 'string', short: 'O', default: '' },
             'viewer-settings': { type: 'string', short: 'E', default: '' },
             'lod-chunk-count': { type: 'string', short: 'C', default: '512' },
@@ -321,13 +323,23 @@ const parseArguments = () => {
 
     const files: File[] = [];
 
+    // Parse gpu option - can be a number or "cpu"
+    let device: number;
+    const gpuValue = v.gpu.toLowerCase();
+    if (gpuValue === 'cpu') {
+        device = -2;  // -2 indicates CPU mode
+    } else {
+        device = parseInteger(v.gpu);
+    }
+
     const options: Options = {
         overwrite: v.overwrite,
         help: v.help,
         version: v.version,
         quiet: v.quiet,
-        cpu: v.cpu,
         iterations: parseInteger(v.iterations),
+        listGpus: v['list-gpus'],
+        device: device,
         lodSelect: v['lod-select'].split(',').filter(v => !!v).map(parseInteger),
         viewerSettingsPath: v['viewer-settings'],
         lodChunkCount: parseInteger(v['lod-chunk-count']),
@@ -491,8 +503,9 @@ GLOBAL OPTIONS
     -v, --version                           Show version and exit
     -q, --quiet                             Suppress non-error output
     -w, --overwrite                         Overwrite output file if it exists
-    -c, --cpu                               Use CPU for SOG spherical harmonic compression
     -i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10
+    -L, --list-gpus                         List available GPU adapters and exit
+    -g, --gpu              <n|cpu>          Select device for SOG compression: GPU adapter index | 'cpu'
     -E, --viewer-settings  <settings.json>  HTML viewer settings JSON file
     -O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC input
     -C, --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
@@ -528,6 +541,30 @@ const main = async () => {
 
     // show version and exit
     if (options.version) {
+        exit(0);
+    }
+
+    // list GPUs and exit
+    if (options.listGpus) {
+        logger.info('Enumerating available GPU adapters...\n');
+        try {
+            const adapters = await enumerateAdapters();
+            if (adapters.length === 0) {
+                logger.info('No GPU adapters found.');
+                logger.info('This could mean:');
+                logger.info('  - WebGPU is not available on your system');
+                logger.info('  - GPU drivers need to be updated');
+                logger.info('  - Your GPU does not support WebGPU');
+            } else {
+                adapters.forEach((adapter) => {
+                    // @ts-ignore
+                    logger.info(`[${adapter.index}] ${adapter.name}`);
+                });
+                logger.info('\nUse -g <index> to select a specific GPU adapter.');
+            }
+        } catch (err) {
+            logger.error('Failed to enumerate GPU adapters:', err);
+        }
         exit(0);
     }
 
