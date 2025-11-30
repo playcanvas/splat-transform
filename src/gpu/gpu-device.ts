@@ -124,7 +124,7 @@ const getDawnAdapterNames = async (): Promise<string[]> => {
         const message = e instanceof Error ? e.message : String(e);
         const lines = message.split('\n');
         const names: string[] = [];
-        
+
         for (const line of lines) {
             // Look for lines like: " * backend: 'd3d12', name: 'NVIDIA RTX A2000 8GB Laptop GPU'"
             const match = line.match(/name:\s*'([^']+)'/);
@@ -132,10 +132,10 @@ const getDawnAdapterNames = async (): Promise<string[]> => {
                 names.push(match[1]);
             }
         }
-        
+
         return names;
     }
-    
+
     // Unexpected: requestAdapter should have thrown with invalid adapter name
     logger.warn('Expected adapter enumeration to throw an error, but it did not.');
     return [];
