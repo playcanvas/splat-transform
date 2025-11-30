@@ -557,7 +557,6 @@ const main = async () => {
                 logger.info('  - Your GPU does not support WebGPU');
             } else {
                 adapters.forEach((adapter) => {
-                    // @ts-ignore
                     logger.info(`[${adapter.index}] ${adapter.name}`);
                 });
                 logger.info('\nUse -g <index> to select a specific GPU adapter.');
