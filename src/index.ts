@@ -330,6 +330,9 @@ const parseArguments = () => {
         device = -2;  // -2 indicates CPU mode
     } else {
         device = parseInteger(v.gpu);
+        if (device < -1) {
+            throw new Error(`Invalid GPU index: ${device}. Must be >= 0 or 'cpu'.`);
+        }
     }
 
     const options: Options = {
