@@ -3,8 +3,9 @@ type Options = {
     help: boolean;
     version: boolean;
     quiet: boolean;
-    cpu: boolean;
     iterations: number;
+    listGpus: boolean;
+    device: number;  // -1 = auto, -2 = CPU, 0+ = GPU index
 
     // lcc input options
     lodSelect: number[];

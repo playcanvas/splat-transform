@@ -112,12 +112,71 @@ class GpuDevice {
     }
 }
 
-const createDevice = async () => {
-    // @ts-ignore
-    globalThis.Worker = Worker;
+// Get Dawn's actual adapter names by triggering its error message.
+// This is the official documented method for enumerating adapters:
+// https://github.com/dawn-gpu/node-webgpu?tab=readme-ov-file#usage
+const getDawnAdapterNames = async (): Promise<string[]> => {
+    try {
+        const gpu = create(['adapter=__list_adapters__']);
+        await gpu.requestAdapter();
+    } catch (e) {
+        // Parse Dawn's error message to extract adapter names
+        const message = e instanceof Error ? e.message : String(e);
+        const lines = message.split('\n');
+        const names: string[] = [];
+
+        for (const line of lines) {
+            // Look for lines like: " * backend: 'd3d12', name: 'NVIDIA RTX A2000 8GB Laptop GPU'"
+            const match = line.match(/name:\s*'([^']+)'/);
+            if (match) {
+                names.push(match[1]);
+            }
+        }
+
+        return names;
+    }
+
+    // Unexpected: requestAdapter should have thrown with invalid adapter name
+    logger.warn('Expected adapter enumeration to throw an error, but it did not.');
+    return [];
+};
+
+// Cache enumerated adapters so we don't query Dawn multiple times
+let cachedAdapters: Array<{ index: number; name: string }> | null = null;
+
+const enumerateAdapters = async () => {
+    if (cachedAdapters) {
+        return cachedAdapters;
+    }
+
+    try {
+        logger.info('Detecting GPU adapters...');
+
+        // Get the actual adapter names directly from Dawn
+        const dawnAdapterNames = await getDawnAdapterNames();
+
+        // Cache and return the list
+        cachedAdapters = dawnAdapterNames.map((name, index) => ({
+            index,
+            name
+        }));
+
+        return cachedAdapters;
+    } catch (e) {
+        logger.error('Failed to enumerate adapters. Error:', e);
+        logger.error('\nThis usually means WebGPU is not available. Please ensure:');
+        logger.error('  - Your GPU drivers are up to date');
+        logger.error('  - Your GPU supports Vulkan, D3D12, or Metal');
+        return [];
+    }
+};
+
+const createDevice = async (adapterName?: string) => {
+    // Use Dawn's adapter selection if a specific adapter name is provided
+    const dawnOptions = adapterName ? [`adapter=${adapterName}`] : [];
 
     // @ts-ignore
-    window.navigator.gpu = create([]);
+    window.navigator.gpu = create(dawnOptions);
 
     const canvas = document.createElement('canvas');
 
@@ -133,8 +192,7 @@ const createDevice = async () => {
     await graphicsDevice.createDevice();
 
     // print gpu info
-    const info = (graphicsDevice as any).gpuAdapter.info;
-    logger.debug(`Created gpu device="${info.device || '-'}" arch="${info.architecture || '-'}" descr="${info.description || '-'}"`);
+    logger.info(`Using GPU: ${adapterName || 'auto'}`);
 
     // create the application
     const app = new Application(canvas, { graphicsDevice });
@@ -154,4 +212,4 @@ const createDevice = async () => {
     return new GpuDevice(app, backbuffer);
 };
 
-export { createDevice, GpuDevice };
+export { createDevice, enumerateAdapters, GpuDevice };

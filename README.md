@@ -77,8 +77,9 @@ Actions can be repeated and applied in any order:
 -v, --version                           Show version and exit
 -q, --quiet                             Suppress non-error output
 -w, --overwrite                         Overwrite output file if it exists
--c, --cpu                               Use CPU for SOG spherical harmonic compression
 -i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10
+-L, --list-gpus                         List all available GPU adapters and exit
+-g, --gpu              <n|cpu>          Select device for SOG compression: GPU adapter index | 'cpu'
 -E, --viewer-settings  <settings.json>  HTML viewer settings JSON file
 -U, --unbundled                         Generate unbundled HTML viewer with separate files
 -O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC input
@@ -175,6 +176,31 @@ Generator scripts can be used to synthesize gaussian splat data. See [gen-grid.m
 ```bash
 splat-transform gen-grid.mjs -p width=10,height=10,scale=10,color=0.1 scenes/grid.ply -w
 ```
+
+### Device Selection for SOG Compression
+
+When compressing to SOG format, you can control which device (GPU or CPU) performs the compression:
+
+```bash
+# List available GPU adapters
+splat-transform --list-gpus
+
+# Let WebGPU automatically choose the best GPU (default behavior)
+splat-transform input.ply output.sog
+
+# Explicitly select a GPU adapter by index
+splat-transform -g 0 input.ply output.sog  # Use first listed adapter
+splat-transform -g 1 input.ply output.sog  # Use second listed adapter
+
+# Use CPU for compression instead (much slower but always available)
+splat-transform -g cpu input.ply output.sog
+```
+
+> [!NOTE]
+> When `-g` is not specified, WebGPU automatically selects the best available GPU. Use `-L` to list available adapters with their indices and names. The order and availability of adapters depends on your system and GPU drivers. Use `-g <index>` to select a specific adapter, or `-g cpu` to force CPU computation.
+
+> [!WARNING]
+> CPU compression can be significantly slower than GPU compression (often 5-10x slower). Use CPU mode only if GPU drivers are unavailable or problematic.
 
 ## Getting Help
 
