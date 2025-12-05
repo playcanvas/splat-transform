@@ -1,6 +1,6 @@
 import { Mat3, Mat4, Quat, Vec3 } from 'playcanvas';
 
-import { DataTable } from './data-table';
+import { Column, DataTable } from './data-table';
 import { RotateSH } from './utils/rotate-sh';
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);

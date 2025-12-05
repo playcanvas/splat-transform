@@ -275,6 +275,7 @@ const parseArguments = () => {
             translate: { type: 'string', short: 't', multiple: true },
             rotate: { type: 'string', short: 'r', multiple: true },
             scale: { type: 'string', short: 's', multiple: true },
+            blur: { type: 'string', short: 'b', multiple: true },
             'filter-nan': { type: 'boolean', short: 'N', multiple: true },
             'filter-value': { type: 'string', short: 'V', multiple: true },
             'filter-harmonics': { type: 'string', short: 'H', multiple: true },
@@ -375,6 +376,12 @@ const parseArguments = () => {
                 case 'scale':
                     current.processActions.push({
                         kind: 'scale',
+                        value: parseNumber(t.value)
+                    });
+                    break;
+                case 'blur':
+                    current.processActions.push({
+                        kind: 'blur',
                         value: parseNumber(t.value)
                     });
                     break;
@@ -494,6 +501,7 @@ ACTIONS (can be repeated, in any order)
     -t, --translate        <x,y,z>          Translate splats by (x, y, z)
     -r, --rotate           <x,y,z>          Rotate splats by Euler angles (x, y, z), in degrees
     -s, --scale            <factor>         Uniformly scale splats by factor
+    -b, --blur             <factor>         Uniformly blurs splats by factor
     -H, --filter-harmonics <0|1|2|3>        Remove spherical harmonic bands > n
     -N, --filter-nan                        Remove Gaussians with NaN or Inf values
     -B, --filter-box       <x,y,z,X,Y,Z>    Remove Gaussians outside box (min, max corners)

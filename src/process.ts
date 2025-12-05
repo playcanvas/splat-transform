@@ -1,6 +1,7 @@
 import { Quat, Vec3 } from 'playcanvas';
 
 import { Column, DataTable } from './data-table';
+import { blur } from './effect';
 import { transform } from './transform';
 
 type Translate = {
@@ -15,6 +16,11 @@ type Rotate = {
 
 type Scale = {
     kind: 'scale';
+    value: number;
+};
+
+type Blur = {
+    kind: 'blur';
     value: number;
 };
 
@@ -57,7 +63,7 @@ type Lod = {
     value: number;
 };
 
-type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | Param | Lod;
+type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | Param | Lod | Blur;
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
@@ -98,6 +104,10 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
             case 'scale':
                 transform(result, Vec3.ZERO, Quat.IDENTITY, processAction.value);
                 break;
+            case 'blur': {
+                result = blur(result, processAction.value);
+                break;
+            }
             case 'filterNaN': {
                 const infOk = new Set(['opacity']);
                 const negInfOk = new Set(['scale_0', 'scale_1', 'scale_2']);
