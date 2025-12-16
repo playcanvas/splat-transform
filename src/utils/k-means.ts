@@ -138,7 +138,10 @@ const kmeans = async (points: DataTable, k: number, iterations: number, device?:
     if (points.numRows < k) {
         return {
             centroids: points.clone(),
-            labels: new Array(points.numRows).fill(0).map((_, i) => i)
+            // use a typed array here so downstream code can rely on
+            // labels supporting subarray(), even in this early-return
+            // path used for very small datasets.
+            labels: new Uint32Array(points.numRows).map((_, i) => i)
         };
     }
 
