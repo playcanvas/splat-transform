@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer';
 import { FileHandle } from 'node:fs/promises';
 
 import { Column, DataTable } from '../data-table';
+import { isCompressedPly, decompressPly } from './decompress-ply';
 
 type PlyProperty = {
     name: string;               // 'x', f_dc_0', etc
@@ -108,7 +109,7 @@ const cmp = (a: Uint8Array, b: Uint8Array, aOffset = 0) => {
 const magicBytes = new Uint8Array([112, 108, 121, 10]);                                                 // ply\n
 const endHeaderBytes = new Uint8Array([10, 101, 110, 100, 95, 104, 101, 97, 100, 101, 114, 10]);        // \nend_header\n
 
-const readPly = async (fileHandle: FileHandle): Promise<PlyData> => {
+const readPly = async (fileHandle: FileHandle): Promise<DataTable> => {
 
     // we don't support ply text header larger than 128k
     const headerBuf = Buffer.alloc(128 * 1024);
@@ -184,10 +185,21 @@ const readPly = async (fileHandle: FileHandle): Promise<PlyData> => {
         });
     }
 
-    return {
+    const plyData = {
         comments: header.comments,
         elements
     };
+
+    if (isCompressedPly(plyData)) {
+        return decompressPly(plyData);
+    }
+
+    const vertexElement = plyData.elements.find(e => e.name === 'vertex');
+    if (!vertexElement) {
+        throw new Error('PLY file does not contain vertex element');
+    }
+
+    return vertexElement.dataTable;
 };
 
 export { PlyData, readPly };

@@ -11,7 +11,6 @@ import { Column, DataTable, TypedArray } from './data-table';
 import { enumerateAdapters } from './gpu/gpu-device';
 import { logger } from './logger';
 import { ProcessAction, processDataTable } from './process';
-import { isCompressedPly, decompressPly } from './readers/decompress-ply';
 import { readKsplat } from './readers/read-ksplat';
 import { readLcc } from './readers/read-lcc';
 import { readMjs } from './readers/read-mjs';
@@ -103,15 +102,7 @@ const readFile = async (filename: string, options: Options, params: Param[]): Pr
         } else if (inputFormat === 'sog') {
             result = [await readSog(inputFile, filename)];
         } else if (inputFormat === 'ply') {
-            const ply = await readPly(inputFile);
-            if (isCompressedPly(ply)) {
-                result = [decompressPly(ply)];
-            } else {
-                if (ply.elements.length !== 1 || ply.elements[0].name !== 'vertex') {
-                    throw new Error(`Unsupported data in file '${filename}'`);
-                }
-                result = [ply.elements[0].dataTable];
-            }
+            result = [await readPly(inputFile)];
         } else if (inputFormat === 'spz') {
             result = [await readSpz(inputFile)];
         } else if (inputFormat === 'lcc') {
