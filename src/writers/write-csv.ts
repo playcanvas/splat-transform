@@ -1,6 +1,6 @@
 import { FileHandle } from 'node:fs/promises';
 
-import { DataTable } from '../data-table';
+import { DataTable } from '../data-table/data-table';
 
 const writeCsv = async (fileHandle: FileHandle, dataTable: DataTable) => {
 

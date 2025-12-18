@@ -1,4 +1,4 @@
-import { DataTable, TypedArray } from '../data-table';
+import { DataTable, TypedArray } from '../data-table/data-table';
 
 // partition idx indices around the k-th largest element
 const quickselect = (data: TypedArray, idx: Uint32Array, k: number): number => {

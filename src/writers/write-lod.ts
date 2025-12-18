@@ -3,12 +3,12 @@ import { dirname, resolve } from 'node:path';
 
 import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
-import { TypedArray, DataTable } from '../data-table';
-import { logger } from '../logger';
-import { generateOrdering } from '../ordering';
 import { writeSog } from './write-sog.js';
+import { TypedArray, DataTable } from '../data-table/data-table';
+import { sortMortonOrder } from '../data-table/morton-order';
+import { BTreeNode, BTree } from '../spatial/b-tree';
 import { Options } from '../types';
-import { BTreeNode, BTree } from '../utils/b-tree';
+import { logger } from '../utils/logger';
 
 type Aabb = {
     min: number[],
@@ -269,7 +269,7 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, envDataTab
             const indices = new Uint32Array(totalIndices);
             for (let j = 0, offset = 0; j < fileUnit.length; ++j) {
                 indices.set(fileUnit[j], offset);
-                generateOrdering(dataTable, indices.subarray(offset, offset + fileUnit[j].length));
+                sortMortonOrder(dataTable, indices.subarray(offset, offset + fileUnit[j].length));
                 offset += fileUnit[j].length;
             }
 

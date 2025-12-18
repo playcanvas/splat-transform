@@ -1,5 +1,4 @@
-import { randomBytes } from 'crypto';
-import { lstat, mkdir, open, rename } from 'node:fs/promises';
+import { lstat, mkdir } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { exit, hrtime } from 'node:process';
 import { parseArgs } from 'node:util';
@@ -7,28 +6,14 @@ import { parseArgs } from 'node:util';
 import { Vec3 } from 'playcanvas';
 
 import { version } from '../package.json';
-import { Column, DataTable, TypedArray } from './data-table';
+import { combine } from './data-table/combine';
+import { DataTable } from './data-table/data-table';
 import { enumerateAdapters } from './gpu/gpu-device';
-import { logger } from './logger';
 import { ProcessAction, processDataTable } from './process';
-import { readKsplat } from './readers/read-ksplat';
-import { readLcc } from './readers/read-lcc';
-import { readMjs } from './readers/read-mjs';
-import { readPly } from './readers/read-ply';
-import { readSog } from './readers/read-sog';
-import { readSplat } from './readers/read-splat';
-import { readSpz } from './readers/read-spz';
-import { Options, Param } from './types';
-import { writeCompressedPly } from './writers/write-compressed-ply';
-import { writeCsv } from './writers/write-csv';
-import { writeHtml } from './writers/write-html';
-import { writeLod } from './writers/write-lod';
-import { writePly } from './writers/write-ply';
-import { writeSog } from './writers/write-sog';
-
-type InputFormat = 'mjs' | 'ksplat' | 'splat' | 'sog' | 'ply' | 'spz' | 'lcc';
-
-type OutputFormat = 'csv' | 'sog' | 'lod' | 'compressed-ply' | 'ply' | 'html';
+import { getInputFormat, readFile } from './read';
+import { Options } from './types';
+import { logger } from './utils/logger';
+import { getOutputFormat, writeFile } from './write';
 
 const fileExists = async (filename: string) => {
     try {
@@ -40,187 +25,6 @@ const fileExists = async (filename: string) => {
         }
         throw e; // real error (permissions, etc)
     }
-};
-
-const getInputFormat = (filename: string): InputFormat => {
-    const lowerFilename = filename.toLowerCase();
-
-    if (lowerFilename.endsWith('.mjs')) {
-        return 'mjs';
-    } else if (lowerFilename.endsWith('.ksplat')) {
-        return 'ksplat';
-    } else if (lowerFilename.endsWith('.splat')) {
-        return 'splat';
-    } else if (lowerFilename.endsWith('.sog') || lowerFilename.endsWith('meta.json')) {
-        return 'sog';
-    } else if (lowerFilename.endsWith('.ply')) {
-        return 'ply';
-    } else if (lowerFilename.endsWith('.spz')) {
-        return 'spz';
-    } else if (lowerFilename.endsWith('.lcc')) {
-        return 'lcc';
-    }
-
-    throw new Error(`Unsupported input file type: ${filename}`);
-};
-
-const getOutputFormat = (filename: string): OutputFormat => {
-    const lowerFilename = filename.toLowerCase();
-
-    if (lowerFilename.endsWith('.csv')) {
-        return 'csv';
-    } else if (lowerFilename.endsWith('lod-meta.json')) {
-        return 'lod';
-    } else if (lowerFilename.endsWith('.sog') || lowerFilename.endsWith('meta.json')) {
-        return 'sog';
-    } else if (lowerFilename.endsWith('.compressed.ply')) {
-        return 'compressed-ply';
-    } else if (lowerFilename.endsWith('.ply')) {
-        return 'ply';
-    } else if (lowerFilename.endsWith('.html')) {
-        return 'html';
-    }
-
-    throw new Error(`Unsupported output file type: ${filename}`);
-};
-
-const readFile = async (filename: string, options: Options, params: Param[]): Promise<DataTable[]> => {
-    const inputFormat = getInputFormat(filename);
-    let result: DataTable[];
-
-    logger.info(`reading '${filename}'...`);
-
-    if (inputFormat === 'mjs') {
-        result = [await readMjs(filename, params)];
-    } else {
-        const inputFile = await open(filename, 'r');
-
-        if (inputFormat === 'ksplat') {
-            result = [await readKsplat(inputFile)];
-        } else if (inputFormat === 'splat') {
-            result = [await readSplat(inputFile)];
-        } else if (inputFormat === 'sog') {
-            result = [await readSog(inputFile, filename)];
-        } else if (inputFormat === 'ply') {
-            result = [await readPly(inputFile)];
-        } else if (inputFormat === 'spz') {
-            result = [await readSpz(inputFile)];
-        } else if (inputFormat === 'lcc') {
-            result = await readLcc(inputFile, filename, options);
-        }
-
-        await inputFile.close();
-    }
-
-    return result;
-};
-
-const writeFile = async (filename: string, dataTable: DataTable, envDataTable: DataTable | null, options: Options) => {
-    // get the output format, throws on failure
-    const outputFormat = getOutputFormat(filename);
-
-    logger.info(`writing '${filename}'...`);
-
-    // write to a temporary file and rename on success
-    const tmpFilename = `.${basename(filename)}.${process.pid}.${Date.now()}.${randomBytes(6).toString('hex')}.tmp`;
-    const tmpPathname = join(dirname(filename), tmpFilename);
-
-    // open the tmp output file
-    const outputFile = await open(tmpPathname, 'wx');
-
-    try {
-        // write the file data
-        switch (outputFormat) {
-            case 'csv':
-                await writeCsv(outputFile, dataTable);
-                break;
-            case 'sog':
-                await writeSog(outputFile, dataTable, filename, options);
-                break;
-            case 'lod':
-                await writeLod(outputFile, dataTable, envDataTable, filename, options);
-                break;
-            case 'compressed-ply':
-                await writeCompressedPly(outputFile, dataTable);
-                break;
-            case 'ply':
-                await writePly(outputFile, {
-                    comments: [],
-                    elements: [{
-                        name: 'vertex',
-                        dataTable: dataTable
-                    }]
-                });
-                break;
-            case 'html':
-                await writeHtml(outputFile, dataTable, filename, options);
-                break;
-        }
-
-        // flush to disk
-        await outputFile.sync();
-    } finally {
-        await outputFile.close().catch(() => { /* ignore */ });
-    }
-
-    // atomically rename to target filename
-    await rename(tmpPathname, filename);
-};
-
-// combine multiple tables into one
-// columns with matching name and type are combined
-const combine = (dataTables: DataTable[]) => {
-    if (dataTables.length === 1) {
-        // nothing to combine
-        return dataTables[0];
-    }
-
-    const findMatchingColumn = (columns: Column[], column: Column) => {
-        for (let i = 0; i < columns.length; ++i) {
-            if (columns[i].name === column.name &&
-                columns[i].dataType === column.dataType) {
-                return columns[i];
-            }
-        }
-        return null;
-    };
-
-    // make unique list of columns where name and type much match
-    const columns = dataTables[0].columns.slice();
-    for (let i = 1; i < dataTables.length; ++i) {
-        const dataTable = dataTables[i];
-        for (let j = 0; j < dataTable.columns.length; ++j) {
-            if (!findMatchingColumn(columns, dataTable.columns[j])) {
-                columns.push(dataTable.columns[j]);
-            }
-        }
-    }
-
-    // count total number of rows
-    const totalRows = dataTables.reduce((sum, dataTable) => sum + dataTable.numRows, 0);
-
-    // construct output dataTable
-    const resultColumns = columns.map((column) => {
-        const constructor = column.data.constructor as new (length: number) => TypedArray;
-        return new Column(column.name, new constructor(totalRows));
-    });
-    const result = new DataTable(resultColumns);
-
-    // copy data
-    let rowOffset = 0;
-    for (let i = 0; i < dataTables.length; ++i) {
-        const dataTable = dataTables[i];
-
-        for (let j = 0; j < dataTable.columns.length; ++j) {
-            const column = dataTable.columns[j];
-            const targetColumn = findMatchingColumn(result.columns, column);
-            targetColumn.data.set(column.data, rowOffset);
-        }
-
-        rowOffset += dataTable.numRows;
-    }
-
-    return result;
 };
 
 const isGSDataTable = (dataTable: DataTable) => {
@@ -482,17 +286,17 @@ SUPPORTED OUTPUTS
     .ply   .compressed.ply   .sog   meta.json   .csv   .html
 
 ACTIONS (can be repeated, in any order)
-    -t, --translate        <x,y,z>          Translate splats by (x, y, z)
-    -r, --rotate           <x,y,z>          Rotate splats by Euler angles (x, y, z), in degrees
-    -s, --scale            <factor>         Uniformly scale splats by factor
+    -t, --translate        <x,y,z>          Translate Gaussians by (x, y, z)
+    -r, --rotate           <x,y,z>          Rotate Gaussians by Euler angles (x, y, z), in degrees
+    -s, --scale            <factor>         Uniformly scale Gaussians by factor
     -H, --filter-harmonics <0|1|2|3>        Remove spherical harmonic bands > n
     -N, --filter-nan                        Remove Gaussians with NaN or Inf values
     -B, --filter-box       <x,y,z,X,Y,Z>    Remove Gaussians outside box (min, max corners)
     -S, --filter-sphere    <x,y,z,radius>   Remove Gaussians outside sphere (center, radius)
-    -V, --filter-value     <name,cmp,value> Keep splats where <name> <cmp> <value>
+    -V, --filter-value     <name,cmp,value> Keep Gaussians where <name> <cmp> <value>
                                               cmp ∈ {lt,lte,gt,gte,eq,neq}
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
-    -l, --lod              <n>              Specify the level of detail, n >= 0.
+    -l, --lod              <n>              Specify the level of detail, n >= 0
 
 GLOBAL OPTIONS
     -h, --help                              Show this help and exit
@@ -614,7 +418,8 @@ const main = async () => {
             });
 
             // read input
-            const dataTables = await readFile(resolve(inputArg.filename), options, params);
+            const inputFilename = resolve(inputArg.filename);
+            const dataTables = await readFile(inputFilename, getInputFormat(inputFilename), options, params);
 
             for (let i = 0; i < dataTables.length; ++i) {
                 const dataTable = dataTables[i];
@@ -640,7 +445,7 @@ const main = async () => {
         );
 
         if (!dataTable || dataTable.numRows === 0) {
-            throw new Error('No splats to write');
+            throw new Error('No Gaussians to write');
         }
 
         const envDataTable = envDataTables.length > 0 && processDataTable(

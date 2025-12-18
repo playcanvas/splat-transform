@@ -1,4 +1,4 @@
-import { DataTable } from '../data-table';
+import { DataTable } from '../data-table/data-table';
 
 interface KdTreeNode {
     index: number;

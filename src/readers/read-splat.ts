@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { FileHandle } from 'node:fs/promises';
 
-import { Column, DataTable } from '../data-table';
+import { Column, DataTable } from '../data-table/data-table';
 
 const readSplat = async (fileHandle: FileHandle): Promise<DataTable> => {
     // Get file size to determine number of splats

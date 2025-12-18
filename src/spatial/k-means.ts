@@ -1,8 +1,8 @@
-import { Column, DataTable } from '../data-table';
-import { logger } from '../logger';
 import { KdTree } from './kd-tree';
+import { Column, DataTable } from '../data-table/data-table';
 import { GpuClustering } from '../gpu/gpu-clustering';
 import { GpuDevice } from '../gpu/gpu-device';
+import { logger } from '../utils/logger';
 
 const initializeCentroids = (dataTable: DataTable, centroids: DataTable, row: any) => {
     const chosenRows = new Set();

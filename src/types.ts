@@ -17,7 +17,6 @@ type Options = {
     // lod output options
     lodChunkCount: number;
     lodChunkExtent: number;
-
 };
 
 type Param = {
