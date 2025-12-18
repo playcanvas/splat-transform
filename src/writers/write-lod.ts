@@ -3,9 +3,9 @@ import { dirname, resolve } from 'node:path';
 
 import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
+import { writeSog } from './write-sog.js';
 import { TypedArray, DataTable } from '../data-table/data-table';
 import { sortMortonOrder } from '../data-table/morton-order';
-import { writeSog } from './write-sog.js';
 import { BTreeNode, BTree } from '../spatial/b-tree';
 import { Options } from '../types';
 import { logger } from '../utils/logger';

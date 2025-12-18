@@ -3,8 +3,8 @@ import { dirname, resolve } from 'node:path';
 
 import { version } from '../../package.json';
 import { Column, DataTable } from '../data-table/data-table';
-import { createDevice, enumerateAdapters, GpuDevice } from '../gpu/gpu-device';
 import { sortMortonOrder } from '../data-table/morton-order';
+import { createDevice, enumerateAdapters, GpuDevice } from '../gpu/gpu-device';
 import { FileWriter } from '../serialize/writer';
 import { ZipWriter } from '../serialize/zip-writer';
 import { kmeans } from '../spatial/k-means';

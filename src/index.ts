@@ -6,8 +6,8 @@ import { parseArgs } from 'node:util';
 import { Vec3 } from 'playcanvas';
 
 import { version } from '../package.json';
-import { DataTable } from './data-table/data-table';
 import { combine } from './data-table/combine';
+import { DataTable } from './data-table/data-table';
 import { enumerateAdapters } from './gpu/gpu-device';
 import { ProcessAction, processDataTable } from './process';
 import { getInputFormat, readFile } from './read';

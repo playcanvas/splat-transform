@@ -1,5 +1,4 @@
 import { DataTable } from './data-table';
-
 import { logger } from '../utils/logger.js';
 
 // sort the provided indices into morton order
