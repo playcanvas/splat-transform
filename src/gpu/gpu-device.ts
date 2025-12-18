@@ -1,7 +1,4 @@
-import { Worker } from 'node:worker_threads';
-
-// import { JSDOM } from 'jsdom';
-import {
+\import {
     // components
     AnimComponentSystem,
     RenderComponentSystem,
