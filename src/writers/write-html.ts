@@ -4,8 +4,8 @@ import { dirname, basename, join } from 'node:path';
 
 import { html, css, js } from '@playcanvas/supersplat-viewer';
 
-import { DataTable } from '../data-table';
 import { writeSog } from './write-sog';
+import { DataTable } from '../data-table/data-table';
 import { Options } from '../types';
 
 type ViewerSettings = {

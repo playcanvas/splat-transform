@@ -1,7 +1,7 @@
 import { Quat, Vec3 } from 'playcanvas';
 
-import { Column, DataTable } from './data-table';
-import { transform } from './transform';
+import { Column, DataTable } from './data-table/data-table';
+import { transform } from './data-table/transform';
 
 type Translate = {
     kind: 'translate';

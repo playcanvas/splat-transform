@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer';
 import { FileHandle, open } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
-import { Column, DataTable } from '../data-table';
+import { Column, DataTable } from '../data-table/data-table';
 import { ZipReader } from '../serialize/zip-reader';
 import { WebPCodec } from '../utils/webp-codec';
 

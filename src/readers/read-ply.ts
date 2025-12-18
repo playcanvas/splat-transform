@@ -1,8 +1,8 @@
 import { Buffer } from 'node:buffer';
 import { FileHandle } from 'node:fs/promises';
 
-import { Column, DataTable } from '../data-table';
 import { isCompressedPly, decompressPly } from './decompress-ply';
+import { Column, DataTable } from '../data-table/data-table';
 
 type PlyProperty = {
     name: string;               // 'x', f_dc_0', etc

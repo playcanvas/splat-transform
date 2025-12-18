@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { FileHandle } from 'node:fs/promises';
 
-import { Column, DataTable } from '../data-table';
+import { Column, DataTable } from '../data-table/data-table';
 
 // Format configuration for different compression modes
 interface CompressionConfig {

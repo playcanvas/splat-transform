@@ -1,8 +1,9 @@
-import { DataTable } from './data-table.js';
-import { logger } from './logger';
+import { DataTable } from './data-table';
 
-// sort the compressed indices into morton order
-const generateOrdering = (dataTable: DataTable, indices: Uint32Array) => {
+import { logger } from '../utils/logger.js';
+
+// sort the provided indices into morton order
+const sortMortonOrder = (dataTable: DataTable, indices: Uint32Array): void => {
     const cx = dataTable.getColumnByName('x').data;
     const cy = dataTable.getColumnByName('y').data;
     const cz = dataTable.getColumnByName('z').data;
@@ -106,8 +107,6 @@ const generateOrdering = (dataTable: DataTable, indices: Uint32Array) => {
     };
 
     generate(indices);
-
-    return indices;
 };
 
-export { generateOrdering };
+export { sortMortonOrder };
