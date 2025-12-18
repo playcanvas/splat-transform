@@ -296,7 +296,7 @@ ACTIONS (can be repeated, in any order)
     -V, --filter-value     <name,cmp,value> Keep Gaussians where <name> <cmp> <value>
                                               cmp ∈ {lt,lte,gt,gte,eq,neq}
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
-    -l, --lod              <n>              Specify the level of detail, n >= 0.
+    -l, --lod              <n>              Specify the level of detail, n >= 0
 
 GLOBAL OPTIONS
     -h, --help                              Show this help and exit
