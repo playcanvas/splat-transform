@@ -74,4 +74,3 @@ class MemoryFileSystem implements FileSystem {
 }
 
 export { MemoryFileSystem };
-

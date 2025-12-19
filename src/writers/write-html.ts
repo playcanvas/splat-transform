@@ -4,9 +4,8 @@ import { html, css, js } from '@playcanvas/supersplat-viewer';
 
 import { writeSog } from './write-sog';
 import { DataTable } from '../data-table/data-table';
-
-import { MemoryFileSystem } from '../serialize/memory-file-system';
 import { FileSystem } from '../serialize/file-system';
+import { MemoryFileSystem } from '../serialize/memory-file-system';
 import { writeFile } from '../serialize/write-helpers';
 import { toBase64 } from '../utils/base64';
 
@@ -65,7 +64,7 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
         // Bundled mode: embed everything in the HTML
         const memoryFs = new MemoryFileSystem();
 
-        const sogFilename = `temp.sog`;
+        const sogFilename = 'temp.sog';
         await writeSog({
             filename: sogFilename,
             dataTable,

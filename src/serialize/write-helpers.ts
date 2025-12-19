@@ -7,4 +7,3 @@ const writeFile = async (fs: FileSystem, filename: string, data: Uint8Array | st
 };
 
 export { writeFile };
-

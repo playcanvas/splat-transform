@@ -149,4 +149,3 @@ class ZipFileSystem implements FileSystem {
 }
 
 export { ZipFileSystem };
-

@@ -1,4 +1,5 @@
 import { DataTable } from './data-table/data-table';
+import { FileSystem } from './serialize/file-system';
 import { Options } from './types';
 import { logger } from './utils/logger';
 import { writeCompressedPly } from './writers/write-compressed-ply';
@@ -7,7 +8,6 @@ import { writeHtml } from './writers/write-html';
 import { writeLod } from './writers/write-lod';
 import { writePly } from './writers/write-ply';
 import { writeSog } from './writers/write-sog';
-import { FileSystem } from './serialize/file-system';
 
 type OutputFormat = 'csv' | 'sog' | 'sog-bundle' | 'lod' | 'compressed-ply' | 'ply' | 'html' | 'html-bundle';
 

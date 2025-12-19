@@ -15,4 +15,3 @@ const toBase64 = (bytes: Uint8Array): string => {
 };
 
 export { toBase64 };
-
