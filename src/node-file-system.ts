@@ -1,5 +1,4 @@
-import { Writer } from './serialize/writer';
-import { FileSystem } from './serialize/file-system';
+import { FileSystem, Writer } from './serialize/file-system';
 
 import { mkdir, readFile as pathReadFile } from 'node:fs/promises';
 import { randomBytes } from 'crypto';

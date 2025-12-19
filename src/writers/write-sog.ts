@@ -251,7 +251,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     const writeScales = async () => {
         const scaleData = await cluster1d(
             new DataTable(['scale_0', 'scale_1', 'scale_2'].map(name => dataTable.getColumnByName(name))),
-            options.iterations,
+            iterations,
             gpuDevice
         );
 
@@ -263,7 +263,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     const writeColors = async () => {
         const colorData = await cluster1d(
             new DataTable(['f_dc_0', 'f_dc_1', 'f_dc_2'].map(name => dataTable.getColumnByName(name))),
-            options.iterations,
+            iterations,
             gpuDevice
         );
 
@@ -295,10 +295,10 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
         const paletteSize = Math.min(64, 2 ** Math.floor(Math.log2(indices.length / 1024))) * 1024;
 
         // calculate kmeans
-        const { centroids, labels } = await kmeans(shDataTable, paletteSize, options.iterations, gpuDevice);
+        const { centroids, labels } = await kmeans(shDataTable, paletteSize, iterations, gpuDevice);
 
         // construct a codebook for all spherical harmonic coefficients
-        const codebook = await cluster1d(centroids, options.iterations, gpuDevice);
+        const codebook = await cluster1d(centroids, iterations, gpuDevice);
 
         // write centroids
         const centroidsBuf = new Uint8Array(64 * shCoeffs * Math.ceil(centroids.numRows / 64) * channels);

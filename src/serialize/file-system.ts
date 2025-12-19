@@ -1,4 +1,11 @@
-import { Writer } from './writer';
+// defines the interface for a stream writer class
+interface Writer {
+    // write data to the stream
+    write(data: Uint8Array): void | Promise<void>;
+
+    // close the writing stream. return value depends on writer implementation.
+    close(): any | Promise<any>;
+}
 
 interface FileSystem {
     // create a writer for the given filename
@@ -8,5 +15,4 @@ interface FileSystem {
     mkdir(path: string): Promise<void>;
 }
 
-export { type FileSystem };
-
+export { type FileSystem, type Writer };
