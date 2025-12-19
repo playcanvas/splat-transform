@@ -8,7 +8,7 @@ import { sortMortonOrder } from '../data-table/morton-order';
 import { BTreeNode, BTree } from '../spatial/b-tree';
 import { logger } from '../utils/logger';
 
-import { Platform } from '../serialize/platform';
+import { FileSystem } from '../serialize/file-system';
 
 type Aabb = {
     min: number[],
@@ -145,20 +145,20 @@ type WriteLodOptions = {
     chunkExtent: number;
 };
 
-const writeLod = async (options: WriteLodOptions, platform: Platform) => {
+const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
     const { filename, dataTable, envDataTable, iterations, deviceIdx, chunkCount, chunkExtent } = options;
 
     const outputDir = dirname(filename);
 
     // ensure top-level output folder exists
-    await platform.mkdir(outputDir);
+    await fs.mkdir(outputDir);
 
     // write the environment sog
     if (envDataTable?.numRows > 0) {
         const pathname = resolve(outputDir, 'env/meta.json');
 
         // ensure output folder exists before any files are written
-        await platform.mkdir(dirname(pathname));
+        await fs.mkdir(dirname(pathname));
 
         logger.info(`writing ${pathname}...`);
 
@@ -168,7 +168,7 @@ const writeLod = async (options: WriteLodOptions, platform: Platform) => {
             bundle: false,
             iterations,
             deviceIdx
-        }, platform);
+        }, fs);
     }
 
     // construct a kd-tree based on centroids from all lods
@@ -265,7 +265,7 @@ const writeLod = async (options: WriteLodOptions, platform: Platform) => {
     };
 
     // write lod-meta.json
-    const writer = await platform.createWriter(filename);
+    const writer = await fs.createWriter(filename);
     writer.write((new TextEncoder()).encode(JSON.stringify(meta, replacer)));
     await writer.close();
 
@@ -280,7 +280,7 @@ const writeLod = async (options: WriteLodOptions, platform: Platform) => {
 
             // ensure output folder exists before any files are written
             const pathname = resolve(outputDir, `${lodValue}_${i}/meta.json`);
-            await platform.mkdir(dirname(pathname));
+            await fs.mkdir(dirname(pathname));
 
             // generate an ordering for each subunit and append it to the unit's indices
             const totalIndices = fileUnit.reduce((acc, curr) => acc + curr.length, 0);
@@ -309,7 +309,7 @@ const writeLod = async (options: WriteLodOptions, platform: Platform) => {
                 bundle: false,
                 iterations,
                 deviceIdx
-            }, platform);
+            }, fs);
         }
     }
 };

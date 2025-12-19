@@ -1,6 +1,6 @@
 import { PlyData } from '../readers/read-ply';
 
-import { Platform } from '../serialize/platform';
+import { FileSystem } from '../serialize/file-system';
 
 const columnTypeToPlyType = (type: string): string => {
     switch (type) {
@@ -20,7 +20,7 @@ type WritePlyOptions = {
     plyData: PlyData;
 };
 
-const writePly = async (options: WritePlyOptions, platform: Platform) => {
+const writePly = async (options: WritePlyOptions, fs: FileSystem) => {
     const { filename, plyData } = options;
 
     const header = [
@@ -39,7 +39,7 @@ const writePly = async (options: WritePlyOptions, platform: Platform) => {
     ];
 
     // write the header
-    const writer = await platform.createWriter(filename);
+    const writer = await fs.createWriter(filename);
     await writer.write((new TextEncoder()).encode(`${header.flat(3).join('\n')}\n`));
 
     for (let i = 0; i < plyData.elements.length; ++i) {

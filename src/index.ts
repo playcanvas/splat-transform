@@ -15,7 +15,7 @@ import { Options } from './types';
 import { logger } from './utils/logger';
 import { getOutputFormat, writeFile } from './write';
 
-import { NodePlatform } from './node-platform';
+import { NodeFileSystem } from './node-file-system';
 
 const fileExists = async (filename: string) => {
     try {
@@ -481,7 +481,7 @@ const main = async () => {
             dataTable,
             envDataTable,
             options
-        }, new NodePlatform());
+        }, new NodeFileSystem());
     } catch (err) {
         // handle errors
         logger.error(err);

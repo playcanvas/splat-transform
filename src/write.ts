@@ -7,7 +7,7 @@ import { writeHtml } from './writers/write-html';
 import { writeLod } from './writers/write-lod';
 import { writePly } from './writers/write-ply';
 import { writeSog } from './writers/write-sog';
-import { Platform } from './serialize/platform';
+import { FileSystem } from './serialize/file-system';
 
 type OutputFormat = 'csv' | 'sog' | 'sog-bundle' | 'lod' | 'compressed-ply' | 'ply' | 'html' | 'html-bundle';
 
@@ -41,7 +41,7 @@ const getOutputFormat = (filename: string, options: Options): OutputFormat => {
     throw new Error(`Unsupported output file type: ${filename}`);
 };
 
-const writeFile = async (writeOptions: WriteOptions, platform: Platform) => {
+const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
     const { filename, outputFormat, dataTable, envDataTable, options } = writeOptions;
 
     logger.info(`writing '${filename}'...`);
@@ -49,7 +49,7 @@ const writeFile = async (writeOptions: WriteOptions, platform: Platform) => {
     // write the file data
     switch (outputFormat) {
         case 'csv':
-            await writeCsv({ filename, dataTable }, platform);
+            await writeCsv({ filename, dataTable }, fs);
             break;
         case 'sog':
         case 'sog-bundle':
@@ -59,7 +59,7 @@ const writeFile = async (writeOptions: WriteOptions, platform: Platform) => {
                 bundle: outputFormat === 'sog-bundle',
                 iterations: options.iterations,
                 deviceIdx: options.deviceIdx
-            }, platform);
+            }, fs);
             break;
         case 'lod':
             await writeLod({
@@ -70,10 +70,10 @@ const writeFile = async (writeOptions: WriteOptions, platform: Platform) => {
                 deviceIdx: options.deviceIdx,
                 chunkCount: options.lodChunkCount,
                 chunkExtent: options.lodChunkExtent
-            }, platform);
+            }, fs);
             break;
         case 'compressed-ply':
-            await writeCompressedPly({ filename, dataTable }, platform);
+            await writeCompressedPly({ filename, dataTable }, fs);
             break;
         case 'ply':
             await writePly({
@@ -85,7 +85,7 @@ const writeFile = async (writeOptions: WriteOptions, platform: Platform) => {
                         dataTable: dataTable
                     }]
                 }
-            }, platform);
+            }, fs);
             break;
         case 'html':
         case 'html-bundle':
@@ -96,7 +96,7 @@ const writeFile = async (writeOptions: WriteOptions, platform: Platform) => {
                 bundle: outputFormat === 'html-bundle',
                 iterations: options.iterations,
                 deviceIdx: options.deviceIdx
-            }, platform);
+            }, fs);
             break;
     }
 };

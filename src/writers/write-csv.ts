@@ -1,20 +1,20 @@
 import { DataTable } from '../data-table/data-table';
 
-import { Platform } from '../serialize/platform';
+import { FileSystem } from '../serialize/file-system';
 
 type WriteCSVOptions = {
     filename: string;
     dataTable: DataTable;
 };
 
-const writeCsv = async (options: WriteCSVOptions, platform: Platform) => {
+const writeCsv = async (options: WriteCSVOptions, fs: FileSystem) => {
     const { filename, dataTable } = options;
 
     const len = dataTable.numRows;
 
     const textEncoder = new TextEncoder();
 
-    const writer = await platform.createWriter(filename);
+    const writer = await fs.createWriter(filename);
 
     // write header
     await writer.write(textEncoder.encode(`${dataTable.columnNames.join(',')}\n`));

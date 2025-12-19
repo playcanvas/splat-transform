@@ -4,9 +4,9 @@ import { version } from '../../package.json';
 import { Column, DataTable } from '../data-table/data-table';
 import { sortMortonOrder } from '../data-table/morton-order';
 import { createDevice, enumerateAdapters, GpuDevice } from '../gpu/gpu-device';
-import { Platform } from '../serialize/platform';
+import { FileSystem } from '../serialize/file-system';
 import { writeFile } from '../serialize/write-helpers';
-import { ZipWriter } from '../serialize/zip-writer';
+import { ZipFileSystem } from '../serialize/zip-file-system';
 import { kmeans } from '../spatial/k-means';
 import { logger } from '../utils/logger';
 import { sigmoid } from '../utils/math';
@@ -112,12 +112,12 @@ type WriteSogOptions = {
     deviceIdx: number;
 };
 
-const writeSog = async (options: WriteSogOptions, platform: Platform) => {
+const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     const { filename: outputFilename, bundle, dataTable, iterations, deviceIdx } = options;
 
-    // initialize output stream
-    const writer = bundle && await platform.createWriter(outputFilename);
-    const zipWriter = writer && new ZipWriter(writer);
+    // initialize output stream - use ZipFileSystem for bundled output
+    const zipFs = bundle ? new ZipFileSystem(await fs.createWriter(outputFilename)) : null;
+    const outputFs = zipFs || fs;
 
     const indices = options.indices || generateIndices(dataTable);
     const numRows = indices.length;
@@ -129,7 +129,7 @@ const writeSog = async (options: WriteSogOptions, platform: Platform) => {
     const layout = identity; // rectChunks;
 
     const writeWebp = async (filename: string, data: Uint8Array, w = width, h = height) => {
-        const pathname = resolve(dirname(outputFilename), filename);
+        const pathname = zipFs ? filename : resolve(dirname(outputFilename), filename);
         logger.info(`writing '${pathname}'...`);
 
         // construct the encoder on first use
@@ -139,11 +139,7 @@ const writeSog = async (options: WriteSogOptions, platform: Platform) => {
 
         const webp = await webPCodec.encodeLosslessRGBA(data, w, h);
 
-        if (zipWriter) {
-            await zipWriter.file(filename, webp);
-        } else {
-            await writeFile(platform, pathname, webp);
-        }
+        await writeFile(outputFs, pathname, webp);
     };
 
     const writeTableData = (filename: string, dataTable: DataTable, w = width, h = height) => {
@@ -406,12 +402,12 @@ const writeSog = async (options: WriteSogOptions, platform: Platform) => {
 
     const metaJson = (new TextEncoder()).encode(JSON.stringify(meta));
 
-    if (zipWriter) {
-        await zipWriter.file('meta.json', metaJson);
-        await zipWriter.close();
-        await writer.close();
-    } else {
-        await writeFile(platform, outputFilename, metaJson);
+    const metaFilename = zipFs ? 'meta.json' : outputFilename;
+    await writeFile(outputFs, metaFilename, metaJson);
+
+    // Close zip archive if bundling
+    if (zipFs) {
+        await zipFs.close();
     }
 };
 

@@ -1,6 +1,6 @@
 import { Writer } from './writer';
 
-interface Platform {
+interface FileSystem {
     // create a writer for the given filename
     createWriter(filename: string): Promise<Writer>;
 
@@ -8,4 +8,5 @@ interface Platform {
     mkdir(path: string): Promise<void>;
 }
 
-export { type Platform };
+export { type FileSystem };
+

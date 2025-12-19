@@ -1,8 +1,8 @@
-import { Platform } from './platform';
+import { FileSystem } from './file-system';
 import { Writer } from './writer';
 
 // write data to a memory buffer
-class BufferWriter implements Writer {
+class MemoryWriter implements Writer {
     write: (data: Uint8Array) => void;
     close: () => Uint8Array[];
 
@@ -50,11 +50,11 @@ class BufferWriter implements Writer {
     }
 }
 
-class BufferPlatform implements Platform {
+class MemoryFileSystem implements FileSystem {
     results: Map<string, Uint8Array> = new Map();
 
     async createWriter(filename: string): Promise<Writer> {
-        return new BufferWriter((result: Uint8Array[]) => {
+        return new MemoryWriter((result: Uint8Array[]) => {
             // combine buffers
             if (result.length === 1) {
                 this.results.set(filename, result[0]);
@@ -73,6 +73,7 @@ class BufferPlatform implements Platform {
     async mkdir(path: string): Promise<void> {
         // no-op
     }
-};
+}
 
-export { BufferPlatform };
+export { MemoryFileSystem };
+

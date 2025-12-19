@@ -1,46 +1,53 @@
 import { Crc } from './crc';
+import { FileSystem } from './file-system';
 import { Writer } from './writer';
 
 // https://gist.github.com/rvaiya/4a2192df729056880a027789ae3cd4b7
 
-// zip archive writer. data is streamed to the output writer.
-class ZipWriter implements Writer {
-    // start a new file
-    start: (filename: string) => Promise<void>;
+type ZipEntry = {
+    filename: Uint8Array;
+    crc: Crc;
+    sizeBytes: number;
+};
 
-    // write func
+// Writer for a single zip entry
+class ZipEntryWriter implements Writer {
     write: (data: Uint8Array) => Promise<void>;
-
-    // finish the archive by writing the footer
     close: () => Promise<void>;
 
-    // helper function to start and write file contents
-    async file(filename: string, content: string | Uint8Array | Uint8Array[]) {
-        // start a new file
-        await this.start(filename);
+    constructor(
+        outputWriter: Writer,
+        entry: ZipEntry,
+        onClose: () => void
+    ) {
+        this.write = async (data: Uint8Array) => {
+            entry.sizeBytes += data.length;
+            entry.crc.update(data);
+            await outputWriter.write(data);
+        };
 
-        // write file content
-        if (typeof content === 'string') {
-            await this.write(new TextEncoder().encode(content));
-        } else if (content instanceof Uint8Array) {
-            await this.write(content);
-        } else {
-            for (let i = 0; i < content.length; i++) {
-                await this.write(content[i]);
-            }
-        }
+        this.close = async () => {
+            onClose();
+        };
     }
+}
 
-    // write uncompressed data to a zip file using the passed-in writer
+// FileSystem implementation that writes files into a zip archive
+class ZipFileSystem implements FileSystem {
+    close: () => Promise<void>;
+    createWriter: (filename: string) => Promise<Writer>;
+    mkdir: (path: string) => Promise<void>;
+
     constructor(writer: Writer) {
         const textEncoder = new TextEncoder();
-        const files: { filename: Uint8Array, crc: Crc, sizeBytes: number }[] = [];
+        const files: ZipEntry[] = [];
+        let activeEntry: ZipEntry | null = null;
 
         const date = new Date();
         const dosTime = (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2);
         const dosDate = ((date.getFullYear() - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate();
 
-        const writeHeader = async (filename: string) => {
+        const writeEntryHeader = async (filename: string) => {
             const filenameBuf = textEncoder.encode(filename);
             const nameLen = filenameBuf.length;
 
@@ -58,12 +65,13 @@ class ZipWriter implements Writer {
 
             await writer.write(header);
 
-            files.push({ filename: filenameBuf, crc: new Crc(), sizeBytes: 0 });
+            const entry: ZipEntry = { filename: filenameBuf, crc: new Crc(), sizeBytes: 0 };
+            files.push(entry);
+            return entry;
         };
 
-        const writeFooter = async () => {
-            const file = files[files.length - 1];
-            const { crc, sizeBytes } = file;
+        const writeEntryFooter = async (entry: ZipEntry) => {
+            const { crc, sizeBytes } = entry;
             const data = new Uint8Array(16);
             const view = new DataView(data.buffer);
             view.setUint32(0, 0x08074b50, true);
@@ -73,27 +81,34 @@ class ZipWriter implements Writer {
             await writer.write(data);
         };
 
-        this.start = async (filename: string) => {
-            // write previous file footer
-            if (files.length > 0) {
-                await writeFooter();
+        this.createWriter = async (filename: string): Promise<Writer> => {
+            // Close previous entry if exists
+            if (activeEntry) {
+                await writeEntryFooter(activeEntry);
+                activeEntry = null;
             }
 
-            await writeHeader(filename);
+            // Start new entry
+            const entry = await writeEntryHeader(filename);
+            activeEntry = entry;
+
+            return new ZipEntryWriter(writer, entry, () => {
+                // Entry closed - will be finalized when next entry starts or archive closes
+            });
         };
 
-        this.write = async (data: Uint8Array) => {
-            const file = files[files.length - 1];
-            file.sizeBytes += data.length;
-            file.crc.update(data);
-            await writer.write(data);
+        this.mkdir = async (_path: string): Promise<void> => {
+            // No-op for zip - directories are created implicitly from file paths
         };
 
         this.close = async () => {
-            // write last file's footer
-            await writeFooter();
+            // Close last entry if exists
+            if (activeEntry) {
+                await writeEntryFooter(activeEntry);
+                activeEntry = null;
+            }
 
-            // write cd records
+            // Write central directory records
             let offset = 0;
             for (const file of files) {
                 const { filename, crc, sizeBytes } = file;
@@ -119,10 +134,11 @@ class ZipWriter implements Writer {
 
                 offset += 30 + nameLen + sizeBytes + 16; // 30 local header + name + data + 16 descriptor
             }
+
             const filenameLength = files.reduce((tot, file) => tot + file.filename.length, 0);
             const dataLength = files.reduce((tot, file) => tot + file.sizeBytes, 0);
 
-            // write eocd record
+            // Write end of central directory record
             const eocd = new Uint8Array(22);
             const eocdView = new DataView(eocd.buffer);
             eocdView.setUint32(0, 0x06054b50, true);
@@ -132,8 +148,12 @@ class ZipWriter implements Writer {
             eocdView.setUint32(16, filenameLength + files.length * (30 + 16) + dataLength, true);
 
             await writer.write(eocd);
+
+            // Close the underlying writer
+            await writer.close();
         };
     }
 }
 
-export { ZipWriter };
+export { ZipFileSystem };
+

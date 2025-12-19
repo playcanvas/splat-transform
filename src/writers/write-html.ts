@@ -5,8 +5,8 @@ import { html, css, js } from '@playcanvas/supersplat-viewer';
 import { writeSog } from './write-sog';
 import { DataTable } from '../data-table/data-table';
 
-import { BufferPlatform } from '../serialize/buffer-platform';
-import { Platform } from '../serialize/platform';
+import { MemoryFileSystem } from '../serialize/memory-file-system';
+import { FileSystem } from '../serialize/file-system';
 import { writeFile } from '../serialize/write-helpers';
 import { toBase64 } from '../utils/base64';
 
@@ -33,7 +33,7 @@ type WriteHtmlOptions = {
     deviceIdx: number;
 };
 
-const writeHtml = async (options: WriteHtmlOptions, platform: Platform) => {
+const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
     const { filename, dataTable, viewerSettingsJson, bundle, iterations, deviceIdx } = options;
 
     const pad = (text: string, spaces: number) => {
@@ -63,7 +63,7 @@ const writeHtml = async (options: WriteHtmlOptions, platform: Platform) => {
 
     if (bundle) {
         // Bundled mode: embed everything in the HTML
-        const bufferPlatform = new BufferPlatform();
+        const memoryFs = new MemoryFileSystem();
 
         const sogFilename = `temp.sog`;
         await writeSog({
@@ -72,10 +72,10 @@ const writeHtml = async (options: WriteHtmlOptions, platform: Platform) => {
             bundle: true,
             iterations,
             deviceIdx
-        }, bufferPlatform);
+        }, memoryFs);
 
         // get the memory buffer
-        const sogData = toBase64(bufferPlatform.results.get(sogFilename));
+        const sogData = toBase64(memoryFs.results.get(sogFilename));
 
         const style = '<link rel="stylesheet" href="./index.css">';
         const script = 'import { main } from \'./index.js\';';
@@ -89,7 +89,7 @@ const writeHtml = async (options: WriteHtmlOptions, platform: Platform) => {
         .replace(content, `fetch("data:application/octet-stream;base64,${sogData}")`)
         .replace('.compressed.ply', '.sog');
 
-        await writeFile(platform, filename, resultHtml);
+        await writeFile(fs, filename, resultHtml);
     } else {
         // Unbundled mode: write separate files
         const outputDir = dirname(filename);
@@ -104,15 +104,15 @@ const writeHtml = async (options: WriteHtmlOptions, platform: Platform) => {
             bundle: true,
             iterations: 0,
             deviceIdx: -1
-        }, platform);
+        }, fs);
 
         // Write CSS file
         const cssPath = join(outputDir, 'index.css');
-        await writeFile(platform, cssPath, css);
+        await writeFile(fs, cssPath, css);
 
         // Write JS file
         const jsPath = join(outputDir, 'index.js');
-        await writeFile(platform, jsPath, js);
+        await writeFile(fs, jsPath, js);
 
         // Generate HTML with external references
         const settings = 'settings: fetch(settingsUrl).then(response => response.json())';
@@ -123,7 +123,7 @@ const writeHtml = async (options: WriteHtmlOptions, platform: Platform) => {
         .replace(content, `fetch("${sogFilename}")`)
         .replace('.compressed.ply', '.sog');
 
-        await writeFile(platform, filename, resultHtml);
+        await writeFile(fs, filename, resultHtml);
     }
 };
 

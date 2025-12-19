@@ -1,5 +1,5 @@
 import { Writer } from './serialize/writer';
-import { Platform } from './serialize/platform';
+import { FileSystem } from './serialize/file-system';
 
 import { mkdir, readFile as pathReadFile } from 'node:fs/promises';
 import { randomBytes } from 'crypto';
@@ -28,7 +28,7 @@ class FileWriter implements Writer {
     }
 }
 
-class NodePlatform implements Platform {
+class NodeFileSystem implements FileSystem {
     async createWriter(filename: string): Promise<Writer> {
         // write to a temporary file
         const tmpFilename = `.${basename(filename)}.${process.pid}.${Date.now()}.${randomBytes(6).toString('hex')}.tmp`;
@@ -42,4 +42,5 @@ class NodePlatform implements Platform {
     }
 }
 
-export { NodePlatform };
+export { NodeFileSystem };
+
