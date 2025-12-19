@@ -35,7 +35,16 @@ const getInputFormat = (filename: string): InputFormat => {
     throw new Error(`Unsupported input file type: ${filename}`);
 };
 
-const readFile = async (filename: string, inputFormat: InputFormat, options: Options, params: Param[]): Promise<DataTable[]> => {
+type ReadFileOptions = {
+    filename: string;
+    inputFormat: InputFormat;
+    options: Options;
+    params: Param[];
+};
+
+const readFile = async (readFileOptions: ReadFileOptions): Promise<DataTable[]> => {
+    const { filename, inputFormat, options, params } = readFileOptions;
+
     let result: DataTable[];
 
     logger.info(`reading '${filename}'...`);

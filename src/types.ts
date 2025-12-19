@@ -5,13 +5,13 @@ type Options = {
     quiet: boolean;
     iterations: number;
     listGpus: boolean;
-    device: number;  // -1 = auto, -2 = CPU, 0+ = GPU index
+    deviceIdx: number;  // -1 = auto, -2 = CPU, 0+ = GPU index
 
     // lcc input options
     lodSelect: number[];
 
     // html output options
-    viewerSettingsPath: string;
+    viewerSettingsJson?: any;
     unbundled: boolean;
 
     // lod output options

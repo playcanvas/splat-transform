@@ -1,4 +1,3 @@
-import { FileHandle, mkdir, open } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
@@ -7,8 +6,9 @@ import { writeSog } from './write-sog.js';
 import { TypedArray, DataTable } from '../data-table/data-table';
 import { sortMortonOrder } from '../data-table/morton-order';
 import { BTreeNode, BTree } from '../spatial/b-tree';
-import { Options } from '../types';
 import { logger } from '../utils/logger';
+
+import { Platform } from '../serialize/platform';
 
 type Aabb = {
     min: number[],
@@ -135,26 +135,40 @@ const binIndices = (parent: BTreeNode, lod: TypedArray) => {
     return result;
 };
 
-const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, envDataTable: DataTable | null, outputFilename: string, options: Options) => {
-    const outputDir = dirname(outputFilename);
+type WriteLodOptions = {
+    filename: string;
+    dataTable: DataTable;
+    envDataTable: DataTable | null;
+    iterations: number;
+    deviceIdx: number;
+    chunkCount: number;
+    chunkExtent: number;
+};
+
+const writeLod = async (options: WriteLodOptions, platform: Platform) => {
+    const { filename, dataTable, envDataTable, iterations, deviceIdx, chunkCount, chunkExtent } = options;
+
+    const outputDir = dirname(filename);
 
     // ensure top-level output folder exists
-    await mkdir(outputDir, { recursive: true });
+    await platform.mkdir(outputDir);
 
     // write the environment sog
     if (envDataTable?.numRows > 0) {
         const pathname = resolve(outputDir, 'env/meta.json');
 
         // ensure output folder exists before any files are written
-        await mkdir(dirname(pathname), { recursive: true });
-
-        const outputFile = await open(pathname, 'w');
+        await platform.mkdir(dirname(pathname));
 
         logger.info(`writing ${pathname}...`);
 
-        await writeSog(outputFile, envDataTable, pathname, options);
-
-        await outputFile.close();
+        await writeSog({
+            filename: pathname,
+            dataTable: envDataTable,
+            bundle: false,
+            iterations,
+            deviceIdx
+        }, platform);
     }
 
     // construct a kd-tree based on centroids from all lods
@@ -167,8 +181,8 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, envDataTab
     const bTree = new BTree(centroidsTable);
 
     // approximate number of gaussians we'll place into file units
-    const binSize = options.lodChunkCount * 1024;
-    const binDim = options.lodChunkExtent;
+    const binSize = chunkCount * 1024;
+    const binDim = chunkExtent;
 
     // map of lod -> fileBin[]
     // fileBin: number[][]
@@ -249,7 +263,11 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, envDataTab
         }
         return value;
     };
-    await fileHandle.write((new TextEncoder()).encode(JSON.stringify(meta, replacer)));
+
+    // write lod-meta.json
+    const writer = await platform.createWriter(filename);
+    writer.write((new TextEncoder()).encode(JSON.stringify(meta, replacer)));
+    await writer.close();
 
     // write file units
     for (const [lodValue, fileUnits] of lodFiles) {
@@ -262,7 +280,7 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, envDataTab
 
             // ensure output folder exists before any files are written
             const pathname = resolve(outputDir, `${lodValue}_${i}/meta.json`);
-            await mkdir(dirname(pathname), { recursive: true });
+            await platform.mkdir(dirname(pathname));
 
             // generate an ordering for each subunit and append it to the unit's indices
             const totalIndices = fileUnit.reduce((acc, curr) => acc + curr.length, 0);
@@ -282,13 +300,16 @@ const writeLod = async (fileHandle: FileHandle, dataTable: DataTable, envDataTab
             }
 
             // write file unit to sog
-            const outputFile = await open(pathname, 'w');
-
             logger.info(`writing ${pathname}...`);
 
-            await writeSog(outputFile, unitDataTable, pathname, options, indices);
-
-            await outputFile.close();
+            await writeSog({
+                filename: pathname,
+                dataTable: unitDataTable,
+                indices,
+                bundle: false,
+                iterations,
+                deviceIdx
+            }, platform);
         }
     }
 };
