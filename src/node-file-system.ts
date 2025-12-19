@@ -1,6 +1,6 @@
 import { FileSystem, Writer } from './serialize/file-system';
 
-import { mkdir, readFile as pathReadFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { randomBytes } from 'crypto';
 import { open, rename } from 'node:fs/promises';
 import { FileHandle } from 'node:fs/promises';
@@ -8,7 +8,7 @@ import { basename, dirname, join } from 'node:path';
 
 // write data to a file stream
 class FileWriter implements Writer {
-    write: (data: Uint8Array) => void;
+    write: (data: Uint8Array) => Promise<void>;
     close: () => Promise<void>;
 
     constructor(fileHandle: FileHandle, filename: string, tmpFilename: string) {

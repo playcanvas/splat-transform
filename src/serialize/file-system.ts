@@ -1,10 +1,10 @@
 // defines the interface for a stream writer class
 interface Writer {
     // write data to the stream
-    write(data: Uint8Array): void | Promise<void>;
+    write(data: Uint8Array): Promise<void>;
 
     // close the writing stream. return value depends on writer implementation.
-    close(): any | Promise<any>;
+    close(): Promise<void>;
 }
 
 interface FileSystem {

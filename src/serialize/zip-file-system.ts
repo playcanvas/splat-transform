@@ -14,11 +14,7 @@ class ZipEntryWriter implements Writer {
     write: (data: Uint8Array) => Promise<void>;
     close: () => Promise<void>;
 
-    constructor(
-        outputWriter: Writer,
-        entry: ZipEntry,
-        onClose: () => void
-    ) {
+    constructor(outputWriter: Writer, entry: ZipEntry) {
         this.write = async (data: Uint8Array) => {
             entry.sizeBytes += data.length;
             entry.crc.update(data);
@@ -26,7 +22,7 @@ class ZipEntryWriter implements Writer {
         };
 
         this.close = async () => {
-            onClose();
+            // no-op, finalization is handled by ZipFileSystem
         };
     }
 }
@@ -91,9 +87,7 @@ class ZipFileSystem implements FileSystem {
             const entry = await writeEntryHeader(filename);
             activeEntry = entry;
 
-            return new ZipEntryWriter(writer, entry, () => {
-                // Entry closed - will be finalized when next entry starts or archive closes
-            });
+            return new ZipEntryWriter(writer, entry);
         };
 
         this.mkdir = async (_path: string): Promise<void> => {
