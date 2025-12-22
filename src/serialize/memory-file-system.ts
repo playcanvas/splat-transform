@@ -2,15 +2,15 @@ import { FileSystem, Writer } from './file-system';
 
 // write data to a memory buffer
 class MemoryWriter implements Writer {
-    write: (data: Uint8Array) => Promise<void>;
-    close: () => Promise<void>;
+    write: (data: Uint8Array) => void;
+    close: () => void;
 
     constructor(onclose: (buffers: Uint8Array[]) => void) {
         const buffers: Uint8Array[] = [];
         let buffer: Uint8Array;
         let cursor = 0;
 
-        this.write = async (data: Uint8Array) => {
+        this.write = (data: Uint8Array) => {
             let readcursor = 0;
 
             while (readcursor < data.byteLength) {
@@ -37,7 +37,7 @@ class MemoryWriter implements Writer {
             }
         };
 
-        this.close = async () => {
+        this.close = () => {
             if (buffer) {
                 buffers.push(new Uint8Array(buffer.buffer, 0, cursor));
                 buffer = null;
@@ -51,7 +51,7 @@ class MemoryWriter implements Writer {
 class MemoryFileSystem implements FileSystem {
     results: Map<string, Uint8Array> = new Map();
 
-    async createWriter(filename: string): Promise<Writer> {
+    createWriter(filename: string): Writer {
         return new MemoryWriter((result: Uint8Array[]) => {
             // combine buffers
             if (result.length === 1) {
