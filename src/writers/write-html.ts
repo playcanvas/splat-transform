@@ -101,8 +101,8 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
             filename: sogPath,
             dataTable,
             bundle: true,
-            iterations: 0,
-            deviceIdx: -1
+            iterations,
+            deviceIdx
         }, fs);
 
         // Write CSS file
