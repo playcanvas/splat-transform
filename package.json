@@ -13,6 +13,15 @@
     "typescript"
   ],
   "license": "MIT",
+  "main": "./dist/lib.mjs",
+  "module": "./dist/lib.mjs",
+  "types": "./dist/lib.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/lib.d.ts",
+      "import": "./dist/lib.mjs"
+    }
+  },
   "bin": {
     "splat-transform": "bin/cli.mjs"
   },
