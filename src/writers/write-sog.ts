@@ -1,14 +1,13 @@
-import { FileHandle, open } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 import { version } from '../../package.json';
 import { Column, DataTable } from '../data-table/data-table';
 import { sortMortonOrder } from '../data-table/morton-order';
 import { createDevice, enumerateAdapters, GpuDevice } from '../gpu/gpu-device';
-import { FileWriter } from '../serialize/writer';
-import { ZipWriter } from '../serialize/zip-writer';
+import { FileSystem } from '../serialize/file-system';
+import { writeFile } from '../serialize/write-helpers';
+import { ZipFileSystem } from '../serialize/zip-file-system';
 import { kmeans } from '../spatial/k-means';
-import { Options } from '../types';
 import { logger } from '../utils/logger';
 import { sigmoid } from '../utils/math';
 import { WebPCodec } from '../utils/webp-codec';
@@ -101,21 +100,26 @@ const cluster1d = async (dataTable: DataTable, iterations: number, device?: GpuD
     };
 };
 
-const writeFile = async (filename: string, data: Uint8Array) => {
-    const outputFile = await open(filename, 'w');
-    outputFile.write(data);
-    await outputFile.close();
-};
-
 let webPCodec: WebPCodec;
 let gpuDevice: GpuDevice;
 
-const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFilename: string, options: Options, indices = generateIndices(dataTable)) => {
-    // initialize output stream
-    const isBundle = outputFilename.toLowerCase().endsWith('.sog');
-    const fileWriter = isBundle && new FileWriter(fileHandle);
-    const zipWriter = fileWriter && new ZipWriter(fileWriter);
+type WriteSogOptions = {
+    filename: string;
+    dataTable: DataTable;
+    indices?: Uint32Array;
+    bundle: boolean;
+    iterations: number;
+    deviceIdx: number;
+};
 
+const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
+    const { filename: outputFilename, bundle, dataTable, iterations, deviceIdx } = options;
+
+    // initialize output stream - use ZipFileSystem for bundled output
+    const zipFs = bundle ? new ZipFileSystem(await fs.createWriter(outputFilename)) : null;
+    const outputFs = zipFs || fs;
+
+    const indices = options.indices || generateIndices(dataTable);
     const numRows = indices.length;
     const width = Math.ceil(Math.sqrt(numRows) / 4) * 4;
     const height = Math.ceil(numRows / width / 4) * 4;
@@ -125,7 +129,7 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     const layout = identity; // rectChunks;
 
     const writeWebp = async (filename: string, data: Uint8Array, w = width, h = height) => {
-        const pathname = resolve(dirname(outputFilename), filename);
+        const pathname = zipFs ? filename : resolve(dirname(outputFilename), filename);
         logger.info(`writing '${pathname}'...`);
 
         // construct the encoder on first use
@@ -135,11 +139,7 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
 
         const webp = await webPCodec.encodeLosslessRGBA(data, w, h);
 
-        if (zipWriter) {
-            await zipWriter.file(filename, webp);
-        } else {
-            await writeFile(pathname, webp);
-        }
+        await writeFile(outputFs, pathname, webp);
     };
 
     const writeTableData = (filename: string, dataTable: DataTable, w = width, h = height) => {
@@ -251,7 +251,7 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     const writeScales = async () => {
         const scaleData = await cluster1d(
             new DataTable(['scale_0', 'scale_1', 'scale_2'].map(name => dataTable.getColumnByName(name))),
-            options.iterations,
+            iterations,
             gpuDevice
         );
 
@@ -263,7 +263,7 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
     const writeColors = async () => {
         const colorData = await cluster1d(
             new DataTable(['f_dc_0', 'f_dc_1', 'f_dc_2'].map(name => dataTable.getColumnByName(name))),
-            options.iterations,
+            iterations,
             gpuDevice
         );
 
@@ -295,10 +295,10 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
         const paletteSize = Math.min(64, 2 ** Math.floor(Math.log2(indices.length / 1024))) * 1024;
 
         // calculate kmeans
-        const { centroids, labels } = await kmeans(shDataTable, paletteSize, options.iterations, gpuDevice);
+        const { centroids, labels } = await kmeans(shDataTable, paletteSize, iterations, gpuDevice);
 
         // construct a codebook for all spherical harmonic coefficients
-        const codebook = await cluster1d(centroids, options.iterations, gpuDevice);
+        const codebook = await cluster1d(centroids, iterations, gpuDevice);
 
         // write centroids
         const centroidsBuf = new Uint8Array(64 * shCoeffs * Math.ceil(centroids.numRows / 64) * channels);
@@ -351,16 +351,16 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
 
     // Initialize GPU device if not using CPU mode
     // device: -1 = auto, -2 = CPU, 0+ = specific GPU index
-    if (options.device !== -2 && !gpuDevice) {
+    if (deviceIdx !== -2 && !gpuDevice) {
         let adapterName: string | undefined;
 
-        if (options.device >= 0) {
+        if (deviceIdx >= 0) {
             const adapters = await enumerateAdapters();
-            const adapter = adapters[options.device];
+            const adapter = adapters[deviceIdx];
             if (adapter) {
                 adapterName = adapter.name;
             } else {
-                logger.warn(`GPU adapter index ${options.device} not found, using default`);
+                logger.warn(`GPU adapter index ${deviceIdx} not found, using default`);
             }
         }
 
@@ -402,12 +402,12 @@ const writeSog = async (fileHandle: FileHandle, dataTable: DataTable, outputFile
 
     const metaJson = (new TextEncoder()).encode(JSON.stringify(meta));
 
-    if (zipWriter) {
-        await zipWriter.file('meta.json', metaJson);
-        await zipWriter.close();
-        await fileWriter.close();
-    } else {
-        await fileHandle.write(metaJson);
+    const metaFilename = zipFs ? 'meta.json' : outputFilename;
+    await writeFile(outputFs, metaFilename, metaJson);
+
+    // Close zip archive if bundling
+    if (zipFs) {
+        await zipFs.close();
     }
 };
 

@@ -1,6 +1,5 @@
-import { FileHandle } from 'node:fs/promises';
-
 import { PlyData } from '../readers/read-ply';
+import { FileSystem } from '../serialize/file-system';
 
 const columnTypeToPlyType = (type: string): string => {
     switch (type) {
@@ -15,7 +14,14 @@ const columnTypeToPlyType = (type: string): string => {
     }
 };
 
-const writePly = async (fileHandle: FileHandle, plyData: PlyData) => {
+type WritePlyOptions = {
+    filename: string;
+    plyData: PlyData;
+};
+
+const writePly = async (options: WritePlyOptions, fs: FileSystem) => {
+    const { filename, plyData } = options;
+
     const header = [
         'ply',
         'format binary_little_endian 1.0',
@@ -32,7 +38,8 @@ const writePly = async (fileHandle: FileHandle, plyData: PlyData) => {
     ];
 
     // write the header
-    await fileHandle.write((new TextEncoder()).encode(`${header.flat(3).join('\n')}\n`));
+    const writer = await fs.createWriter(filename);
+    await writer.write((new TextEncoder()).encode(`${header.flat(3).join('\n')}\n`));
 
     for (let i = 0; i < plyData.elements.length; ++i) {
         const table = plyData.elements[i].dataTable;
@@ -62,9 +69,11 @@ const writePly = async (fileHandle: FileHandle, plyData: PlyData) => {
             }
 
             // write the chunk
-            await fileHandle.write(chunkData.subarray(0, offset));
+            await writer.write(chunkData.subarray(0, offset));
         }
     }
+
+    await writer.close();
 };
 
 export { writePly };

@@ -1,13 +1,22 @@
-import { FileHandle } from 'node:fs/promises';
-
 import { DataTable } from '../data-table/data-table';
+import { FileSystem } from '../serialize/file-system';
 
-const writeCsv = async (fileHandle: FileHandle, dataTable: DataTable) => {
+type WriteCSVOptions = {
+    filename: string;
+    dataTable: DataTable;
+};
+
+const writeCsv = async (options: WriteCSVOptions, fs: FileSystem) => {
+    const { filename, dataTable } = options;
 
     const len = dataTable.numRows;
 
+    const textEncoder = new TextEncoder();
+
+    const writer = await fs.createWriter(filename);
+
     // write header
-    await fileHandle.write(`${dataTable.columnNames.join(',')}\n`);
+    await writer.write(textEncoder.encode(`${dataTable.columnNames.join(',')}\n`));
 
     const columns = dataTable.columns.map(c => c.data);
 
@@ -18,8 +27,10 @@ const writeCsv = async (fileHandle: FileHandle, dataTable: DataTable) => {
             if (c) row += ',';
             row += columns[c][i];
         }
-        await fileHandle.write(`${row}\n`);
+        await writer.write(textEncoder.encode(`${row}\n`));
     }
+
+    await writer.close();
 };
 
 export { writeCsv };

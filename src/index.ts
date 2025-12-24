@@ -1,4 +1,4 @@
-import { lstat, mkdir } from 'node:fs/promises';
+import { lstat, mkdir, readFile as pathReadFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { exit, hrtime } from 'node:process';
 import { parseArgs } from 'node:util';
@@ -9,11 +9,13 @@ import { version } from '../package.json';
 import { combine } from './data-table/combine';
 import { DataTable } from './data-table/data-table';
 import { enumerateAdapters } from './gpu/gpu-device';
+import { NodeFileSystem } from './node-file-system';
 import { ProcessAction, processDataTable } from './process';
 import { getInputFormat, readFile } from './read';
 import { Options } from './types';
 import { logger } from './utils/logger';
 import { getOutputFormat, writeFile } from './write';
+
 
 const fileExists = async (filename: string) => {
     try {
@@ -45,7 +47,7 @@ type File = {
     processActions: ProcessAction[];
 };
 
-const parseArguments = () => {
+const parseArguments = async () => {
     const { values: v, tokens } = parseArgs({
         tokens: true,
         strict: true,
@@ -120,16 +122,27 @@ const parseArguments = () => {
     const files: File[] = [];
 
     // Parse gpu option - can be a number or "cpu"
-    let device: number;
+    let deviceIdx: number;
     const gpuValue = v.gpu.toLowerCase();
     if (gpuValue === 'cpu') {
-        device = -2;  // -2 indicates CPU mode
+        deviceIdx = -2;  // -2 indicates CPU mode
     } else {
-        device = parseInteger(v.gpu);
-        if (device < -1) {
-            throw new Error(`Invalid GPU index: ${device}. Must be >= 0 or 'cpu'.`);
+        deviceIdx = parseInteger(v.gpu);
+        if (deviceIdx < -1) {
+            throw new Error(`Invalid GPU index: ${deviceIdx}. Must be >= 0 or 'cpu'.`);
         }
     }
+
+    const readJsonFile = async (path: string) => {
+        const content = await pathReadFile(path, 'utf-8');
+        try {
+            return JSON.parse(content);
+        } catch (e) {
+            throw new Error(`Failed to parse viewer settings JSON file: ${path}`);
+        }
+    };
+
+    const viewerSettingsPath = v['viewer-settings'];
 
     const options: Options = {
         overwrite: v.overwrite,
@@ -138,9 +151,9 @@ const parseArguments = () => {
         quiet: v.quiet,
         iterations: parseInteger(v.iterations),
         listGpus: v['list-gpus'],
-        device: device,
+        deviceIdx,
         lodSelect: v['lod-select'].split(',').filter(v => !!v).map(parseInteger),
-        viewerSettingsPath: v['viewer-settings'],
+        viewerSettingsJson: viewerSettingsPath && await readJsonFile(viewerSettingsPath),
         unbundled: v.unbundled,
         lodChunkCount: parseInteger(v['lod-chunk-count']),
         lodChunkExtent: parseInteger(v['lod-chunk-extent'])
@@ -333,7 +346,7 @@ const main = async () => {
     const startTime = hrtime();
 
     // read args
-    const { files, options } = parseArguments();
+    const { files, options } = await parseArguments();
 
     // configure logger
     logger.setQuiet(options.quiet);
@@ -378,7 +391,7 @@ const main = async () => {
     const outputArg = files[files.length - 1];
 
     const outputFilename = resolve(outputArg.filename);
-    const outputFormat = getOutputFormat(outputFilename);
+    const outputFormat = getOutputFormat(outputFilename, options);
 
     if (options.overwrite) {
         // ensure target directory exists when using -w
@@ -418,8 +431,14 @@ const main = async () => {
             });
 
             // read input
-            const inputFilename = resolve(inputArg.filename);
-            const dataTables = await readFile(inputFilename, getInputFormat(inputFilename), options, params);
+            const filename = resolve(inputArg.filename);
+            const inputFormat = getInputFormat(filename);
+            const dataTables = await readFile({
+                filename,
+                inputFormat,
+                options,
+                params
+            });
 
             for (let i = 0; i < dataTables.length; ++i) {
                 const dataTable = dataTables[i];
@@ -456,7 +475,13 @@ const main = async () => {
         logger.info(`Loaded ${dataTable.numRows} gaussians`);
 
         // write file
-        await writeFile(outputFilename, dataTable, envDataTable, options);
+        await writeFile({
+            filename: outputFilename,
+            outputFormat,
+            dataTable,
+            envDataTable,
+            options
+        }, new NodeFileSystem());
     } catch (err) {
         // handle errors
         logger.error(err);
