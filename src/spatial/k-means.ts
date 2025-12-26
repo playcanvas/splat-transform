@@ -4,36 +4,39 @@ import { GpuClustering } from '../gpu/gpu-clustering';
 import { GpuDevice } from '../gpu/gpu-device';
 import { logger } from '../utils/logger';
 
-const initializeCentroids = (dataTable: DataTable, centroids: DataTable, row: any) => {
-    const chosenRows = new Set();
-    for (let i = 0; i < centroids.numRows; ++i) {
-        let candidateRow;
-        do {
-            candidateRow = Math.floor(Math.random() * dataTable.numRows);
-        } while (chosenRows.has(candidateRow));
+// use floyd's algorithm to pick m unique random indices from 0..n-1
+const pickRandomIndices = (n: number, m: number, rng = Math.random) => {
+    const chosen = new Set<number>();
+    for (let j = n - m; j < n; j++) {
+        const t = Math.floor(rng() * (j + 1));
+        chosen.add(chosen.has(t) ? j : t);
+    }
+    return [...chosen];
+};
 
-        chosenRows.add(candidateRow);
-        dataTable.getRow(candidateRow, row);
+const initializeCentroids = (dataTable: DataTable, centroids: DataTable, row: any) => {
+    const indices = pickRandomIndices(dataTable.numRows, centroids.numRows);
+    for (let i = 0; i < centroids.numRows; ++i) {
+        dataTable.getRow(indices[i], row);
         centroids.setRow(i, row);
     }
 };
 
-// in the 1d case we can initialize centroids evenly over the input range
+// in the 1d case we use quantile-based initialization for better handling of skewed data
 const initializeCentroids1D = (dataTable: DataTable, centroids: DataTable) => {
-    // calculate min/max
-    let m = Infinity;
-    let M = -Infinity;
-
     const data = dataTable.getColumn(0).data;
-    for (let i = 0; i < dataTable.numRows; ++i) {
-        const value = data[i];
-        if (value < m) m = value;
-        if (value > M) M = value;
-    }
+    const n = dataTable.numRows;
+    const k = centroids.numRows;
+
+    // Sort data to compute quantiles
+    const sorted = Float32Array.from(data).sort((a, b) => a - b);
 
     const centroidsData = centroids.getColumn(0).data;
-    for (let i = 0; i < centroids.numRows; ++i) {
-        centroidsData[i] = m + (M - m) * i / (centroids.numRows - 1);
+    for (let i = 0; i < k; ++i) {
+        // Place centroid at the center of its expected cluster region
+        const quantile = (2 * i + 1) / (2 * k);
+        const index = Math.min(Math.floor(quantile * n), n - 1);
+        centroidsData[i] = sorted[index];
     }
 };
 
