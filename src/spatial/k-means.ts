@@ -5,10 +5,10 @@ import { GpuDevice } from '../gpu/gpu-device';
 import { logger } from '../utils/logger';
 
 // use floyd's algorithm to pick m unique random indices from 0..n-1
-const pickRandomIndices = (n: number, m: number, rng = Math.random) => {
+const pickRandomIndices = (n: number, m: number) => {
     const chosen = new Set<number>();
     for (let j = n - m; j < n; j++) {
-        const t = Math.floor(rng() * (j + 1));
+        const t = Math.floor(Math.random() * (j + 1));
         chosen.add(chosen.has(t) ? j : t);
     }
     return [...chosen];
