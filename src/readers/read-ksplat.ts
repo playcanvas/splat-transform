@@ -1,7 +1,5 @@
-import { Buffer } from 'node:buffer';
-import { FileHandle } from 'node:fs/promises';
-
 import { Column, DataTable } from '../data-table/data-table';
+import { ReadSource } from '../serialize/read-stream';
 
 // Format configuration for different compression modes
 interface CompressionConfig {
@@ -92,13 +90,9 @@ const COMPRESSION_MODES: CompressionConfig[] = [
 
 const HARMONICS_COMPONENT_COUNT = [0, 9, 24, 45];
 
-const readKsplat = async (fileHandle: FileHandle): Promise<DataTable> => {
-    const stats = await fileHandle.stat();
-    const totalSize = stats.size;
-
-    // Load complete file
-    const fileBuffer = Buffer.alloc(totalSize);
-    await fileHandle.read(fileBuffer, 0, totalSize, 0);
+const readKsplat = async (readSource: ReadSource): Promise<DataTable> => {
+    const fileBuffer = await readSource.arrayBuffer();
+    const totalSize = fileBuffer.byteLength;
 
     const MAIN_HEADER_SIZE = 4096;
     const SECTION_HEADER_SIZE = 1024;
@@ -108,7 +102,7 @@ const readKsplat = async (fileHandle: FileHandle): Promise<DataTable> => {
     }
 
     // Parse main header
-    const mainHeader = new DataView(fileBuffer.buffer, fileBuffer.byteOffset, MAIN_HEADER_SIZE);
+    const mainHeader = new DataView(fileBuffer, 0, MAIN_HEADER_SIZE);
 
     const majorVersion = mainHeader.getUint8(0);
     const minorVersion = mainHeader.getUint8(1);
@@ -135,7 +129,7 @@ const readKsplat = async (fileHandle: FileHandle): Promise<DataTable> => {
     let maxHarmonicsDegree = 0;
     for (let sectionIdx = 0; sectionIdx < maxSections; sectionIdx++) {
         const sectionHeaderOffset = MAIN_HEADER_SIZE + sectionIdx * SECTION_HEADER_SIZE;
-        const sectionHeader = new DataView(fileBuffer.buffer, fileBuffer.byteOffset + sectionHeaderOffset, SECTION_HEADER_SIZE);
+        const sectionHeader = new DataView(fileBuffer, sectionHeaderOffset, SECTION_HEADER_SIZE);
 
         const sectionSplatCount = sectionHeader.getUint32(0, true);
         if (sectionSplatCount === 0) continue; // Skip empty sections
@@ -187,7 +181,7 @@ const readKsplat = async (fileHandle: FileHandle): Promise<DataTable> => {
     // Process each section
     for (let sectionIdx = 0; sectionIdx < maxSections; sectionIdx++) {
         const sectionHeaderOffset = MAIN_HEADER_SIZE + sectionIdx * SECTION_HEADER_SIZE;
-        const sectionHeader = new DataView(fileBuffer.buffer, fileBuffer.byteOffset + sectionHeaderOffset, SECTION_HEADER_SIZE);
+        const sectionHeader = new DataView(fileBuffer, sectionHeaderOffset, SECTION_HEADER_SIZE);
 
         const sectionSplatCount = sectionHeader.getUint32(0, true);
         const maxSectionSplats = sectionHeader.getUint32(4, true);
@@ -214,14 +208,14 @@ const readKsplat = async (fileHandle: FileHandle): Promise<DataTable> => {
 
         // Get bucket centers
         const bucketCentersOffset = currentSectionDataOffset + partialBucketMetaSize;
-        const bucketCenters = new Float32Array(fileBuffer.buffer, fileBuffer.byteOffset + bucketCentersOffset, bucketCount * 3);
+        const bucketCenters = new Float32Array(fileBuffer, bucketCentersOffset, bucketCount * 3);
 
         // Get partial bucket sizes
-        const partialBucketSizes = new Uint32Array(fileBuffer.buffer, fileBuffer.byteOffset + currentSectionDataOffset, partialBuckets);
+        const partialBucketSizes = new Uint32Array(fileBuffer, currentSectionDataOffset, partialBuckets);
 
         // Get splat data
         const splatDataOffset = currentSectionDataOffset + totalBucketStorageSize;
-        const splatData = new DataView(fileBuffer.buffer, fileBuffer.byteOffset + splatDataOffset, sectionDataSize);
+        const splatData = new DataView(fileBuffer, splatDataOffset, sectionDataSize);
 
         // Harmonic value decoder
         const decodeHarmonics = (offset: number, component: number): number => {
