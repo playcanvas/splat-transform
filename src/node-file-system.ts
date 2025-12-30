@@ -47,6 +47,8 @@ class NodeReadFileSystem implements ReadFileSystem {
         return new ReadSource(async () => {
             const inputFile = await open(filename, 'r');
             const stats = await inputFile.stat();
+            const anim = '▁▂▃▄▅▆▇█';
+            const animLen = anim.length;
             let progress = 0;
 
             return {
@@ -57,13 +59,13 @@ class NodeReadFileSystem implements ReadFileSystem {
                 },
                 onProgress: (readBytes: number, totalBytes?: number) => {
                     const prevProgress = progress;
-                    progress = Math.max(progress, totalBytes ? 10 * (readBytes / totalBytes) : 0);
+                    progress = Math.max(progress, totalBytes ? animLen * (readBytes / totalBytes) : 0);
 
-                    for (let i = 0; i < Math.floor(progress) - Math.floor(prevProgress); ++i) {
-                        logger.progress('#');
+                    for (let i = Math.floor(prevProgress); i < Math.floor(progress); ++i) {
+                        logger.progress(anim[i % animLen]);
                     }
 
-                    if (progress >= 10) {
+                    if (progress >= animLen) {
                         logger.progress('\n');
                     }
                 }
