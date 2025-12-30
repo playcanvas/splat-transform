@@ -120,12 +120,6 @@ class ZipReadFileSystem implements ReadFileSystem {
             return { source: decompressed };
         });
     }
-
-    getFiles(path: string): string[] {
-        const prefix = path.endsWith('/') ? path : `${path}/`;
-        return [...this.entries.keys()].filter(name => path === '' || path === '.' || name === path || name.startsWith(prefix)
-        );
-    }
 }
 
 export { ZipReadFileSystem };
