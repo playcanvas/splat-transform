@@ -51,6 +51,8 @@ class NodeReadFileSystem implements ReadFileSystem {
             const animLen = anim.length;
             let progress = 0;
 
+            logger.info(`reading '${filename}'...`);
+
             return {
                 source: {
                     stream: inputFile.readableWebStream() as ReadableStream<Uint8Array>,

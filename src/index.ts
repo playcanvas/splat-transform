@@ -471,7 +471,7 @@ const main = async () => {
             outputArg.processActions
         );
 
-        logger.info(`Loaded ${dataTable.numRows} gaussians`);
+        logger.info(`loaded ${dataTable.numRows} gaussians`);
 
         // write file
         await writeFile({

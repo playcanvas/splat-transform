@@ -9,8 +9,8 @@ import { readSog } from './readers/read-sog';
 import { readSplat } from './readers/read-splat';
 import { readSpz } from './readers/read-spz';
 import { ReadFileSystem } from './serialize/read-file-system';
+import { ZipReadFileSystem } from './serialize/zip-read-file-system';
 import { Options, Param } from './types';
-import { logger } from './utils/logger';
 
 type InputFormat = 'mjs' | 'ksplat' | 'splat' | 'sog' | 'ply' | 'spz' | 'lcc';
 
@@ -48,8 +48,6 @@ const readFile = async (readFileOptions: ReadFileOptions, fs: ReadFileSystem): P
 
     let result: DataTable[];
 
-    logger.info(`reading '${filename}'...`);
-
     if (inputFormat === 'mjs') {
         result = [await readMjs(filename, params)];
     } else if (inputFormat === 'ksplat') {
@@ -60,20 +58,26 @@ const readFile = async (readFileOptions: ReadFileOptions, fs: ReadFileSystem): P
         result = [await readPly(filename, fs)];
     } else if (inputFormat === 'spz') {
         result = [await readSpz(filename, fs)];
-    } else {
-        // sog and lcc need FileHandle for random access
-        const inputFile = await open(filename, 'r');
-
-        if (inputFormat === 'sog') {
-            result = [await readSog(inputFile, filename)];
-        } else if (inputFormat === 'lcc') {
-            result = await readLcc(inputFile, filename, options);
+    } else if (inputFormat === 'sog') {
+        const lowerFilename = filename.toLowerCase();
+        if (lowerFilename.endsWith('.sog')) {
+            // Read .sog bundle into memory and parse as ZIP
+            const source = await fs.createReader(filename);
+            const buffer = await source.arrayBuffer();
+            const zipFs = new ZipReadFileSystem(new Uint8Array(buffer));
+            result = [await readSog('meta.json', zipFs)];
+        } else {
+            // Read unbundled sog (meta.json)
+            result = [await readSog(filename, fs)];
         }
-
+    } else if (inputFormat === 'lcc') {
+        // lcc still needs FileHandle for random access
+        const inputFile = await open(filename, 'r');
+        result = await readLcc(inputFile, filename, options);
         await inputFile.close();
     }
 
-    return result;
+    return result!;
 };
 
 export { readFile, getInputFormat, type InputFormat };
