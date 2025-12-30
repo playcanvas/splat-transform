@@ -1,10 +1,7 @@
-import { Buffer } from 'node:buffer';
-import { FileHandle, open } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-
-import { Vec3 } from 'playcanvas';
+import { path, Vec3 } from 'playcanvas';
 
 import { Column, DataTable } from '../data-table/data-table';
+import { ReadFileSystem } from '../serialize/read-file-system';
 import { Options } from '../types';
 
 const kSH_C0 = 0.28209479177387814;
@@ -44,41 +41,24 @@ type LccParam = {
     targetLod: number;
     compressInfo: CompressInfo;
     unitInfos: Array<LccUnitInfo>;
-    dataFile: FileHandle;
-    shFile?: FileHandle;
+    dataFile: Uint8Array;
+    shFile?: Uint8Array;
 }
 
 type ProcessUnitContext = {
     info: LccUnitInfo;
     targetLod: number;
-    dataFile: FileHandle;
-    shFile?: FileHandle;
+    dataFile: Uint8Array;
+    shFile?: Uint8Array;
     compressInfo: CompressInfo;
     propertyOffset: number;
     properties: Record<string, Float32Array>;
     properties_f_rest: Float32Array[] | null;
 }
 
-const readPart = async (fh: FileHandle, start: number, end: number): Promise<Uint8Array> => {
-    const buf = Buffer.alloc(end - start);
-    await fh.read(buf, 0, end - start, start);
-    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
-};
-
-const read = async (fh: FileHandle): Promise<Uint8Array> => {
-    const stat = await fh.stat();
-    const buf = Buffer.alloc(stat.size);
-    await fh.read(buf, 0, stat.size, 0);
-    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
-};
-
-const openAndRead = async (pathname: string): Promise<Uint8Array> => {
-    const handle = await open(pathname, 'r');
-    try {
-        return await read(handle);
-    } finally {
-        await handle.close();
-    }
+const loadFile = async (fs: ReadFileSystem, path: string): Promise<Uint8Array> => {
+    const source = await fs.createReader(path);
+    return new Uint8Array(await source.arrayBuffer());
 };
 
 // parse .lcc files, such as meta.lcc
@@ -288,7 +268,7 @@ const decodeSplat = (
     }
 };
 
-const processUnit = async (ctx: ProcessUnitContext) => {
+const processUnit = (ctx: ProcessUnitContext) => {
     const {
         info,
         targetLod,
@@ -309,15 +289,15 @@ const processUnit = async (ctx: ProcessUnitContext) => {
         return propertyOffset;
     }
 
-    // load data
-    const dataSource = await readPart(dataFile, offset, offset + size);
-    const dataView = new DataView(dataSource.buffer);
+    // get data slice
+    const dataSource = dataFile.subarray(offset, offset + size);
+    const dataView = new DataView(dataSource.buffer, dataSource.byteOffset, dataSource.byteLength);
 
-    // load sh data
+    // get sh data slice
     let shDataView: DataView | null = null;
     if (shFile) {
-        const shSource = await readPart(shFile, offset * 2, offset * 2 + size * 2);
-        shDataView = new DataView(shSource.buffer);
+        const shSource = shFile.subarray(offset * 2, offset * 2 + size * 2);
+        shDataView = new DataView(shSource.buffer, shSource.byteOffset, shSource.byteLength);
     }
 
     const unitProperties = initProperties(unitSplats);
@@ -341,7 +321,7 @@ const processUnit = async (ctx: ProcessUnitContext) => {
 };
 
 // this function would stream data directly into GSplatData buffers
-const deserializeFromLcc = async (param: LccParam) => {
+const deserializeFromLcc = (param: LccParam) => {
     const { totalSplats, unitInfos, targetLod, dataFile, shFile, compressInfo } = param;
 
     // properties to GSplatData
@@ -350,7 +330,7 @@ const deserializeFromLcc = async (param: LccParam) => {
 
     let propertyOffset = 0;
     for (const info of unitInfos) {
-        propertyOffset = await processUnit({
+        propertyOffset = processUnit({
             info,
             targetLod,
             dataFile,
@@ -431,8 +411,8 @@ const deserializeEnvironment = (raw: Uint8Array, compressInfo: CompressInfo, has
     return new DataTable(columns);
 };
 
-const readLcc = async (fileHandle: FileHandle, sourceName: string, options: Options): Promise<DataTable[]> => {
-    const lccData = await read(fileHandle);
+const readLcc = async (filename: string, fs: ReadFileSystem, options: Options): Promise<DataTable[]> => {
+    const lccData = await loadFile(fs, filename);
     const lccText = new TextDecoder().decode(lccData);
     const lccJson = JSON.parse(lccText);
 
@@ -457,11 +437,11 @@ const readLcc = async (fileHandle: FileHandle, sourceName: string, options: Opti
     const compressInfo = parseMeta(lccJson);
     const splats = lccJson.splats;
 
-    const relatedFilename = (name: string) => join(dirname(sourceName ?? ''), name);
+    const relatedFilename = (name: string) => path.join(path.getDirectory(filename), name);
 
-    const indexData = await openAndRead(relatedFilename('index.bin'));
-    const dataFile = await open(relatedFilename('data.bin'), 'r');
-    const shFile = hasSH ? await open(relatedFilename('shcoef.bin'), 'r') : null;
+    const indexData = await loadFile(fs, relatedFilename('index.bin'));
+    const dataFile = await loadFile(fs, relatedFilename('data.bin'));
+    const shFile = hasSH ? await loadFile(fs, relatedFilename('shcoef.bin')) : undefined;
 
     const unitInfos: LccUnitInfo[] = parseIndexBin(indexData.buffer as ArrayBuffer, lccJson);
 
@@ -473,7 +453,7 @@ const readLcc = async (fileHandle: FileHandle, sourceName: string, options: Opti
         new Array(splats.length).fill(0).map((_, i) => i);
 
     if (lods.length === 0) {
-        throw new Error(`No valid LODs selected for LCC input file: ${sourceName} lods: ${JSON.stringify(lods)}`);
+        throw new Error(`No valid LODs selected for LCC input file: ${filename} lods: ${JSON.stringify(lods)}`);
     }
 
     const result = [];
@@ -483,7 +463,7 @@ const readLcc = async (fileHandle: FileHandle, sourceName: string, options: Opti
         const outputLod = i;
         const totalSplats = splats[inputLod];
 
-        const dataTable = await deserializeFromLcc({
+        const dataTable = deserializeFromLcc({
             totalSplats,
             unitInfos,
             targetLod: inputLod,
@@ -497,16 +477,10 @@ const readLcc = async (fileHandle: FileHandle, sourceName: string, options: Opti
         result.push(dataTable);
     }
 
-    // cleanup
-    await dataFile.close();
-    if (shFile) {
-        await shFile.close();
-    }
-
     // load environment and tag as lod -1
     try {
-        const envData = await openAndRead(relatedFilename('environment.bin'));
-        const envDataTable  = await deserializeEnvironment(envData, compressInfo, hasSH);
+        const envData = await loadFile(fs, relatedFilename('environment.bin'));
+        const envDataTable = deserializeEnvironment(envData, compressInfo, hasSH);
         envDataTable.addColumn(new Column('lod', new Float32Array(envDataTable.numRows).fill(-1)));
         result.push(envDataTable);
     } catch (err) {

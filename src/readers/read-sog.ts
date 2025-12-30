@@ -1,16 +1,8 @@
+import { path } from 'playcanvas';
+
 import { Column, DataTable } from '../data-table/data-table';
 import { ReadFileSystem } from '../serialize/read-file-system';
 import { WebPCodec } from '../utils/webp-codec';
-
-// Simple path utilities (no Node.js dependency)
-const getDirectory = (path: string): string => {
-    const idx = path.lastIndexOf('/');
-    return idx === -1 ? '' : path.substring(0, idx);
-};
-
-const joinPath = (base: string, name: string): string => {
-    return base ? `${base}/${name}` : name;
-};
 
 type Meta = {
     version: number;
@@ -77,10 +69,10 @@ const sigmoidInv = (y: number) => {
 
 const readSog = async (filename: string, fs: ReadFileSystem): Promise<DataTable> => {
     const decoder = await WebPCodec.create();
-    const baseDir = getDirectory(filename);
+    const baseDir = path.getDirectory(filename);
 
     const load = async (name: string): Promise<Uint8Array> => {
-        const fullPath = joinPath(baseDir, name);
+        const fullPath = path.join(baseDir, name);
         const source = await fs.createReader(fullPath);
         const buffer = await source.arrayBuffer();
         return new Uint8Array(buffer);

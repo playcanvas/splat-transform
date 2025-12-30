@@ -10,10 +10,9 @@ type ZipEntryInfo = {
 
 const inflate = async (compressed: Uint8Array): Promise<Uint8Array> => {
     const ds = new DecompressionStream('deflate-raw');
-    const writer = ds.writable.getWriter();
-    await writer.write(compressed as BufferSource);
-    await writer.close();
-    return new Uint8Array(await new Response(ds.readable).arrayBuffer());
+    const out = new Blob([compressed as ArrayBufferView<ArrayBuffer>]).stream().pipeThrough(ds);
+    const ab = await new Response(out).arrayBuffer();
+    return new Uint8Array(ab); // uncompressed file bytes
 };
 
 // Parse ZIP file using EOCD/CDR approach

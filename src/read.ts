@@ -1,5 +1,3 @@
-import { open } from 'node:fs/promises';
-
 import { DataTable } from './data-table/data-table';
 import { readKsplat } from './readers/read-ksplat';
 import { readLcc } from './readers/read-lcc';
@@ -71,10 +69,7 @@ const readFile = async (readFileOptions: ReadFileOptions, fs: ReadFileSystem): P
             result = [await readSog(filename, fs)];
         }
     } else if (inputFormat === 'lcc') {
-        // lcc still needs FileHandle for random access
-        const inputFile = await open(filename, 'r');
-        result = await readLcc(inputFile, filename, options);
-        await inputFile.close();
+        result = await readLcc(filename, fs, options);
     }
 
     return result!;
