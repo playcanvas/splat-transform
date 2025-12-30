@@ -1,6 +1,6 @@
 import { isCompressedPly, decompressPly } from './decompress-ply';
 import { Column, DataTable } from '../data-table/data-table';
-import { ReadSource } from '../serialize/read-stream';
+import { ReadSource } from '../serialize/read-source';
 
 type PlyProperty = {
     name: string;               // 'x', f_dc_0', etc

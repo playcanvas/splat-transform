@@ -8,7 +8,7 @@ import { readPly } from './readers/read-ply';
 import { readSog } from './readers/read-sog';
 import { readSplat } from './readers/read-splat';
 import { readSpz } from './readers/read-spz';
-import { ReadSource } from './serialize/read-stream';
+import { ReadSource } from './serialize/read-source';
 import { Options, Param } from './types';
 import { logger } from './utils/logger';
 
@@ -43,12 +43,31 @@ type ReadFileOptions = {
     params: Param[];
 };
 
-const createReadSource = async (filename: string): Promise<ReadSource> => {
-    const inputFile = await open(filename, 'r');
-    const stats = await inputFile.stat();
-    return new ReadSource({
-        source: inputFile.readableWebStream() as ReadableStream<Uint8Array>,
-        totalBytes: stats.size
+const createFileSource = (filename: string): ReadSource => {
+    return new ReadSource(async () => {
+        const inputFile = await open(filename, 'r');
+        const stats = await inputFile.stat();
+        let progress = 0;
+
+        return {
+            source: {
+                stream: inputFile.readableWebStream() as ReadableStream<Uint8Array>,
+                totalBytes: stats.size,
+                close: () => inputFile.close()
+            },
+            onProgress: (readBytes: number, totalBytes?: number) => {
+                const prevProgress = progress;
+                progress = Math.max(progress, totalBytes ? 10 * (readBytes / totalBytes) : 0);
+
+                for (let i = 0; i < Math.floor(progress) - Math.floor(prevProgress); ++i) {
+                    logger.progress(`#`);
+                }
+
+                if (progress >= 10) {
+                    logger.progress('\n');
+                }
+            },
+        };
     });
 };
 
@@ -62,13 +81,13 @@ const readFile = async (readFileOptions: ReadFileOptions): Promise<DataTable[]> 
     if (inputFormat === 'mjs') {
         result = [await readMjs(filename, params)];
     } else if (inputFormat === 'ksplat') {
-        result = [await readKsplat(await createReadSource(filename))];
+        result = [await readKsplat(createFileSource(filename))];
     } else if (inputFormat === 'splat') {
-        result = [await readSplat(await createReadSource(filename))];
+        result = [await readSplat(createFileSource(filename))];
     } else if (inputFormat === 'ply') {
-        result = [await readPly(await createReadSource(filename))];
+        result = [await readPly(createFileSource(filename))];
     } else if (inputFormat === 'spz') {
-        result = [await readSpz(await createReadSource(filename))];
+        result = [await readSpz(createFileSource(filename))];
     } else {
         // sog and lcc need FileHandle for random access
         const inputFile = await open(filename, 'r');

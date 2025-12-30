@@ -1,5 +1,5 @@
 import { Column, DataTable } from '../data-table/data-table';
-import { ReadSource } from '../serialize/read-stream';
+import { ReadSource } from '../serialize/read-source';
 
 const readSplat = async (readSource: ReadSource): Promise<DataTable> => {
     const stream = await readSource.getReadStream();
