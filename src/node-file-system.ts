@@ -75,7 +75,7 @@ class NodeReadFileSystem implements ReadFileSystem {
         });
     }
 
-    async getFiles(path: string): Promise<string[]> {
+    getFiles(path: string): Promise<string[]> {
         throw new Error('NodeReadFileSystem.getFiles not implemented');
     }
 }

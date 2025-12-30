@@ -31,7 +31,8 @@ export default [
             'jsdoc/require-returns-type': 'off',
             'lines-between-class-members': 'off',
             'no-await-in-loop': 'off',
-            'require-atomic-updates': 'off'
+            'require-atomic-updates': 'off',
+            'no-undef': 'off' // TypeScript handles this
         }
     }, {
         files: ['**/*.mjs'],
