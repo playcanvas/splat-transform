@@ -1,5 +1,5 @@
 import { Column, DataTable } from '../data-table/data-table';
-import { ReadSource } from '../serialize/read-source';
+import { ReadFileSystem } from '../serialize/read-file-system';
 
 // See https://github.com/nianticlabs/spz for reference implementation
 
@@ -29,7 +29,8 @@ function getFixed24(positionsView: DataView, elementIndex: number, memberIndex: 
 
 const HARMONICS_COMPONENT_COUNT = [0, 9, 24, 45];
 
-const readSpz = async (readSource: ReadSource): Promise<DataTable> => {
+const readSpz = async (filename: string, fs: ReadFileSystem): Promise<DataTable> => {
+    const readSource = await fs.createReader(filename);
     let fileBuffer = await readSource.arrayBuffer();
 
     // Check if file is GZip compressed

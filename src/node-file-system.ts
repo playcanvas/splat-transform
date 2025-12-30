@@ -3,6 +3,9 @@ import { mkdir, open, rename, FileHandle } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 
 import { FileSystem, Writer } from './serialize/file-system';
+import { ReadFileSystem } from './serialize/read-file-system';
+import { ReadSource } from './serialize/read-source';
+import { logger } from './utils/logger';
 
 // write data to a file stream
 class FileWriter implements Writer {
@@ -39,4 +42,38 @@ class NodeFileSystem implements FileSystem {
     }
 }
 
-export { NodeFileSystem };
+class NodeReadFileSystem implements ReadFileSystem {
+    createReader(filename: string): ReadSource {
+        return new ReadSource(async () => {
+            const inputFile = await open(filename, 'r');
+            const stats = await inputFile.stat();
+            let progress = 0;
+
+            return {
+                source: {
+                    stream: inputFile.readableWebStream() as ReadableStream<Uint8Array>,
+                    totalBytes: stats.size,
+                    close: () => inputFile.close()
+                },
+                onProgress: (readBytes: number, totalBytes?: number) => {
+                    const prevProgress = progress;
+                    progress = Math.max(progress, totalBytes ? 10 * (readBytes / totalBytes) : 0);
+
+                    for (let i = 0; i < Math.floor(progress) - Math.floor(prevProgress); ++i) {
+                        logger.progress('#');
+                    }
+
+                    if (progress >= 10) {
+                        logger.progress('\n');
+                    }
+                }
+            };
+        });
+    }
+
+    async getFiles(path: string): Promise<string[]> {
+        throw new Error('NodeReadFileSystem.getFiles not implemented');
+    }
+}
+
+export { NodeFileSystem, NodeReadFileSystem };

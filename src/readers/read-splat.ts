@@ -1,7 +1,8 @@
 import { Column, DataTable } from '../data-table/data-table';
-import { ReadSource } from '../serialize/read-source';
+import { ReadFileSystem } from '../serialize/read-file-system';
 
-const readSplat = async (readSource: ReadSource): Promise<DataTable> => {
+const readSplat = async (filename: string, fs: ReadFileSystem): Promise<DataTable> => {
+    const readSource = await fs.createReader(filename);
     const stream = await readSource.getReadStream();
 
     // Each splat is 32 bytes
@@ -132,6 +133,8 @@ const readSplat = async (readSource: ReadSource): Promise<DataTable> => {
             }
         }
     }
+
+    stream.close();
 
     return new DataTable(columns);
 };

@@ -9,13 +9,12 @@ import { version } from '../package.json';
 import { combine } from './data-table/combine';
 import { DataTable } from './data-table/data-table';
 import { enumerateAdapters } from './gpu/gpu-device';
-import { NodeFileSystem } from './node-file-system';
+import { NodeFileSystem, NodeReadFileSystem } from './node-file-system';
 import { ProcessAction, processDataTable } from './process';
 import { getInputFormat, readFile } from './read';
 import { Options } from './types';
 import { logger } from './utils/logger';
 import { getOutputFormat, writeFile } from './write';
-
 
 const fileExists = async (filename: string) => {
     try {
@@ -438,7 +437,7 @@ const main = async () => {
                 inputFormat,
                 options,
                 params
-            });
+            }, new NodeReadFileSystem());
 
             for (let i = 0; i < dataTables.length; ++i) {
                 const dataTable = dataTables[i];

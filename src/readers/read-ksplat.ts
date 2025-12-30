@@ -1,5 +1,5 @@
 import { Column, DataTable } from '../data-table/data-table';
-import { ReadSource } from '../serialize/read-source';
+import { ReadFileSystem } from '../serialize/read-file-system';
 
 // Format configuration for different compression modes
 interface CompressionConfig {
@@ -90,7 +90,8 @@ const COMPRESSION_MODES: CompressionConfig[] = [
 
 const HARMONICS_COMPONENT_COUNT = [0, 9, 24, 45];
 
-const readKsplat = async (readSource: ReadSource): Promise<DataTable> => {
+const readKsplat = async (filename: string, fs: ReadFileSystem): Promise<DataTable> => {
+    const readSource = await fs.createReader(filename);
     const fileBuffer = await readSource.arrayBuffer();
     const totalSize = fileBuffer.byteLength;
 
