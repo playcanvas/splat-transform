@@ -187,9 +187,13 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
     // map of lod -> fileBin[]
     // fileBin: number[][]
     const lodFiles: Map<number, number[][][]> = new Map();
-    const lodColumn = dataTable.getColumnByName('lod').data;
+    const lodColumn = dataTable.getColumnByName('lod')?.data;
     const filenames: string[] = [];
     let lodLevels = 0;
+
+    if (!lodColumn) {
+        throw new Error('Missing lod assignment');
+    }
 
     const build = (node: BTreeNode): MetaNode => {
         if (!node.indices && (node.count > binSize || (node.aabb && node.aabb.largestDim() > binDim))) {
