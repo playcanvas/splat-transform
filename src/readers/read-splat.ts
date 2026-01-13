@@ -1,12 +1,10 @@
-import { Buffer } from 'node:buffer';
-import { FileHandle } from 'node:fs/promises';
-
 import { Column, DataTable } from '../data-table/data-table';
+import { ReadSource } from '../serialize/read';
 
-const readSplat = async (fileHandle: FileHandle): Promise<DataTable> => {
-    // Get file size to determine number of splats
-    const fileStats = await fileHandle.stat();
-    const fileSize = fileStats.size;
+const readSplat = async (source: ReadSource): Promise<DataTable> => {
+    // Load complete file
+    const fileBuffer = await source.read().readAll();
+    const fileSize = fileBuffer.length;
 
     // Each splat is 32 bytes
     const BYTES_PER_SPLAT = 32;
@@ -45,88 +43,75 @@ const readSplat = async (fileHandle: FileHandle): Promise<DataTable> => {
         new Column('rot_3', new Float32Array(numSplats))
     ];
 
-    // Read data in chunks
-    const chunkSize = 1024;
-    const numChunks = Math.ceil(numSplats / chunkSize);
-    const chunkData = Buffer.alloc(chunkSize * BYTES_PER_SPLAT);
+    // Create a DataView for reading binary data
+    const dataView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset, fileBuffer.byteLength);
 
-    for (let c = 0; c < numChunks; ++c) {
-        const numRows = Math.min(chunkSize, numSplats - c * chunkSize);
-        const bytesToRead = numRows * BYTES_PER_SPLAT;
+    // Parse each splat
+    for (let splatIndex = 0; splatIndex < numSplats; splatIndex++) {
+        const offset = splatIndex * BYTES_PER_SPLAT;
 
-        const { bytesRead } = await fileHandle.read(chunkData, 0, bytesToRead);
-        if (bytesRead !== bytesToRead) {
-            throw new Error('Failed to read expected amount of data from .splat file');
-        }
+        // Read position (3 × float32)
+        const x = dataView.getFloat32(offset + 0, true);
+        const y = dataView.getFloat32(offset + 4, true);
+        const z = dataView.getFloat32(offset + 8, true);
 
-        // Parse each splat in the chunk
-        for (let r = 0; r < numRows; ++r) {
-            const splatIndex = c * chunkSize + r;
-            const offset = r * BYTES_PER_SPLAT;
+        // Read scale (3 × float32)
+        const scaleX = dataView.getFloat32(offset + 12, true);
+        const scaleY = dataView.getFloat32(offset + 16, true);
+        const scaleZ = dataView.getFloat32(offset + 20, true);
 
-            // Read position (3 × float32)
-            const x = chunkData.readFloatLE(offset + 0);
-            const y = chunkData.readFloatLE(offset + 4);
-            const z = chunkData.readFloatLE(offset + 8);
+        // Read color and opacity (4 × uint8)
+        const red = fileBuffer[offset + 24];
+        const green = fileBuffer[offset + 25];
+        const blue = fileBuffer[offset + 26];
+        const opacity = fileBuffer[offset + 27];
 
-            // Read scale (3 × float32)
-            const scaleX = chunkData.readFloatLE(offset + 12);
-            const scaleY = chunkData.readFloatLE(offset + 16);
-            const scaleZ = chunkData.readFloatLE(offset + 20);
+        // Read rotation quaternion (4 × uint8)
+        const rot0 = fileBuffer[offset + 28];
+        const rot1 = fileBuffer[offset + 29];
+        const rot2 = fileBuffer[offset + 30];
+        const rot3 = fileBuffer[offset + 31];
 
-            // Read color and opacity (4 × uint8)
-            const red = chunkData.readUInt8(offset + 24);
-            const green = chunkData.readUInt8(offset + 25);
-            const blue = chunkData.readUInt8(offset + 26);
-            const opacity = chunkData.readUInt8(offset + 27);
+        // Store position
+        (columns[0].data as Float32Array)[splatIndex] = x;
+        (columns[1].data as Float32Array)[splatIndex] = y;
+        (columns[2].data as Float32Array)[splatIndex] = z;
 
-            // Read rotation quaternion (4 × uint8)
-            const rot0 = chunkData.readUInt8(offset + 28);
-            const rot1 = chunkData.readUInt8(offset + 29);
-            const rot2 = chunkData.readUInt8(offset + 30);
-            const rot3 = chunkData.readUInt8(offset + 31);
+        // Store scale (convert from linear in .splat to log scale for internal use)
+        (columns[3].data as Float32Array)[splatIndex] = Math.log(scaleX);
+        (columns[4].data as Float32Array)[splatIndex] = Math.log(scaleY);
+        (columns[5].data as Float32Array)[splatIndex] = Math.log(scaleZ);
 
-            // Store position
-            (columns[0].data as Float32Array)[splatIndex] = x;
-            (columns[1].data as Float32Array)[splatIndex] = y;
-            (columns[2].data as Float32Array)[splatIndex] = z;
+        // Store color (convert from uint8 back to spherical harmonics)
+        const SH_C0 = 0.28209479177387814;
+        (columns[6].data as Float32Array)[splatIndex] = (red / 255.0 - 0.5) / SH_C0;
+        (columns[7].data as Float32Array)[splatIndex] = (green / 255.0 - 0.5) / SH_C0;
+        (columns[8].data as Float32Array)[splatIndex] = (blue / 255.0 - 0.5) / SH_C0;
 
-            // Store scale (convert from linear in .splat to log scale for internal use)
-            (columns[3].data as Float32Array)[splatIndex] = Math.log(scaleX);
-            (columns[4].data as Float32Array)[splatIndex] = Math.log(scaleY);
-            (columns[5].data as Float32Array)[splatIndex] = Math.log(scaleZ);
+        // Store opacity (convert from uint8 to float and apply inverse sigmoid)
+        const epsilon = 1e-6;
+        const normalizedOpacity = Math.max(epsilon, Math.min(1.0 - epsilon, opacity / 255.0));
+        (columns[9].data as Float32Array)[splatIndex] = Math.log(normalizedOpacity / (1.0 - normalizedOpacity));
 
-            // Store color (convert from uint8 back to spherical harmonics)
-            const SH_C0 = 0.28209479177387814;
-            (columns[6].data as Float32Array)[splatIndex] = (red / 255.0 - 0.5) / SH_C0;
-            (columns[7].data as Float32Array)[splatIndex] = (green / 255.0 - 0.5) / SH_C0;
-            (columns[8].data as Float32Array)[splatIndex] = (blue / 255.0 - 0.5) / SH_C0;
+        // Store rotation quaternion (convert from uint8 [0,255] to float [-1,1] and normalize)
+        const rot0Norm = (rot0 / 255.0) * 2.0 - 1.0;
+        const rot1Norm = (rot1 / 255.0) * 2.0 - 1.0;
+        const rot2Norm = (rot2 / 255.0) * 2.0 - 1.0;
+        const rot3Norm = (rot3 / 255.0) * 2.0 - 1.0;
 
-            // Store opacity (convert from uint8 to float and apply inverse sigmoid)
-            const epsilon = 1e-6;
-            const normalizedOpacity = Math.max(epsilon, Math.min(1.0 - epsilon, opacity / 255.0));
-            (columns[9].data as Float32Array)[splatIndex] = Math.log(normalizedOpacity / (1.0 - normalizedOpacity));
-
-            // Store rotation quaternion (convert from uint8 [0,255] to float [-1,1] and normalize)
-            const rot0Norm = (rot0 / 255.0) * 2.0 - 1.0;
-            const rot1Norm = (rot1 / 255.0) * 2.0 - 1.0;
-            const rot2Norm = (rot2 / 255.0) * 2.0 - 1.0;
-            const rot3Norm = (rot3 / 255.0) * 2.0 - 1.0;
-
-            // Normalize quaternion
-            const length = Math.sqrt(rot0Norm * rot0Norm + rot1Norm * rot1Norm + rot2Norm * rot2Norm + rot3Norm * rot3Norm);
-            if (length > 0) {
-                (columns[10].data as Float32Array)[splatIndex] = rot0Norm / length;
-                (columns[11].data as Float32Array)[splatIndex] = rot1Norm / length;
-                (columns[12].data as Float32Array)[splatIndex] = rot2Norm / length;
-                (columns[13].data as Float32Array)[splatIndex] = rot3Norm / length;
-            } else {
-                // Default to identity quaternion if invalid
-                (columns[10].data as Float32Array)[splatIndex] = 0.0;
-                (columns[11].data as Float32Array)[splatIndex] = 0.0;
-                (columns[12].data as Float32Array)[splatIndex] = 0.0;
-                (columns[13].data as Float32Array)[splatIndex] = 1.0;
-            }
+        // Normalize quaternion
+        const length = Math.sqrt(rot0Norm * rot0Norm + rot1Norm * rot1Norm + rot2Norm * rot2Norm + rot3Norm * rot3Norm);
+        if (length > 0) {
+            (columns[10].data as Float32Array)[splatIndex] = rot0Norm / length;
+            (columns[11].data as Float32Array)[splatIndex] = rot1Norm / length;
+            (columns[12].data as Float32Array)[splatIndex] = rot2Norm / length;
+            (columns[13].data as Float32Array)[splatIndex] = rot3Norm / length;
+        } else {
+            // Default to identity quaternion if invalid
+            (columns[10].data as Float32Array)[splatIndex] = 0.0;
+            (columns[11].data as Float32Array)[splatIndex] = 0.0;
+            (columns[12].data as Float32Array)[splatIndex] = 0.0;
+            (columns[13].data as Float32Array)[splatIndex] = 1.0;
         }
     }
 

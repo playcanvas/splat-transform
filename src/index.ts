@@ -12,6 +12,7 @@ import { enumerateAdapters } from './gpu/gpu-device';
 import { NodeFileSystem } from './node-file-system';
 import { ProcessAction, processDataTable } from './process';
 import { getInputFormat, readFile } from './read';
+import { NodeReadFileSystem } from './serialize/read/node-source';
 import { Options } from './types';
 import { logger } from './utils/logger';
 import { getOutputFormat, writeFile } from './write';
@@ -423,6 +424,9 @@ const main = async () => {
     }
 
     try {
+        // Create file system for reading (reused across all input files)
+        const nodeFs = new NodeReadFileSystem();
+
         // read, filter, process input files
         const inputDataTables = (await Promise.all(inputArgs.map(async (inputArg) => {
             // extract params
@@ -433,11 +437,13 @@ const main = async () => {
             // read input
             const filename = resolve(inputArg.filename);
             const inputFormat = getInputFormat(filename);
+
             const dataTables = await readFile({
                 filename,
                 inputFormat,
                 options,
-                params
+                params,
+                fileSystem: nodeFs
             });
 
             for (let i = 0; i < dataTables.length; ++i) {

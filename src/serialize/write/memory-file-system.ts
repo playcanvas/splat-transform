@@ -1,4 +1,4 @@
-import { FileSystem, Writer } from './file-system';
+import { type FileSystem, type Writer } from './file-system';
 
 // write data to a memory buffer
 class MemoryWriter implements Writer {

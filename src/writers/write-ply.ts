@@ -1,5 +1,5 @@
 import { PlyData } from '../readers/read-ply';
-import { FileSystem } from '../serialize/file-system';
+import { type FileSystem } from '../serialize/write';
 
 const columnTypeToPlyType = (type: string): string => {
     switch (type) {

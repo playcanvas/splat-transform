@@ -1,5 +1,5 @@
 import { DataTable } from '../data-table/data-table';
-import { FileSystem } from '../serialize/file-system';
+import { type FileSystem } from '../serialize/write';
 
 type WriteCSVOptions = {
     filename: string;

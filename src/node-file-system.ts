@@ -2,7 +2,7 @@ import { randomBytes } from 'crypto';
 import { mkdir, open, rename, FileHandle } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 
-import { FileSystem, Writer } from './serialize/file-system';
+import { type FileSystem, type Writer } from './serialize/write';
 
 // write data to a file stream
 class FileWriter implements Writer {

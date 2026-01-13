@@ -1,9 +1,6 @@
-import { Buffer } from 'node:buffer';
-import { FileHandle, open } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-
 import { Column, DataTable } from '../data-table/data-table';
-import { ZipReader } from '../serialize/zip-reader';
+import { dirname, join } from '../serialize/path-utils';
+import { ReadFileSystem, readFile } from '../serialize/read';
 import { WebPCodec } from '../utils/webp-codec';
 
 type Meta = {
@@ -14,13 +11,6 @@ type Meta = {
     quats: { files: string[] };
     sh0: { codebook: number[]; files: string[] };
     shN?: { count: number; bands: number; codebook: number[]; files: string[] };
-};
-
-const readFileFully = async (fh: FileHandle): Promise<Uint8Array> => {
-    const stat = await fh.stat();
-    const buf = Buffer.alloc(stat.size);
-    await fh.read(buf, 0, stat.size, 0);
-    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
 };
 
 const decodeMeans = (lo: Uint8Array, hi: Uint8Array, count: number) => {
@@ -76,36 +66,18 @@ const sigmoidInv = (y: number) => {
     return Math.log(e / (1 - e));
 };
 
-const readSog = async (fileHandle: FileHandle, sourceName?: string): Promise<DataTable> => {
+/**
+ * Read a SOG file from a ReadFileSystem.
+ * @param fileSystem - The file system to read from
+ * @param filename - Path to meta.json (relative paths resolved from its directory)
+ * @returns DataTable with Gaussian splat data
+ */
+const readSog = async (fileSystem: ReadFileSystem, filename: string): Promise<DataTable> => {
     const decoder = await WebPCodec.create();
-    const stat = await fileHandle.stat();
 
-    // Helper to read from bundle or folder
-    let entries: Map<string, Uint8Array> | null = null;
-    const lowerName = (sourceName ?? '').toLowerCase();
-    if (lowerName.endsWith('.sog')) {
-        const zr = new ZipReader(fileHandle, stat.size);
-        const list = await zr.list();
-        entries = new Map();
-        for (const e of list) {
-            const data = await e.readData();
-            entries.set(e.name, data);
-        }
-    }
-
-    const load = async (name: string): Promise<Uint8Array> => {
-        if (entries) {
-            const v = entries.get(name);
-            if (!v) throw new Error(`Missing entry '${name}' in sog`);
-            return v;
-        }
-        const fh = await open(join(dirname(sourceName ?? ''), name), 'r');
-        try {
-            return await readFileFully(fh);
-        } finally {
-            await fh.close();
-        }
-    };
+    // Resolve paths relative to the meta.json directory
+    const baseDir = dirname(filename);
+    const load = (name: string) => readFile(fileSystem, baseDir ? join(baseDir, name) : name);
 
     // meta.json
     const metaBytes = await load('meta.json');
@@ -190,7 +162,6 @@ const readSog = async (fileHandle: FileHandle, sourceName?: string): Promise<Dat
     const { rgba: c0, width: cw, height: ch } = decoder.decodeRGBA(sh0Webp);
     if (cw * ch < count) throw new Error('SOG sh0 texture too small for count');
     const cCode = new Float32Array(meta.sh0.codebook);
-    const SH_C0 = 0.28209479177387814;
     const dc0 = columns[6].data as Float32Array;
     const dc1 = columns[7].data as Float32Array;
     const dc2 = columns[8].data as Float32Array;
