@@ -1,6 +1,6 @@
-import { open } from 'node:fs/promises';
-
 import { DataTable } from './data-table/data-table';
+import { ReadFileSystem } from './io/read';
+import { ZipReadFileSystem } from './io/read/zip-file-system';
 import { readKsplat } from './readers/read-ksplat';
 import { readLcc } from './readers/read-lcc';
 import { readMjs } from './readers/read-mjs';
@@ -40,10 +40,11 @@ type ReadFileOptions = {
     inputFormat: InputFormat;
     options: Options;
     params: Param[];
+    fileSystem: ReadFileSystem;
 };
 
 const readFile = async (readFileOptions: ReadFileOptions): Promise<DataTable[]> => {
-    const { filename, inputFormat, options, params } = readFileOptions;
+    const { filename, inputFormat, options, params, fileSystem } = readFileOptions;
 
     let result: DataTable[];
 
@@ -51,24 +52,38 @@ const readFile = async (readFileOptions: ReadFileOptions): Promise<DataTable[]> 
 
     if (inputFormat === 'mjs') {
         result = [await readMjs(filename, params)];
-    } else {
-        const inputFile = await open(filename, 'r');
-
-        if (inputFormat === 'ksplat') {
-            result = [await readKsplat(inputFile)];
-        } else if (inputFormat === 'splat') {
-            result = [await readSplat(inputFile)];
-        } else if (inputFormat === 'sog') {
-            result = [await readSog(inputFile, filename)];
-        } else if (inputFormat === 'ply') {
-            result = [await readPly(inputFile)];
-        } else if (inputFormat === 'spz') {
-            result = [await readSpz(inputFile)];
-        } else if (inputFormat === 'lcc') {
-            result = await readLcc(inputFile, filename, options);
+    } else if (inputFormat === 'sog') {
+        const lowerFilename = filename.toLowerCase();
+        if (lowerFilename.endsWith('.sog')) {
+            const source = await fileSystem.createSource(filename);
+            const zipFs = new ZipReadFileSystem(source);
+            try {
+                result = [await readSog(zipFs, 'meta.json')];
+            } finally {
+                zipFs.close();
+            }
+        } else {
+            result = [await readSog(fileSystem, filename)];
         }
-
-        await inputFile.close();
+    } else if (inputFormat === 'lcc') {
+        // LCC uses ReadFileSystem for multi-file access
+        result = await readLcc(fileSystem, filename, options);
+    } else {
+        // All other formats use ReadSource
+        const source = await fileSystem.createSource(filename);
+        try {
+            if (inputFormat === 'ply') {
+                result = [await readPly(source)];
+            } else if (inputFormat === 'ksplat') {
+                result = [await readKsplat(source)];
+            } else if (inputFormat === 'splat') {
+                result = [await readSplat(source)];
+            } else if (inputFormat === 'spz') {
+                result = [await readSpz(source)];
+            }
+        } finally {
+            source.close();
+        }
     }
 
     return result;

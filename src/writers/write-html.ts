@@ -4,9 +4,7 @@ import { html, css, js } from '@playcanvas/supersplat-viewer';
 
 import { writeSog } from './write-sog';
 import { DataTable } from '../data-table/data-table';
-import { FileSystem } from '../serialize/file-system';
-import { MemoryFileSystem } from '../serialize/memory-file-system';
-import { writeFile } from '../serialize/write-helpers';
+import { type FileSystem, MemoryFileSystem, writeFile } from '../io/write';
 import { toBase64 } from '../utils/base64';
 
 type ViewerSettings = {

@@ -9,7 +9,7 @@ import { version } from '../package.json';
 import { combine } from './data-table/combine';
 import { DataTable } from './data-table/data-table';
 import { enumerateAdapters } from './gpu/gpu-device';
-import { NodeFileSystem } from './node-file-system';
+import { NodeFileSystem, NodeReadFileSystem } from './node-file-system';
 import { ProcessAction, processDataTable } from './process';
 import { getInputFormat, readFile } from './read';
 import { Options } from './types';
@@ -423,6 +423,9 @@ const main = async () => {
     }
 
     try {
+        // Create file system for reading (reused across all input files)
+        const nodeFs = new NodeReadFileSystem();
+
         // read, filter, process input files
         const inputDataTables = (await Promise.all(inputArgs.map(async (inputArg) => {
             // extract params
@@ -433,11 +436,16 @@ const main = async () => {
             // read input
             const filename = resolve(inputArg.filename);
             const inputFormat = getInputFormat(filename);
+
+            // For mjs format, convert to file:// URL (Node.js-specific)
+            const readFilename = inputFormat === 'mjs' ? `file://${filename}` : filename;
+
             const dataTables = await readFile({
-                filename,
+                filename: readFilename,
                 inputFormat,
                 options,
-                params
+                params,
+                fileSystem: nodeFs
             });
 
             for (let i = 0; i < dataTables.length; ++i) {

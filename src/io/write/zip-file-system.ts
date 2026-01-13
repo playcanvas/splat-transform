@@ -1,5 +1,5 @@
 import { Crc } from './crc';
-import { FileSystem, Writer } from './file-system';
+import { type FileSystem, type Writer } from './file-system';
 
 // https://gist.github.com/rvaiya/4a2192df729056880a027789ae3cd4b7
 

@@ -1,7 +1,5 @@
-import { Buffer } from 'node:buffer';
-import { FileHandle } from 'node:fs/promises';
-
 import { Column, DataTable } from '../data-table/data-table';
+import { ReadSource } from '../io/read';
 
 // Format configuration for different compression modes
 interface CompressionConfig {
@@ -92,13 +90,10 @@ const COMPRESSION_MODES: CompressionConfig[] = [
 
 const HARMONICS_COMPONENT_COUNT = [0, 9, 24, 45];
 
-const readKsplat = async (fileHandle: FileHandle): Promise<DataTable> => {
-    const stats = await fileHandle.stat();
-    const totalSize = stats.size;
-
+const readKsplat = async (source: ReadSource): Promise<DataTable> => {
     // Load complete file
-    const fileBuffer = Buffer.alloc(totalSize);
-    await fileHandle.read(fileBuffer, 0, totalSize, 0);
+    const fileBuffer = await source.read().readAll();
+    const totalSize = fileBuffer.length;
 
     const MAIN_HEADER_SIZE = 4096;
     const SECTION_HEADER_SIZE = 1024;

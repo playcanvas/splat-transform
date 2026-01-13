@@ -1,22 +1,16 @@
-import { Buffer } from 'node:buffer';
-import { FileHandle } from 'node:fs/promises';
-
 import { Column, DataTable } from '../data-table/data-table';
+import { ReadSource } from '../io/read';
 
 // See https://github.com/nianticlabs/spz for reference implementation
 
-const decompressGZIP = async (fileHandle: FileHandle): Promise<Buffer<ArrayBuffer>> => {
-    const stats = await fileHandle.stat();
-    const zippedSize = stats.size;
-    const fileBuffer = Buffer.alloc(zippedSize);
-    await fileHandle.read(fileBuffer, 0, zippedSize, 0);
-
-    const blob = new Blob([fileBuffer.buffer], { type: 'application/gzip' });
+const decompressGZIP = async (data: Uint8Array): Promise<Uint8Array> => {
+    // Convert to ArrayBuffer slice to satisfy Blob constructor type requirements
+    const arrayBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+    const blob = new Blob([arrayBuffer], { type: 'application/gzip' });
     const ds = new DecompressionStream('gzip');
     const decompressionStream = blob.stream().pipeThrough(ds);
-    const arrayBuffer = await new Response(decompressionStream).arrayBuffer();
-
-    return Buffer.from(arrayBuffer);
+    const decompressed = await new Response(decompressionStream).arrayBuffer();
+    return new Uint8Array(decompressed);
 };
 
 // Coefficient used by niantic labs spz to have better results with Spherical harmonics.
@@ -38,20 +32,18 @@ function getFixed24(positionsView: DataView, elementIndex: number, memberIndex: 
 
 const HARMONICS_COMPONENT_COUNT = [0, 9, 24, 45];
 
-const readSpz = async (fileHandle: FileHandle): Promise<DataTable> => {
-    // Load magic
+const readSpz = async (source: ReadSource): Promise<DataTable> => {
+    // Load complete file
+    let fileBuffer = await source.read().readAll();
+
+    // Check if file is GZip compressed
     const magicSize = 4;
-    let fileBuffer = Buffer.alloc(magicSize);
-    await fileHandle.read(fileBuffer, 0, magicSize, 0);
-    let magicView = new DataView(fileBuffer.buffer, 0, magicSize);
+    let magicView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset, magicSize);
 
     // If file is GZip compressed, decompress it first.
-    let isGZipped = false;
-    if (magicView.getUint16(0) === 0x1F8B) { // '1F 8B' is the magic for gzip: https://en.wikipedia.org/wiki/Gzip
-        isGZipped = true;
-        fileBuffer = await decompressGZIP(fileHandle);
-
-        magicView = new DataView(fileBuffer.buffer, 0, magicSize);
+    if (magicView.getUint16(0) === 0x1F8B) { // '1F 8B' is the magic for gzip
+        fileBuffer = await decompressGZIP(fileBuffer);
+        magicView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset, magicSize);
     }
 
     const magic = magicView.getUint32(0, true);
@@ -60,16 +52,13 @@ const readSpz = async (fileHandle: FileHandle): Promise<DataTable> => {
     }
 
     const HEADER_SIZE = 16;
-    const totalSize = fileBuffer.buffer.byteLength;
+    const totalSize = fileBuffer.length;
 
     if (totalSize < HEADER_SIZE) {
         throw new Error('File too small to be valid .spz format');
     }
 
     // Parse header
-    if (isGZipped === false) {
-        await fileHandle.read(fileBuffer, 0, totalSize, 0);
-    }
     const header = new DataView(fileBuffer.buffer, fileBuffer.byteOffset, HEADER_SIZE);
 
     const version = header.getUint32(4, true);
@@ -80,8 +69,6 @@ const readSpz = async (fileHandle: FileHandle): Promise<DataTable> => {
     const numSplats = header.getUint32(8, true);
     const shDegree = header.getUint8(12);
     const fractionalBits = header.getUint8(13);
-    const unused_flags = header.getUint8(14); // Trained with antialiasing or not
-    const unused_reserved = header.getUint8(15); // padding
 
     const positionsByteSize = numSplats * 3 * 3; // 3 * 24bit values
     const alphasByteSize = numSplats; // u8
@@ -89,14 +76,14 @@ const readSpz = async (fileHandle: FileHandle): Promise<DataTable> => {
     const scalesByteSize = numSplats * 3; // u8 * 3
     const rotationsByteSize = numSplats * 3; // u8 * 3
     const harmonicsComponentCount = HARMONICS_COMPONENT_COUNT[shDegree];
-    const shByteSize =  numSplats * harmonicsComponentCount;
+    const shByteSize = numSplats * harmonicsComponentCount;
 
-    const positionsView = new DataView(fileBuffer.buffer, HEADER_SIZE, positionsByteSize);
-    const alphasView =    new DataView(fileBuffer.buffer, HEADER_SIZE + positionsByteSize, alphasByteSize);
-    const colorsView =    new DataView(fileBuffer.buffer, HEADER_SIZE + positionsByteSize + alphasByteSize, colorsByteSize);
-    const scalesView =    new DataView(fileBuffer.buffer, HEADER_SIZE + positionsByteSize + alphasByteSize + colorsByteSize, scalesByteSize);
-    const rotationsView = new DataView(fileBuffer.buffer, HEADER_SIZE + positionsByteSize + alphasByteSize + colorsByteSize + scalesByteSize, rotationsByteSize);
-    const shView =        new DataView(fileBuffer.buffer, HEADER_SIZE + positionsByteSize + alphasByteSize + colorsByteSize + scalesByteSize + rotationsByteSize, shByteSize);
+    const positionsView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset + HEADER_SIZE, positionsByteSize);
+    const alphasView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset + HEADER_SIZE + positionsByteSize, alphasByteSize);
+    const colorsView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset + HEADER_SIZE + positionsByteSize + alphasByteSize, colorsByteSize);
+    const scalesView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset + HEADER_SIZE + positionsByteSize + alphasByteSize + colorsByteSize, scalesByteSize);
+    const rotationsView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset + HEADER_SIZE + positionsByteSize + alphasByteSize + colorsByteSize + scalesByteSize, rotationsByteSize);
+    const shView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset + HEADER_SIZE + positionsByteSize + alphasByteSize + colorsByteSize + scalesByteSize + rotationsByteSize, shByteSize);
 
     // Create columns for the standard Gaussian splat data
     const columns = [
@@ -141,9 +128,9 @@ const readSpz = async (fileHandle: FileHandle): Promise<DataTable> => {
         const scaleZ = scalesView.getUint8(splatIndex * 3 + 2) / 16.0 - 10.0;
 
         // Read color and opacity (4 × uint8)
-        const red =   colorsView.getUint8(splatIndex * 3 + 0);
+        const red = colorsView.getUint8(splatIndex * 3 + 0);
         const green = colorsView.getUint8(splatIndex * 3 + 1);
-        const blue =  colorsView.getUint8(splatIndex * 3 + 2);
+        const blue = colorsView.getUint8(splatIndex * 3 + 2);
         const opacity = alphasView.getUint8(splatIndex);
 
         // Read rotation quaternion (4 × uint8)
@@ -161,10 +148,10 @@ const readSpz = async (fileHandle: FileHandle): Promise<DataTable> => {
             let sum_squares = 0;
             for (let i = 3; i >= 0; --i) {
                 if (i !== largestRotIndex) {
-                    const mag    = packedRotation & c_mask;
+                    const mag = packedRotation & c_mask;
                     const negbit = (packedRotation >> 9) & 1;
                     packedRotation >>= 10;
-                    rotation[i]     = Math.SQRT1_2 * (mag) / c_mask;
+                    rotation[i] = Math.SQRT1_2 * (mag) / c_mask;
                     if (negbit === 1) {
                         rotation[i] = -rotation[i];
                     }
