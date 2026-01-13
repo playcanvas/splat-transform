@@ -1,5 +1,5 @@
 import { Column, DataTable } from '../data-table/data-table';
-import { ReadSource } from '../serialize/read';
+import { ReadSource } from '../io/read';
 
 // Format configuration for different compression modes
 interface CompressionConfig {

@@ -1,5 +1,5 @@
 import { Column, DataTable } from '../data-table/data-table';
-import { ReadSource } from '../serialize/read';
+import { ReadSource } from '../io/read';
 
 // See https://github.com/nianticlabs/spz for reference implementation
 

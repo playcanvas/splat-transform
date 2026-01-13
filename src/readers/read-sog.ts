@@ -1,6 +1,5 @@
 import { Column, DataTable } from '../data-table/data-table';
-import { dirname, join } from '../serialize/path-utils';
-import { ReadFileSystem, readFile } from '../serialize/read';
+import { dirname, join, ReadFileSystem, readFile } from '../io/read';
 import { WebPCodec } from '../utils/webp-codec';
 
 type Meta = {

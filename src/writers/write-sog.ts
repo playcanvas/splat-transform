@@ -4,7 +4,7 @@ import { version } from '../../package.json';
 import { Column, DataTable } from '../data-table/data-table';
 import { sortMortonOrder } from '../data-table/morton-order';
 import { createDevice, enumerateAdapters, GpuDevice } from '../gpu/gpu-device';
-import { type FileSystem, writeFile, ZipFileSystem } from '../serialize/write';
+import { type FileSystem, writeFile, ZipFileSystem } from '../io/write';
 import { kmeans } from '../spatial/k-means';
 import { logger } from '../utils/logger';
 import { sigmoid } from '../utils/math';

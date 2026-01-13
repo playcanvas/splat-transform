@@ -1,7 +1,7 @@
 import { Vec3 } from 'playcanvas';
 
 import { Column, DataTable } from '../data-table/data-table';
-import { dirname, join, ReadFileSystem, ReadSource, readFile } from '../serialize/read';
+import { dirname, join, ReadFileSystem, ReadSource, readFile } from '../io/read';
 import { Options } from '../types';
 
 const kSH_C0 = 0.28209479177387814;

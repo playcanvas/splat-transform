@@ -1,4 +1,6 @@
 import { DataTable } from './data-table/data-table';
+import { ReadFileSystem } from './io/read';
+import { ZipReadFileSystem } from './io/read/zip-file-system';
 import { readKsplat } from './readers/read-ksplat';
 import { readLcc } from './readers/read-lcc';
 import { readMjs } from './readers/read-mjs';
@@ -6,8 +8,6 @@ import { readPly } from './readers/read-ply';
 import { readSog } from './readers/read-sog';
 import { readSplat } from './readers/read-splat';
 import { readSpz } from './readers/read-spz';
-import { ReadFileSystem } from './serialize/read';
-import { ZipReadFileSystem } from './serialize/read/zip-file-system';
 import { Options, Param } from './types';
 import { logger } from './utils/logger';
 

@@ -2,7 +2,7 @@
 export { ReadStream, type ReadSource, type ReadFileSystem, type ProgressCallback, readFile } from './file-system';
 
 // Platform-agnostic path utilities
-export { dirname, join } from '../path-utils';
+export { dirname, join } from '../../utils/path';
 
 // Filesystem implementations
 export { MemoryReadFileSystem } from './memory-file-system';

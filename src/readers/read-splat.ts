@@ -1,5 +1,5 @@
 import { Column, DataTable } from '../data-table/data-table';
-import { ReadSource } from '../serialize/read';
+import { ReadSource } from '../io/read';
 
 const readSplat = async (source: ReadSource): Promise<DataTable> => {
     // Load complete file
