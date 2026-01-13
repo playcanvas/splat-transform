@@ -3,12 +3,12 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { exit, hrtime } from 'node:process';
 import { parseArgs } from 'node:util';
 
-import { Vec3 } from 'playcanvas';
+import { GraphicsDevice, Vec3 } from 'playcanvas';
 
 import { version } from '../package.json';
 import { combine } from './data-table/combine';
 import { DataTable } from './data-table/data-table';
-import { enumerateAdapters } from './gpu/gpu-device';
+import { createDevice, enumerateAdapters } from './node-device';
 import { NodeFileSystem, NodeReadFileSystem } from './node-file-system';
 import { ProcessAction, processDataTable } from './process';
 import { getInputFormat, readFile } from './read';
@@ -482,13 +482,37 @@ const main = async () => {
 
         logger.info(`Loaded ${dataTable.numRows} gaussians`);
 
+        // Create device creator function with caching
+        // deviceIdx: -1 = auto, -2 = CPU, 0+ = specific GPU index
+        let cachedDevice: GraphicsDevice | undefined;
+        const deviceCreator = options.deviceIdx === -2 ? undefined : async () => {
+            if (cachedDevice) {
+                return cachedDevice;
+            }
+
+            let adapterName: string | undefined;
+            if (options.deviceIdx >= 0) {
+                const adapters = await enumerateAdapters();
+                const adapter = adapters[options.deviceIdx];
+                if (adapter) {
+                    adapterName = adapter.name;
+                } else {
+                    logger.warn(`GPU adapter index ${options.deviceIdx} not found, using default`);
+                }
+            }
+
+            cachedDevice = await createDevice(adapterName);
+            return cachedDevice;
+        };
+
         // write file
         await writeFile({
             filename: outputFilename,
             outputFormat,
             dataTable,
             envDataTable,
-            options
+            options,
+            createDevice: deviceCreator
         }, new NodeFileSystem());
     } catch (err) {
         // handle errors

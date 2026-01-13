@@ -12,10 +12,9 @@ import {
     Shader,
     StorageBuffer,
     UniformBufferFormat,
-    UniformFormat
+    UniformFormat,
+    GraphicsDevice
 } from 'playcanvas';
-
-import { GpuDevice } from './gpu-device.js';
 import { DataTable } from '../data-table/data-table.js';
 
 const clusterWgsl = (numColumns: number, useF16: boolean) => {
@@ -144,8 +143,7 @@ class GpuClustering {
     execute: (points: DataTable, centroids: DataTable, labels: Uint32Array) => Promise<void>;
     destroy: () => void;
 
-    constructor(gpuDevice: GpuDevice, numColumns: number, numCentroids: number) {
-        const device = gpuDevice.app.graphicsDevice;
+    constructor(device: GraphicsDevice, numColumns: number, numCentroids: number) {
 
         // Check if device supports f16
         const useF16 = !!('supportsShaderF16' in device && device.supportsShaderF16);

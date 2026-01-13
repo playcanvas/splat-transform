@@ -7,7 +7,7 @@ import { writeCsv } from './writers/write-csv';
 import { writeHtml } from './writers/write-html';
 import { writeLod } from './writers/write-lod';
 import { writePly } from './writers/write-ply';
-import { writeSog } from './writers/write-sog';
+import { writeSog, type DeviceCreator } from './writers/write-sog';
 
 type OutputFormat = 'csv' | 'sog' | 'sog-bundle' | 'lod' | 'compressed-ply' | 'ply' | 'html' | 'html-bundle';
 
@@ -17,6 +17,7 @@ type WriteOptions = {
     dataTable: DataTable;
     envDataTable?: DataTable;
     options: Options;
+    createDevice?: DeviceCreator;
 };
 
 const getOutputFormat = (filename: string, options: Options): OutputFormat => {
@@ -42,7 +43,7 @@ const getOutputFormat = (filename: string, options: Options): OutputFormat => {
 };
 
 const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
-    const { filename, outputFormat, dataTable, envDataTable, options } = writeOptions;
+    const { filename, outputFormat, dataTable, envDataTable, options, createDevice } = writeOptions;
 
     logger.info(`writing '${filename}'...`);
 
@@ -58,7 +59,7 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
                 dataTable,
                 bundle: outputFormat === 'sog-bundle',
                 iterations: options.iterations,
-                deviceIdx: options.deviceIdx
+                createDevice
             }, fs);
             break;
         case 'lod':
@@ -67,7 +68,7 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
                 dataTable,
                 envDataTable,
                 iterations: options.iterations,
-                deviceIdx: options.deviceIdx,
+                createDevice,
                 chunkCount: options.lodChunkCount,
                 chunkExtent: options.lodChunkExtent
             }, fs);
@@ -95,7 +96,7 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
                 viewerSettingsJson: options.viewerSettingsJson,
                 bundle: outputFormat === 'html-bundle',
                 iterations: options.iterations,
-                deviceIdx: options.deviceIdx
+                createDevice
             }, fs);
             break;
     }

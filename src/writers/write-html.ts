@@ -2,7 +2,7 @@ import { dirname, basename, join } from 'node:path';
 
 import { html, css, js } from '@playcanvas/supersplat-viewer';
 
-import { writeSog } from './write-sog';
+import { writeSog, type DeviceCreator } from './write-sog';
 import { DataTable } from '../data-table/data-table';
 import { type FileSystem, MemoryFileSystem, writeFile } from '../io/write';
 import { toBase64 } from '../utils/base64';
@@ -27,11 +27,11 @@ type WriteHtmlOptions = {
     viewerSettingsJson?: any;
     bundle: boolean;
     iterations: number;
-    deviceIdx: number;
+    createDevice?: DeviceCreator;
 };
 
 const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
-    const { filename, dataTable, viewerSettingsJson, bundle, iterations, deviceIdx } = options;
+    const { filename, dataTable, viewerSettingsJson, bundle, iterations, createDevice } = options;
 
     const pad = (text: string, spaces: number) => {
         const whitespace = ' '.repeat(spaces);
@@ -68,7 +68,7 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
             dataTable,
             bundle: true,
             iterations,
-            deviceIdx
+            createDevice
         }, memoryFs);
 
         // get the memory buffer
@@ -100,7 +100,7 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
             dataTable,
             bundle: true,
             iterations,
-            deviceIdx
+            createDevice
         }, fs);
 
         // Write CSS file
