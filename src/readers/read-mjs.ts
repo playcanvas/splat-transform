@@ -7,16 +7,16 @@ type Generator = {
     getRow: (index: number, row: any) => void;
 };
 
-const readMjs = async (filename: string, params: Param[]): Promise<DataTable> => {
-    const module = await import(`file://${filename}`);
+const readMjs = async (moduleUrl: string, params: Param[]): Promise<DataTable> => {
+    const module = await import(moduleUrl);
     if (!module) {
-        throw new Error(`Failed to load module: ${filename}`);
+        throw new Error(`Failed to load module: ${moduleUrl}`);
     }
 
     const generator = (await module.Generator?.create(params)) as Generator;
 
     if (!generator) {
-        throw new Error(`Failed to create Generator instance: ${filename}`);
+        throw new Error(`Failed to create Generator instance: ${moduleUrl}`);
     }
 
     const columns: Column[] = generator.columnNames.map((name: string) => {

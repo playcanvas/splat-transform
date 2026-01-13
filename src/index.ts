@@ -437,8 +437,11 @@ const main = async () => {
             const filename = resolve(inputArg.filename);
             const inputFormat = getInputFormat(filename);
 
+            // For mjs format, convert to file:// URL (Node.js-specific)
+            const readFilename = inputFormat === 'mjs' ? `file://${filename}` : filename;
+
             const dataTables = await readFile({
-                filename,
+                filename: readFilename,
                 inputFormat,
                 options,
                 params,
