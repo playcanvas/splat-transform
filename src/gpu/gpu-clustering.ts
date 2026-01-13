@@ -15,6 +15,7 @@ import {
     UniformFormat,
     GraphicsDevice
 } from 'playcanvas';
+
 import { DataTable } from '../data-table/data-table.js';
 
 const clusterWgsl = (numColumns: number, useF16: boolean) => {

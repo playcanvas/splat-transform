@@ -129,6 +129,9 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     const height = Math.ceil(numRows / width / 4) * 4;
     const channels = 4;
 
+    // Initialize GPU device if a creator was provided
+    const gpuDevice = createDevice ? await createDevice() : undefined;
+
     // the layout function determines how the data is packed into the output texture.
     const layout = identity; // rectChunks;
 
@@ -352,9 +355,6 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     // convert and write attributes
     const meansMinMax = await writeMeans();
     await writeQuaternions();
-
-    // Initialize GPU device if a creator was provided
-    const gpuDevice = createDevice ? await createDevice() : undefined;
 
     const scalesCodebook = await writeScales();
     const colorsCodebook = await writeColors();
