@@ -1,19 +1,11 @@
 // Core interfaces and base classes
-export { ReadStream } from './read-stream';
-export { type ReadSource } from './read-source';
-export { type ReadFileSystem, type ProgressCallback, readFile } from './read-file-system';
+export { ReadStream, type ReadSource, type ReadFileSystem, type ProgressCallback, readFile } from './file-system';
 
 // Platform-agnostic path utilities
 export { dirname, join } from '../path-utils';
 
-// Memory source implementation
-export { MemoryReadStream, MemoryReadSource, MemoryReadFileSystem } from './memory-source';
-
-// Node.js file source implementation
-export { NodeReadStream, NodeReadSource, NodeReadFileSystem } from './node-source';
-
-// URL/fetch source implementation
-export { UrlReadStream, UrlReadSource, UrlReadFileSystem } from './url-source';
-
-// Zip filesystem implementation
-export { ZipReadFileSystem, ZipEntrySource, type ZipEntry } from './zip-read-file-system';
+// Filesystem implementations
+export { MemoryReadFileSystem } from './memory-file-system';
+export { NodeReadFileSystem } from '../../node-file-system';
+export { UrlReadFileSystem } from './url-file-system';
+export { ZipReadFileSystem } from './zip-file-system';

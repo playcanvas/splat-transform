@@ -7,7 +7,7 @@ import { readSog } from './readers/read-sog';
 import { readSplat } from './readers/read-splat';
 import { readSpz } from './readers/read-spz';
 import { ReadFileSystem } from './serialize/read';
-import { ZipReadFileSystem } from './serialize/read/zip-read-file-system';
+import { ZipReadFileSystem } from './serialize/read/zip-file-system';
 import { Options, Param } from './types';
 import { logger } from './utils/logger';
 

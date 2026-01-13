@@ -1,6 +1,4 @@
-import { ReadFileSystem, ProgressCallback } from './read-file-system';
-import { ReadSource } from './read-source';
-import { ReadStream } from './read-stream';
+import { type ReadFileSystem, type ProgressCallback, type ReadSource, ReadStream } from './file-system';
 
 /**
  * Metadata for a zip file entry.
@@ -390,4 +388,4 @@ class ZipReadFileSystem implements ReadFileSystem {
     }
 }
 
-export { ZipReadFileSystem, ZipEntrySource, type ZipEntry };
+export { ZipReadFileSystem };

@@ -1,6 +1,4 @@
-import { ReadFileSystem, ProgressCallback } from './read-file-system';
-import { ReadSource } from './read-source';
-import { ReadStream } from './read-stream';
+import { type ReadFileSystem, type ProgressCallback, type ReadSource, ReadStream } from './file-system';
 
 /**
  * ReadStream implementation for reading from memory buffers.
@@ -104,4 +102,4 @@ class MemoryReadFileSystem implements ReadFileSystem {
     }
 }
 
-export { MemoryReadStream, MemoryReadSource, MemoryReadFileSystem };
+export { MemoryReadFileSystem };
