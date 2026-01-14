@@ -5,6 +5,9 @@ import { parseArgs } from 'node:util';
 
 import { GraphicsDevice, Vec3 } from 'playcanvas';
 
+import { createDevice, enumerateAdapters } from './node-device';
+import { NodeFileSystem, NodeReadFileSystem } from './node-file-system';
+import { version } from '../../package.json';
 import {
     combine,
     DataTable,
@@ -29,11 +32,6 @@ interface CliOptions extends LibOptions {
     listGpus: boolean;
     deviceIdx: number;  // -1 = auto, -2 = CPU, 0+ = GPU index
 }
-
-import { version } from '../../package.json';
-import { createDevice, enumerateAdapters } from './node-device';
-import { NodeFileSystem, NodeReadFileSystem } from './node-file-system';
-
 
 const fileExists = async (filename: string) => {
     try {
@@ -372,7 +370,7 @@ const main = async () => {
         warn: (...args) => console.warn(...args),
         error: (...args) => console.error(...args),
         debug: (...args) => console.log(...args),
-        progress: (text) => process.stdout.write(text)
+        progress: text => process.stdout.write(text)
     });
 
     // configure logger

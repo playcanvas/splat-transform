@@ -1,5 +1,3 @@
-import { dirname, resolve } from '../utils/path';
-
 import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { writeSog, type DeviceCreator } from './write-sog.js';
@@ -8,6 +6,7 @@ import { sortMortonOrder } from '../data-table/morton-order';
 import { type FileSystem } from '../io/write';
 import { BTreeNode, BTree } from '../spatial/b-tree';
 import { logger } from '../utils/logger';
+import { dirname, resolve } from '../utils/path';
 
 
 type Aabb = {
