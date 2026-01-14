@@ -1,10 +1,10 @@
 import { html, css, js } from '@playcanvas/supersplat-viewer';
+import { basename, dirname, join } from 'pathe';
 
 import { writeSog, type DeviceCreator } from './write-sog';
 import { DataTable } from '../data-table/data-table';
 import { type FileSystem, MemoryFileSystem, writeFile } from '../io/write';
 import { toBase64 } from '../utils/base64';
-import { basename, dirname, join } from '../utils/path';
 
 type ViewerSettings = {
     camera?: {
