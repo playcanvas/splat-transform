@@ -313,13 +313,13 @@ USAGE
 
   • Input files become the working set; ACTIONS are applied in order.
   • The last file is the output; actions after it modify the final result.
-  • Use /dev/null (Unix) or nul (Windows) as output to discard file output.
+  • Use 'null' as output to discard file output.
 
 SUPPORTED INPUTS
     .ply   .compressed.ply   .sog   meta.json   .ksplat   .splat   .spz   .mjs   .lcc
 
 SUPPORTED OUTPUTS
-    .ply   .compressed.ply   .sog   meta.json   .csv   .html   /dev/null   nul
+    .ply   .compressed.ply   .sog   meta.json   .csv   .html   null
 
 ACTIONS (can be repeated, in any order)
     -t, --translate        <x,y,z>          Translate Gaussians by (x, y, z)
@@ -369,7 +369,7 @@ EXAMPLES
     splat-transform bunny.ply --summary output.ply
 
     # Print summary without writing a file (discard output)
-    splat-transform bunny.ply --summary /dev/null
+    splat-transform bunny.ply -m null
 `;
 
 const main = async () => {
@@ -431,10 +431,8 @@ const main = async () => {
 
     const outputFilename = resolve(outputArg.filename);
 
-    // Check for null output (/dev/null on Unix, nul on Windows)
-    const isNullOutput = outputFilename === '/dev/null' ||
-                         outputFilename.toLowerCase() === 'nul' ||
-                         outputFilename.toLowerCase().endsWith('\\nul');
+    // Check for null output (discard file writing)
+    const isNullOutput = outputArg.filename.toLowerCase() === 'null';
 
     let outputFormat: ReturnType<typeof getOutputFormat> | null = null;
 

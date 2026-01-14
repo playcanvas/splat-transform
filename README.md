@@ -36,7 +36,7 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 **Key points:**
 - Input files become the working set; ACTIONS are applied in order
 - The last file is the output; actions after it modify the final result
-- Use `/dev/null` (Unix) or `nul` (Windows) as output to discard file output
+- Use `null` as output to discard file output
 
 ## Supported Formats
 
@@ -181,7 +181,7 @@ Generate per-column statistics for data analysis or test validation:
 splat-transform input.ply --summary output.ply
 
 # Print summary without writing a file (discard output)
-splat-transform input.ply --summary /dev/null
+splat-transform input.ply -m null
 
 # Print summary before and after a transform
 splat-transform input.ply --summary -s 0.5 --summary output.ply
