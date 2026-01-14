@@ -5,16 +5,34 @@ import { parseArgs } from 'node:util';
 
 import { GraphicsDevice, Vec3 } from 'playcanvas';
 
-import { version } from '../package.json';
-import { combine } from './data-table/combine';
-import { DataTable } from './data-table/data-table';
+import {
+    combine,
+    DataTable,
+    getInputFormat,
+    readFile,
+    getOutputFormat,
+    writeFile,
+    processDataTable,
+    type ProcessAction,
+    type Options as LibOptions,
+    logger
+} from '../lib/index';
+
+/**
+ * CLI-specific options extending library options.
+ */
+interface CliOptions extends LibOptions {
+    overwrite: boolean;
+    help: boolean;
+    version: boolean;
+    quiet: boolean;
+    listGpus: boolean;
+    deviceIdx: number;  // -1 = auto, -2 = CPU, 0+ = GPU index
+}
+
+import { version } from '../../package.json';
 import { createDevice, enumerateAdapters } from './node-device';
 import { NodeFileSystem, NodeReadFileSystem } from './node-file-system';
-import { ProcessAction, processDataTable } from './process';
-import { getInputFormat, readFile } from './read';
-import { Options } from './types';
-import { logger } from './utils/logger';
-import { getOutputFormat, writeFile } from './write';
 
 
 const fileExists = async (filename: string) => {
@@ -144,7 +162,7 @@ const parseArguments = async () => {
 
     const viewerSettingsPath = v['viewer-settings'];
 
-    const options: Options = {
+    const options: CliOptions = {
         overwrite: v.overwrite,
         help: v.help,
         version: v.version,
@@ -348,10 +366,19 @@ const main = async () => {
     // read args
     const { files, options } = await parseArguments();
 
+    // inject Node.js-specific logger with process.stdout for progress
+    logger.setLogger({
+        log: (...args) => console.log(...args),
+        warn: (...args) => console.warn(...args),
+        error: (...args) => console.error(...args),
+        debug: (...args) => console.log(...args),
+        progress: (text) => process.stdout.write(text)
+    });
+
     // configure logger
     logger.setQuiet(options.quiet);
 
-    logger.info(`splat-transform v${version}`);
+    logger.log(`splat-transform v${version}`);
 
     // show version and exit
     if (options.version) {
@@ -360,20 +387,20 @@ const main = async () => {
 
     // list GPUs and exit
     if (options.listGpus) {
-        logger.info('Enumerating available GPU adapters...\n');
+        logger.log('Enumerating available GPU adapters...\n');
         try {
             const adapters = await enumerateAdapters();
             if (adapters.length === 0) {
-                logger.info('No GPU adapters found.');
-                logger.info('This could mean:');
-                logger.info('  - WebGPU is not available on your system');
-                logger.info('  - GPU drivers need to be updated');
-                logger.info('  - Your GPU does not support WebGPU');
+                logger.log('No GPU adapters found.');
+                logger.log('This could mean:');
+                logger.log('  - WebGPU is not available on your system');
+                logger.log('  - GPU drivers need to be updated');
+                logger.log('  - Your GPU does not support WebGPU');
             } else {
                 adapters.forEach((adapter) => {
-                    logger.info(`[${adapter.index}] ${adapter.name}`);
+                    logger.log(`[${adapter.index}] ${adapter.name}`);
                 });
-                logger.info('\nUse -g <index> to select a specific GPU adapter.');
+                logger.log('\nUse -g <index> to select a specific GPU adapter.');
             }
         } catch (err) {
             logger.error('Failed to enumerate GPU adapters:', err);
@@ -480,7 +507,7 @@ const main = async () => {
             outputArg.processActions
         );
 
-        logger.info(`Loaded ${dataTable.numRows} gaussians`);
+        logger.log(`Loaded ${dataTable.numRows} gaussians`);
 
         // Create device creator function with caching
         // deviceIdx: -1 = auto, -2 = CPU, 0+ = specific GPU index
@@ -522,7 +549,7 @@ const main = async () => {
 
     const endTime = hrtime(startTime);
 
-    logger.info(`done in ${endTime[0] + endTime[1] / 1e9}s`);
+    logger.log(`done in ${endTime[0] + endTime[1] / 1e9}s`);
 
     // something in webgpu seems to keep the process alive after returning
     // from main so force exit

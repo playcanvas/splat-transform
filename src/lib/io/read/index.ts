@@ -4,8 +4,7 @@ export { ReadStream, type ReadSource, type ReadFileSystem, type ProgressCallback
 // Platform-agnostic path utilities
 export { dirname, join } from '../../utils/path';
 
-// Filesystem implementations
+// Filesystem implementations (platform-agnostic only)
 export { MemoryReadFileSystem } from './memory-file-system';
-export { NodeReadFileSystem } from '../../node-file-system';
 export { UrlReadFileSystem } from './url-file-system';
 export { ZipReadFileSystem } from './zip-file-system';

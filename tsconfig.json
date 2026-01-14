@@ -10,8 +10,12 @@
         "inlineSources": true,
         "resolveJsonModule": true,
         "allowJs": false,
-        "checkJs": false
+        "checkJs": false,
+        "declaration": true,
+        "declarationDir": "dist",
+        "outDir": "dist",
+        "rootDir": "src"
     },
     "include": ["./src/**/*.ts"],
-    "exclude": ["node_modules", "**/*.js", "dist"]
+    "exclude": ["node_modules", "dist", "packages"]
 }

@@ -1,4 +1,4 @@
-import createModule from '../../lib/webp.mjs';
+import createModule from '../../../lib/webp.mjs';
 
 class WebPCodec {
     Module: any;

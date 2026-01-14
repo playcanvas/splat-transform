@@ -2,7 +2,7 @@ import { dirname, resolve } from 'node:path';
 
 import { GraphicsDevice } from 'playcanvas';
 
-import { version } from '../../package.json';
+import { version } from '../../../package.json';
 import { Column, DataTable } from '../data-table/data-table';
 import { sortMortonOrder } from '../data-table/morton-order';
 import { type FileSystem, writeFile, ZipFileSystem } from '../io/write';
@@ -137,7 +137,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
 
     const writeWebp = async (filename: string, data: Uint8Array, w = width, h = height) => {
         const pathname = zipFs ? filename : resolve(dirname(outputFilename), filename);
-        logger.info(`writing '${pathname}'...`);
+        logger.log(`writing '${pathname}'...`);
 
         // construct the encoder on first use
         if (!webPCodec) {
