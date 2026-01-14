@@ -70,7 +70,7 @@ Actions can be repeated and applied in any order:
                                           cmp ∈ {lt,lte,gt,gte,eq,neq}
 -p, --params           <key=val,...>    Pass parameters to .mjs generator script
 -l, --lod              <n>              Specify the level of detail of this model, n >= 0.
-    --summary                           Print per-column statistics to stdout
+-m, --summary                           Print per-column statistics to stdout
 ```
 
 ## Global Options

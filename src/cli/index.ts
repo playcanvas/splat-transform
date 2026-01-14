@@ -95,7 +95,7 @@ const parseArguments = async () => {
             'filter-sphere': { type: 'string', short: 'S', multiple: true },
             params: { type: 'string', short: 'p', multiple: true },
             lod: { type: 'string', short: 'l', multiple: true },
-            summary: { type: 'boolean', multiple: true }
+            summary: { type: 'boolean', short: 'm', multiple: true }
         }
     });
 
@@ -333,7 +333,7 @@ ACTIONS (can be repeated, in any order)
                                               cmp ∈ {lt,lte,gt,gte,eq,neq}
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
     -l, --lod              <n>              Specify the level of detail, n >= 0
-        --summary                           Print per-column statistics to stdout
+    -m, --summary                           Print per-column statistics to stdout
 
 GLOBAL OPTIONS
     -h, --help                              Show this help and exit
