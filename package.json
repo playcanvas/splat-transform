@@ -61,7 +61,7 @@
   },
   "scripts": {
     "build": "rollup -c && npm run build:types",
-    "build:types": "tsc --emitDeclarationOnly --declaration --declarationDir dist",
+    "build:types": "tsc -p tsconfig.types.json --emitDeclarationOnly --declaration --declarationDir dist",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",
     "watch": "rollup -c -w"
