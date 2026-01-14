@@ -64,7 +64,9 @@
     "build": "rollup -c",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",
-    "watch": "rollup -c -w"
+    "watch": "rollup -c -w",
+    "test": "node --test test/*.test.mjs",
+    "test:fixtures": "node test/fixtures/create-fixtures.mjs"
   },
   "engines": {
     "node": ">=18.0.0"
