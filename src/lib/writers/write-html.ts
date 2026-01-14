@@ -1,4 +1,4 @@
-import { dirname, basename, join } from 'node:path';
+import { basename, dirname, join } from '../utils/path';
 
 import { html, css, js } from '@playcanvas/supersplat-viewer';
 

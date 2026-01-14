@@ -1,4 +1,4 @@
-import { dirname, resolve } from 'node:path';
+import { dirname, resolve } from '../utils/path';
 
 import { GraphicsDevice } from 'playcanvas';
 

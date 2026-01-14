@@ -1,4 +1,4 @@
-import { dirname, resolve } from 'node:path';
+import { dirname, resolve } from '../utils/path';
 
 import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
