@@ -3,6 +3,7 @@ import { Quat, Vec3 } from 'playcanvas';
 import { Column, DataTable } from './data-table/data-table';
 import { computeSummary, type SummaryData } from './data-table/summary';
 import { transform } from './data-table/transform';
+import { logger } from './utils/logger';
 
 type Translate = {
     kind: 'translate';
@@ -241,7 +242,7 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
             case 'summary': {
                 const summary = computeSummary(result);
                 const markdown = formatMarkdown(summary);
-                console.log(markdown);
+                logger.output(markdown);
                 break;
             }
         }

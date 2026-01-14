@@ -378,13 +378,14 @@ const main = async () => {
     // read args
     const { files, options } = await parseArguments();
 
-    // inject Node.js-specific logger with process.stdout for progress
+    // inject Node.js-specific logger - logs go to stderr, data output goes to stdout
     logger.setLogger({
-        log: (...args) => console.log(...args),
+        log: (...args) => console.error(...args),
         warn: (...args) => console.warn(...args),
         error: (...args) => console.error(...args),
-        debug: (...args) => console.log(...args),
-        progress: text => process.stdout.write(text)
+        debug: (...args) => console.error(...args),
+        progress: text => process.stderr.write(text),
+        output: text => console.log(text)
     });
 
     // configure logger

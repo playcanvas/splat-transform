@@ -12,6 +12,8 @@ interface Logger {
     debug(...args: any[]): void;
     /** Output text without newline (for progress indicators). */
     progress(text: string): void;
+    /** Output data to stdout (for piping). */
+    output(text: string): void;
 }
 
 /**
@@ -23,7 +25,8 @@ const defaultLogger: Logger = {
     warn: (...args) => console.warn(...args),
     error: (...args) => console.error(...args),
     debug: (...args) => console.log(...args),
-    progress: () => {}
+    progress: () => {},
+    output: text => console.log(text)
 };
 
 let impl: Logger = defaultLogger;
@@ -89,6 +92,14 @@ const logger = {
      */
     progress(text: string) {
         if (!quiet) impl.progress(text);
+    },
+
+    /**
+     * Output data to stdout (for piping). Always shown, even in quiet mode.
+     * @param text - The text to output.
+     */
+    output(text: string) {
+        impl.output(text);
     }
 };
 
