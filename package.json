@@ -20,7 +20,8 @@
     ".": {
       "import": "./dist/index.mjs",
       "types": "./dist/lib/index.d.ts"
-    }
+    },
+    "./lib/*": "./lib/*"
   },
   "bin": {
     "splat-transform": "bin/cli.mjs"

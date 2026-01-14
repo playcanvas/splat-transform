@@ -1,16 +1,27 @@
 import createModule from '../../../lib/webp.mjs';
 
 class WebPCodec {
+    /**
+     * URL to the webp.wasm file. Set this before any SOG read/write operations
+     * in browser environments where the default path resolution doesn't work.
+     *
+     * @example
+     * import { WebPCodec } from '@playcanvas/splat-transform';
+     * import wasmUrl from '@playcanvas/splat-transform/lib/webp.wasm?url';
+     * WebPCodec.wasmUrl = wasmUrl;
+     */
+    static wasmUrl: string | null = null;
+
     Module: any;
 
     static async create() {
         const instance = new WebPCodec();
         instance.Module = await createModule({
             locateFile: (path: string) => {
-                if (path.endsWith('.wasm')) {
-                    return new URL(`../lib/${path}`, import.meta.url).toString();
+                if (path.endsWith('.wasm') && WebPCodec.wasmUrl) {
+                    return WebPCodec.wasmUrl;
                 }
-                return path;
+                return new URL(`../lib/${path}`, import.meta.url).toString();
             }
         });
         return instance;
