@@ -312,7 +312,7 @@ SUPPORTED INPUTS
     .ply   .compressed.ply   .sog   meta.json   .ksplat   .splat   .spz   .mjs   .lcc
 
 SUPPORTED OUTPUTS
-    .ply   .compressed.ply   .sog   meta.json   .csv   .html
+    .ply   .compressed.ply   .sog   meta.json   .csv   .html   .summary.json   .summary.md
 
 ACTIONS (can be repeated, in any order)
     -t, --translate        <x,y,z>          Translate Gaussians by (x, y, z)
@@ -356,6 +356,10 @@ EXAMPLES
 
     # Generate LOD with custom chunk size and node split size
     splat-transform -O 0,1,2 -C 1024 -X 32 input.lcc output/lod-meta.json
+
+    # Generate statistical summary for test validation (JSON or Markdown)
+    splat-transform bunny.ply bunny.summary.json
+    splat-transform bunny.ply bunny.summary.md
 `;
 
 const main = async () => {
@@ -370,7 +374,7 @@ const main = async () => {
         warn: (...args) => console.warn(...args),
         error: (...args) => console.error(...args),
         debug: (...args) => console.log(...args),
-        progress: text => process.stdout.write(text)
+        progress: (text) => process.stdout.write(text)
     });
 
     // configure logger

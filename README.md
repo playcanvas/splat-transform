@@ -12,7 +12,7 @@
 SplatTransform is an open source CLI tool for converting and editing Gaussian splats. It can:
 
 📥 Read PLY, Compressed PLY, SOG, SPLAT, KSPLAT, SPZ and LCC formats  
-📤 Write PLY, Compressed PLY, SOG, CSV, HTML Viewer and LOD (streaming) formats  
+📤 Write PLY, Compressed PLY, SOG, CSV, HTML Viewer, LOD (streaming) and Summary formats  
 🔗 Merge multiple splats  
 🔄 Apply transformations to input splats  
 🎛️ Filter out Gaussians or spherical harmonic bands  
@@ -51,6 +51,8 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 | `.mjs` | ✅ | ❌ | Generate a scene using an mjs script (Beta) |
 | `.csv` | ❌ | ✅ | Comma-separated values spreadsheet |
 | `.html` | ❌ | ✅ | HTML viewer app (single-page or unbundled) based on SOG |
+| `.summary.json` | ❌ | ✅ | Statistical summary in JSON format (for test validation) |
+| `.summary.md` | ❌ | ✅ | Statistical summary in Markdown table format (for review) |
 
 ## Actions
 
@@ -168,6 +170,20 @@ splat-transform -w cloudA.ply -r 0,90,0 cloudB.ply -s 2 merged.compressed.ply
 # Apply final transformations to combined result
 splat-transform input1.ply input2.ply output.ply -t 0,0,10 -s 0.5
 ```
+
+### Statistical Summary
+
+Generate per-column statistics for data analysis or test validation:
+
+```bash
+# Generate JSON summary (for programmatic test validation)
+splat-transform input.ply output.summary.json
+
+# Generate Markdown summary (for human review)
+splat-transform input.ply output.summary.md
+```
+
+The summary includes min, max, median, mean, stdDev, nanCount and infCount for each column in the data.
 
 ### Generators (Beta)
 
