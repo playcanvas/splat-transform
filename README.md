@@ -9,7 +9,7 @@
 
 | [User Guide](https://developer.playcanvas.com/user-manual/gaussian-splatting/editing/splat-transform/) | [Blog](https://blog.playcanvas.com/) | [Forum](https://forum.playcanvas.com/) |
 
-SplatTransform is an open source CLI tool for converting and editing Gaussian splats. It can:
+SplatTransform is an open source library and CLI tool for converting and editing Gaussian splats. It can:
 
 📥 Read PLY, Compressed PLY, SOG, SPLAT, KSPLAT, SPZ and LCC formats  
 📤 Write PLY, Compressed PLY, SOG, CSV, HTML Viewer and LOD (streaming) formats  
@@ -19,6 +19,8 @@ SplatTransform is an open source CLI tool for converting and editing Gaussian sp
 🎛️ Filter out Gaussians or spherical harmonic bands  
 ⚙️ Procedurally generate splats using JavaScript generators
 
+The library is platform-agnostic and can be used in both Node.js and browser environments.
+
 ## Installation
 
 Install or update to the latest version:
@@ -27,7 +29,13 @@ Install or update to the latest version:
 npm install -g @playcanvas/splat-transform
 ```
 
-## Usage
+For library usage, install as a dependency:
+
+```bash
+npm install @playcanvas/splat-transform
+```
+
+## CLI Usage
 
 ```bash
 splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
@@ -230,4 +238,135 @@ splat-transform --version
 
 # Show help
 splat-transform --help
+```
+
+---
+
+## Library Usage
+
+SplatTransform exposes a programmatic API for reading, processing, and writing Gaussian splat data.
+
+### Basic Import
+
+```typescript
+import {
+    readFile,
+    writeFile,
+    getInputFormat,
+    getOutputFormat,
+    DataTable,
+    processDataTable
+} from '@playcanvas/splat-transform';
+```
+
+### Key Exports
+
+| Export | Description |
+| ------ | ----------- |
+| `readFile` | Read splat data from various formats |
+| `writeFile` | Write splat data to various formats |
+| `getInputFormat` | Detect input format from filename |
+| `getOutputFormat` | Detect output format from filename |
+| `DataTable`, `Column` | Core data structures for splat data |
+| `combine` | Merge multiple DataTables into one |
+| `transform` | Apply spatial transformations |
+| `processDataTable` | Apply a sequence of processing actions |
+| `computeSummary` | Generate statistical summary of data |
+
+### File System Abstractions
+
+The library uses abstract file system interfaces for maximum flexibility:
+
+**Reading:**
+- `UrlReadFileSystem` - Read from URLs (browser/Node.js)
+- `MemoryReadFileSystem` - Read from in-memory buffers
+- `ZipReadFileSystem` - Read from ZIP archives
+
+**Writing:**
+- `MemoryFileSystem` - Write to in-memory buffers
+- `ZipFileSystem` - Write to ZIP archives
+
+### Example: Reading and Processing
+
+```typescript
+import { Vec3 } from 'playcanvas';
+import {
+    readFile,
+    writeFile,
+    getInputFormat,
+    getOutputFormat,
+    processDataTable,
+    UrlReadFileSystem,
+    MemoryFileSystem
+} from '@playcanvas/splat-transform';
+
+// Read a PLY file from URL
+const fileSystem = new UrlReadFileSystem();
+const inputFormat = getInputFormat('scene.ply');
+
+const dataTables = await readFile({
+    filename: 'https://example.com/scene.ply',
+    inputFormat,
+    options: { iterations: 10 },
+    params: [],
+    fileSystem
+});
+
+// Apply transformations
+const processed = processDataTable(dataTables[0], [
+    { kind: 'scale', value: 0.5 },
+    { kind: 'translate', value: new Vec3(0, 1, 0) },
+    { kind: 'filterNaN' }
+]);
+
+// Write to in-memory buffer
+const memFs = new MemoryFileSystem();
+const outputFormat = getOutputFormat('output.ply', {});
+
+await writeFile({
+    filename: 'output.ply',
+    outputFormat,
+    dataTable: processed,
+    options: {}
+}, memFs);
+
+// Get the output data
+const outputBuffer = memFs.files.get('output.ply');
+```
+
+### Processing Actions
+
+The `processDataTable` function accepts an array of actions:
+
+```typescript
+type ProcessAction =
+    | { kind: 'translate'; value: Vec3 }
+    | { kind: 'rotate'; value: Vec3 }       // Euler angles in degrees
+    | { kind: 'scale'; value: number }
+    | { kind: 'filterNaN' }
+    | { kind: 'filterByValue'; columnName: string; comparator: 'lt'|'lte'|'gt'|'gte'|'eq'|'neq'; value: number }
+    | { kind: 'filterBands'; value: 0|1|2|3 }
+    | { kind: 'filterBox'; min: Vec3; max: Vec3 }
+    | { kind: 'filterSphere'; center: Vec3; radius: number }
+    | { kind: 'lod'; value: number }
+    | { kind: 'summary' };
+```
+
+### Custom Logging
+
+Configure the logger for your environment:
+
+```typescript
+import { logger } from '@playcanvas/splat-transform';
+
+logger.setLogger({
+    log: console.log,
+    warn: console.warn,
+    error: console.error,
+    debug: console.debug,
+    progress: (text) => process.stdout.write(text),
+    output: console.log
+});
+
+logger.setQuiet(true); // Suppress non-error output
 ```
