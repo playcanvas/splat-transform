@@ -1,7 +1,8 @@
+import { GraphicsDevice } from 'playcanvas';
+
 import { KdTree } from './kd-tree';
 import { Column, DataTable } from '../data-table/data-table';
 import { GpuClustering } from '../gpu/gpu-clustering';
-import { GpuDevice } from '../gpu/gpu-device';
 import { logger } from '../utils/logger';
 
 // use floyd's algorithm to pick m unique random indices from 0..n-1
@@ -136,7 +137,7 @@ const groupLabels = (labels: Uint32Array, k: number) => {
     return clusters;
 };
 
-const kmeans = async (points: DataTable, k: number, iterations: number, device?: GpuDevice) => {
+const kmeans = async (points: DataTable, k: number, iterations: number, device?: GraphicsDevice) => {
     // too few data points
     if (points.numRows < k) {
         return {

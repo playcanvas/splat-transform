@@ -1,30 +1,7 @@
-import {
-    // components
-    AnimComponentSystem,
-    RenderComponentSystem,
-    CameraComponentSystem,
-    LightComponentSystem,
-    GSplatComponentSystem,
-    ScriptComponentSystem,
-    // handlers
-    AnimClipHandler,
-    AnimStateGraphHandler,
-    BinaryHandler,
-    ContainerHandler,
-    CubemapHandler,
-    GSplatHandler,
-    RenderHandler,
-    TextureHandler,
-    // rest
-    PIXELFORMAT_BGRA8,
-    AppBase,
-    AppOptions,
-    Texture,
-    WebgpuGraphicsDevice
-} from 'playcanvas';
+import { GraphicsDevice, WebgpuGraphicsDevice } from 'playcanvas';
 import { create, globals } from 'webgpu';
 
-import { logger } from '../utils/logger';
+import { logger } from './utils/logger';
 
 const initializeGlobals = () => {
     Object.assign(globalThis, globals);
@@ -61,53 +38,6 @@ const initializeGlobals = () => {
 };
 
 initializeGlobals();
-
-class Application extends AppBase {
-    constructor(canvas: HTMLCanvasElement, options: any = {}) {
-        super(canvas);
-
-        const appOptions = new AppOptions();
-
-        appOptions.graphicsDevice = options.graphicsDevice;
-
-        appOptions.componentSystems = [
-            AnimComponentSystem,
-            CameraComponentSystem,
-            GSplatComponentSystem,
-            LightComponentSystem,
-            RenderComponentSystem,
-            ScriptComponentSystem
-        ];
-
-        appOptions.resourceHandlers = [
-            AnimClipHandler,
-            AnimStateGraphHandler,
-            BinaryHandler,
-            ContainerHandler,
-            CubemapHandler,
-            GSplatHandler,
-            RenderHandler,
-            TextureHandler
-        ];
-
-        this.init(appOptions);
-    }
-}
-
-class GpuDevice {
-    app: Application;
-    backbuffer: Texture;
-
-    constructor(app: Application, backbuffer: Texture) {
-        this.app = app;
-        this.backbuffer = backbuffer;
-    }
-
-    destroy() {
-        this.backbuffer.destroy();
-        this.app.destroy();
-    }
-}
 
 // Get Dawn's actual adapter names by triggering its error message.
 // This is the official documented method for enumerating adapters:
@@ -168,7 +98,7 @@ const enumerateAdapters = async () => {
     }
 };
 
-const createDevice = async (adapterName?: string) => {
+const createDevice = async (adapterName?: string): Promise<GraphicsDevice> => {
     // Use Dawn's adapter selection if a specific adapter name is provided
     const dawnOptions = adapterName ? [`adapter=${adapterName}`] : [];
 
@@ -191,22 +121,7 @@ const createDevice = async (adapterName?: string) => {
     // print gpu info
     logger.info(`Using GPU: ${adapterName || 'auto'}`);
 
-    // create the application
-    const app = new Application(canvas, { graphicsDevice });
-
-    // create external backbuffer
-    const backbuffer = new Texture(graphicsDevice, {
-        width: 1024,
-        height: 512,
-        name: 'WebgpuInternalBackbuffer',
-        mipmaps: false,
-        format: PIXELFORMAT_BGRA8
-    });
-
-    // @ts-ignore
-    graphicsDevice.externalBackbuffer = backbuffer;
-
-    return new GpuDevice(app, backbuffer);
+    return graphicsDevice;
 };
 
-export { createDevice, enumerateAdapters, GpuDevice };
+export { createDevice, enumerateAdapters };

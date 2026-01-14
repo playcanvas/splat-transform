@@ -2,7 +2,7 @@ import { dirname, resolve } from 'node:path';
 
 import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
-import { writeSog } from './write-sog.js';
+import { writeSog, type DeviceCreator } from './write-sog.js';
 import { TypedArray, DataTable } from '../data-table/data-table';
 import { sortMortonOrder } from '../data-table/morton-order';
 import { type FileSystem } from '../io/write';
@@ -140,13 +140,13 @@ type WriteLodOptions = {
     dataTable: DataTable;
     envDataTable: DataTable | null;
     iterations: number;
-    deviceIdx: number;
+    createDevice?: DeviceCreator;
     chunkCount: number;
     chunkExtent: number;
 };
 
 const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
-    const { filename, dataTable, envDataTable, iterations, deviceIdx, chunkCount, chunkExtent } = options;
+    const { filename, dataTable, envDataTable, iterations, createDevice, chunkCount, chunkExtent } = options;
 
     const outputDir = dirname(filename);
 
@@ -167,7 +167,7 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
             dataTable: envDataTable,
             bundle: false,
             iterations,
-            deviceIdx
+            createDevice
         }, fs);
     }
 
@@ -312,7 +312,7 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
                 indices,
                 bundle: false,
                 iterations,
-                deviceIdx
+                createDevice
             }, fs);
         }
     }

@@ -1,14 +1,21 @@
 import { dirname, resolve } from 'node:path';
 
+import { GraphicsDevice } from 'playcanvas';
+
 import { version } from '../../package.json';
 import { Column, DataTable } from '../data-table/data-table';
 import { sortMortonOrder } from '../data-table/morton-order';
-import { createDevice, enumerateAdapters, GpuDevice } from '../gpu/gpu-device';
 import { type FileSystem, writeFile, ZipFileSystem } from '../io/write';
 import { kmeans } from '../spatial/k-means';
 import { logger } from '../utils/logger';
 import { sigmoid } from '../utils/math';
 import { WebPCodec } from '../utils/webp-codec';
+
+/**
+ * A function that creates a GraphicsDevice on demand.
+ * The application is responsible for caching if needed.
+ */
+type DeviceCreator = () => Promise<GraphicsDevice>;
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
@@ -53,7 +60,7 @@ const generateIndices = (dataTable: DataTable) => {
 // return
 //      - the resulting labels in a new datatable having same shape as the input
 //      - array of 256 centroids
-const cluster1d = async (dataTable: DataTable, iterations: number, device?: GpuDevice) => {
+const cluster1d = async (dataTable: DataTable, iterations: number, device?: GraphicsDevice) => {
     const { numColumns, numRows } = dataTable;
 
     // construct 1d points from the columns of data
@@ -99,7 +106,6 @@ const cluster1d = async (dataTable: DataTable, iterations: number, device?: GpuD
 };
 
 let webPCodec: WebPCodec;
-let gpuDevice: GpuDevice;
 
 type WriteSogOptions = {
     filename: string;
@@ -107,11 +113,11 @@ type WriteSogOptions = {
     indices?: Uint32Array;
     bundle: boolean;
     iterations: number;
-    deviceIdx: number;
+    createDevice?: DeviceCreator;
 };
 
 const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
-    const { filename: outputFilename, bundle, dataTable, iterations, deviceIdx } = options;
+    const { filename: outputFilename, bundle, dataTable, iterations, createDevice } = options;
 
     // initialize output stream - use ZipFileSystem for bundled output
     const zipFs = bundle ? new ZipFileSystem(await fs.createWriter(outputFilename)) : null;
@@ -122,6 +128,9 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     const width = Math.ceil(Math.sqrt(numRows) / 4) * 4;
     const height = Math.ceil(numRows / width / 4) * 4;
     const channels = 4;
+
+    // Initialize GPU device if a creator was provided
+    const gpuDevice = createDevice ? await createDevice() : undefined;
 
     // the layout function determines how the data is packed into the output texture.
     const layout = identity; // rectChunks;
@@ -347,24 +356,6 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     const meansMinMax = await writeMeans();
     await writeQuaternions();
 
-    // Initialize GPU device if not using CPU mode
-    // device: -1 = auto, -2 = CPU, 0+ = specific GPU index
-    if (deviceIdx !== -2 && !gpuDevice) {
-        let adapterName: string | undefined;
-
-        if (deviceIdx >= 0) {
-            const adapters = await enumerateAdapters();
-            const adapter = adapters[deviceIdx];
-            if (adapter) {
-                adapterName = adapter.name;
-            } else {
-                logger.warn(`GPU adapter index ${deviceIdx} not found, using default`);
-            }
-        }
-
-        gpuDevice = await createDevice(adapterName);
-    }
-
     const scalesCodebook = await writeScales();
     const colorsCodebook = await writeColors();
     const shN = shBands > 0 ? await writeSH(shBands) : null;
@@ -409,4 +400,4 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     }
 };
 
-export { writeSog };
+export { writeSog, type DeviceCreator };
