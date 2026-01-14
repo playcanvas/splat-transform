@@ -13,6 +13,7 @@ SplatTransform is an open source CLI tool for converting and editing Gaussian sp
 
 📥 Read PLY, Compressed PLY, SOG, SPLAT, KSPLAT, SPZ and LCC formats  
 📤 Write PLY, Compressed PLY, SOG, CSV, HTML Viewer and LOD (streaming) formats  
+📊 Generate statistical summaries for data analysis  
 🔗 Merge multiple splats  
 🔄 Apply transformations to input splats  
 🎛️ Filter out Gaussians or spherical harmonic bands  
@@ -35,6 +36,7 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 **Key points:**
 - Input files become the working set; ACTIONS are applied in order
 - The last file is the output; actions after it modify the final result
+- Use `null` as output to discard file output
 
 ## Supported Formats
 
@@ -68,6 +70,7 @@ Actions can be repeated and applied in any order:
                                           cmp ∈ {lt,lte,gt,gte,eq,neq}
 -p, --params           <key=val,...>    Pass parameters to .mjs generator script
 -l, --lod              <n>              Specify the level of detail of this model, n >= 0.
+-m, --summary                           Print per-column statistics to stdout
 ```
 
 ## Global Options
@@ -168,6 +171,23 @@ splat-transform -w cloudA.ply -r 0,90,0 cloudB.ply -s 2 merged.compressed.ply
 # Apply final transformations to combined result
 splat-transform input1.ply input2.ply output.ply -t 0,0,10 -s 0.5
 ```
+
+### Statistical Summary
+
+Generate per-column statistics for data analysis or test validation:
+
+```bash
+# Print summary, then write output
+splat-transform input.ply --summary output.ply
+
+# Print summary without writing a file (discard output)
+splat-transform input.ply -m null
+
+# Print summary before and after a transform
+splat-transform input.ply --summary -s 0.5 --summary output.ply
+```
+
+The summary includes min, max, median, mean, stdDev, nanCount and infCount for each column in the data.
 
 ### Generators (Beta)
 

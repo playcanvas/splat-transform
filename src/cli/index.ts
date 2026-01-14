@@ -94,7 +94,8 @@ const parseArguments = async () => {
             'filter-box': { type: 'string', short: 'B', multiple: true },
             'filter-sphere': { type: 'string', short: 'S', multiple: true },
             params: { type: 'string', short: 'p', multiple: true },
-            lod: { type: 'string', short: 'l', multiple: true }
+            lod: { type: 'string', short: 'l', multiple: true },
+            summary: { type: 'boolean', short: 'm', multiple: true }
         }
     });
 
@@ -291,6 +292,11 @@ const parseArguments = async () => {
                     });
                     break;
                 }
+                case 'summary':
+                    current.processActions.push({
+                        kind: 'summary'
+                    });
+                    break;
             }
         }
     }
@@ -307,12 +313,13 @@ USAGE
 
   • Input files become the working set; ACTIONS are applied in order.
   • The last file is the output; actions after it modify the final result.
+  • Use 'null' as output to discard file output.
 
 SUPPORTED INPUTS
     .ply   .compressed.ply   .sog   meta.json   .ksplat   .splat   .spz   .mjs   .lcc
 
 SUPPORTED OUTPUTS
-    .ply   .compressed.ply   .sog   meta.json   .csv   .html
+    .ply   .compressed.ply   .sog   meta.json   .csv   .html   null
 
 ACTIONS (can be repeated, in any order)
     -t, --translate        <x,y,z>          Translate Gaussians by (x, y, z)
@@ -326,6 +333,7 @@ ACTIONS (can be repeated, in any order)
                                               cmp ∈ {lt,lte,gt,gte,eq,neq}
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
     -l, --lod              <n>              Specify the level of detail, n >= 0
+    -m, --summary                           Print per-column statistics to stdout
 
 GLOBAL OPTIONS
     -h, --help                              Show this help and exit
@@ -356,6 +364,12 @@ EXAMPLES
 
     # Generate LOD with custom chunk size and node split size
     splat-transform -O 0,1,2 -C 1024 -X 32 input.lcc output/lod-meta.json
+
+    # Print statistical summary, then write output
+    splat-transform bunny.ply --summary output.ply
+
+    # Print summary without writing a file (discard output)
+    splat-transform bunny.ply -m null
 `;
 
 const main = async () => {
@@ -364,13 +378,14 @@ const main = async () => {
     // read args
     const { files, options } = await parseArguments();
 
-    // inject Node.js-specific logger with process.stdout for progress
+    // inject Node.js-specific logger - logs go to stderr, data output goes to stdout
     logger.setLogger({
-        log: (...args) => console.log(...args),
+        log: (...args) => console.error(...args),
         warn: (...args) => console.warn(...args),
         error: (...args) => console.error(...args),
-        debug: (...args) => console.log(...args),
-        progress: text => process.stdout.write(text)
+        debug: (...args) => console.error(...args),
+        progress: text => process.stderr.write(text),
+        output: text => console.log(text)
     });
 
     // configure logger
@@ -416,32 +431,40 @@ const main = async () => {
     const outputArg = files[files.length - 1];
 
     const outputFilename = resolve(outputArg.filename);
-    const outputFormat = getOutputFormat(outputFilename, options);
 
-    if (options.overwrite) {
-        // ensure target directory exists when using -w
-        await mkdir(dirname(outputFilename), { recursive: true });
-    } else {
-        // check overwrite before doing any work
-        if (await fileExists(outputFilename)) {
-            logger.error(`File '${outputFilename}' already exists. Use -w option to overwrite.`);
-            exit(1);
-        }
+    // Check for null output (discard file writing)
+    const isNullOutput = outputArg.filename.toLowerCase() === 'null';
 
-        // for unbundled HTML, also check for additional files
-        if (outputFormat === 'html' && options.unbundled) {
-            const outputDir = dirname(outputFilename);
-            const baseFilename = basename(outputFilename, '.html');
-            const filesToCheck = [
-                join(outputDir, 'index.css'),
-                join(outputDir, 'index.js'),
-                join(outputDir, `${baseFilename}.sog`)
-            ];
+    let outputFormat: ReturnType<typeof getOutputFormat> | null = null;
 
-            for (const file of filesToCheck) {
-                if (await fileExists(file)) {
-                    logger.error(`File '${file}' already exists. Use -w option to overwrite.`);
-                    exit(1);
+    if (!isNullOutput) {
+        outputFormat = getOutputFormat(outputFilename, options);
+
+        if (options.overwrite) {
+            // ensure target directory exists when using -w
+            await mkdir(dirname(outputFilename), { recursive: true });
+        } else {
+            // check overwrite before doing any work
+            if (await fileExists(outputFilename)) {
+                logger.error(`File '${outputFilename}' already exists. Use -w option to overwrite.`);
+                exit(1);
+            }
+
+            // for unbundled HTML, also check for additional files
+            if (outputFormat === 'html' && options.unbundled) {
+                const outputDir = dirname(outputFilename);
+                const baseFilename = basename(outputFilename, '.html');
+                const filesToCheck = [
+                    join(outputDir, 'index.css'),
+                    join(outputDir, 'index.js'),
+                    join(outputDir, `${baseFilename}.sog`)
+                ];
+
+                for (const file of filesToCheck) {
+                    if (await fileExists(file)) {
+                        logger.error(`File '${file}' already exists. Use -w option to overwrite.`);
+                        exit(1);
+                    }
                 }
             }
         }
@@ -507,38 +530,41 @@ const main = async () => {
 
         logger.log(`Loaded ${dataTable.numRows} gaussians`);
 
-        // Create device creator function with caching
-        // deviceIdx: -1 = auto, -2 = CPU, 0+ = specific GPU index
-        let cachedDevice: GraphicsDevice | undefined;
-        const deviceCreator = options.deviceIdx === -2 ? undefined : async () => {
-            if (cachedDevice) {
-                return cachedDevice;
-            }
-
-            let adapterName: string | undefined;
-            if (options.deviceIdx >= 0) {
-                const adapters = await enumerateAdapters();
-                const adapter = adapters[options.deviceIdx];
-                if (adapter) {
-                    adapterName = adapter.name;
-                } else {
-                    logger.warn(`GPU adapter index ${options.deviceIdx} not found, using default`);
+        // Skip file writing for null output
+        if (!isNullOutput) {
+            // Create device creator function with caching
+            // deviceIdx: -1 = auto, -2 = CPU, 0+ = specific GPU index
+            let cachedDevice: GraphicsDevice | undefined;
+            const deviceCreator = options.deviceIdx === -2 ? undefined : async () => {
+                if (cachedDevice) {
+                    return cachedDevice;
                 }
-            }
 
-            cachedDevice = await createDevice(adapterName);
-            return cachedDevice;
-        };
+                let adapterName: string | undefined;
+                if (options.deviceIdx >= 0) {
+                    const adapters = await enumerateAdapters();
+                    const adapter = adapters[options.deviceIdx];
+                    if (adapter) {
+                        adapterName = adapter.name;
+                    } else {
+                        logger.warn(`GPU adapter index ${options.deviceIdx} not found, using default`);
+                    }
+                }
 
-        // write file
-        await writeFile({
-            filename: outputFilename,
-            outputFormat,
-            dataTable,
-            envDataTable,
-            options,
-            createDevice: deviceCreator
-        }, new NodeFileSystem());
+                cachedDevice = await createDevice(adapterName);
+                return cachedDevice;
+            };
+
+            // write file
+            await writeFile({
+                filename: outputFilename,
+                outputFormat: outputFormat!,
+                dataTable,
+                envDataTable,
+                options,
+                createDevice: deviceCreator
+            }, new NodeFileSystem());
+        }
     } catch (err) {
         // handle errors
         logger.error(err);

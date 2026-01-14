@@ -3,6 +3,8 @@ export { Column, DataTable } from './data-table/data-table';
 export type { TypedArray, ColumnType, Row } from './data-table/data-table';
 export { combine } from './data-table/combine';
 export { transform } from './data-table/transform';
+export { computeSummary } from './data-table/summary';
+export type { ColumnStats, SummaryData } from './data-table/summary';
 
 // High-level read/write
 export { readFile, getInputFormat } from './read';
