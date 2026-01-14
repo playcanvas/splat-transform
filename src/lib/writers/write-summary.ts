@@ -87,9 +87,9 @@ const computeColumnStats = (data: ArrayLike<number>): ColumnStats => {
     // Compute median (requires sorting)
     validValues.sort((a, b) => a - b);
     const mid = Math.floor(validValues.length / 2);
-    const median = validValues.length % 2 === 0
-        ? (validValues[mid - 1] + validValues[mid]) / 2
-        : validValues[mid];
+    const median = validValues.length % 2 === 0 ?
+        (validValues[mid - 1] + validValues[mid]) / 2 :
+        validValues[mid];
 
     return {
         min: round(min),
@@ -155,9 +155,9 @@ const writeSummary = async (options: WriteSummaryOptions, fs: FileSystem) => {
 
     const summary = computeSummary(dataTable);
 
-    const content = format === 'json'
-        ? formatJson(summary)
-        : formatMarkdown(summary);
+    const content = format === 'json' ?
+        formatJson(summary) :
+        formatMarkdown(summary);
 
     const textEncoder = new TextEncoder();
     const writer = await fs.createWriter(filename);

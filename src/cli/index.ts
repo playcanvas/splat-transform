@@ -374,7 +374,7 @@ const main = async () => {
         warn: (...args) => console.warn(...args),
         error: (...args) => console.error(...args),
         debug: (...args) => console.log(...args),
-        progress: (text) => process.stdout.write(text)
+        progress: text => process.stdout.write(text)
     });
 
     // configure logger
