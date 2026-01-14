@@ -1,6 +1,6 @@
 import json from '@rollup/plugin-json';
 import resolve from '@rollup/plugin-node-resolve';
-import esbuild from 'rollup-plugin-esbuild';
+import typescript from '@rollup/plugin-typescript';
 
 // Library build - platform agnostic
 const library = {
@@ -13,9 +13,10 @@ const library = {
     },
     external: ['playcanvas'],
     plugins: [
-        esbuild({
-            target: 'es2022',
-            tsconfig: './tsconfig.json'
+        typescript({
+            tsconfig: './tsconfig.json',
+            declaration: true,
+            declarationDir: 'dist'
         }),
         resolve(),
         json()
@@ -34,10 +35,10 @@ const cli = {
     },
     external: ['webgpu'],
     plugins: [
-        esbuild({
-            target: 'es2022',
-            platform: 'node',
-            tsconfig: './tsconfig.json'
+        typescript({
+            tsconfig: './tsconfig.json',
+            declaration: false,
+            declarationDir: undefined
         }),
         resolve(),
         json()

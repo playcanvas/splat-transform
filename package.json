@@ -45,23 +45,22 @@
     "@playcanvas/supersplat-viewer": "1.10.2",
     "@rollup/plugin-json": "6.1.0",
     "@rollup/plugin-node-resolve": "16.0.3",
+    "@rollup/plugin-typescript": "12.3.0",
     "@types/node": "24.10.4",
     "@typescript-eslint/eslint-plugin": "8.51.0",
     "@typescript-eslint/parser": "8.51.0",
-    "esbuild": "0.24.2",
     "eslint": "9.39.2",
     "eslint-import-resolver-typescript": "4.4.4",
     "playcanvas": "2.14.4",
     "rollup": "4.54.0",
-    "rollup-plugin-esbuild": "6.2.1",
+    "tslib": "2.8.1",
     "typescript": "5.9.3"
   },
   "peerDependencies": {
     "playcanvas": ">=2.0.0"
   },
   "scripts": {
-    "build": "rollup -c && npm run build:types",
-    "build:types": "tsc -p tsconfig.types.json --emitDeclarationOnly --declaration --declarationDir dist",
+    "build": "rollup -c",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",
     "watch": "rollup -c -w"
