@@ -95,6 +95,7 @@ const resolve = (...segments: string[]): string => {
     // Process segments from right to left, stopping at first absolute path
     const parts: string[] = [];
     let hasAbsolute = false;
+    let pendingDotDot = 0;  // Track unresolved .. count
 
     for (let i = segments.length - 1; i >= 0 && !hasAbsolute; i--) {
         const segment = segments[i];
@@ -113,17 +114,19 @@ const resolve = (...segments: string[]): string => {
         for (let j = segParts.length - 1; j >= 0; j--) {
             const part = segParts[j];
             if (part === '..') {
-                // Skip the next non-.. part
-                let skip = 1;
-                while (skip > 0 && parts.length > 0) {
-                    const removed = parts.pop();
-                    if (removed !== '..') skip--;
-                }
-                if (skip > 0) parts.push('..');
+                pendingDotDot++;
+            } else if (pendingDotDot > 0) {
+                pendingDotDot--;  // This segment is canceled by a pending ..
             } else {
                 parts.push(part);
             }
         }
+    }
+
+    // Add any remaining .. that couldn't be resolved
+    while (pendingDotDot > 0) {
+        parts.push('..');
+        pendingDotDot--;
     }
 
     // Reverse to get correct order
