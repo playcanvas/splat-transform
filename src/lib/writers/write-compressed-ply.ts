@@ -1,5 +1,5 @@
 import { CompressedChunk } from './compressed-chunk';
-import { version } from '../../package.json';
+import { version } from '../../../package.json';
 import { DataTable } from '../data-table/data-table';
 import { sortMortonOrder } from '../data-table/morton-order';
 import { type FileSystem } from '../io/write';

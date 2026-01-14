@@ -45,7 +45,7 @@ const getOutputFormat = (filename: string, options: Options): OutputFormat => {
 const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
     const { filename, outputFormat, dataTable, envDataTable, options, createDevice } = writeOptions;
 
-    logger.info(`writing '${filename}'...`);
+    logger.log(`writing '${filename}'...`);
 
     // write the file data
     switch (outputFormat) {

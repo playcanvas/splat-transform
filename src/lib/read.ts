@@ -48,7 +48,7 @@ const readFile = async (readFileOptions: ReadFileOptions): Promise<DataTable[]> 
 
     let result: DataTable[];
 
-    logger.info(`reading '${filename}'...`);
+    logger.log(`reading '${filename}'...`);
 
     if (inputFormat === 'mjs') {
         result = [await readMjs(filename, params)];

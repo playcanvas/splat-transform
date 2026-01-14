@@ -1,5 +1,3 @@
-import { dirname, resolve } from 'node:path';
-
 import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { writeSog, type DeviceCreator } from './write-sog.js';
@@ -8,6 +6,7 @@ import { sortMortonOrder } from '../data-table/morton-order';
 import { type FileSystem } from '../io/write';
 import { BTreeNode, BTree } from '../spatial/b-tree';
 import { logger } from '../utils/logger';
+import { dirname, resolve } from '../utils/path';
 
 
 type Aabb = {
@@ -160,7 +159,7 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
         // ensure output folder exists before any files are written
         await fs.mkdir(dirname(pathname));
 
-        logger.info(`writing ${pathname}...`);
+        logger.log(`writing ${pathname}...`);
 
         await writeSog({
             filename: pathname,
@@ -304,7 +303,7 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
             }
 
             // write file unit to sog
-            logger.info(`writing ${pathname}...`);
+            logger.log(`writing ${pathname}...`);
 
             await writeSog({
                 filename: pathname,

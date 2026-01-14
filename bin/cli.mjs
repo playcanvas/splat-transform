@@ -1,5 +1,5 @@
 #!/usr/bin/env node
 
-import { main } from '../dist/index.mjs';
+import { main } from '../dist/cli.mjs';
 
 await main();

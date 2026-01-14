@@ -1,7 +1,7 @@
 import { GraphicsDevice, WebgpuGraphicsDevice } from 'playcanvas';
 import { create, globals } from 'webgpu';
 
-import { logger } from './utils/logger';
+import { logger } from '../lib/index';
 
 const initializeGlobals = () => {
     Object.assign(globalThis, globals);
@@ -77,7 +77,7 @@ const enumerateAdapters = async () => {
     }
 
     try {
-        logger.info('Detecting GPU adapters...');
+        logger.log('Detecting GPU adapters...');
 
         // Get the actual adapter names directly from Dawn
         const dawnAdapterNames = await getDawnAdapterNames();
@@ -119,7 +119,7 @@ const createDevice = async (adapterName?: string): Promise<GraphicsDevice> => {
     await graphicsDevice.createDevice();
 
     // print gpu info
-    logger.info(`Using GPU: ${adapterName || 'auto'}`);
+    logger.log(`Using GPU: ${adapterName || 'auto'}`);
 
     return graphicsDevice;
 };

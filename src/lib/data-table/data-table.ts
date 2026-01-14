@@ -147,4 +147,4 @@ class DataTable {
     }
 }
 
-export { Column, DataTable, TypedArray };
+export { Column, DataTable, TypedArray, ColumnType, Row };
