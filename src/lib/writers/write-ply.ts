@@ -44,14 +44,14 @@ const writePly = async (options: WritePlyOptions, fs: FileSystem) => {
     for (let i = 0; i < plyData.elements.length; ++i) {
         const table = plyData.elements[i].dataTable;
         const columns = table.columns;
-        const buffers = columns.map(c => Buffer.from(c.data.buffer));
+        const buffers = columns.map(c => new Uint8Array(c.data.buffer, c.data.byteOffset, c.data.byteLength));
         const sizes = columns.map(c => c.data.BYTES_PER_ELEMENT);
         const rowSize = sizes.reduce((total, size) => total + size, 0);
 
         // write to file in chunks of 1024 rows
         const chunkSize = 1024;
         const numChunks = Math.ceil(table.numRows / chunkSize);
-        const chunkData = Buffer.alloc(chunkSize * rowSize);
+        const chunkData = new Uint8Array(chunkSize * rowSize);
 
         for (let c = 0; c < numChunks; ++c) {
             const numRows = Math.min(chunkSize, table.numRows - c * chunkSize);
@@ -63,7 +63,8 @@ const writePly = async (options: WritePlyOptions, fs: FileSystem) => {
 
                 for (let p = 0; p < columns.length; ++p) {
                     const s = sizes[p];
-                    buffers[p].copy(chunkData, offset, rowOffset * s, rowOffset * s + s);
+                    const srcOffset = rowOffset * s;
+                    chunkData.set(buffers[p].subarray(srcOffset, srcOffset + s), offset);
                     offset += s;
                 }
             }

@@ -37,7 +37,7 @@ class WebPCodec {
         Module._webp_free(outPtr);
         Module._free(inPtr); Module._free(outPtrPtr); Module._free(outSizePtr);
 
-        return Buffer.from(bytes);
+        return bytes;
     }
 
     decodeRGBA(webp: Uint8Array): { rgba: Uint8Array, width: number, height: number } {
