@@ -1,3 +1,4 @@
+import { dirname, resolve } from 'pathe';
 import { GraphicsDevice } from 'playcanvas';
 
 import { version } from '../../../package.json';
@@ -7,7 +8,6 @@ import { type FileSystem, writeFile, ZipFileSystem } from '../io/write';
 import { kmeans } from '../spatial/k-means';
 import { logger } from '../utils/logger';
 import { sigmoid } from '../utils/math';
-import { dirname, resolve } from '../utils/path';
 import { WebPCodec } from '../utils/webp-codec';
 
 /**
