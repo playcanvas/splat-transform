@@ -1,6 +1,7 @@
 import { Quat, Vec3 } from 'playcanvas';
 
 import { Column, DataTable } from './data-table/data-table';
+import { computeSummary, type SummaryData } from './data-table/summary';
 import { transform } from './data-table/transform';
 
 type Translate = {
@@ -57,9 +58,58 @@ type Lod = {
     value: number;
 };
 
-type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | Param | Lod;
+type Summary = {
+    kind: 'summary';
+};
+
+type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | Param | Lod | Summary;
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
+
+const formatMarkdown = (summary: SummaryData): string => {
+    const lines: string[] = [];
+
+    lines.push('# Summary');
+    lines.push('');
+    lines.push(`**Row Count:** ${summary.rowCount}`);
+    lines.push('');
+
+    // Build header and data rows as string arrays
+    const headers = ['Column', 'min', 'max', 'median', 'mean', 'stdDev', 'nanCount', 'infCount'];
+    const rows: string[][] = [];
+
+    for (const [name, stats] of Object.entries(summary.columns)) {
+        rows.push([
+            name,
+            String(stats.min),
+            String(stats.max),
+            String(stats.median),
+            String(stats.mean),
+            String(stats.stdDev),
+            String(stats.nanCount),
+            String(stats.infCount)
+        ]);
+    }
+
+    // Calculate max width for each column
+    const colWidths = headers.map((header, colIndex) => {
+        const dataWidths = rows.map(row => row[colIndex].length);
+        return Math.max(header.length, ...dataWidths);
+    });
+
+    // Build aligned table
+    const padRow = (cells: string[]) => `| ${cells.map((cell, i) => cell.padEnd(colWidths[i])).join(' | ')} |`;
+
+    const separator = `|${colWidths.map(w => '-'.repeat(w + 2)).join('|')}|`;
+
+    lines.push(padRow(headers));
+    lines.push(separator);
+    for (const row of rows) {
+        lines.push(padRow(row));
+    }
+
+    return lines.join('\n');
+};
 
 const filter = (dataTable: DataTable, predicate: (row: any, rowIndex: number) => boolean): DataTable => {
     const indices = new Uint32Array(dataTable.numRows);
@@ -186,6 +236,12 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
                     result.addColumn(new Column('lod', new Float32Array(result.numRows)));
                 }
                 result.getColumnByName('lod').data.fill(processAction.value);
+                break;
+            }
+            case 'summary': {
+                const summary = computeSummary(result);
+                const markdown = formatMarkdown(summary);
+                console.log(markdown);
                 break;
             }
         }

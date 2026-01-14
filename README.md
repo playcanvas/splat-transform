@@ -12,7 +12,8 @@
 SplatTransform is an open source CLI tool for converting and editing Gaussian splats. It can:
 
 📥 Read PLY, Compressed PLY, SOG, SPLAT, KSPLAT, SPZ and LCC formats  
-📤 Write PLY, Compressed PLY, SOG, CSV, HTML Viewer, LOD (streaming) and Summary formats  
+📤 Write PLY, Compressed PLY, SOG, CSV, HTML Viewer and LOD (streaming) formats  
+📊 Generate statistical summaries for data analysis  
 🔗 Merge multiple splats  
 🔄 Apply transformations to input splats  
 🎛️ Filter out Gaussians or spherical harmonic bands  
@@ -35,6 +36,7 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 **Key points:**
 - Input files become the working set; ACTIONS are applied in order
 - The last file is the output; actions after it modify the final result
+- Use `/dev/null` (Unix) or `nul` (Windows) as output to discard file output
 
 ## Supported Formats
 
@@ -51,8 +53,6 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 | `.mjs` | ✅ | ❌ | Generate a scene using an mjs script (Beta) |
 | `.csv` | ❌ | ✅ | Comma-separated values spreadsheet |
 | `.html` | ❌ | ✅ | HTML viewer app (single-page or unbundled) based on SOG |
-| `.summary.json` | ❌ | ✅ | Statistical summary in JSON format (for test validation) |
-| `.summary.md` | ❌ | ✅ | Statistical summary in Markdown table format (for review) |
 
 ## Actions
 
@@ -70,6 +70,7 @@ Actions can be repeated and applied in any order:
                                           cmp ∈ {lt,lte,gt,gte,eq,neq}
 -p, --params           <key=val,...>    Pass parameters to .mjs generator script
 -l, --lod              <n>              Specify the level of detail of this model, n >= 0.
+    --summary                           Print per-column statistics to stdout
 ```
 
 ## Global Options
@@ -176,11 +177,14 @@ splat-transform input1.ply input2.ply output.ply -t 0,0,10 -s 0.5
 Generate per-column statistics for data analysis or test validation:
 
 ```bash
-# Generate JSON summary (for programmatic test validation)
-splat-transform input.ply output.summary.json
+# Print summary, then write output
+splat-transform input.ply --summary output.ply
 
-# Generate Markdown summary (for human review)
-splat-transform input.ply output.summary.md
+# Print summary without writing a file (discard output)
+splat-transform input.ply --summary /dev/null
+
+# Print summary before and after a transform
+splat-transform input.ply --summary -s 0.5 --summary output.ply
 ```
 
 The summary includes min, max, median, mean, stdDev, nanCount and infCount for each column in the data.

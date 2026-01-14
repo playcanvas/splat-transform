@@ -8,9 +8,8 @@ import { writeHtml } from './writers/write-html';
 import { writeLod } from './writers/write-lod';
 import { writePly } from './writers/write-ply';
 import { writeSog, type DeviceCreator } from './writers/write-sog';
-import { writeSummary } from './writers/write-summary';
 
-type OutputFormat = 'csv' | 'sog' | 'sog-bundle' | 'lod' | 'compressed-ply' | 'ply' | 'html' | 'html-bundle' | 'summary' | 'summary-md';
+type OutputFormat = 'csv' | 'sog' | 'sog-bundle' | 'lod' | 'compressed-ply' | 'ply' | 'html' | 'html-bundle';
 
 type WriteOptions = {
     filename: string;
@@ -38,10 +37,6 @@ const getOutputFormat = (filename: string, options: Options): OutputFormat => {
         return 'ply';
     } else if (lowerFilename.endsWith('.html')) {
         return options.unbundled ? 'html' : 'html-bundle';
-    } else if (lowerFilename.endsWith('.summary.json')) {
-        return 'summary';
-    } else if (lowerFilename.endsWith('.summary.md')) {
-        return 'summary-md';
     }
 
     throw new Error(`Unsupported output file type: ${filename}`);
@@ -103,12 +98,6 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
                 iterations: options.iterations,
                 createDevice
             }, fs);
-            break;
-        case 'summary':
-            await writeSummary({ filename, dataTable, format: 'json' }, fs);
-            break;
-        case 'summary-md':
-            await writeSummary({ filename, dataTable, format: 'md' }, fs);
             break;
     }
 };

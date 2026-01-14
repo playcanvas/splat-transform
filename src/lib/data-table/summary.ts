@@ -1,5 +1,4 @@
-import { DataTable } from '../data-table/data-table';
-import { type FileSystem } from '../io/write';
+import { DataTable } from './data-table';
 
 type ColumnStats = {
     min: number;
@@ -15,12 +14,6 @@ type SummaryData = {
     version: number;
     rowCount: number;
     columns: Record<string, ColumnStats>;
-};
-
-type WriteSummaryOptions = {
-    filename: string;
-    dataTable: DataTable;
-    format: 'json' | 'md';
 };
 
 const PRECISION = 6;
@@ -116,53 +109,4 @@ const computeSummary = (dataTable: DataTable): SummaryData => {
     };
 };
 
-const formatJson = (summary: SummaryData): string => {
-    return JSON.stringify(summary, null, 2);
-};
-
-const formatMarkdown = (summary: SummaryData): string => {
-    const lines: string[] = [];
-
-    lines.push('# Summary');
-    lines.push('');
-    lines.push(`**Row Count:** ${summary.rowCount}`);
-    lines.push('');
-
-    // Table header
-    lines.push('| Column | min | max | median | mean | stdDev | nanCount | infCount |');
-    lines.push('|--------|-----|-----|--------|------|--------|----------|----------|');
-
-    // Table rows
-    for (const [name, stats] of Object.entries(summary.columns)) {
-        const row = [
-            name,
-            stats.min,
-            stats.max,
-            stats.median,
-            stats.mean,
-            stats.stdDev,
-            stats.nanCount,
-            stats.infCount
-        ];
-        lines.push(`| ${row.join(' | ')} |`);
-    }
-
-    return lines.join('\n');
-};
-
-const writeSummary = async (options: WriteSummaryOptions, fs: FileSystem) => {
-    const { filename, dataTable, format } = options;
-
-    const summary = computeSummary(dataTable);
-
-    const content = format === 'json' ?
-        formatJson(summary) :
-        formatMarkdown(summary);
-
-    const textEncoder = new TextEncoder();
-    const writer = await fs.createWriter(filename);
-    await writer.write(textEncoder.encode(content));
-    await writer.close();
-};
-
-export { writeSummary };
+export { computeSummary, type ColumnStats, type SummaryData };
