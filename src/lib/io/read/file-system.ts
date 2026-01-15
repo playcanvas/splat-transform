@@ -67,7 +67,6 @@ abstract class ReadStream {
 /**
  * Interface representing a readable data source.
  * Provides size information and creates streams for reading.
- * @ignore
  */
 interface ReadSource {
     /**
