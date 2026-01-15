@@ -6,6 +6,16 @@ type WriteCSVOptions = {
     dataTable: DataTable;
 };
 
+/**
+ * Writes Gaussian splat data to a CSV text file.
+ *
+ * Useful for debugging, analysis, or importing into spreadsheet applications.
+ * Each row represents one splat with all column values separated by commas.
+ *
+ * @param options - Options including filename and data table to write.
+ * @param fs - File system for writing the output file.
+ * @ignore
+ */
 const writeCsv = async (options: WriteCSVOptions, fs: FileSystem) => {
     const { filename, dataTable } = options;
 

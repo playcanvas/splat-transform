@@ -1,7 +1,25 @@
+/**
+ * Union of all typed array types supported for column data.
+ */
 type TypedArray = Int8Array | Uint8Array | Int16Array | Uint16Array | Int32Array | Uint32Array | Float32Array | Float64Array;
 
+/**
+ * String identifiers for typed array element types.
+ */
 type ColumnType = 'int8' | 'uint8' | 'int16' | 'uint16' | 'int32' | 'uint32' | 'float32' | 'float64';
 
+/**
+ * A named column of typed array data within a DataTable.
+ *
+ * Columns store homogeneous numeric data efficiently using JavaScript typed arrays.
+ *
+ * @example
+ * ```ts
+ * const positions = new Column('x', new Float32Array([1.0, 2.0, 3.0]));
+ * console.log(positions.name);     // 'x'
+ * console.log(positions.dataType); // 'float32'
+ * ```
+ */
 class Column {
     name: string;
     data: TypedArray;
@@ -30,10 +48,40 @@ class Column {
     }
 }
 
+/**
+ * A row object mapping column names to numeric values.
+ * @ignore
+ */
 type Row = {
     [colName: string]: number;
 };
 
+/**
+ * A table of columnar data representing Gaussian splat properties.
+ *
+ * DataTable is the core data structure for splat data. Each column represents
+ * a property (e.g., position, rotation, color) as a typed array, and all columns
+ * must have the same number of rows.
+ *
+ * Standard columns include:
+ * - Position: `x`, `y`, `z`
+ * - Rotation: `rot_0`, `rot_1`, `rot_2`, `rot_3` (quaternion)
+ * - Scale: `scale_0`, `scale_1`, `scale_2` (log scale)
+ * - Color: `f_dc_0`, `f_dc_1`, `f_dc_2` (spherical harmonics DC)
+ * - Opacity: `opacity` (logit)
+ * - Spherical Harmonics: `f_rest_0` through `f_rest_44`
+ *
+ * @example
+ * ```ts
+ * const table = new DataTable([
+ *     new Column('x', new Float32Array([0, 1, 2])),
+ *     new Column('y', new Float32Array([0, 0, 0])),
+ *     new Column('z', new Float32Array([0, 0, 0]))
+ * ]);
+ * console.log(table.numRows);    // 3
+ * console.log(table.numColumns); // 3
+ * ```
+ */
 class DataTable {
     columns: Column[];
 

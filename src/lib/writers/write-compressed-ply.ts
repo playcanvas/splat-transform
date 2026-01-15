@@ -32,6 +32,17 @@ type WriteCompressedPlyOptions = {
     dataTable: DataTable;
 };
 
+/**
+ * Writes Gaussian splat data to compressed PLY format.
+ *
+ * Uses quantization and chunking to reduce file size while maintaining
+ * compatibility with PLY-based viewers. Data is sorted using Morton order
+ * for better compression and streaming performance.
+ *
+ * @param options - Options including filename and data table to write.
+ * @param fs - File system for writing the output file.
+ * @ignore
+ */
 const writeCompressedPly = async (options: WriteCompressedPlyOptions, fs: FileSystem) => {
     const { filename, dataTable } = options;
 

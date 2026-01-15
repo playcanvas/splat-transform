@@ -1,6 +1,21 @@
 import { Column, DataTable, TypedArray } from './data-table';
 
-// combine multiple DataTables into a single DataTable instance
+/**
+ * Combines multiple DataTables into a single DataTable.
+ *
+ * Merges rows from all input tables. Columns are matched by name and type;
+ * columns that don't exist in all tables will have undefined values for
+ * rows from tables lacking that column.
+ *
+ * @param dataTables - Array of DataTables to combine.
+ * @returns A new DataTable containing all rows from all input tables.
+ *
+ * @example
+ * ```ts
+ * const combined = combine([tableA, tableB, tableC]);
+ * console.log(combined.numRows); // tableA.numRows + tableB.numRows + tableC.numRows
+ * ```
+ */
 const combine = (dataTables: DataTable[]) : DataTable => {
     if (dataTables.length === 1) {
         // nothing to combine

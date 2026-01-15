@@ -23,6 +23,7 @@ type Options = {
 
 /**
  * Parameter passed to MJS generator scripts.
+ * @ignore
  */
 type Param = {
     name: string;

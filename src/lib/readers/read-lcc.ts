@@ -406,6 +406,19 @@ const deserializeEnvironment = (raw: Uint8Array, compressInfo: CompressInfo, has
     return new DataTable(columns);
 };
 
+/**
+ * Reads an XGrids LCC format containing multi-LOD Gaussian splat data.
+ *
+ * The LCC format uses a quadtree spatial structure with multiple LOD levels.
+ * Each LOD level is stored separately in data.bin with optional spherical
+ * harmonics in shcoef.bin. Environment splats are stored in environment.bin.
+ *
+ * @param fileSystem - File system for reading the LCC files.
+ * @param filename - Path to the meta.lcc file.
+ * @param options - Options including LOD selection via `lodSelect`.
+ * @returns Promise resolving to an array of DataTables, one per LOD level plus environment.
+ * @ignore
+ */
 const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Options): Promise<DataTable[]> => {
     const lccData = await readFile(fileSystem, filename);
     const lccText = new TextDecoder().decode(lccData);

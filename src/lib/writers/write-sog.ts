@@ -11,8 +11,12 @@ import { sigmoid } from '../utils/math';
 import { WebPCodec } from '../utils/webp-codec';
 
 /**
- * A function that creates a GraphicsDevice on demand.
+ * A function that creates a PlayCanvas GraphicsDevice on demand.
+ *
+ * Used for GPU-accelerated k-means clustering during SOG compression.
  * The application is responsible for caching if needed.
+ *
+ * @returns Promise resolving to a GraphicsDevice instance.
  */
 type DeviceCreator = () => Promise<GraphicsDevice>;
 
@@ -115,6 +119,17 @@ type WriteSogOptions = {
     createDevice?: DeviceCreator;
 };
 
+/**
+ * Writes Gaussian splat data to the PlayCanvas SOG format.
+ *
+ * SOG (Splat Optimized Graphics) uses WebP lossless compression and k-means
+ * clustering to achieve high compression ratios. Data is stored in textures
+ * for efficient GPU loading.
+ *
+ * @param options - Options including filename, data, and compression settings.
+ * @param fs - File system for writing output files.
+ * @ignore
+ */
 const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     const { filename: outputFilename, bundle, dataTable, iterations, createDevice } = options;
 

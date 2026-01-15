@@ -70,6 +70,7 @@ const sigmoidInv = (y: number) => {
  * @param fileSystem - The file system to read from
  * @param filename - Path to meta.json (relative paths resolved from its directory)
  * @returns DataTable with Gaussian splat data
+ * @ignore
  */
 const readSog = async (fileSystem: ReadFileSystem, filename: string): Promise<DataTable> => {
     const decoder = await WebPCodec.create();

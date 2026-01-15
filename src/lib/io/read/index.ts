@@ -7,4 +7,4 @@ export { dirname, join } from 'pathe';
 // Filesystem implementations (platform-agnostic only)
 export { MemoryReadFileSystem } from './memory-file-system';
 export { UrlReadFileSystem } from './url-file-system';
-export { ZipReadFileSystem } from './zip-file-system';
+export { ZipReadFileSystem, type ZipEntry } from './zip-file-system';

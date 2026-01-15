@@ -1,6 +1,7 @@
 /**
  * Abstract base class for streaming data from a source.
  * Uses a pull-based model where the consumer provides the buffer.
+ * @ignore
  */
 abstract class ReadStream {
     /**
@@ -66,6 +67,7 @@ abstract class ReadStream {
 /**
  * Interface representing a readable data source.
  * Provides size information and creates streams for reading.
+ * @ignore
  */
 interface ReadSource {
     /**

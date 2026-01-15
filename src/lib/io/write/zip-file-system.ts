@@ -27,7 +27,26 @@ class ZipEntryWriter implements Writer {
     }
 }
 
-// FileSystem implementation that writes files into a zip archive
+/**
+ * A file system that writes files into a ZIP archive.
+ *
+ * Creates a ZIP file containing all written files. Used internally
+ * for bundled output formats like .sog files.
+ *
+ * @example
+ * ```ts
+ * const outputWriter = await fs.createWriter('bundle.zip');
+ * const zipFs = new ZipFileSystem(outputWriter);
+ *
+ * // Write files into the zip
+ * const writer = await zipFs.createWriter('data.json');
+ * await writer.write(jsonData);
+ * await writer.close();
+ *
+ * // Finalize the zip
+ * await zipFs.close();
+ * ```
+ */
 class ZipFileSystem implements FileSystem {
     close: () => Promise<void>;
     createWriter: (filename: string) => Promise<Writer>;

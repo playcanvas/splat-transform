@@ -57,6 +57,8 @@
     "publint": "0.3.16",
     "rollup": "4.54.0",
     "tslib": "2.8.1",
+    "typedoc": "0.28.15",
+    "typedoc-plugin-mdn-links": "5.0.10",
     "typescript": "5.9.3"
   },
   "peerDependencies": {
@@ -64,6 +66,7 @@
   },
   "scripts": {
     "build": "rollup -c",
+    "docs": "typedoc",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",
     "publint": "publint",
