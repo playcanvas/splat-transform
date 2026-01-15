@@ -1,18 +1,34 @@
 import { DataTable } from './data-table';
 
+/**
+ * Statistical summary for a single column.
+ */
 type ColumnStats = {
+    /** Minimum value (excluding NaN/Inf). */
     min: number;
+    /** Maximum value (excluding NaN/Inf). */
     max: number;
+    /** Median value. */
     median: number;
+    /** Arithmetic mean. */
     mean: number;
+    /** Standard deviation. */
     stdDev: number;
+    /** Count of NaN values. */
     nanCount: number;
+    /** Count of Infinity values. */
     infCount: number;
 };
 
+/**
+ * Statistical summary for an entire DataTable.
+ */
 type SummaryData = {
+    /** Summary format version. */
     version: number;
+    /** Total number of rows. */
     rowCount: number;
+    /** Per-column statistics keyed by column name. */
     columns: Record<string, ColumnStats>;
 };
 
@@ -95,6 +111,23 @@ const computeColumnStats = (data: ArrayLike<number>): ColumnStats => {
     };
 };
 
+/**
+ * Computes statistical summary for all columns in a DataTable.
+ *
+ * For each column, calculates min, max, median, mean, standard deviation,
+ * and counts of NaN/Infinity values. Useful for data validation and analysis.
+ *
+ * @param dataTable - The DataTable to analyze.
+ * @returns Summary data with per-column statistics.
+ *
+ * @example
+ * ```ts
+ * const summary = computeSummary(dataTable);
+ * console.log(summary.rowCount);
+ * console.log(summary.columns['x'].mean);
+ * console.log(summary.columns['opacity'].nanCount);
+ * ```
+ */
 const computeSummary = (dataTable: DataTable): SummaryData => {
     const columns: Record<string, ColumnStats> = {};
 

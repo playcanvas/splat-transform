@@ -388,4 +388,4 @@ class ZipReadFileSystem implements ReadFileSystem {
     }
 }
 
-export { ZipReadFileSystem };
+export { ZipReadFileSystem, type ZipEntry };

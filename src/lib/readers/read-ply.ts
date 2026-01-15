@@ -131,6 +131,16 @@ const readExact = async (
     return totalRead;
 };
 
+/**
+ * Reads a PLY file containing Gaussian splat data.
+ *
+ * Supports both standard PLY files and compressed PLY format. The PLY format is
+ * the standard output from 3D Gaussian Splatting training pipelines.
+ *
+ * @param source - The read source providing access to the PLY file data.
+ * @returns Promise resolving to a DataTable containing the splat data.
+ * @ignore
+ */
 const readPly = async (source: ReadSource): Promise<DataTable> => {
     const stream = source.read();
 

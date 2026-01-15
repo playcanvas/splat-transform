@@ -19,6 +19,16 @@ type WritePlyOptions = {
     plyData: PlyData;
 };
 
+/**
+ * Writes Gaussian splat data to a binary PLY file.
+ *
+ * The PLY format is the standard output from 3D Gaussian Splatting training
+ * and is widely supported by visualization tools.
+ *
+ * @param options - Options including filename and PLY data to write.
+ * @param fs - File system for writing the output file.
+ * @ignore
+ */
 const writePly = async (options: WritePlyOptions, fs: FileSystem) => {
     const { filename, plyData } = options;
 

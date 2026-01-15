@@ -90,6 +90,17 @@ const COMPRESSION_MODES: CompressionConfig[] = [
 
 const HARMONICS_COMPONENT_COUNT = [0, 9, 24, 45];
 
+/**
+ * Reads a .ksplat file containing compressed Gaussian splat data.
+ *
+ * The .ksplat format (Kevin Kwok's format) uses spatial bucketing and
+ * quantization to achieve high compression ratios while preserving quality.
+ * Supports multiple compression modes and spherical harmonics bands.
+ *
+ * @param source - The read source providing access to the .ksplat file data.
+ * @returns Promise resolving to a DataTable containing the splat data.
+ * @ignore
+ */
 const readKsplat = async (source: ReadSource): Promise<DataTable> => {
     // Load complete file
     const fileBuffer = await source.read().readAll();

@@ -29,6 +29,16 @@ type WriteHtmlOptions = {
     createDevice?: DeviceCreator;
 };
 
+/**
+ * Writes Gaussian splat data as a self-contained HTML viewer.
+ *
+ * Creates an interactive 3D viewer that can be opened directly in a browser.
+ * Uses the PlayCanvas SuperSplat viewer for rendering.
+ *
+ * @param options - Options including filename, data, and viewer settings.
+ * @param fs - File system for writing output files.
+ * @ignore
+ */
 const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
     const { filename, dataTable, viewerSettingsJson, bundle, iterations, createDevice } = options;
 

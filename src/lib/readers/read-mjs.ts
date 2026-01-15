@@ -7,6 +7,18 @@ type Generator = {
     getRow: (index: number, row: any) => void;
 };
 
+/**
+ * Reads splat data from a JavaScript module generator.
+ *
+ * The module must export a `Generator` class with a static `create(params)` method
+ * that returns an object with `count`, `columnNames`, and `getRow(index, row)` properties.
+ * This allows programmatic generation of splat data.
+ *
+ * @param moduleUrl - URL or path to the JavaScript module.
+ * @param params - Parameters to pass to the generator's create method.
+ * @returns Promise resolving to a DataTable containing the generated splat data.
+ * @ignore
+ */
 const readMjs = async (moduleUrl: string, params: Param[]): Promise<DataTable> => {
     const module = await import(moduleUrl);
     if (!module) {
