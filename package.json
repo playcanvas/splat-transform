@@ -18,8 +18,14 @@
   "types": "dist/lib/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/lib/index.d.ts",
-      "import": "./dist/index.mjs"
+      "import": {
+        "types": "./dist/lib/index.d.ts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/lib/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./lib/*": "./lib/*"
   },
@@ -65,7 +71,7 @@
     "playcanvas": ">=2.0.0"
   },
   "scripts": {
-    "build": "rollup -c",
+    "build": "rollup -c && node -e \"fs=require('fs');fs.copyFileSync('dist/lib/index.d.ts','dist/lib/index.d.cts')\"",
     "docs": "typedoc",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",

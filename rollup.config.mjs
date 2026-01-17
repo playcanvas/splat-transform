@@ -2,8 +2,8 @@ import json from '@rollup/plugin-json';
 import resolve from '@rollup/plugin-node-resolve';
 import typescript from '@rollup/plugin-typescript';
 
-// Library build - platform agnostic
-const library = {
+// Library build - ESM (platform agnostic)
+const esm = {
     input: 'src/lib/index.ts',
     output: {
         dir: 'dist',
@@ -17,6 +17,29 @@ const library = {
             tsconfig: './tsconfig.json',
             declaration: true,
             declarationDir: 'dist'
+        }),
+        resolve(),
+        json()
+    ],
+    cache: false
+};
+
+// Library build - CommonJS (for non-module apps)
+const cjs = {
+    input: 'src/lib/index.ts',
+    output: {
+        dir: 'dist',
+        format: 'cjs',
+        sourcemap: true,
+        entryFileNames: 'index.cjs',
+        exports: 'named'
+    },
+    external: ['playcanvas'],
+    plugins: [
+        typescript({
+            tsconfig: './tsconfig.json',
+            declaration: false,
+            declarationDir: undefined
         }),
         resolve(),
         json()
@@ -46,4 +69,4 @@ const cli = {
     cache: false
 };
 
-export default [library, cli];
+export default [esm, cjs, cli];
