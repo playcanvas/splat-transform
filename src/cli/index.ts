@@ -391,7 +391,7 @@ const main = async () => {
             if (node.stepName) {
                 console.error(`[${node.step}/${node.totalSteps}] ${node.stepName}`);
             } else {
-                process.stderr.write(node.step === node.totalSteps ? '#\n' : '#');
+                process.stderr.write(node.step === node.totalSteps ? '# done 🎉\n' : '#');
             }
         }
     });
