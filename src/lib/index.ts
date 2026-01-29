@@ -45,7 +45,7 @@ export type { Options, Param } from './types';
 
 // Logger
 export { logger } from './utils/logger';
-export type { Logger } from './utils/logger';
+export type { Logger, ProgressNode } from './utils/logger';
 
 // WebP codec (for browser WASM configuration)
 export { WebPCodec } from './utils/webp-codec';
