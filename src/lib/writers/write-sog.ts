@@ -365,14 +365,33 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     };
 
     const shBands = { '9': 1, '24': 2, '-1': 3 }[shNames.findIndex(v => !dataTable.hasColumn(v))] ?? 0;
+    const totalSteps = shBands > 0 ? 7 : 6;
 
     // convert and write attributes
+    logger.progress.begin(totalSteps);
+
+    logger.progress.step('Generating morton order');
+    // indices already generated above
+
+    logger.progress.step('Writing positions');
     const meansMinMax = await writeMeans();
+
+    logger.progress.step('Writing quaternions');
     await writeQuaternions();
 
+    logger.progress.step('Compressing scales');
     const scalesCodebook = await writeScales();
+
+    logger.progress.step('Compressing colors');
     const colorsCodebook = await writeColors();
-    const shN = shBands > 0 ? await writeSH(shBands) : null;
+
+    let shN = null;
+    if (shBands > 0) {
+        logger.progress.step('Compressing spherical harmonics');
+        shN = await writeSH(shBands);
+    }
+
+    logger.progress.step('Finalizing');
 
     // construct meta.json
     const meta: any = {

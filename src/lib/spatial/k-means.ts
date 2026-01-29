@@ -167,6 +167,9 @@ const kmeans = async (points: DataTable, k: number, iterations: number, device?:
 
     logger.debug(`Running k-means clustering: dims=${points.numColumns} points=${points.numRows} clusters=${k} iterations=${iterations}...`);
 
+    // Report iterations as anonymous nested steps
+    logger.progress.begin(iterations);
+
     while (!converged) {
         if (gpuClustering) {
             await gpuClustering.execute(points, centroids, labels);
@@ -194,14 +197,13 @@ const kmeans = async (points: DataTable, k: number, iterations: number, device?:
             converged = true;
         }
 
-        logger.progress('#');
+        // Report iteration as anonymous step
+        logger.progress.step();
     }
 
     if (gpuClustering) {
         gpuClustering.destroy();
     }
-
-    logger.debug(' done 🎉');
 
     return { centroids, labels };
 };

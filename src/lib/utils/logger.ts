@@ -1,4 +1,21 @@
 /**
+ * Progress node representing a step in a nested progress tree.
+ * Walk up via `parent` to access enclosing steps.
+ */
+interface ProgressNode {
+    /** Current step number at this level. */
+    step: number;
+    /** Total number of steps at this level. */
+    totalSteps: number;
+    /** Name of the current step (undefined for anonymous steps). */
+    stepName?: string;
+    /** Parent node (undefined for root level). */
+    parent?: ProgressNode;
+    /** Nesting depth (0 for root level). */
+    depth: number;
+}
+
+/**
  * Logger interface for injectable logging implementation.
  */
 interface Logger {
@@ -10,27 +27,77 @@ interface Logger {
     error(...args: any[]): void;
     /** Log debug/verbose messages. */
     debug(...args: any[]): void;
-    /** Output text without newline (for progress indicators). */
-    progress(text: string): void;
     /** Output data to stdout (for piping). */
     output(text: string): void;
+    /** Called on progress step updates with the current node. */
+    onProgress(node: ProgressNode): void;
 }
 
 /**
  * Default logger implementation (browser-safe).
- * Progress is a no-op since process.stdout is not available in browsers.
  */
 const defaultLogger: Logger = {
     log: (...args) => console.log(...args),
     warn: (...args) => console.warn(...args),
     error: (...args) => console.error(...args),
     debug: (...args) => console.log(...args),
-    progress: () => {},
-    output: text => console.log(text)
+    output: text => console.log(text),
+    onProgress: (node) => {
+        // step 0 is the begin notification - nothing to print
+        if (node.step === 0) return;
+
+        const indent = '  '.repeat(node.depth);
+        const name = node.stepName ?? '';
+        console.log(`${indent}[${node.step}/${node.totalSteps}] ${name}`);
+    }
 };
 
 let impl: Logger = defaultLogger;
 let quiet = false;
+
+/**
+ * Progress tracking with nested step support.
+ * Access via logger.progress.begin(), logger.progress.step()
+ */
+class Progress {
+    private currentNode: ProgressNode | undefined;
+
+    /**
+     * Start a multi-step progress operation. Creates a new node with current as parent.
+     * Calls onProgress with step: 0 to notify consumers of the new progress block.
+     * @param totalSteps - Total number of steps in the operation.
+     */
+    begin(totalSteps: number) {
+        this.currentNode = {
+            step: 0,
+            totalSteps,
+            stepName: undefined,
+            parent: this.currentNode,
+            depth: (this.currentNode?.depth ?? -1) + 1
+        };
+
+        if (!quiet) impl.onProgress(this.currentNode);
+    }
+
+    /**
+     * Advance to the next step. Auto-increments the step counter.
+     * Auto-ends when all steps are complete.
+     * @param name - Optional name of the step.
+     */
+    step(name?: string) {
+        if (!this.currentNode) return;
+
+        this.currentNode.step++;
+        this.currentNode.stepName = name;
+
+        if (!quiet) impl.onProgress(this.currentNode);
+
+        // Auto-end when all steps complete
+        if (this.currentNode.step === this.currentNode.totalSteps) {
+            this.currentNode = this.currentNode.parent;
+        }
+    }
+}
 
 /**
  * Global logger instance with injectable implementation.
@@ -38,6 +105,12 @@ let quiet = false;
  * Use setQuiet() to suppress log/warn/progress output.
  */
 const logger = {
+    /**
+     * Progress tracking with nested step support.
+     * Call begin(n) to start, then step() n times. Auto-ends when complete.
+     */
+    progress: new Progress(),
+
     /**
      * Set a custom logger implementation.
      * @param l - The logger implementation to use.
@@ -87,14 +160,6 @@ const logger = {
     },
 
     /**
-     * Output text without newline (for progress indicators). Suppressed in quiet mode.
-     * @param text - The text to output.
-     */
-    progress(text: string) {
-        if (!quiet) impl.progress(text);
-    },
-
-    /**
      * Output data to stdout (for piping). Always shown, even in quiet mode.
      * @param text - The text to output.
      */
@@ -104,4 +169,4 @@ const logger = {
 };
 
 export { logger };
-export type { Logger };
+export type { Logger, ProgressNode };

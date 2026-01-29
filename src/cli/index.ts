@@ -319,7 +319,7 @@ SUPPORTED INPUTS
     .ply   .compressed.ply   .sog   meta.json   .ksplat   .splat   .spz   .mjs   .lcc
 
 SUPPORTED OUTPUTS
-    .ply   .compressed.ply   .sog   meta.json   .csv   .html   null
+    .ply   .compressed.ply   .sog   meta.json   lod-meta.json   .csv   .html   null
 
 ACTIONS (can be repeated, in any order)
     -t, --translate        <x,y,z>          Translate Gaussians by (x, y, z)
@@ -384,8 +384,14 @@ const main = async () => {
         warn: (...args) => console.warn(...args),
         error: (...args) => console.error(...args),
         debug: (...args) => console.error(...args),
-        progress: text => process.stderr.write(text),
-        output: text => console.log(text)
+        output: text => console.log(text),
+        onProgress: (node) => {
+            if (node.stepName) {
+                console.error(`[${node.step}/${node.totalSteps}] ${node.stepName}`);
+            } else if (node.step > 0) {
+                process.stderr.write(node.step === node.totalSteps ? '# done 🎉\n' : '#');
+            }
+        }
     });
 
     // configure logger
