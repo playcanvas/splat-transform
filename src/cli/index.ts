@@ -390,12 +390,9 @@ const main = async () => {
             if (node.step === 0) return;
 
             if (node.stepName) {
-                process.stderr.write(`[${node.step}/${node.totalSteps}] ${node.stepName}\n`);
+                console.error(`[${node.step}/${node.totalSteps}] ${node.stepName}`);
             } else {
-                process.stderr.write('#');
-                if (node.step === node.totalSteps) {
-                    process.stderr.write('\n');
-                }
+                process.stderr.write(node.step === node.totalSteps ? '#\n' : '#');
             }
         }
     });
