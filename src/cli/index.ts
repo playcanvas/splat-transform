@@ -379,7 +379,6 @@ const main = async () => {
     const { files, options } = await parseArguments();
 
     // inject Node.js-specific logger - logs go to stderr, data output goes to stdout
-    // Track hash count per node for proper output formatting
     logger.setLogger({
         log: (...args) => console.error(...args),
         warn: (...args) => console.warn(...args),
