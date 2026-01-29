@@ -386,11 +386,9 @@ const main = async () => {
         debug: (...args) => console.error(...args),
         output: text => console.log(text),
         onProgress: (node) => {
-            if (node.step === 0) return;
-
             if (node.stepName) {
                 console.error(`[${node.step}/${node.totalSteps}] ${node.stepName}`);
-            } else {
+            } else if (node.step > 0) {
                 process.stderr.write(node.step === node.totalSteps ? '# done 🎉\n' : '#');
             }
         }

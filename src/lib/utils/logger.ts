@@ -11,6 +11,8 @@ interface ProgressNode {
     stepName?: string;
     /** Parent node (undefined for root level). */
     parent?: ProgressNode;
+    /** Nesting depth (0 for root level). */
+    depth: number;
 }
 
 /**
@@ -44,11 +46,7 @@ const defaultLogger: Logger = {
         // step 0 is the begin notification - nothing to print
         if (node.step === 0) return;
 
-        // Calculate depth by walking up
-        let depth = 0;
-        for (let n = node.parent; n; n = n.parent) depth++;
-
-        const indent = '  '.repeat(depth);
+        const indent = '  '.repeat(node.depth);
         const name = node.stepName ?? '';
         console.log(`${indent}[${node.step}/${node.totalSteps}] ${name}`);
     }
@@ -74,7 +72,8 @@ class Progress {
             step: 0,
             totalSteps,
             stepName: undefined,
-            parent: this.currentNode
+            parent: this.currentNode,
+            depth: (this.currentNode?.depth ?? -1) + 1
         };
 
         if (!quiet) impl.onProgress(this.currentNode);
