@@ -144,6 +144,17 @@ type WriteLodOptions = {
     chunkExtent: number;
 };
 
+/**
+ * Writes Gaussian splat data to multi-LOD format with spatial chunking.
+ *
+ * Creates a hierarchical structure with multiple LOD levels, each stored
+ * in separate SOG files. Includes spatial indexing via a binary tree for
+ * efficient streaming and view-dependent loading.
+ *
+ * @param options - Options including filename, data, and chunking parameters.
+ * @param fs - File system for writing output files.
+ * @ignore
+ */
 const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
     const { filename, dataTable, envDataTable, iterations, createDevice, chunkCount, chunkExtent } = options;
 

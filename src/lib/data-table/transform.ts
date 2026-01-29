@@ -8,7 +8,25 @@ const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 const v = new Vec3();
 const q = new Quat();
 
-// apply translation, rotation and scale to a data table
+/**
+ * Applies a spatial transformation to splat data in-place.
+ *
+ * Transforms position, rotation, scale, and spherical harmonics data.
+ * The transformation is applied as: scale first, then rotation, then translation.
+ *
+ * @param dataTable - The DataTable to transform (modified in-place).
+ * @param t - Translation vector.
+ * @param r - Rotation quaternion.
+ * @param s - Uniform scale factor.
+ *
+ * @example
+ * ```ts
+ * import { Vec3, Quat } from 'playcanvas';
+ *
+ * // Scale by 2x, rotate 90° around Y, translate up
+ * transform(dataTable, new Vec3(0, 5, 0), new Quat().setFromEulerAngles(0, 90, 0), 2.0);
+ * ```
+ */
 const transform = (dataTable: DataTable, t: Vec3, r: Quat, s: number): void => {
     const mat = new Mat4().setTRS(t, r, new Vec3(s, s, s));
     const mat3 = new Mat3().setFromQuat(r);

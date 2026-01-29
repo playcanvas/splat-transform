@@ -32,6 +32,18 @@ function getFixed24(positionsView: DataView, elementIndex: number, memberIndex: 
 
 const HARMONICS_COMPONENT_COUNT = [0, 9, 24, 45];
 
+/**
+ * Reads a .spz file containing Niantic Labs compressed Gaussian splat data.
+ *
+ * The .spz format uses GZIP compression and fixed-point encoding to achieve
+ * compact file sizes. Supports version 2 and 3 of the format.
+ *
+ * @see https://github.com/nianticlabs/spz
+ *
+ * @param source - The read source providing access to the .spz file data.
+ * @returns Promise resolving to a DataTable containing the splat data.
+ * @ignore
+ */
 const readSpz = async (source: ReadSource): Promise<DataTable> => {
     // Load complete file
     let fileBuffer = await source.read().readAll();

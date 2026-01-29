@@ -5,64 +5,137 @@ import { computeSummary, type SummaryData } from './data-table/summary';
 import { transform } from './data-table/transform';
 import { logger } from './utils/logger';
 
+/**
+ * Translate splats by a 3D vector offset.
+ */
 type Translate = {
+    /** Action type identifier. */
     kind: 'translate';
+    /** Translation offset. */
     value: Vec3;
 };
 
+/**
+ * Rotate splats by Euler angles.
+ */
 type Rotate = {
+    /** Action type identifier. */
     kind: 'rotate';
-    value: Vec3;        // euler angles in degrees
+    /** Euler angles in degrees (x, y, z). */
+    value: Vec3;
 };
 
+/**
+ * Uniformly scale all splats.
+ */
 type Scale = {
+    /** Action type identifier. */
     kind: 'scale';
+    /** Scale factor. */
     value: number;
 };
 
+/**
+ * Remove splats containing NaN or Infinity values.
+ */
 type FilterNaN = {
+    /** Action type identifier. */
     kind: 'filterNaN';
 };
 
+/**
+ * Filter splats by comparing a column value.
+ */
 type FilterByValue = {
+    /** Action type identifier. */
     kind: 'filterByValue';
+    /** Name of the column to compare. */
     columnName: string;
+    /** Comparison operator. */
     comparator: 'lt' | 'lte' | 'gt' | 'gte' | 'eq' | 'neq';
+    /** Value to compare against. */
     value: number;
 };
 
+/**
+ * Remove spherical harmonic bands above a threshold.
+ */
 type FilterBands = {
+    /** Action type identifier. */
     kind: 'filterBands';
+    /** Maximum SH band to keep (0-3). */
     value: 0 | 1 | 2 | 3;
 };
 
+/**
+ * Keep only splats within a bounding box.
+ */
 type FilterBox = {
+    /** Action type identifier. */
     kind: 'filterBox';
+    /** Minimum corner of the box. */
     min: Vec3;
+    /** Maximum corner of the box. */
     max: Vec3;
 };
 
+/**
+ * Keep only splats within a sphere.
+ */
 type FilterSphere = {
+    /** Action type identifier. */
     kind: 'filterSphere';
+    /** Center of the sphere. */
     center: Vec3;
+    /** Radius of the sphere. */
     radius: number;
 };
 
+/**
+ * Parameter for .mjs generator modules.
+ */
 type Param = {
+    /** Action type identifier. */
     kind: 'param';
+    /** Parameter name. */
     name: string;
+    /** Parameter value. */
     value: string;
 };
 
+/**
+ * Assign a LOD level to all splats.
+ */
 type Lod = {
+    /** Action type identifier. */
     kind: 'lod';
+    /** LOD level to assign. */
     value: number;
 };
 
+/**
+ * Print a statistical summary to the logger.
+ */
 type Summary = {
+    /** Action type identifier. */
     kind: 'summary';
 };
 
+/**
+ * A processing action to apply to splat data.
+ *
+ * Actions can transform, filter, or analyze the data:
+ * - `translate` - Move splats by a Vec3 offset
+ * - `rotate` - Rotate splats by Euler angles (degrees)
+ * - `scale` - Uniformly scale splats
+ * - `filterNaN` - Remove splats with NaN/Inf values
+ * - `filterByValue` - Keep splats matching a column condition
+ * - `filterBands` - Remove spherical harmonic bands above a threshold
+ * - `filterBox` - Keep splats within a bounding box
+ * - `filterSphere` - Keep splats within a sphere
+ * - `lod` - Assign LOD level to all splats
+ * - `summary` - Print statistical summary to logger
+ */
 type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | Param | Lod | Summary;
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
@@ -128,7 +201,28 @@ const filter = (dataTable: DataTable, predicate: (row: any, rowIndex: number) =>
     return dataTable.permuteRows(indices.subarray(0, index));
 };
 
-// process a data table with standard options
+/**
+ * Applies a sequence of processing actions to splat data.
+ *
+ * Actions are applied in order and can include transformations (translate, rotate, scale),
+ * filters (NaN, value, box, sphere, bands), and analysis (summary).
+ *
+ * @param dataTable - The input splat data.
+ * @param processActions - Array of actions to apply in sequence.
+ * @returns The processed DataTable (may be a new instance if filtered).
+ *
+ * @example
+ * ```ts
+ * import { Vec3 } from 'playcanvas';
+ *
+ * const processed = processDataTable(dataTable, [
+ *     { kind: 'scale', value: 0.5 },
+ *     { kind: 'translate', value: new Vec3(0, 1, 0) },
+ *     { kind: 'filterNaN' },
+ *     { kind: 'filterByValue', columnName: 'opacity', comparator: 'gt', value: 0.1 }
+ * ]);
+ * ```
+ */
 const processDataTable = (dataTable: DataTable, processActions: ProcessAction[]) => {
     let result = dataTable;
 
@@ -251,4 +345,18 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
     return result;
 };
 
-export { ProcessAction, processDataTable };
+export {
+    processDataTable,
+    type ProcessAction,
+    type Translate,
+    type Rotate,
+    type Scale,
+    type FilterNaN,
+    type FilterByValue,
+    type FilterBands,
+    type FilterBox,
+    type FilterSphere,
+    type Param,
+    type Lod,
+    type Summary
+};

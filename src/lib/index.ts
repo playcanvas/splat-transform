@@ -8,17 +8,30 @@ export type { ColumnStats, SummaryData } from './data-table/summary';
 
 // High-level read/write
 export { readFile, getInputFormat } from './read';
-export type { InputFormat } from './read';
+export type { InputFormat, ReadFileOptions } from './read';
 export { writeFile, getOutputFormat } from './write';
-export type { OutputFormat } from './write';
+export type { OutputFormat, WriteOptions } from './write';
 
 // Processing
 export { processDataTable } from './process';
-export type { ProcessAction } from './process';
+export type {
+    ProcessAction,
+    Translate,
+    Rotate,
+    Scale,
+    FilterNaN,
+    FilterByValue,
+    FilterBands,
+    FilterBox,
+    FilterSphere,
+    Param as ProcessParam,
+    Lod,
+    Summary
+} from './process';
 
 // File system abstractions
 export { ReadStream, MemoryReadFileSystem, UrlReadFileSystem, ZipReadFileSystem } from './io/read';
-export type { ReadSource, ReadFileSystem, ProgressCallback } from './io/read';
+export type { ReadSource, ReadFileSystem, ProgressCallback, ZipEntry } from './io/read';
 export { MemoryFileSystem, ZipFileSystem } from './io/write';
 export type { FileSystem, Writer } from './io/write';
 

@@ -48,6 +48,21 @@ class MemoryWriter implements Writer {
     }
 }
 
+/**
+ * A file system that writes files to in-memory buffers.
+ *
+ * Useful for generating output without writing to disk, such as when
+ * creating data for download or further processing.
+ *
+ * @example
+ * ```ts
+ * const fs = new MemoryFileSystem();
+ * await writeFile({ filename: 'output.ply', ... }, fs);
+ *
+ * // Get the generated data
+ * const data = fs.results.get('output.ply');
+ * ```
+ */
 class MemoryFileSystem implements FileSystem {
     results: Map<string, Uint8Array> = new Map();
 

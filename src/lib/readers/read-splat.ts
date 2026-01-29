@@ -1,6 +1,16 @@
 import { Column, DataTable } from '../data-table/data-table';
 import { ReadSource } from '../io/read';
 
+/**
+ * Reads an Antimatter15 .splat file containing Gaussian splat data.
+ *
+ * The .splat format stores each splat as 32 bytes with position, scale, color,
+ * opacity, and rotation data in a compact binary format.
+ *
+ * @param source - The read source providing access to the .splat file data.
+ * @returns Promise resolving to a DataTable containing the splat data.
+ * @ignore
+ */
 const readSplat = async (source: ReadSource): Promise<DataTable> => {
     // Load complete file
     const fileBuffer = await source.read().readAll();
