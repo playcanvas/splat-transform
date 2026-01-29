@@ -3,7 +3,7 @@
  * Walk up via `parent` to access enclosing steps.
  */
 interface ProgressNode {
-    /** Current step number (1-based) at this level. */
+    /** Current step number at this level. */
     step: number;
     /** Total number of steps at this level. */
     totalSteps: number;
