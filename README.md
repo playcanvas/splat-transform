@@ -274,6 +274,7 @@ import {
 | `transform` | Apply spatial transformations |
 | `processDataTable` | Apply a sequence of processing actions |
 | `computeSummary` | Generate statistical summary of data |
+| `sortMortonOrder` | Sort indices by Morton code for spatial locality |
 
 ### File System Abstractions
 

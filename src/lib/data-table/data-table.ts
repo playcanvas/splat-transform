@@ -202,8 +202,8 @@ class DataTable {
      * in-place rather than creating a copy.
      *
      * @param indices - Array of indices defining the permutation. Must have the same
-     *                  length as the number of rows, and must be a valid permutation
-     *                  (each index 0 to n-1 appears exactly once).
+     * length as the number of rows, and must be a valid permutation
+     * (each index 0 to n-1 appears exactly once).
      */
     permuteRowsInPlace(indices: Uint32Array | number[]): void {
         const n = this.numRows;
