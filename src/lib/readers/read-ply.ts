@@ -57,6 +57,11 @@ const getReader = (type: string): ValueReader => {
     }
 };
 
+// Check if all properties in an element are float type (enables fast path)
+const isFloatElement = (element: PlyElement): boolean => {
+    return element.properties.every(p => p.type === 'float');
+};
+
 // parse the ply header text and return an array of Element structures and a
 // string containing the ply format
 const parseHeader = (data: Uint8Array): PlyHeader => {
@@ -197,47 +202,76 @@ const readPly = async (source: ReadSource): Promise<DataTable> => {
         const element = header.elements[i];
 
         const columns = element.properties.map((property) => {
-            return new Column(property.name, new (getDataType(property.type))(element.count));
+            return new Column(property.name, new (getDataType(property.type)!)(element.count));
         });
 
-        // Pre-compute column info: data array, byte size, byte offset within row, and reader function
-        let byteOffset = 0;
-        const columnInfo = element.properties.map((property, idx) => {
-            const size = columns[idx].data.BYTES_PER_ELEMENT;
-            const info = {
-                data: columns[idx].data,
-                size,
-                byteOffset,
-                reader: getReader(property.type)
-            };
-            byteOffset += size;
-            return info;
-        });
+        const numProperties = columns.length;
+        const numRows = element.count;
 
-        const rowSize = byteOffset;
+        // Check if all properties are float32 (enables fast path)
+        if (isFloatElement(element)) {
+            // Fast path: all properties are float32
+            // Use Float32Array view with property-major loop order for best performance
+            const rowSize = numProperties * 4; // 4 bytes per float
+            const chunkSize = 1024;
+            const numChunks = Math.ceil(numRows / chunkSize);
+            const chunkData = new Uint8Array(chunkSize * rowSize);
+            const floatData = new Float32Array(chunkData.buffer);
 
-        // read data in chunks of 1024 rows at a time
-        const chunkSize = 1024;
-        const numChunks = Math.ceil(element.count / chunkSize);
-        const chunkData = new Uint8Array(chunkSize * rowSize);
+            // Pre-extract storage arrays for direct access
+            const storage = columns.map(c => c.data as Float32Array);
 
-        for (let c = 0; c < numChunks; ++c) {
-            const numRows = Math.min(chunkSize, element.count - c * chunkSize);
+            for (let c = 0; c < numChunks; ++c) {
+                const chunkRows = Math.min(chunkSize, numRows - c * chunkSize);
+                const baseRowIndex = c * chunkSize;
 
-            await readExact(stream, chunkData, 0, rowSize * numRows);
+                await readExact(stream, chunkData, 0, rowSize * chunkRows);
 
-            // Create DataView once per chunk (avoids creating views in inner loop)
-            const view = new DataView(chunkData.buffer, chunkData.byteOffset, chunkData.byteLength);
+                // Property-major loop order: better cache locality, processes batch at once
+                for (let p = 0; p < numProperties; ++p) {
+                    const s = storage[p];
+                    for (let r = 0; r < chunkRows; ++r) {
+                        s[baseRowIndex + r] = floatData[r * numProperties + p];
+                    }
+                }
+            }
+        } else {
+            // General path: mixed types, use DataView with reader functions
+            let byteOffset = 0;
+            const columnInfo = element.properties.map((property, idx) => {
+                const size = columns[idx].data.BYTES_PER_ELEMENT;
+                const info = {
+                    data: columns[idx].data,
+                    size,
+                    byteOffset,
+                    reader: getReader(property.type)
+                };
+                byteOffset += size;
+                return info;
+            });
 
-            // read data row at a time using DataView
-            for (let r = 0; r < numRows; ++r) {
-                const rowIndex = c * chunkSize + r;
-                const rowByteOffset = r * rowSize;
+            const rowSize = byteOffset;
+            const chunkSize = 1024;
+            const numChunks = Math.ceil(numRows / chunkSize);
+            const chunkData = new Uint8Array(chunkSize * rowSize);
 
-                // Read each property value directly into the typed array
-                for (let p = 0; p < columnInfo.length; ++p) {
-                    const info = columnInfo[p];
-                    info.data[rowIndex] = info.reader(view, rowByteOffset + info.byteOffset);
+            for (let c = 0; c < numChunks; ++c) {
+                const chunkRows = Math.min(chunkSize, numRows - c * chunkSize);
+
+                await readExact(stream, chunkData, 0, rowSize * chunkRows);
+
+                // Create DataView once per chunk
+                const view = new DataView(chunkData.buffer, chunkData.byteOffset, chunkData.byteLength);
+
+                // Row-major loop with DataView readers
+                for (let r = 0; r < chunkRows; ++r) {
+                    const rowIndex = c * chunkSize + r;
+                    const rowByteOffset = r * rowSize;
+
+                    for (let p = 0; p < columnInfo.length; ++p) {
+                        const info = columnInfo[p];
+                        info.data[rowIndex] = info.reader(view, rowByteOffset + info.byteOffset);
+                    }
                 }
             }
         }
