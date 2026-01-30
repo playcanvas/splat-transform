@@ -95,7 +95,8 @@ const parseArguments = async () => {
             'filter-sphere': { type: 'string', short: 'S', multiple: true },
             params: { type: 'string', short: 'p', multiple: true },
             lod: { type: 'string', short: 'l', multiple: true },
-            summary: { type: 'boolean', short: 'm', multiple: true }
+            summary: { type: 'boolean', short: 'm', multiple: true },
+            'morton-order': { type: 'boolean', short: 'M', multiple: true }
         }
     });
 
@@ -297,6 +298,11 @@ const parseArguments = async () => {
                         kind: 'summary'
                     });
                     break;
+                case 'morton-order':
+                    current.processActions.push({
+                        kind: 'mortonOrder'
+                    });
+                    break;
             }
         }
     }
@@ -334,6 +340,7 @@ ACTIONS (can be repeated, in any order)
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
     -l, --lod              <n>              Specify the level of detail, n >= 0
     -m, --summary                           Print per-column statistics to stdout
+    -M, --morton-order                      Reorder Gaussians by Morton code (Z-order curve)
 
 GLOBAL OPTIONS
     -h, --help                              Show this help and exit

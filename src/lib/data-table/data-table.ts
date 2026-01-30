@@ -193,6 +193,53 @@ class DataTable {
         }
         return result;
     }
+
+    /**
+     * Permutes the rows of this DataTable in-place according to the given indices.
+     * After calling, row `i` will contain the data that was previously at row `indices[i]`.
+     *
+     * This is a memory-efficient alternative to `permuteRows` that modifies the table
+     * in-place rather than creating a copy.
+     *
+     * @param indices - Array of indices defining the permutation. Must have the same
+     * length as the number of rows, and must be a valid permutation
+     * (each index 0 to n-1 appears exactly once).
+     */
+    permuteRowsInPlace(indices: Uint32Array | number[]): void {
+        const n = this.numRows;
+        const numCols = this.columns.length;
+        const visited = new Uint8Array(n);
+        const temps = new Array(numCols);
+
+        for (let i = 0; i < n; i++) {
+            if (visited[i] || indices[i] === i) continue;
+
+            // Save values at position i
+            for (let c = 0; c < numCols; c++) {
+                temps[c] = this.columns[c].data[i];
+            }
+
+            // Walk the cycle
+            let j = i;
+            while (true) {
+                const next = indices[j];
+                visited[j] = 1;
+
+                if (next === i) {
+                    // End of cycle - place saved values
+                    for (let c = 0; c < numCols; c++) {
+                        this.columns[c].data[j] = temps[c];
+                    }
+                    break;
+                }
+                // Move values from next to j
+                for (let c = 0; c < numCols; c++) {
+                    this.columns[c].data[j] = this.columns[c].data[next];
+                }
+                j = next;
+            }
+        }
+    }
 }
 
 export { Column, DataTable, TypedArray, ColumnType, Row };

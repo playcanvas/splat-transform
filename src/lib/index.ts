@@ -5,6 +5,7 @@ export { combine } from './data-table/combine';
 export { transform } from './data-table/transform';
 export { computeSummary } from './data-table/summary';
 export type { ColumnStats, SummaryData } from './data-table/summary';
+export { sortMortonOrder } from './data-table/morton-order';
 
 // High-level read/write
 export { readFile, getInputFormat } from './read';
@@ -26,7 +27,8 @@ export type {
     FilterSphere,
     Param as ProcessParam,
     Lod,
-    Summary
+    Summary,
+    MortonOrder
 } from './process';
 
 // File system abstractions

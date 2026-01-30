@@ -17,6 +17,7 @@ SplatTransform is an open source library and CLI tool for converting and editing
 🔗 Merge multiple splats  
 🔄 Apply transformations to input splats  
 🎛️ Filter out Gaussians or spherical harmonic bands  
+🔀 Reorder splats for improved spatial locality  
 ⚙️ Procedurally generate splats using JavaScript generators
 
 The library is platform-agnostic and can be used in both Node.js and browser environments.
@@ -79,6 +80,7 @@ Actions can be repeated and applied in any order:
 -p, --params           <key=val,...>    Pass parameters to .mjs generator script
 -l, --lod              <n>              Specify the level of detail of this model, n >= 0.
 -m, --summary                           Print per-column statistics to stdout
+-M, --morton-order                      Reorder Gaussians by Morton code (Z-order curve)
 ```
 
 ## Global Options
@@ -272,6 +274,7 @@ import {
 | `transform` | Apply spatial transformations |
 | `processDataTable` | Apply a sequence of processing actions |
 | `computeSummary` | Generate statistical summary of data |
+| `sortMortonOrder` | Sort indices by Morton code for spatial locality |
 
 ### File System Abstractions
 
@@ -349,7 +352,8 @@ type ProcessAction =
     | { kind: 'filterBox'; min: Vec3; max: Vec3 }
     | { kind: 'filterSphere'; center: Vec3; radius: number }
     | { kind: 'lod'; value: number }
-    | { kind: 'summary' };
+    | { kind: 'summary' }
+    | { kind: 'mortonOrder' };
 ```
 
 ### Custom Logging
