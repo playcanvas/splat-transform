@@ -17,6 +17,7 @@ SplatTransform is an open source library and CLI tool for converting and editing
 🔗 Merge multiple splats  
 🔄 Apply transformations to input splats  
 🎛️ Filter out Gaussians or spherical harmonic bands  
+🔀 Reorder splats for improved spatial locality  
 ⚙️ Procedurally generate splats using JavaScript generators
 
 The library is platform-agnostic and can be used in both Node.js and browser environments.
