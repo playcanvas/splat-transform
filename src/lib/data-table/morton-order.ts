@@ -3,11 +3,24 @@ import { logger } from '../utils/logger.js';
 
 // sort the provided indices into morton order
 const sortMortonOrder = (dataTable: DataTable, indices: Uint32Array): void => {
-    const cx = dataTable.getColumnByName('x').data;
-    const cy = dataTable.getColumnByName('y').data;
-    const cz = dataTable.getColumnByName('z').data;
+    const xCol = dataTable.getColumnByName('x');
+    const yCol = dataTable.getColumnByName('y');
+    const zCol = dataTable.getColumnByName('z');
+
+    if (!xCol || !yCol || !zCol) {
+        logger.debug('missing required position columns');
+        return;
+    }
+
+    const cx = xCol.data;
+    const cy = yCol.data;
+    const cz = zCol.data;
 
     const generate = (indices: Uint32Array) => {
+        if (indices.length === 0) {
+            return;
+        }
+
         // https://fgiesen.wordpress.com/2009/12/13/decoding-morton-codes/
         const encodeMorton3 = (x: number, y: number, z: number) : number => {
             const Part1By2 = (x: number) => {
@@ -22,12 +35,12 @@ const sortMortonOrder = (dataTable: DataTable, indices: Uint32Array): void => {
             return (Part1By2(z) << 2) + (Part1By2(y) << 1) + Part1By2(x);
         };
 
-        let mx: number;
-        let my: number;
-        let mz: number;
-        let Mx: number;
-        let My: number;
-        let Mz: number;
+        let mx = Infinity;
+        let my = Infinity;
+        let mz = Infinity;
+        let Mx = -Infinity;
+        let My = -Infinity;
+        let Mz = -Infinity;
 
         // calculate scene extents across all splats (using sort centers, because they're in world space)
         for (let i = 0; i < indices.length; ++i) {
@@ -36,15 +49,12 @@ const sortMortonOrder = (dataTable: DataTable, indices: Uint32Array): void => {
             const y = cy[ri];
             const z = cz[ri];
 
-            if (mx === undefined) {
-                mx = Mx = x;
-                my = My = y;
-                mz = Mz = z;
-            } else {
-                if (x < mx) mx = x; else if (x > Mx) Mx = x;
-                if (y < my) my = y; else if (y > My) My = y;
-                if (z < mz) mz = z; else if (z > Mz) Mz = z;
-            }
+            if (x < mx) mx = x;
+            if (x > Mx) Mx = x;
+            if (y < my) my = y;
+            if (y > My) My = y;
+            if (z < mz) mz = z;
+            if (z > Mz) Mz = z;
         }
 
         const xlen = Mx - mx;
@@ -80,7 +90,10 @@ const sortMortonOrder = (dataTable: DataTable, indices: Uint32Array): void => {
         }
 
         // sort indices by morton code
-        const order = indices.map((_, i) => i);
+        const order = new Uint32Array(indices.length);
+        for (let i = 0; i < order.length; i++) {
+            order[i] = i;
+        }
         order.sort((a, b) => morton[a] - morton[b]);
 
         const tmpIndices = indices.slice();

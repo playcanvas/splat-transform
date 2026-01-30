@@ -40,6 +40,23 @@ const getDataType = (type: string) => {
     }
 };
 
+// Returns a function that reads a value from a DataView at the given byte offset
+type ValueReader = (view: DataView, offset: number) => number;
+
+const getReader = (type: string): ValueReader => {
+    switch (type) {
+        case 'char':   return (v, o) => v.getInt8(o);
+        case 'uchar':  return (v, o) => v.getUint8(o);
+        case 'short':  return (v, o) => v.getInt16(o, true);
+        case 'ushort': return (v, o) => v.getUint16(o, true);
+        case 'int':    return (v, o) => v.getInt32(o, true);
+        case 'uint':   return (v, o) => v.getUint32(o, true);
+        case 'float':  return (v, o) => v.getFloat32(o, true);
+        case 'double': return (v, o) => v.getFloat64(o, true);
+        default: throw new Error(`unsupported ply type: ${type}`);
+    }
+};
+
 // parse the ply header text and return an array of Element structures and a
 // string containing the ply format
 const parseHeader = (data: Uint8Array): PlyHeader => {
@@ -183,9 +200,21 @@ const readPly = async (source: ReadSource): Promise<DataTable> => {
             return new Column(property.name, new (getDataType(property.type))(element.count));
         });
 
-        const buffers = columns.map(column => new Uint8Array(column.data.buffer));
-        const sizes = columns.map(column => column.data.BYTES_PER_ELEMENT);
-        const rowSize = sizes.reduce((total, size) => total + size, 0);
+        // Pre-compute column info: data array, byte size, byte offset within row, and reader function
+        let byteOffset = 0;
+        const columnInfo = element.properties.map((property, idx) => {
+            const size = columns[idx].data.BYTES_PER_ELEMENT;
+            const info = {
+                data: columns[idx].data,
+                size,
+                byteOffset,
+                reader: getReader(property.type)
+            };
+            byteOffset += size;
+            return info;
+        });
+
+        const rowSize = byteOffset;
 
         // read data in chunks of 1024 rows at a time
         const chunkSize = 1024;
@@ -197,18 +226,18 @@ const readPly = async (source: ReadSource): Promise<DataTable> => {
 
             await readExact(stream, chunkData, 0, rowSize * numRows);
 
-            let offset = 0;
+            // Create DataView once per chunk (avoids creating views in inner loop)
+            const view = new DataView(chunkData.buffer, chunkData.byteOffset, chunkData.byteLength);
 
-            // read data row at a time
+            // read data row at a time using DataView
             for (let r = 0; r < numRows; ++r) {
-                const rowOffset = c * chunkSize + r;
+                const rowIndex = c * chunkSize + r;
+                const rowByteOffset = r * rowSize;
 
-                // copy into column data
-                for (let p = 0; p < columns.length; ++p) {
-                    const s = sizes[p];
-                    // Equivalent to: chunkData.copy(buffers[p], rowOffset * s, offset, offset + s)
-                    buffers[p].set(chunkData.subarray(offset, offset + s), rowOffset * s);
-                    offset += s;
+                // Read each property value directly into the typed array
+                for (let p = 0; p < columnInfo.length; ++p) {
+                    const info = columnInfo[p];
+                    info.data[rowIndex] = info.reader(view, rowByteOffset + info.byteOffset);
                 }
             }
         }
