@@ -315,10 +315,10 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
 
         const paletteSize = Math.min(64, 2 ** Math.floor(Math.log2(indices.length / 1024))) * 1024;
 
-        // calculate kmeans
+        logger.progress.step('Compressing spherical harmonics');
         const { centroids, labels } = await kmeans(shDataTable, paletteSize, iterations, gpuDevice);
 
-        // construct a codebook for all spherical harmonic coefficients
+        logger.progress.step('Quantizing spherical harmonics');
         const codebook = await cluster1d(centroids, iterations, gpuDevice);
 
         // write centroids
@@ -365,7 +365,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     };
 
     const shBands = { '9': 1, '24': 2, '-1': 3 }[shNames.findIndex(v => !dataTable.hasColumn(v))] ?? 0;
-    const totalSteps = shBands > 0 ? 7 : 6;
+    const totalSteps = shBands > 0 ? 8 : 6;
 
     // convert and write attributes
     logger.progress.begin(totalSteps);
@@ -387,7 +387,6 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
 
     let shN = null;
     if (shBands > 0) {
-        logger.progress.step('Compressing spherical harmonics');
         shN = await writeSH(shBands);
     }
 
