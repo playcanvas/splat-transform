@@ -79,6 +79,7 @@ Actions can be repeated and applied in any order:
 -p, --params           <key=val,...>    Pass parameters to .mjs generator script
 -l, --lod              <n>              Specify the level of detail of this model, n >= 0.
 -m, --summary                           Print per-column statistics to stdout
+-M, --morton-order                      Reorder Gaussians by Morton code (Z-order curve)
 ```
 
 ## Global Options
@@ -349,7 +350,8 @@ type ProcessAction =
     | { kind: 'filterBox'; min: Vec3; max: Vec3 }
     | { kind: 'filterSphere'; center: Vec3; radius: number }
     | { kind: 'lod'; value: number }
-    | { kind: 'summary' };
+    | { kind: 'summary' }
+    | { kind: 'mortonOrder' };
 ```
 
 ### Custom Logging
