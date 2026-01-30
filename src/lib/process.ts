@@ -1,6 +1,7 @@
 import { Quat, Vec3 } from 'playcanvas';
 
 import { Column, DataTable } from './data-table/data-table';
+import { sortMortonOrder } from './data-table/morton-order';
 import { computeSummary, type SummaryData } from './data-table/summary';
 import { transform } from './data-table/transform';
 import { logger } from './utils/logger';
@@ -122,6 +123,14 @@ type Summary = {
 };
 
 /**
+ * Reorder splats by Morton code (Z-order curve) for improved spatial locality.
+ */
+type MortonOrder = {
+    /** Action type identifier. */
+    kind: 'mortonOrder';
+};
+
+/**
  * A processing action to apply to splat data.
  *
  * Actions can transform, filter, or analyze the data:
@@ -135,8 +144,9 @@ type Summary = {
  * - `filterSphere` - Keep splats within a sphere
  * - `lod` - Assign LOD level to all splats
  * - `summary` - Print statistical summary to logger
+ * - `mortonOrder` - Reorder splats by Morton code for spatial locality
  */
-type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | Param | Lod | Summary;
+type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | Param | Lod | Summary | MortonOrder;
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
@@ -339,6 +349,15 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
                 logger.output(markdown);
                 break;
             }
+            case 'mortonOrder': {
+                const indices = new Uint32Array(result.numRows);
+                for (let i = 0; i < indices.length; i++) {
+                    indices[i] = i;
+                }
+                sortMortonOrder(result, indices);
+                result.permuteRowsInPlace(indices);
+                break;
+            }
         }
     }
 
@@ -358,5 +377,6 @@ export {
     type FilterSphere,
     type Param,
     type Lod,
-    type Summary
+    type Summary,
+    type MortonOrder
 };
