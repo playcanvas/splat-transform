@@ -8,7 +8,9 @@ import assert from 'node:assert';
 
 import {
     computeSummary,
-    processDataTable
+    processDataTable,
+    Column,
+    DataTable
 } from '../dist/index.mjs';
 
 import { createMinimalTestData } from './helpers/test-utils.mjs';
@@ -484,5 +486,296 @@ describe('LOD Action', () => {
         for (let i = 0; i < result.numRows; i++) {
             assert.strictEqual(lodCol[i], 2, `lod[${i}] should be 2`);
         }
+    });
+});
+
+describe('Morton Order', () => {
+    let testData;
+
+    before(() => {
+        testData = createMinimalTestData();
+    });
+
+    it('should preserve row count and summary statistics', () => {
+        const originalSummary = computeSummary(testData);
+        const clonedData = testData.clone();
+
+        const result = processDataTable(clonedData, [{ kind: 'mortonOrder' }]);
+
+        const newSummary = computeSummary(result);
+
+        // Row count must be unchanged (it's a permutation)
+        assert.strictEqual(result.numRows, testData.numRows, 'Row count should be unchanged');
+
+        // All column statistics should be preserved since it's just a reordering
+        for (const colName of Object.keys(originalSummary.columns)) {
+            const orig = originalSummary.columns[colName];
+            const curr = newSummary.columns[colName];
+            assertClose(curr.min, orig.min, 1e-10, `${colName}.min`);
+            assertClose(curr.max, orig.max, 1e-10, `${colName}.max`);
+            assertClose(curr.mean, orig.mean, 1e-10, `${colName}.mean`);
+            assertClose(curr.sum, orig.sum, 1e-10, `${colName}.sum`);
+        }
+    });
+
+    it('should be idempotent (applying twice gives same result)', () => {
+        const clonedData = testData.clone();
+
+        // Apply mortonOrder once
+        const result1 = processDataTable(clonedData, [{ kind: 'mortonOrder' }]);
+
+        // Capture the order after first application
+        const xAfterFirst = Array.from(result1.getColumnByName('x').data);
+        const zAfterFirst = Array.from(result1.getColumnByName('z').data);
+
+        // Apply mortonOrder again
+        const result2 = processDataTable(result1, [{ kind: 'mortonOrder' }]);
+
+        // Order should be unchanged
+        const xAfterSecond = result2.getColumnByName('x').data;
+        const zAfterSecond = result2.getColumnByName('z').data;
+
+        for (let i = 0; i < result2.numRows; i++) {
+            assert.strictEqual(xAfterSecond[i], xAfterFirst[i], `x[${i}] should be unchanged after second mortonOrder`);
+            assert.strictEqual(zAfterSecond[i], zAfterFirst[i], `z[${i}] should be unchanged after second mortonOrder`);
+        }
+    });
+
+    it('should preserve all data values (permutation correctness)', () => {
+        const clonedData = testData.clone();
+
+        // Collect all values before (as sorted arrays for comparison)
+        const originalValues = {};
+        for (const col of testData.columns) {
+            originalValues[col.name] = Array.from(col.data).sort((a, b) => a - b);
+        }
+
+        const result = processDataTable(clonedData, [{ kind: 'mortonOrder' }]);
+
+        // After mortonOrder, all values should still be present (just reordered)
+        for (const col of result.columns) {
+            const resultValues = Array.from(col.data).sort((a, b) => a - b);
+            assert.strictEqual(resultValues.length, originalValues[col.name].length, `${col.name} should have same number of values`);
+            for (let i = 0; i < resultValues.length; i++) {
+                assertClose(resultValues[i], originalValues[col.name][i], 1e-10, `${col.name}[${i}] value should be preserved`);
+            }
+        }
+    });
+
+    it('should order by Morton code (spatial locality)', () => {
+        const clonedData = testData.clone();
+
+        const result = processDataTable(clonedData, [{ kind: 'mortonOrder' }]);
+
+        // Compute Morton codes for the resulting order
+        const xCol = result.getColumnByName('x').data;
+        const yCol = result.getColumnByName('y').data;
+        const zCol = result.getColumnByName('z').data;
+
+        // Find extents
+        let mx = Infinity, Mx = -Infinity;
+        let my = Infinity, My = -Infinity;
+        let mz = Infinity, Mz = -Infinity;
+        for (let i = 0; i < result.numRows; i++) {
+            if (xCol[i] < mx) mx = xCol[i];
+            if (xCol[i] > Mx) Mx = xCol[i];
+            if (yCol[i] < my) my = yCol[i];
+            if (yCol[i] > My) My = yCol[i];
+            if (zCol[i] < mz) mz = zCol[i];
+            if (zCol[i] > Mz) Mz = zCol[i];
+        }
+
+        const xlen = Mx - mx;
+        const ylen = My - my;
+        const zlen = Mz - mz;
+
+        const xmul = (xlen === 0) ? 0 : 1024 / xlen;
+        const ymul = (ylen === 0) ? 0 : 1024 / ylen;
+        const zmul = (zlen === 0) ? 0 : 1024 / zlen;
+
+        // Morton encoding helper
+        const Part1By2 = (x) => {
+            x &= 0x000003ff;
+            x = (x ^ (x << 16)) & 0xff0000ff;
+            x = (x ^ (x << 8)) & 0x0300f00f;
+            x = (x ^ (x << 4)) & 0x030c30c3;
+            x = (x ^ (x << 2)) & 0x09249249;
+            return x;
+        };
+        const encodeMorton3 = (x, y, z) => (Part1By2(z) << 2) + (Part1By2(y) << 1) + Part1By2(x);
+
+        // Compute Morton codes
+        const mortonCodes = [];
+        for (let i = 0; i < result.numRows; i++) {
+            const ix = Math.min(1023, (xCol[i] - mx) * xmul) >>> 0;
+            const iy = Math.min(1023, (yCol[i] - my) * ymul) >>> 0;
+            const iz = Math.min(1023, (zCol[i] - mz) * zmul) >>> 0;
+            mortonCodes.push(encodeMorton3(ix, iy, iz));
+        }
+
+        // Morton codes should be non-decreasing
+        for (let i = 1; i < mortonCodes.length; i++) {
+            assert(mortonCodes[i] >= mortonCodes[i - 1],
+                `Morton code at index ${i} (${mortonCodes[i]}) should be >= previous (${mortonCodes[i - 1]})`);
+        }
+    });
+
+    it('should handle empty table', () => {
+        const emptyData = new DataTable([
+            new Column('x', new Float32Array(0)),
+            new Column('y', new Float32Array(0)),
+            new Column('z', new Float32Array(0))
+        ]);
+
+        const result = processDataTable(emptyData, [{ kind: 'mortonOrder' }]);
+
+        assert.strictEqual(result.numRows, 0, 'Should still have 0 rows');
+    });
+
+    it('should handle single row', () => {
+        const singleRowData = new DataTable([
+            new Column('x', new Float32Array([1.0])),
+            new Column('y', new Float32Array([2.0])),
+            new Column('z', new Float32Array([3.0]))
+        ]);
+
+        const result = processDataTable(singleRowData, [{ kind: 'mortonOrder' }]);
+
+        assert.strictEqual(result.numRows, 1, 'Should have 1 row');
+        assertClose(result.getColumnByName('x').data[0], 1.0, 1e-10, 'x value');
+        assertClose(result.getColumnByName('y').data[0], 2.0, 1e-10, 'y value');
+        assertClose(result.getColumnByName('z').data[0], 3.0, 1e-10, 'z value');
+    });
+
+    it('should handle identical points', () => {
+        // All points at the same location
+        const identicalData = new DataTable([
+            new Column('x', new Float32Array([5.0, 5.0, 5.0, 5.0])),
+            new Column('y', new Float32Array([5.0, 5.0, 5.0, 5.0])),
+            new Column('z', new Float32Array([5.0, 5.0, 5.0, 5.0])),
+            new Column('id', new Float32Array([0, 1, 2, 3])) // Unique identifier
+        ]);
+
+        const result = processDataTable(identicalData, [{ kind: 'mortonOrder' }]);
+
+        assert.strictEqual(result.numRows, 4, 'Should have 4 rows');
+
+        // All values should still be 5.0
+        for (let i = 0; i < 4; i++) {
+            assertClose(result.getColumnByName('x').data[i], 5.0, 1e-10, `x[${i}]`);
+        }
+
+        // All ids should still be present
+        const ids = Array.from(result.getColumnByName('id').data).sort((a, b) => a - b);
+        assert.deepStrictEqual(ids, [0, 1, 2, 3], 'All ids should be preserved');
+    });
+
+    it('should handle zero-extent on one axis', () => {
+        // All points on a plane (y = 0)
+        const planarData = new DataTable([
+            new Column('x', new Float32Array([0, 1, 2, 3])),
+            new Column('y', new Float32Array([0, 0, 0, 0])), // Zero extent
+            new Column('z', new Float32Array([0, 1, 2, 3]))
+        ]);
+
+        const result = processDataTable(planarData, [{ kind: 'mortonOrder' }]);
+
+        assert.strictEqual(result.numRows, 4, 'Should have 4 rows');
+
+        // All y values should still be 0
+        for (let i = 0; i < 4; i++) {
+            assertClose(result.getColumnByName('y').data[i], 0, 1e-10, `y[${i}]`);
+        }
+
+        // Check all x values are preserved
+        const xValues = Array.from(result.getColumnByName('x').data).sort((a, b) => a - b);
+        assert.deepStrictEqual(xValues, [0, 1, 2, 3], 'All x values should be preserved');
+    });
+});
+
+describe('permuteRowsInPlace', () => {
+    it('should handle identity permutation', () => {
+        const data = new DataTable([
+            new Column('a', new Float32Array([1, 2, 3, 4])),
+            new Column('b', new Float32Array([10, 20, 30, 40]))
+        ]);
+
+        const indices = new Uint32Array([0, 1, 2, 3]);
+        data.permuteRowsInPlace(indices);
+
+        // Data should be unchanged
+        assert.deepStrictEqual(Array.from(data.getColumnByName('a').data), [1, 2, 3, 4]);
+        assert.deepStrictEqual(Array.from(data.getColumnByName('b').data), [10, 20, 30, 40]);
+    });
+
+    it('should handle reverse permutation', () => {
+        const data = new DataTable([
+            new Column('a', new Float32Array([1, 2, 3, 4])),
+            new Column('b', new Float32Array([10, 20, 30, 40]))
+        ]);
+
+        const indices = new Uint32Array([3, 2, 1, 0]);
+        data.permuteRowsInPlace(indices);
+
+        // Data should be reversed
+        assert.deepStrictEqual(Array.from(data.getColumnByName('a').data), [4, 3, 2, 1]);
+        assert.deepStrictEqual(Array.from(data.getColumnByName('b').data), [40, 30, 20, 10]);
+    });
+
+    it('should handle simple swap', () => {
+        const data = new DataTable([
+            new Column('a', new Float32Array([1, 2, 3, 4])),
+            new Column('b', new Float32Array([10, 20, 30, 40]))
+        ]);
+
+        // Swap first two elements only
+        const indices = new Uint32Array([1, 0, 2, 3]);
+        data.permuteRowsInPlace(indices);
+
+        assert.deepStrictEqual(Array.from(data.getColumnByName('a').data), [2, 1, 3, 4]);
+        assert.deepStrictEqual(Array.from(data.getColumnByName('b').data), [20, 10, 30, 40]);
+    });
+
+    it('should handle multi-element cycle', () => {
+        const data = new DataTable([
+            new Column('a', new Float32Array([1, 2, 3, 4, 5])),
+            new Column('b', new Float32Array([10, 20, 30, 40, 50]))
+        ]);
+
+        // 3-cycle: 0 -> 1 -> 2 -> 0, rest unchanged
+        // indices[i] = source index for position i
+        // indices = [1, 2, 0, 3, 4] means:
+        //   position 0 gets value from index 1
+        //   position 1 gets value from index 2
+        //   position 2 gets value from index 0
+        const indices = new Uint32Array([1, 2, 0, 3, 4]);
+        data.permuteRowsInPlace(indices);
+
+        // After cycle: [2, 3, 1, 4, 5]
+        assert.deepStrictEqual(Array.from(data.getColumnByName('a').data), [2, 3, 1, 4, 5]);
+        assert.deepStrictEqual(Array.from(data.getColumnByName('b').data), [20, 30, 10, 40, 50]);
+    });
+
+    it('should handle multiple independent cycles', () => {
+        const data = new DataTable([
+            new Column('a', new Float32Array([1, 2, 3, 4, 5, 6]))
+        ]);
+
+        // Two independent 3-cycles: (0,1,2) and (3,4,5)
+        const indices = new Uint32Array([1, 2, 0, 4, 5, 3]);
+        data.permuteRowsInPlace(indices);
+
+        assert.deepStrictEqual(Array.from(data.getColumnByName('a').data), [2, 3, 1, 5, 6, 4]);
+    });
+
+    it('should handle empty data', () => {
+        const data = new DataTable([
+            new Column('a', new Float32Array(0))
+        ]);
+
+        const indices = new Uint32Array(0);
+        data.permuteRowsInPlace(indices);
+
+        assert.strictEqual(data.numRows, 0);
     });
 });
