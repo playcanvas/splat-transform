@@ -1,5 +1,6 @@
 // Core interfaces and base classes
 export { ReadStream, type ReadSource, type ReadFileSystem, type ProgressCallback, readFile } from './file-system';
+export { BufferedReadStream } from './buffered-read-stream';
 
 // Platform-agnostic path utilities
 export { dirname, join } from 'pathe';

@@ -2,7 +2,7 @@ import { randomBytes } from 'crypto';
 import { FileHandle, mkdir, open, rename, stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 
-import { type ReadFileSystem, type ProgressCallback, type ReadSource, ReadStream } from '../lib/io/read';
+import { type ReadFileSystem, type ProgressCallback, type ReadSource, ReadStream, BufferedReadStream } from '../lib/io/read';
 import { type FileSystem, type Writer } from '../lib/io/write';
 
 // ============================================================================
@@ -73,7 +73,9 @@ class NodeReadSource implements ReadSource {
         const clampedStart = Math.max(0, Math.min(start, this.size));
         const clampedEnd = Math.max(clampedStart, Math.min(end, this.size));
 
-        return new NodeReadStream(this.fileHandle, clampedStart, clampedEnd);
+        // Wrap with BufferedReadStream to reduce async overhead from file reads
+        const raw = new NodeReadStream(this.fileHandle, clampedStart, clampedEnd);
+        return new BufferedReadStream(raw, 4 * 1024 * 1024);  // 4MB chunks
     }
 
     close(): void {
