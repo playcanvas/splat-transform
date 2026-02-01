@@ -32,7 +32,7 @@ export type {
 } from './process';
 
 // File system abstractions
-export { ReadStream, MemoryReadFileSystem, UrlReadFileSystem, ZipReadFileSystem } from './io/read';
+export { ReadStream, BufferedReadStream, MemoryReadFileSystem, UrlReadFileSystem, ZipReadFileSystem } from './io/read';
 export type { ReadSource, ReadFileSystem, ProgressCallback, ZipEntry } from './io/read';
 export { MemoryFileSystem, ZipFileSystem } from './io/write';
 export type { FileSystem, Writer } from './io/write';
