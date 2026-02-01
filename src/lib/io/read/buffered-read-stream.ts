@@ -30,6 +30,11 @@ class BufferedReadStream extends ReadStream {
     }
 
     async pull(target: Uint8Array): Promise<number> {
+        // Early return for zero-length requests (e.g., EOF check from readAll)
+        if (target.length === 0) {
+            return 0;
+        }
+
         let written = 0;
 
         // Serve from buffer first
