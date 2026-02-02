@@ -77,6 +77,8 @@ Actions can be repeated and applied in any order:
 -S, --filter-sphere    <x,y,z,radius>   Remove Gaussians outside sphere (center, radius)
 -V, --filter-value     <name,cmp,value> Keep splats where <name> <cmp> <value>
                                           cmp ∈ {lt,lte,gt,gte,eq,neq}
+-F, --filter-visibility <n|n%>          Keep the n most visible splats (by opacity * volume)
+                                          Use n% to keep a percentage of splats
 -p, --params           <key=val,...>    Pass parameters to .mjs generator script
 -l, --lod              <n>              Specify the level of detail of this model, n >= 0.
 -m, --summary                           Print per-column statistics to stdout
@@ -170,6 +172,12 @@ splat-transform input.ply -V opacity,gt,0.5 output.ply
 
 # Strip spherical harmonic bands higher than 2
 splat-transform input.ply --filter-harmonics 2 output.ply
+
+# Keep only the 50000 most visible splats
+splat-transform input.ply --filter-visibility 50000 output.ply
+
+# Keep the top 25% most visible splats
+splat-transform input.ply -F 25% output.ply
 ```
 
 ### Advanced Usage
@@ -275,6 +283,7 @@ import {
 | `processDataTable` | Apply a sequence of processing actions |
 | `computeSummary` | Generate statistical summary of data |
 | `sortMortonOrder` | Sort indices by Morton code for spatial locality |
+| `sortByVisibility` | Sort indices by visibility score for filtering |
 
 ### File System Abstractions
 
@@ -351,6 +360,7 @@ type ProcessAction =
     | { kind: 'filterBands'; value: 0|1|2|3 }
     | { kind: 'filterBox'; min: Vec3; max: Vec3 }
     | { kind: 'filterSphere'; center: Vec3; radius: number }
+    | { kind: 'filterVisibility'; count: number | null; percent: number | null }
     | { kind: 'lod'; value: number }
     | { kind: 'summary' }
     | { kind: 'mortonOrder' };

@@ -1,6 +1,7 @@
 import { Quat, Vec3 } from 'playcanvas';
 
 import { Column, DataTable } from './data-table/data-table';
+import { sortByVisibility } from './data-table/filter-visibility';
 import { sortMortonOrder } from './data-table/morton-order';
 import { computeSummary, type SummaryData } from './data-table/summary';
 import { transform } from './data-table/transform';
@@ -131,6 +132,21 @@ type MortonOrder = {
 };
 
 /**
+ * Filter splats by visibility score, keeping only the most visible ones.
+ *
+ * Visibility is computed as: linear_opacity * volume
+ * where opacity is converted from logit and scales from log space.
+ */
+type FilterVisibility = {
+    /** Action type identifier. */
+    kind: 'filterVisibility';
+    /** Target number of splats to keep, or null for percentage mode. */
+    count: number | null;
+    /** Percentage of splats to keep (0-100), or null for count mode. */
+    percent: number | null;
+};
+
+/**
  * A processing action to apply to splat data.
  *
  * Actions can transform, filter, or analyze the data:
@@ -145,8 +161,9 @@ type MortonOrder = {
  * - `lod` - Assign LOD level to all splats
  * - `summary` - Print statistical summary to logger
  * - `mortonOrder` - Reorder splats by Morton code for spatial locality
+ * - `filterVisibility` - Keep only the most visible splats by opacity * volume
  */
-type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | Param | Lod | Summary | MortonOrder;
+type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | Param | Lod | Summary | MortonOrder | FilterVisibility;
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
@@ -358,6 +375,25 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
                 result.permuteRowsInPlace(indices);
                 break;
             }
+            case 'filterVisibility': {
+                const indices = new Uint32Array(result.numRows);
+                for (let i = 0; i < indices.length; i++) {
+                    indices[i] = i;
+                }
+                sortByVisibility(result, indices);
+
+                // Determine how many to keep
+                let keepCount: number;
+                if (processAction.count !== null) {
+                    keepCount = Math.min(processAction.count, result.numRows);
+                } else {
+                    keepCount = Math.round(result.numRows * (processAction.percent ?? 100) / 100);
+                }
+                keepCount = Math.max(0, keepCount);
+
+                result = result.permuteRows(indices.subarray(0, keepCount));
+                break;
+            }
         }
     }
 
@@ -378,5 +414,6 @@ export {
     type Param,
     type Lod,
     type Summary,
-    type MortonOrder
+    type MortonOrder,
+    type FilterVisibility
 };
