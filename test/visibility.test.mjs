@@ -3,7 +3,7 @@
  * Tests sortByVisibility function and filterVisibility action.
  */
 
-import { describe, it, before } from 'node:test';
+import { describe, it } from 'node:test';
 import assert from 'node:assert';
 
 import {
@@ -17,20 +17,6 @@ import { createMinimalTestData } from './helpers/test-utils.mjs';
 import { assertClose } from './helpers/summary-compare.mjs';
 
 import { Vec3 } from 'playcanvas';
-
-/**
- * Helper to compute visibility score for a single splat.
- * @param {number} logitOpacity - Opacity in logit form
- * @param {number} logScale0 - scale_0 in log form
- * @param {number} logScale1 - scale_1 in log form
- * @param {number} logScale2 - scale_2 in log form
- * @returns {number} Visibility score
- */
-function computeVisibilityScore(logitOpacity, logScale0, logScale1, logScale2) {
-    const linearOpacity = 1 / (1 + Math.exp(-logitOpacity));
-    const volume = Math.exp(logScale0 + logScale1 + logScale2);
-    return linearOpacity * volume;
-}
 
 /**
  * Creates a minimal valid DataTable with required columns for visibility testing.
