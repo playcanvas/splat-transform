@@ -93,11 +93,11 @@ const parseArguments = async () => {
             'filter-harmonics': { type: 'string', short: 'H', multiple: true },
             'filter-box': { type: 'string', short: 'B', multiple: true },
             'filter-sphere': { type: 'string', short: 'S', multiple: true },
+            'filter-visibility': { type: 'string', short: 'F', multiple: true },
             params: { type: 'string', short: 'p', multiple: true },
             lod: { type: 'string', short: 'l', multiple: true },
             summary: { type: 'boolean', short: 'm', multiple: true },
-            'morton-order': { type: 'boolean', short: 'M', multiple: true },
-            'filter-visibility': { type: 'string', short: 'F', multiple: true }
+            'morton-order': { type: 'boolean', short: 'M', multiple: true }
         }
     });
 
@@ -364,12 +364,12 @@ ACTIONS (can be repeated, in any order)
     -S, --filter-sphere    <x,y,z,radius>   Remove Gaussians outside sphere (center, radius)
     -V, --filter-value     <name,cmp,value> Keep Gaussians where <name> <cmp> <value>
                                               cmp ∈ {lt,lte,gt,gte,eq,neq}
+    -F, --filter-visibility <n|n%>          Keep the n most visible Gaussians (by opacity * volume)
+                                              Use n% to keep a percentage of Gaussians
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
     -l, --lod              <n>              Specify the level of detail, n >= 0
     -m, --summary                           Print per-column statistics to stdout
     -M, --morton-order                      Reorder Gaussians by Morton code (Z-order curve)
-    -F, --filter-visibility <n|n%>          Keep the n most visible Gaussians (by opacity * volume)
-                                              Use n% to keep a percentage of Gaussians
 
 GLOBAL OPTIONS
     -h, --help                              Show this help and exit
