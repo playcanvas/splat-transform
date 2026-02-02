@@ -199,45 +199,44 @@ class DataTable {
      * After calling, row `i` will contain the data that was previously at row `indices[i]`.
      *
      * This is a memory-efficient alternative to `permuteRows` that modifies the table
-     * in-place rather than creating a copy.
+     * in-place rather than creating a copy. It reuses ArrayBuffers between columns to
+     * minimize memory allocations.
      *
      * @param indices - Array of indices defining the permutation. Must have the same
      * length as the number of rows, and must be a valid permutation
      * (each index 0 to n-1 appears exactly once).
      */
     permuteRowsInPlace(indices: Uint32Array | number[]): void {
-        const n = this.numRows;
-        const numCols = this.columns.length;
-        const visited = new Uint8Array(n);
-        const temps = new Array(numCols);
+        // Cache for reusing ArrayBuffers by size
+        const cache = new Map<number, ArrayBuffer>();
 
-        for (let i = 0; i < n; i++) {
-            if (visited[i] || indices[i] === i) continue;
+        const getBuffer = (size: number): ArrayBuffer => {
+            const cached = cache.get(size);
+            if (cached) {
+                cache.delete(size);
+                return cached;
+            }
+            return new ArrayBuffer(size);
+        };
 
-            // Save values at position i
-            for (let c = 0; c < numCols; c++) {
-                temps[c] = this.columns[c].data[i];
+        const returnBuffer = (buffer: ArrayBuffer): void => {
+            cache.set(buffer.byteLength, buffer);
+        };
+
+        const n = indices.length;
+
+        for (const column of this.columns) {
+            const src = column.data;
+            const constructor = src.constructor as new (buffer: ArrayBuffer) => TypedArray;
+            const dst = new constructor(getBuffer(src.byteLength));
+
+            // Sequential writes are cache-friendly
+            for (let i = 0; i < n; i++) {
+                dst[i] = src[indices[i]];
             }
 
-            // Walk the cycle
-            let j = i;
-            while (true) {
-                const next = indices[j];
-                visited[j] = 1;
-
-                if (next === i) {
-                    // End of cycle - place saved values
-                    for (let c = 0; c < numCols; c++) {
-                        this.columns[c].data[j] = temps[c];
-                    }
-                    break;
-                }
-                // Move values from next to j
-                for (let c = 0; c < numCols; c++) {
-                    this.columns[c].data[j] = this.columns[c].data[next];
-                }
-                j = next;
-            }
+            returnBuffer(src.buffer as ArrayBuffer);
+            column.data = dst;
         }
     }
 }
