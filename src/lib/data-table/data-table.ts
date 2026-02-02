@@ -223,7 +223,7 @@ class DataTable {
             cache.set(buffer.byteLength, buffer);
         };
 
-        const n = indices.length;
+        const n = this.numRows;
 
         for (const column of this.columns) {
             const src = column.data;
