@@ -1,5 +1,11 @@
 import { Column, DataTable, TypedArray } from './data-table';
 
+/** Number of bins for histogram. */
+const NUM_BINS = 16;
+
+/** Unicode block characters for histogram visualization (lowest to highest). */
+const BARS = '▁▂▃▄▅▆▇█';
+
 /**
  * Statistical summary for a single column.
  */
@@ -18,6 +24,8 @@ type ColumnStats = {
     nanCount: number;
     /** Count of Infinity values. */
     infCount: number;
+    /** ASCII histogram of value distribution. */
+    histogram: string;
 };
 
 /**
@@ -123,16 +131,19 @@ const computeColumnStats = (column: Column): ColumnStats => {
             mean: NaN,
             stdDev: NaN,
             nanCount,
-            infCount
+            infCount,
+            histogram: BARS[0].repeat(NUM_BINS)
         };
     }
 
     const mean = sum / validCount;
 
-    // Second pass: copy valid values to typed array and compute stdDev
+    // Second pass: copy valid values to typed array, compute stdDev, and build histogram
     // Use the same typed array type as the source to preserve precision and save memory
     const TypedArrayCtor = data.constructor as new (length: number) => TypedArray;
     const validValues = new TypedArrayCtor(validCount);
+    const bins = new Uint32Array(NUM_BINS);
+    const range = max - min;
     let sumSquaredDiff = 0;
     let idx = 0;
 
@@ -142,10 +153,30 @@ const computeColumnStats = (column: Column): ColumnStats => {
             validValues[idx++] = v;
             const diff = v - mean;
             sumSquaredDiff += diff * diff;
+
+            // Bucket value into histogram bin
+            if (range > 0) {
+                const binIndex = Math.min(NUM_BINS - 1, Math.floor((v - min) / range * NUM_BINS));
+                bins[binIndex]++;
+            } else {
+                // All values are the same - put in middle bin
+                bins[NUM_BINS >>> 1]++;
+            }
         }
     }
 
     const stdDev = Math.sqrt(sumSquaredDiff / validCount);
+
+    // Convert bins to ASCII histogram
+    let maxBin = 0;
+    for (let i = 0; i < NUM_BINS; i++) {
+        if (bins[i] > maxBin) maxBin = bins[i];
+    }
+    let histogram = '';
+    for (let i = 0; i < NUM_BINS; i++) {
+        const level = maxBin > 0 ? Math.floor(bins[i] / maxBin * (BARS.length - 1)) : 0;
+        histogram += BARS[level];
+    }
 
     // Compute median using QuickSelect - O(n) instead of O(n log n)
     const mid = validCount >>> 1;
@@ -167,7 +198,8 @@ const computeColumnStats = (column: Column): ColumnStats => {
         mean: round(mean),
         stdDev: round(stdDev),
         nanCount,
-        infCount
+        infCount,
+        histogram
     };
 };
 

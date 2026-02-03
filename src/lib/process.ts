@@ -176,7 +176,7 @@ const formatMarkdown = (summary: SummaryData): string => {
     lines.push('');
 
     // Build header and data rows as string arrays
-    const headers = ['Column', 'min', 'max', 'median', 'mean', 'stdDev', 'nanCount', 'infCount'];
+    const headers = ['Column', 'min', 'max', 'median', 'mean', 'stdDev', 'nans', 'infs', 'histogram'];
     const rows: string[][] = [];
 
     for (const [name, stats] of Object.entries(summary.columns)) {
@@ -188,7 +188,8 @@ const formatMarkdown = (summary: SummaryData): string => {
             String(stats.mean),
             String(stats.stdDev),
             String(stats.nanCount),
-            String(stats.infCount)
+            String(stats.infCount),
+            stats.histogram
         ]);
     }
 
