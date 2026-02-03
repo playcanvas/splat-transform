@@ -17,12 +17,22 @@ class NodeReadStream extends ReadStream {
     private position: number;
     private end: number;
     private closed: boolean = false;
+    private progress: ProgressCallback | undefined;
+    private totalSize: number | undefined;
 
-    constructor(fileHandle: FileHandle, start: number, end: number) {
+    constructor(
+        fileHandle: FileHandle,
+        start: number,
+        end: number,
+        progress?: ProgressCallback,
+        totalSize?: number
+    ) {
         super(end - start);
         this.fileHandle = fileHandle;
         this.position = start;
         this.end = end;
+        this.progress = progress;
+        this.totalSize = totalSize;
     }
 
     async pull(target: Uint8Array): Promise<number> {
@@ -40,6 +50,12 @@ class NodeReadStream extends ReadStream {
 
         this.position += bytesRead;
         this.bytesRead += bytesRead;
+
+        // Report progress
+        if (this.progress) {
+            this.progress(this.bytesRead, this.totalSize);
+        }
+
         return bytesRead;
     }
 
@@ -58,10 +74,12 @@ class NodeReadSource implements ReadSource {
 
     private fileHandle: FileHandle;
     private closed: boolean = false;
+    private progress: ProgressCallback | undefined;
 
-    constructor(fileHandle: FileHandle, size: number) {
+    constructor(fileHandle: FileHandle, size: number, progress?: ProgressCallback) {
         this.fileHandle = fileHandle;
         this.size = size;
+        this.progress = progress;
     }
 
     read(start: number = 0, end: number = this.size): ReadStream {
@@ -74,7 +92,13 @@ class NodeReadSource implements ReadSource {
         const clampedEnd = Math.max(clampedStart, Math.min(end, this.size));
 
         // Wrap with BufferedReadStream to reduce async overhead from file reads
-        const raw = new NodeReadStream(this.fileHandle, clampedStart, clampedEnd);
+        const raw = new NodeReadStream(
+            this.fileHandle,
+            clampedStart,
+            clampedEnd,
+            this.progress,
+            this.size
+        );
         return new BufferedReadStream(raw, 4 * 1024 * 1024);  // 4MB chunks
     }
 
@@ -97,7 +121,7 @@ class NodeReadFileSystem implements ReadFileSystem {
             progress(0, fileStats.size);
         }
 
-        return new NodeReadSource(fileHandle, fileStats.size);
+        return new NodeReadSource(fileHandle, fileStats.size, progress);
     }
 }
 
