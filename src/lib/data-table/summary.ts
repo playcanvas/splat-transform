@@ -132,7 +132,7 @@ const computeColumnStats = (column: Column): ColumnStats => {
             stdDev: NaN,
             nanCount,
             infCount,
-            histogram: BARS[0].repeat(NUM_BINS)
+            histogram: ' '.repeat(NUM_BINS)
         };
     }
 
@@ -174,8 +174,12 @@ const computeColumnStats = (column: Column): ColumnStats => {
     }
     let histogram = '';
     for (let i = 0; i < NUM_BINS; i++) {
-        const level = maxBin > 0 ? Math.floor(bins[i] / maxBin * (BARS.length - 1)) : 0;
-        histogram += BARS[level];
+        if (bins[i] === 0) {
+            histogram += ' ';
+        } else {
+            const level = maxBin > 0 ? Math.floor(bins[i] / maxBin * (BARS.length - 1)) : 0;
+            histogram += BARS[level];
+        }
     }
 
     // Compute median using QuickSelect - O(n) instead of O(n log n)
