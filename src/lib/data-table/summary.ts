@@ -42,6 +42,12 @@ const round = (value: number): number => {
 /**
  * QuickSelect algorithm to find the k-th smallest element in O(n) average time.
  * Modifies the array in place (partial reordering).
+ *
+ * @param arr - The typed array to search.
+ * @param k - The index of the element to find (0-based).
+ * @param left - Left boundary of the search range.
+ * @param right - Right boundary of the search range.
+ * @returns The k-th smallest element.
  */
 const quickSelect = (arr: TypedArray, k: number, left: number, right: number): number => {
     while (left < right) {
