@@ -102,4 +102,4 @@ class MemoryReadFileSystem implements ReadFileSystem {
     }
 }
 
-export { MemoryReadFileSystem };
+export { MemoryReadFileSystem, MemoryReadSource };

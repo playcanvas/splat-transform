@@ -1,4 +1,45 @@
 import { type ReadFileSystem, type ProgressCallback, type ReadSource, ReadStream } from './file-system';
+import { MemoryReadSource } from './memory-file-system';
+
+/**
+ * Probe a URL to check if the server supports Range requests.
+ * We can't rely on the Accept-Ranges header because CORS often blocks access to it
+ * (it's not a CORS-safelisted response header).
+ * Instead, we request a 1-byte range and check if we get 206 Partial Content.
+ * @param url - The URL to probe
+ * @returns Object with rangeSupported flag and size (from Content-Range header)
+ */
+const probeRangeSupport = async (url: string): Promise<{ rangeSupported: boolean; size?: number }> => {
+    const controller = new AbortController();
+    try {
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: { 'Range': 'bytes=0-0' },
+            signal: controller.signal
+        });
+
+        // Abort immediately to prevent downloading the body.
+        // This is safe because await fetch() resolves once headers arrive,
+        // so response.status and headers are already available.
+        controller.abort();
+
+        // 206 Partial Content means Range is supported
+        if (response.status === 206) {
+            // Try to get total size from Content-Range header (format: "bytes 0-0/12345")
+            const contentRange = response.headers.get('Content-Range');
+            const match = contentRange?.match(/\/(\d+)$/);
+            const size = match ? parseInt(match[1], 10) : undefined;
+            return { rangeSupported: true, size };
+        }
+
+        // 200 OK means server ignored Range header - not supported
+        // Other status codes also mean Range isn't working as expected
+        return { rangeSupported: false };
+    } catch {
+        // Network error or other failure - assume Range not supported
+        return { rangeSupported: false };
+    }
+};
 
 /**
  * ReadStream implementation for reading from fetch responses.
@@ -214,6 +255,11 @@ class UrlReadSource implements ReadSource {
 /**
  * ReadFileSystem for reading from URLs using fetch.
  * Supports optional base URL for relative paths.
+ *
+ * Automatically detects whether the server supports Range requests.
+ * If Range requests are supported, uses streaming with Range headers for efficient seeking.
+ * If not supported (e.g., Python's SimpleHTTPRequestHandler), falls back to downloading
+ * the entire file into memory first.
  */
 class UrlReadFileSystem implements ReadFileSystem {
     private baseUrl: string;
@@ -228,14 +274,24 @@ class UrlReadFileSystem implements ReadFileSystem {
     async createSource(filename: string, progress?: ProgressCallback): Promise<ReadSource> {
         const url = this.baseUrl ? new URL(filename, this.baseUrl).href : filename;
 
-        // Make a HEAD request to get the size without downloading the body
-        const headResponse = await fetch(url, { method: 'HEAD' });
-        if (!headResponse.ok) {
-            throw new Error(`HTTP error ${headResponse.status}: ${headResponse.statusText}`);
+        // Probe to check if Range requests are supported
+        const { rangeSupported, size: probeSize } = await probeRangeSupport(url);
+
+        if (!rangeSupported) {
+            // Fall back to downloading the entire file into memory
+            return await this.createMemorySource(url, progress);
         }
 
-        const contentLength = headResponse.headers.get('Content-Length');
-        const size = contentLength ? parseInt(contentLength, 10) : undefined;
+        // Range is supported - use streaming approach
+        // If we got size from probe, use it; otherwise try HEAD request
+        let size = probeSize;
+        if (size === undefined) {
+            const headResponse = await fetch(url, { method: 'HEAD' });
+            if (headResponse.ok) {
+                const contentLength = headResponse.headers.get('Content-Length');
+                size = contentLength ? parseInt(contentLength, 10) : undefined;
+            }
+        }
 
         // Report initial progress
         if (progress) {
@@ -243,6 +299,61 @@ class UrlReadFileSystem implements ReadFileSystem {
         }
 
         return new UrlReadSource(url, size, progress);
+    }
+
+    /**
+     * Download the entire file and create a memory-based source.
+     * Used as fallback when server doesn't support Range requests.
+     * @param url - The URL to download
+     * @param progress - Optional callback for progress reporting
+     * @returns Promise resolving to a memory-based ReadSource
+     */
+    private async createMemorySource(url: string, progress?: ProgressCallback): Promise<ReadSource> {
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
+        }
+
+        // Get expected size for progress reporting
+        const contentLength = response.headers.get('Content-Length');
+        const expectedSize = contentLength ? parseInt(contentLength, 10) : undefined;
+
+        // Report initial progress
+        if (progress) {
+            progress(0, expectedSize);
+        }
+
+        // Read the response body with progress updates
+        if (response.body && progress) {
+            const reader = response.body.getReader();
+            const chunks: Uint8Array[] = [];
+            let loaded = 0;
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                chunks.push(value);
+                loaded += value.length;
+                progress(loaded, expectedSize);
+            }
+
+            // Combine chunks into single buffer
+            const data = new Uint8Array(loaded);
+            let offset = 0;
+            for (const chunk of chunks) {
+                data.set(chunk, offset);
+                offset += chunk.length;
+            }
+
+            return new MemoryReadSource(data);
+        }
+
+        // No progress callback or no body - simple path
+        const buffer = await response.arrayBuffer();
+        if (progress) {
+            progress(buffer.byteLength, buffer.byteLength);
+        }
+        return new MemoryReadSource(buffer);
     }
 }
 
