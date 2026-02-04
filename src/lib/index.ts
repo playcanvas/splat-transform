@@ -66,3 +66,7 @@ export type { Logger, ProgressNode } from './utils/logger';
 
 // WebP codec (for browser WASM configuration)
 export { WebPCodec } from './utils/webp-codec';
+
+// Voxelization
+export { computeGaussianExtents, getGaussianAABB, gaussianOverlapsBox } from './voxel/index';
+export type { GaussianExtentsResult } from './voxel/index';
