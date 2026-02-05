@@ -73,15 +73,16 @@ describe('GaussianBVH', function () {
             const bvh = new GaussianBVH(dataTable, extents);
             const bounds = bvh.sceneBounds;
 
-            // First Gaussian: AABB (-1, -1, -1) to (1, 1, 1)
-            // Second Gaussian: AABB (9, -1, -1) to (11, 1, 1)
-            // Combined: (-1, -1, -1) to (11, 1, 1)
-            assert.ok(Math.abs(bounds.minX - (-1)) < 0.001);
-            assert.ok(Math.abs(bounds.minY - (-1)) < 0.001);
-            assert.ok(Math.abs(bounds.minZ - (-1)) < 0.001);
-            assert.ok(Math.abs(bounds.maxX - 11) < 0.001);
-            assert.ok(Math.abs(bounds.maxY - 1) < 0.001);
-            assert.ok(Math.abs(bounds.maxZ - 1) < 0.001);
+            // With 3-sigma extent (3 for scale=1):
+            // First Gaussian at (0,0,0): AABB (-3, -3, -3) to (3, 3, 3)
+            // Second Gaussian at (10,0,0): AABB (7, -3, -3) to (13, 3, 3)
+            // Combined: (-3, -3, -3) to (13, 3, 3)
+            assert.ok(Math.abs(bounds.minX - (-3)) < 0.001);
+            assert.ok(Math.abs(bounds.minY - (-3)) < 0.001);
+            assert.ok(Math.abs(bounds.minZ - (-3)) < 0.001);
+            assert.ok(Math.abs(bounds.maxX - 13) < 0.001);
+            assert.ok(Math.abs(bounds.maxY - 3) < 0.001);
+            assert.ok(Math.abs(bounds.maxZ - 3) < 0.001);
         });
 
         it('should handle large datasets', function () {

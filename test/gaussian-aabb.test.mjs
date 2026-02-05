@@ -46,18 +46,18 @@ describe('GaussianAABB', function () {
             const extentY = result.extents.getColumnByName('extent_y').data;
             const extentZ = result.extents.getColumnByName('extent_z').data;
 
-            // Half-extents should match the scale (no rotation)
-            assert.ok(Math.abs(extentX[0] - 1) < 0.001, `Expected extent X ~1, got ${extentX[0]}`);
-            assert.ok(Math.abs(extentY[0] - 2) < 0.001, `Expected extent Y ~2, got ${extentY[0]}`);
-            assert.ok(Math.abs(extentZ[0] - 3) < 0.001, `Expected extent Z ~3, got ${extentZ[0]}`);
+            // Half-extents should be 3-sigma (3 * scale) for Gaussian rendering
+            assert.ok(Math.abs(extentX[0] - 3) < 0.001, `Expected extent X ~3, got ${extentX[0]}`);
+            assert.ok(Math.abs(extentY[0] - 6) < 0.001, `Expected extent Y ~6, got ${extentY[0]}`);
+            assert.ok(Math.abs(extentZ[0] - 9) < 0.001, `Expected extent Z ~9, got ${extentZ[0]}`);
 
-            // Scene bounds should be position +/- extents
-            assert.ok(Math.abs(result.sceneBounds.min.x - (-1)) < 0.001);
-            assert.ok(Math.abs(result.sceneBounds.min.y - (-2)) < 0.001);
-            assert.ok(Math.abs(result.sceneBounds.min.z - (-3)) < 0.001);
-            assert.ok(Math.abs(result.sceneBounds.max.x - 1) < 0.001);
-            assert.ok(Math.abs(result.sceneBounds.max.y - 2) < 0.001);
-            assert.ok(Math.abs(result.sceneBounds.max.z - 3) < 0.001);
+            // Scene bounds should be position +/- extents (3-sigma)
+            assert.ok(Math.abs(result.sceneBounds.min.x - (-3)) < 0.001);
+            assert.ok(Math.abs(result.sceneBounds.min.y - (-6)) < 0.001);
+            assert.ok(Math.abs(result.sceneBounds.min.z - (-9)) < 0.001);
+            assert.ok(Math.abs(result.sceneBounds.max.x - 3) < 0.001);
+            assert.ok(Math.abs(result.sceneBounds.max.y - 6) < 0.001);
+            assert.ok(Math.abs(result.sceneBounds.max.z - 9) < 0.001);
         });
 
         it('should compute extents for a translated Gaussian', function () {
@@ -85,18 +85,18 @@ describe('GaussianAABB', function () {
             const extentY = result.extents.getColumnByName('extent_y').data;
             const extentZ = result.extents.getColumnByName('extent_z').data;
 
-            // Half-extents should be 1, 1, 1
-            assert.ok(Math.abs(extentX[0] - 1) < 0.001);
-            assert.ok(Math.abs(extentY[0] - 1) < 0.001);
-            assert.ok(Math.abs(extentZ[0] - 1) < 0.001);
+            // Half-extents should be 3-sigma (3 * scale = 3)
+            assert.ok(Math.abs(extentX[0] - 3) < 0.001);
+            assert.ok(Math.abs(extentY[0] - 3) < 0.001);
+            assert.ok(Math.abs(extentZ[0] - 3) < 0.001);
 
-            // Scene bounds should be (10, 20, 30) +/- (1, 1, 1)
-            assert.ok(Math.abs(result.sceneBounds.min.x - 9) < 0.001);
-            assert.ok(Math.abs(result.sceneBounds.min.y - 19) < 0.001);
-            assert.ok(Math.abs(result.sceneBounds.min.z - 29) < 0.001);
-            assert.ok(Math.abs(result.sceneBounds.max.x - 11) < 0.001);
-            assert.ok(Math.abs(result.sceneBounds.max.y - 21) < 0.001);
-            assert.ok(Math.abs(result.sceneBounds.max.z - 31) < 0.001);
+            // Scene bounds should be (10, 20, 30) +/- (3, 3, 3)
+            assert.ok(Math.abs(result.sceneBounds.min.x - 7) < 0.001);
+            assert.ok(Math.abs(result.sceneBounds.min.y - 17) < 0.001);
+            assert.ok(Math.abs(result.sceneBounds.min.z - 27) < 0.001);
+            assert.ok(Math.abs(result.sceneBounds.max.x - 13) < 0.001);
+            assert.ok(Math.abs(result.sceneBounds.max.y - 23) < 0.001);
+            assert.ok(Math.abs(result.sceneBounds.max.z - 33) < 0.001);
         });
 
         it('should compute larger extents for rotated Gaussians', function () {
@@ -132,11 +132,12 @@ describe('GaussianAABB', function () {
             const extentY = result.extents.getColumnByName('extent_y').data;
             const extentZ = result.extents.getColumnByName('extent_z').data;
 
-            // After 45 deg rotation around Z, a box with halfExtents (2, 1, 1) should have
-            // larger X and Y extents
-            assert.ok(extentX[0] > 1.4, `X extent should expand, got ${extentX[0]}`);
-            assert.ok(extentY[0] > 1.4, `Y extent should expand, got ${extentY[0]}`);
-            assert.ok(Math.abs(extentZ[0] - 1) < 0.001, `Z extent should stay ~1, got ${extentZ[0]}`);
+            // After 45 deg rotation around Z, a box with halfExtents (6, 3, 3) (3-sigma) should have
+            // larger X and Y extents due to rotation mixing X and Y
+            // The rotated AABB should have X and Y extents > 4.2 (sqrt(2) * min of 3)
+            assert.ok(extentX[0] > 4.2, `X extent should expand, got ${extentX[0]}`);
+            assert.ok(extentY[0] > 4.2, `Y extent should expand, got ${extentY[0]}`);
+            assert.ok(Math.abs(extentZ[0] - 3) < 0.001, `Z extent should stay ~3, got ${extentZ[0]}`);
         });
 
         it('should compute scene bounds for multiple Gaussians', function () {
@@ -162,9 +163,10 @@ describe('GaussianAABB', function () {
 
             assert.strictEqual(result.extents.numRows, 2);
 
-            // Scene bounds should span both Gaussians
-            assert.ok(Math.abs(result.sceneBounds.min.x - (-6)) < 0.001, `Min X should be -6, got ${result.sceneBounds.min.x}`);
-            assert.ok(Math.abs(result.sceneBounds.max.x - 11) < 0.001, `Max X should be 11, got ${result.sceneBounds.max.x}`);
+            // Scene bounds should span both Gaussians with 3-sigma extent (3)
+            // First at -5: min = -5 - 3 = -8, Second at 10: max = 10 + 3 = 13
+            assert.ok(Math.abs(result.sceneBounds.min.x - (-8)) < 0.001, `Min X should be -8, got ${result.sceneBounds.min.x}`);
+            assert.ok(Math.abs(result.sceneBounds.max.x - 13) < 0.001, `Max X should be 13, got ${result.sceneBounds.max.x}`);
         });
 
         it('should return DataTable with correct column names', function () {
@@ -219,12 +221,15 @@ describe('GaussianAABB', function () {
 
             getGaussianAABB(result.extents, dataTable, 0, min, max);
 
-            assert.ok(Math.abs(min.x - 4) < 0.001, `Min X should be 4, got ${min.x}`);
-            assert.ok(Math.abs(min.y - 8) < 0.001, `Min Y should be 8, got ${min.y}`);
-            assert.ok(Math.abs(min.z - 12) < 0.001, `Min Z should be 12, got ${min.z}`);
-            assert.ok(Math.abs(max.x - 6) < 0.001, `Max X should be 6, got ${max.x}`);
-            assert.ok(Math.abs(max.y - 12) < 0.001, `Max Y should be 12, got ${max.y}`);
-            assert.ok(Math.abs(max.z - 18) < 0.001, `Max Z should be 18, got ${max.z}`);
+            // With 3-sigma: extent = (3, 6, 9), position = (5, 10, 15)
+            // min = (5-3, 10-6, 15-9) = (2, 4, 6)
+            // max = (5+3, 10+6, 15+9) = (8, 16, 24)
+            assert.ok(Math.abs(min.x - 2) < 0.001, `Min X should be 2, got ${min.x}`);
+            assert.ok(Math.abs(min.y - 4) < 0.001, `Min Y should be 4, got ${min.y}`);
+            assert.ok(Math.abs(min.z - 6) < 0.001, `Min Z should be 6, got ${min.z}`);
+            assert.ok(Math.abs(max.x - 8) < 0.001, `Max X should be 8, got ${max.x}`);
+            assert.ok(Math.abs(max.y - 16) < 0.001, `Max Y should be 16, got ${max.y}`);
+            assert.ok(Math.abs(max.z - 24) < 0.001, `Max Z should be 24, got ${max.z}`);
         });
     });
 
@@ -249,7 +254,7 @@ describe('GaussianAABB', function () {
 
             const result = computeGaussianExtents(dataTable);
 
-            // Gaussian AABB is (-1, -1, -1) to (1, 1, 1)
+            // Gaussian AABB is (-3, -3, -3) to (3, 3, 3) with 3-sigma extent
 
             // Overlapping box (contained)
             assert.strictEqual(
@@ -260,29 +265,29 @@ describe('GaussianAABB', function () {
                 'Contained box should overlap'
             );
 
-            // Touching box (edge contact)
+            // Touching box (edge contact at x=3)
             assert.strictEqual(
                 gaussianOverlapsBox(result.extents, dataTable, 0,
-                    new Vec3(1, 0, 0),
-                    new Vec3(2, 1, 1)),
+                    new Vec3(3, 0, 0),
+                    new Vec3(4, 1, 1)),
                 true,
                 'Edge-touching box should overlap'
             );
 
-            // Non-overlapping box (completely to the right)
+            // Non-overlapping box (completely to the right of 3-sigma extent)
             assert.strictEqual(
                 gaussianOverlapsBox(result.extents, dataTable, 0,
-                    new Vec3(2, 0, 0),
-                    new Vec3(3, 1, 1)),
+                    new Vec3(4, 0, 0),
+                    new Vec3(5, 1, 1)),
                 false,
                 'Box to the right should not overlap'
             );
 
-            // Non-overlapping box (completely above)
+            // Non-overlapping box (completely above 3-sigma extent)
             assert.strictEqual(
                 gaussianOverlapsBox(result.extents, dataTable, 0,
-                    new Vec3(0, 2, 0),
-                    new Vec3(1, 3, 1)),
+                    new Vec3(0, 4, 0),
+                    new Vec3(1, 5, 1)),
                 false,
                 'Box above should not overlap'
             );
