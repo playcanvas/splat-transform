@@ -82,8 +82,8 @@ const computeGaussianExtents = (dataTable: DataTable): GaussianExtentsResult => 
         rotation.set(rx[i], ry[i], rz[i], rw[i]).normalize();
         scale.set(Math.exp(sx[i]), Math.exp(sy[i]), Math.exp(sz[i]));
 
-        // Set local box half-extents (scale of the Gaussian ellipsoid)
-        localBox.halfExtents.set(scale.x, scale.y, scale.z);
+        // Set local box half-extents to 3-sigma (Gaussians render out to 3-sigma)
+        localBox.halfExtents.set(scale.x * 3, scale.y * 3, scale.z * 3);
 
         // Create rotation matrix (translation is included to position the AABB correctly)
         mat4.setTRS(position, rotation, Vec3.ONE);

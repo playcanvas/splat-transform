@@ -68,5 +68,5 @@ export type { Logger, ProgressNode } from './utils/logger';
 export { WebPCodec } from './utils/webp-codec';
 
 // Voxelization
-export { computeGaussianExtents, getGaussianAABB, gaussianOverlapsBox, GaussianBVH } from './voxel/index';
-export type { GaussianExtentsResult, GaussianBVHNode, BVHBounds } from './voxel/index';
+export { computeGaussianExtents, getGaussianAABB, gaussianOverlapsBox, GaussianBVH, GpuVoxelization } from './voxel/index';
+export type { GaussianExtentsResult, GaussianBVHNode, BVHBounds, VoxelizationResult } from './voxel/index';
