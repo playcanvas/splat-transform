@@ -68,5 +68,31 @@ export type { Logger, ProgressNode } from './utils/logger';
 export { WebPCodec } from './utils/webp-codec';
 
 // Voxelization
-export { computeGaussianExtents, getGaussianAABB, gaussianOverlapsBox, GaussianBVH, GpuVoxelization } from './voxel/index';
-export type { GaussianExtentsResult, GaussianBVHNode, BVHBounds, VoxelizationResult } from './voxel/index';
+export {
+    computeGaussianExtents,
+    getGaussianAABB,
+    gaussianOverlapsBox,
+    GaussianBVH,
+    GpuVoxelization,
+    // Sparse octree
+    xyzToMorton,
+    mortonToXYZ,
+    popcount,
+    isSolid,
+    isEmpty,
+    getChildOffset,
+    BlockAccumulator,
+    buildSparseOctree,
+    alignGridBounds,
+    SOLID_LEAF_MARKER,
+    MIXED_LEAF_MARKER
+} from './voxel/index';
+
+export type {
+    GaussianExtentsResult,
+    GaussianBVHNode,
+    BVHBounds,
+    VoxelizationResult,
+    SparseOctree,
+    Bounds
+} from './voxel/index';

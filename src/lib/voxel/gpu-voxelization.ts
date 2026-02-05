@@ -188,8 +188,8 @@ class GpuVoxelization {
     /** Floats per Gaussian in the interleaved buffer (16 for alignment) */
     private static readonly FLOATS_PER_GAUSSIAN = 16;
 
-    /** Maximum indices per dispatch (controls index buffer size) */
-    private static readonly MAX_INDICES_DISPATCH = 65536;
+    /** Maximum indices per dispatch (controls index buffer size: 262144 * 4 = 1 MB) */
+    private static readonly MAX_INDICES_DISPATCH = 262144;
 
     /** Maximum blocks per dispatch */
     private static readonly MAX_BLOCKS_DISPATCH = 4096;
