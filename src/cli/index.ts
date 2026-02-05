@@ -83,6 +83,8 @@ const parseArguments = async () => {
             'lod-chunk-count': { type: 'string', short: 'C', default: '512' },
             'lod-chunk-extent': { type: 'string', short: 'X', default: '16' },
             unbundled: { type: 'boolean', short: 'U', default: false },
+            'voxel-resolution': { type: 'string', short: 'R', default: '0.05' },
+            'opacity-cutoff': { type: 'string', short: 'A', default: '0.5' },
 
             // per-file options
             translate: { type: 'string', short: 't', multiple: true },
@@ -175,7 +177,9 @@ const parseArguments = async () => {
         viewerSettingsJson: viewerSettingsPath && await readJsonFile(viewerSettingsPath),
         unbundled: v.unbundled,
         lodChunkCount: parseInteger(v['lod-chunk-count']),
-        lodChunkExtent: parseInteger(v['lod-chunk-extent'])
+        lodChunkExtent: parseInteger(v['lod-chunk-extent']),
+        voxelResolution: parseNumber(v['voxel-resolution']),
+        opacityCutoff: parseNumber(v['opacity-cutoff'])
     };
 
     for (const t of tokens) {
@@ -352,7 +356,7 @@ SUPPORTED INPUTS
     .ply   .compressed.ply   .sog   meta.json   .ksplat   .splat   .spz   .mjs   .lcc
 
 SUPPORTED OUTPUTS
-    .ply   .compressed.ply   .sog   meta.json   lod-meta.json   .csv   .html   null
+    .ply   .compressed.ply   .sog   meta.json   lod-meta.json   .csv   .html   .voxel.json   null
 
 ACTIONS (can be repeated, in any order)
     -t, --translate        <x,y,z>          Translate Gaussians by (x, y, z)
@@ -384,6 +388,8 @@ GLOBAL OPTIONS
     -O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC input
     -C, --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
     -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
+    -R, --voxel-resolution <n>              Voxel size in world units for .voxel.json. Default: 0.05
+    -A, --opacity-cutoff   <n>              Opacity threshold for solid voxels. Default: 0.5
 
 EXAMPLES
     # Scale then translate
@@ -400,6 +406,12 @@ EXAMPLES
 
     # Generate LOD with custom chunk size and node split size
     splat-transform -O 0,1,2 -C 1024 -X 32 input.lcc output/lod-meta.json
+
+    # Generate voxel collision data
+    splat-transform input.ply output.voxel.json
+
+    # Generate voxel data with custom resolution and opacity threshold
+    splat-transform -R 0.1 -A 0.3 input.ply output.voxel.json
 
     # Print statistical summary, then write output
     splat-transform bunny.ply --summary output.ply

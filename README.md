@@ -12,7 +12,7 @@
 SplatTransform is an open source library and CLI tool for converting and editing Gaussian splats. It can:
 
 📥 Read PLY, Compressed PLY, SOG, SPLAT, KSPLAT, SPZ and LCC formats  
-📤 Write PLY, Compressed PLY, SOG, CSV, HTML Viewer and LOD (streaming) formats  
+📤 Write PLY, Compressed PLY, SOG, CSV, HTML Viewer, LOD and Voxel formats  
 📊 Generate statistical summaries for data analysis  
 🔗 Merge multiple splats  
 🔄 Apply transformations to input splats  
@@ -62,6 +62,7 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 | `.mjs` | ✅ | ❌ | Generate a scene using an mjs script (Beta) |
 | `.csv` | ❌ | ✅ | Comma-separated values spreadsheet |
 | `.html` | ❌ | ✅ | HTML viewer app (single-page or unbundled) based on SOG |
+| `.voxel.json` | ❌ | ✅ | Sparse voxel octree for collision detection |
 
 ## Actions
 
@@ -100,6 +101,8 @@ Actions can be repeated and applied in any order:
 -O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC input
 -C, --lod-chunk-count  <n>              Approx number of Gaussians per LOD chunk in K. Default: 512
 -X, --lod-chunk-extent <n>              Approx size of an LOD chunk in world units (m). Default: 16
+-R, --voxel-resolution <n>              Voxel size in world units for .voxel.json. Default: 0.05
+-A, --opacity-cutoff   <n>              Opacity threshold for solid voxels. Default: 0.5
 ```
 
 > [!NOTE]
@@ -214,6 +217,27 @@ Generator scripts can be used to synthesize gaussian splat data. See [gen-grid.m
 ```bash
 splat-transform gen-grid.mjs -p width=10,height=10,scale=10,color=0.1 scenes/grid.ply -w
 ```
+
+### Voxel Output
+
+Generate sparse voxel octree data for collision detection:
+
+```bash
+# Generate voxel collision data
+splat-transform input.ply output.voxel.json
+
+# Generate voxel data with custom resolution (10cm voxels)
+splat-transform -R 0.1 input.ply output.voxel.json
+
+# Generate voxel data with lower opacity threshold
+splat-transform -A 0.3 input.ply output.voxel.json
+
+# Combine resolution and opacity settings
+splat-transform -R 0.1 -A 0.3 input.ply output.voxel.json
+```
+
+> [!NOTE]
+> Voxel output generates two files: `output.voxel.json` (metadata) and `output.voxel.bin` (binary octree data). The voxel resolution controls the size of individual voxels in world units. The opacity cutoff determines the threshold above which voxels are considered solid.
 
 ### Device Selection for SOG Compression
 
