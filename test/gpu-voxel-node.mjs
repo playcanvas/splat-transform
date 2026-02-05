@@ -192,14 +192,17 @@ async function main() {
                 // Extract solid voxel centers
                 for (let blockIdx = 0; blockIdx < result.blocks.length; blockIdx++) {
                     const block = result.blocks[blockIdx];
-                    const mask = result.masks[blockIdx];
+                    const maskLow = result.masks[blockIdx * 2];
+                    const maskHigh = result.masks[blockIdx * 2 + 1];
                     
-                    if (mask === 0n) continue;
+                    if (maskLow === 0 && maskHigh === 0) continue;
                     
                     // Check each voxel in the 4x4x4 block
                     for (let voxelIdx = 0; voxelIdx < 64; voxelIdx++) {
-                        const bit = 1n << BigInt(voxelIdx);
-                        if ((mask & bit) !== 0n) {
+                        const isSet = voxelIdx < 32
+                            ? (maskLow & (1 << voxelIdx)) !== 0
+                            : (maskHigh & (1 << (voxelIdx - 32))) !== 0;
+                        if (isSet) {
                             // Voxel is solid - compute world position
                             const localPos = mortonToXYZ(voxelIdx);
                             

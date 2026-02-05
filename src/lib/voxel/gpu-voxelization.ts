@@ -157,8 +157,11 @@ interface VoxelizationResult {
     /** Block coordinates (x, y, z) for each block */
     blocks: Array<{ x: number; y: number; z: number }>;
 
-    /** 64-bit voxel masks (as BigInt) for each block */
-    masks: BigUint64Array;
+    /**
+     * Interleaved u32 voxel masks for each block.
+     * For block at index i: masks[i*2] = low bits (voxels 0-31), masks[i*2+1] = high bits (voxels 32-63)
+     */
+    masks: Uint32Array;
 }
 
 /**
@@ -378,16 +381,15 @@ class GpuVoxelization {
 
         // Convert to result format
         const blocks: Array<{ x: number; y: number; z: number }> = [];
-        const masks = new BigUint64Array(totalBlocks);
+        const masks = new Uint32Array(totalBlocks * 2);
 
         let blockIdx = 0;
         for (let z = 0; z < numBlocksZ; z++) {
             for (let y = 0; y < numBlocksY; y++) {
                 for (let x = 0; x < numBlocksX; x++) {
                     blocks.push({ x, y, z });
-                    const low = resultsU32[blockIdx * 2];
-                    const high = resultsU32[blockIdx * 2 + 1];
-                    masks[blockIdx] = BigInt(low) | (BigInt(high) << 32n);
+                    masks[blockIdx * 2] = resultsU32[blockIdx * 2];
+                    masks[blockIdx * 2 + 1] = resultsU32[blockIdx * 2 + 1];
                     blockIdx++;
                 }
             }

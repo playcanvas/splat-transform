@@ -38,15 +38,16 @@ describe('VoxelizationResult', function () {
         it('should define expected result format', function () {
             // VoxelizationResult is a type, so we test by documenting expected structure:
             // - blocks: Array<{ x: number; y: number; z: number }>
-            // - masks: BigUint64Array
+            // - masks: Uint32Array (interleaved: masks[i*2] = low bits, masks[i*2+1] = high bits)
             // This is validated at compile time, but we can test the concept
             const mockResult = {
                 blocks: [{ x: 0, y: 0, z: 0 }],
-                masks: new BigUint64Array(1)
+                masks: new Uint32Array(2)  // 2 u32s per block
             };
 
             assert.ok(Array.isArray(mockResult.blocks));
-            assert.ok(mockResult.masks instanceof BigUint64Array);
+            assert.ok(mockResult.masks instanceof Uint32Array);
+            assert.strictEqual(mockResult.masks.length, mockResult.blocks.length * 2);
         });
     });
 });

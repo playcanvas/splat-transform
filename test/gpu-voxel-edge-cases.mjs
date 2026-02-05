@@ -193,13 +193,16 @@ async function voxelizeTestCase(gpuVoxelization, dataTable, extentsResult, voxel
                 
                 for (let blockIdx = 0; blockIdx < result.blocks.length; blockIdx++) {
                     const block = result.blocks[blockIdx];
-                    const mask = result.masks[blockIdx];
+                    const maskLow = result.masks[blockIdx * 2];
+                    const maskHigh = result.masks[blockIdx * 2 + 1];
                     
-                    if (mask === 0n) continue;
+                    if (maskLow === 0 && maskHigh === 0) continue;
                     
                     for (let voxelIdx = 0; voxelIdx < 64; voxelIdx++) {
-                        const bit = 1n << BigInt(voxelIdx);
-                        if ((mask & bit) !== 0n) {
+                        const isSet = voxelIdx < 32
+                            ? (maskLow & (1 << voxelIdx)) !== 0
+                            : (maskHigh & (1 << (voxelIdx - 32))) !== 0;
+                        if (isSet) {
                             const localPos = mortonToXYZ(voxelIdx);
                             
                             const worldX = blockMinX + block.x * blockSize + (localPos.x + 0.5) * voxelRes;
