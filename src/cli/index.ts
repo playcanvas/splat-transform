@@ -353,7 +353,7 @@ USAGE
   • Use 'null' as output to discard file output.
 
 SUPPORTED INPUTS
-    .ply   .compressed.ply   .sog   meta.json   .ksplat   .splat   .spz   .mjs   .lcc
+    .ply   .compressed.ply   .sog   meta.json   .ksplat   .splat   .spz   .mjs   .lcc   .voxel.json
 
 SUPPORTED OUTPUTS
     .ply   .compressed.ply   .sog   meta.json   lod-meta.json   .csv   .html   .voxel.json   null
@@ -412,6 +412,9 @@ EXAMPLES
 
     # Generate voxel data with custom resolution and opacity threshold
     splat-transform -R 0.1 -A 0.3 input.ply output.voxel.json
+
+    # Convert voxel data back to PLY for visualization
+    splat-transform scene.voxel.json scene-voxels.ply
 
     # Print statistical summary, then write output
     splat-transform bunny.ply --summary output.ply
