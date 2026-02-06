@@ -77,18 +77,8 @@ export {
     gaussianOverlapsBox,
     GaussianBVH,
     GpuVoxelization,
-    // Sparse octree
-    xyzToMorton,
-    mortonToXYZ,
-    popcount,
-    isSolid,
-    isEmpty,
-    getChildOffset,
-    BlockAccumulator,
     buildSparseOctree,
-    alignGridBounds,
-    SOLID_LEAF_MARKER,
-    MIXED_LEAF_MARKER
+    alignGridBounds
 } from './voxel/index';
 
 export type {

@@ -8,12 +8,14 @@ import {
     computeGaussianExtents,
     GaussianBVH,
     GpuVoxelization,
-    BlockAccumulator,
     buildSparseOctree,
-    alignGridBounds,
+    alignGridBounds
+} from '../voxel/index';
+import {
+    BlockAccumulator,
     xyzToMorton,
     type SparseOctree
-} from '../voxel/index';
+} from '../voxel/sparse-octree';
 
 /**
  * A function that creates a PlayCanvas GraphicsDevice on demand.

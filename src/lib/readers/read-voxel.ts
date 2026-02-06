@@ -2,7 +2,7 @@ import { basename, dirname, join } from 'pathe';
 
 import { Column, DataTable } from '../data-table/data-table';
 import { ReadFileSystem, readFile } from '../io/read';
-import { getChildOffset, mortonToXYZ } from '../voxel/index';
+import { getChildOffset, mortonToXYZ } from '../voxel/sparse-octree';
 
 /** SH coefficient for color conversion */
 const C0 = 0.28209479177387814;
