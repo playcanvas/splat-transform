@@ -138,10 +138,11 @@ fn main(
     // Determine if voxel is solid
     let isSolid = finalOpacity >= uniforms.opacityCutoff;
     
-    // Write result bit to output
+    // Write result bit to output using linear indexing (z*16 + y*4 + x)
+    let linearIdx = localPos.z * 16u + localPos.y * 4u + localPos.x;
     let blockIndex = blockId.x + blockId.y * uniforms.numBlocksX + blockId.z * uniforms.numBlocksX * uniforms.numBlocksY;
-    let wordIndex = blockIndex * 2u + (voxelIdx >> 5u);
-    let bitIndex = voxelIdx & 31u;
+    let wordIndex = blockIndex * 2u + (linearIdx >> 5u);
+    let bitIndex = linearIdx & 31u;
     
     if (isSolid) {
         atomicOr(&results[wordIndex], 1u << bitIndex);
