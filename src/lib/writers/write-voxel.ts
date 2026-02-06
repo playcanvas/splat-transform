@@ -84,6 +84,10 @@ interface VoxelMetadata {
 
 /**
  * Write octree data to files.
+ *
+ * @param fs - File system for writing output files.
+ * @param jsonFilename - Output filename for JSON metadata.
+ * @param octree - Sparse octree structure to write.
  */
 const writeOctreeFiles = async (
     fs: FileSystem,
@@ -171,17 +175,19 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
 
     logger.log(`voxelizing scene (resolution: ${voxelResolution}, opacity cutoff: ${opacityCutoff})...`);
 
+    logger.progress.begin(6);
+
     // Phase 1: Compute Gaussian extents
-    logger.log('computing Gaussian extents...');
+    logger.progress.step('Computing Gaussian extents');
     const extentsResult = computeGaussianExtents(dataTable);
     const bounds = extentsResult.sceneBounds;
 
     // Phase 2: Build BVH
-    logger.log('building BVH...');
+    logger.progress.step('Building BVH');
     const bvh = new GaussianBVH(dataTable, extentsResult.extents);
 
     // Phase 3: Create GPU device and voxelization
-    logger.log('creating GPU device...');
+    logger.progress.step('Creating GPU device');
     const device = await createDevice();
 
     const gpuVoxelization = new GpuVoxelization(device);
@@ -199,10 +205,22 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     const accumulator = new BlockAccumulator();
     const batchSize = 16;  // 16x16x16 = 4096 blocks max per batch
 
-    logger.log('voxelizing...');
+    logger.progress.step('Voxelizing');
+
+    // Inner progress for voxelization batches
+    const numZBatches = Math.max(1, Math.ceil(numBlocksZ / batchSize));
+    logger.progress.begin(10);
+    let lastVoxelStep = 0;
 
     // Process the entire scene in batches
     for (let bz = 0; bz < numBlocksZ; bz += batchSize) {
+        // Report inner progress scaled to 10 steps
+        const currentVoxelStep = Math.min(10, Math.floor(((bz / batchSize) + 1) / numZBatches * 10));
+        while (lastVoxelStep < currentVoxelStep) {
+            logger.progress.step();
+            lastVoxelStep++;
+        }
+
         for (let by = 0; by < numBlocksY; by += batchSize) {
             for (let bx = 0; bx < numBlocksX; bx += batchSize) {
                 const currBatchX = Math.min(batchSize, numBlocksX - bx);
@@ -255,13 +273,19 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         }
     }
 
+    // Flush remaining inner voxelization progress steps
+    while (lastVoxelStep < 10) {
+        logger.progress.step();
+        lastVoxelStep++;
+    }
+
     // Cleanup GPU resources (device lifecycle managed by caller)
     gpuVoxelization.destroy();
 
     logger.log(`voxelization complete: ${accumulator.count} non-empty blocks`);
 
     // Phase 5: Build sparse octree
-    logger.log('building sparse octree...');
+    logger.progress.step('Building sparse octree');
 
     // Align grid bounds to block boundaries
     const gridBounds = alignGridBounds(
@@ -281,6 +305,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     logger.log(`octree: depth=${octree.treeDepth}, interior=${octree.numInteriorNodes}, mixed=${octree.numMixedLeaves}`);
 
     // Phase 6: Write output files
+    logger.progress.step('Writing output');
     await writeOctreeFiles(fs, filename, octree);
 
     const totalBytes = (octree.nodes.length + octree.leafData.length) * 4;

@@ -1,5 +1,7 @@
 import { Vec3 } from 'playcanvas';
 
+import { logger } from '../utils/logger';
+
 // ============================================================================
 // Constants
 // ============================================================================
@@ -71,8 +73,8 @@ function mortonToXYZ(m: number): [number, number, number] {
  * @returns Number of bits set to 1
  */
 function popcount(n: number): number {
-    n = n >>> 0; // Ensure unsigned
-    n = n - ((n >>> 1) & 0x55555555);
+    n >>>= 0; // Ensure unsigned
+    n -= ((n >>> 1) & 0x55555555);
     n = (n & 0x33333333) + ((n >>> 2) & 0x33333333);
     return (((n + (n >>> 4)) & 0x0F0F0F0F) * 0x01010101) >>> 24;
 }
@@ -334,6 +336,10 @@ function buildSparseOctree(
     // Sort by Morton code
     blocks.sort((a, b) => a.morton - b.morton);
 
+    // Inner progress: 10 anonymous steps
+    logger.progress.begin(10);
+    let octreeStep = 0;
+
     // Calculate tree depth based on grid size
     const gridSize = new Vec3(
         gridBounds.max.x - gridBounds.min.x,
@@ -366,8 +372,19 @@ function buildSparseOctree(
         });
     }
 
-    // Build up level by level
+    // 1 step for init
+    logger.progress.step();
+    octreeStep++;
+
+    // Build up level by level (8 steps for level processing, 1 for flatten)
+    const levelSteps = 8;
     for (let level = 0; level < treeDepth; level++) {
+        // Report inner progress scaled to levelSteps
+        const targetStep = 1 + Math.min(levelSteps, Math.floor((level + 1) / treeDepth * levelSteps));
+        while (octreeStep < targetStep) {
+            logger.progress.step();
+            octreeStep++;
+        }
         const nextLevel = new Map<number, BuildNode>();
 
         // Group nodes by parent Morton code
@@ -425,12 +442,31 @@ function buildSparseOctree(
         }
     }
 
+    // Flush remaining level steps
+    while (octreeStep < 9) {
+        logger.progress.step();
+        octreeStep++;
+    }
+
     // Flatten tree to arrays
-    return flattenTree(currentLevel, mixed.masks, gridBounds, gaussianBounds, voxelResolution, treeDepth);
+    const result = flattenTree(currentLevel, mixed.masks, gridBounds, gaussianBounds, voxelResolution, treeDepth);
+
+    // Final step (10th)
+    logger.progress.step();
+
+    return result;
 }
 
 /**
  * Flatten the constructed tree into Laine-Karras format arrays.
+ *
+ * @param rootLevel - Map of root-level nodes keyed by Morton code.
+ * @param mixedMasks - Interleaved voxel masks for mixed blocks.
+ * @param gridBounds - Grid bounds aligned to block boundaries.
+ * @param gaussianBounds - Original Gaussian scene bounds.
+ * @param voxelResolution - Size of each voxel in world units.
+ * @param treeDepth - Maximum tree depth.
+ * @returns Sparse octree structure in Laine-Karras format.
  */
 function flattenTree(
     rootLevel: Map<number, BuildNode>,
