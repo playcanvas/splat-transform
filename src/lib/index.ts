@@ -47,6 +47,7 @@ export { readPly } from './readers/read-ply';
 export { readSog } from './readers/read-sog';
 export { readSplat } from './readers/read-splat';
 export { readSpz } from './readers/read-spz';
+export { readVoxel } from './readers/read-voxel';
 
 // Individual writers (for advanced use)
 export { writeSog } from './writers/write-sog';

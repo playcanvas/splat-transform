@@ -7,11 +7,11 @@ import { Vec3 } from 'playcanvas';
 /** All 64 bits set (as unsigned 32-bit) */
 const SOLID_MASK = 0xFFFFFFFF >>> 0;
 
-/** Solid leaf node marker: mask byte = 0xFF, no children needed */
-const SOLID_LEAF_MARKER = 0xFF000000 >>> 0;
+/** Solid leaf node marker: high byte = 0x00 (no children), lower bits all zero */
+const SOLID_LEAF_MARKER = 0x00000000 >>> 0;
 
-/** Mixed leaf node marker: high byte = 0xFE, lower 24 bits = leafData index */
-const MIXED_LEAF_MARKER = 0xFE000000 >>> 0;
+/** Mixed leaf node marker: high byte = 0x00, bit 23 set, lower 23 bits = leafData index */
+const MIXED_LEAF_MARKER = 0x00800000 >>> 0;
 
 // ============================================================================
 // Morton Code Functions
@@ -416,8 +416,11 @@ function buildSparseOctree(
 
         currentLevel = nextLevel;
 
-        // If only one node remains and it's the root, we're done
-        if (currentLevel.size <= 1) {
+        // Break when the tree is empty or has converged to a single root at Morton 0.
+        // We must NOT break early if the single remaining node has a non-zero Morton,
+        // because the reader reconstructs Morton codes starting from root Morton 0.
+        if (currentLevel.size === 0 ||
+            (currentLevel.size === 1 && currentLevel.has(0))) {
             break;
         }
     }
@@ -517,7 +520,7 @@ function flattenTree(
             const leafDataIndex = leafDataList.length / 2;
             leafDataList.push(mixedMasks[node.maskIndex * 2]);     // lo
             leafDataList.push(mixedMasks[node.maskIndex * 2 + 1]); // hi
-            nodes[i] = MIXED_LEAF_MARKER | (leafDataIndex & 0x00FFFFFF);
+            nodes[i] = MIXED_LEAF_MARKER | (leafDataIndex & 0x007FFFFF);
             numMixedLeaves++;
         }
     }

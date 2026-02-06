@@ -13,11 +13,14 @@ import {
     Column,
     DataTable,
     computeSummary,
+    getInputFormat,
+    readFile,
     readPly,
     readSplat,
     readKsplat,
     readSpz,
     readSog,
+    readVoxel,
     writePly,
     writeCompressedPly,
     writeSog,
@@ -417,5 +420,61 @@ describe('MJS Generator Format (Input Only)', () => {
         // Positions should span expected range
         assert(summary.columns.x.min < 0, 'x.min should be negative');
         assert(summary.columns.x.max > 0, 'x.max should be positive');
+    });
+});
+
+describe('Voxel Format (Input Only)', () => {
+    let voxelFs;
+    const voxelJsonPath = join(__dirname, '..', 'lmsf.voxel.json');
+
+    before(async () => {
+        voxelFs = new MemoryReadFileSystem();
+        const jsonBytes = await fsReadFile(voxelJsonPath);
+        const binBytes = await fsReadFile(join(__dirname, '..', 'lmsf.voxel.bin'));
+        voxelFs.set('lmsf.voxel.json', new Uint8Array(jsonBytes));
+        voxelFs.set('lmsf.voxel.bin', new Uint8Array(binBytes));
+    });
+
+    it('should detect voxel format from filename', () => {
+        assert.strictEqual(getInputFormat('scene.voxel.json'), 'voxel');
+    });
+
+    it('should read voxel file and produce DataTable with leaf blocks', async () => {
+        const dataTable = await readVoxel(voxelFs, 'lmsf.voxel.json');
+
+        assert(dataTable.numRows > 0, 'Should have at least one leaf block');
+        assert.strictEqual(dataTable.numColumns, 14);
+
+        const requiredColumns = ['x', 'y', 'z', 'scale_0', 'scale_1', 'scale_2', 'rot_0', 'rot_1', 'rot_2', 'rot_3', 'f_dc_0', 'f_dc_1', 'f_dc_2', 'opacity'];
+        for (const col of requiredColumns) {
+            assert(dataTable.hasColumn(col), `Should have column ${col}`);
+        }
+    });
+
+    it('should read voxel via readFile and write to PLY', async () => {
+        const tables = await readFile({
+            filename: 'lmsf.voxel.json',
+            inputFormat: getInputFormat('lmsf.voxel.json'),
+            options: {},
+            params: [],
+            fileSystem: voxelFs
+        });
+
+        assert.strictEqual(tables.length, 1);
+        const dataTable = tables[0];
+        assert(dataTable.numRows > 0);
+
+        const writeFs = new MemoryFileSystem();
+        await writePly({
+            filename: 'voxel-out.ply',
+            plyData: {
+                comments: ['Voxel leaf visualization'],
+                elements: [{ name: 'vertex', dataTable }]
+            }
+        }, writeFs);
+
+        const plyData = writeFs.results.get('voxel-out.ply');
+        assert(plyData, 'PLY should be written');
+        assert(plyData.length > 0, 'PLY should not be empty');
     });
 });

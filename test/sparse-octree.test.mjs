@@ -523,10 +523,11 @@ describe('buildSparseOctree', function () {
             assert.strictEqual(octree.leafData[1], 0x55555555);
 
             // Check that a node has mixed leaf marker
-            // Use >>> 0 to convert to unsigned for correct comparison
+            // Mixed leaves have highByte=0x00 and bit 23 set
             let hasMixedLeaf = false;
             for (let i = 0; i < octree.nodes.length; i++) {
-                if (((octree.nodes[i] & 0xFF000000) >>> 0) === MIXED_LEAF_MARKER) {
+                const n = octree.nodes[i] >>> 0;
+                if (((n >> 24) & 0xFF) === 0x00 && (n & 0x00800000) !== 0) {
                     hasMixedLeaf = true;
                     break;
                 }

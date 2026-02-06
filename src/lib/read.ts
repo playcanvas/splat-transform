@@ -8,6 +8,7 @@ import { readPly } from './readers/read-ply';
 import { readSog } from './readers/read-sog';
 import { readSplat } from './readers/read-splat';
 import { readSpz } from './readers/read-spz';
+import { readVoxel } from './readers/read-voxel';
 import { Options, Param } from './types';
 import { logger } from './utils/logger';
 
@@ -21,8 +22,9 @@ import { logger } from './utils/logger';
  * - `sog` - PlayCanvas SOG format (WebP-compressed)
  * - `lcc` - XGrids LCC format
  * - `mjs` - JavaScript module generator
+ * - `voxel` - Sparse voxel octree format
  */
-type InputFormat = 'mjs' | 'ksplat' | 'splat' | 'sog' | 'ply' | 'spz' | 'lcc';
+type InputFormat = 'mjs' | 'ksplat' | 'splat' | 'sog' | 'ply' | 'spz' | 'lcc' | 'voxel';
 
 /**
  * Determines the input format based on file extension.
@@ -54,6 +56,8 @@ const getInputFormat = (filename: string): InputFormat => {
         return 'spz';
     } else if (lowerFilename.endsWith('.lcc')) {
         return 'lcc';
+    } else if (lowerFilename.endsWith('.voxel.json')) {
+        return 'voxel';
     }
 
     throw new Error(`Unsupported input file type: ${filename}`);
@@ -124,6 +128,8 @@ const readFile = async (readFileOptions: ReadFileOptions): Promise<DataTable[]> 
     } else if (inputFormat === 'lcc') {
         // LCC uses ReadFileSystem for multi-file access
         result = await readLcc(fileSystem, filename, options);
+    } else if (inputFormat === 'voxel') {
+        result = [await readVoxel(fileSystem, filename)];
     } else {
         // All other formats use ReadSource
         const source = await fileSystem.createSource(filename);
