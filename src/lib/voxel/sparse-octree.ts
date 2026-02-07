@@ -30,18 +30,16 @@ const SOLID_LEAF_MARKER = 0xFF000000 >>> 0;
  * @returns Morton code with interleaved bits: ...z2y2x2 z1y1x1 z0y0x0
  */
 function xyzToMorton(x: number, y: number, z: number): number {
-    // Use lookup table approach for better performance
-    // Split into low and high parts to avoid 32-bit overflow issues
     let result = 0;
+    let shift = 1; // Running power: 2^(i*3), starts at 2^0 = 1
     for (let i = 0; i < 17; i++) {
-        const xBit = (x >>> i) & 1;
-        const yBit = (y >>> i) & 1;
-        const zBit = (z >>> i) & 1;
-        // Position: i*3 for x, i*3+1 for y, i*3+2 for z
-        const shift = i * 3;
-        result += xBit * Math.pow(2, shift);
-        result += yBit * Math.pow(2, shift + 1);
-        result += zBit * Math.pow(2, shift + 2);
+        if (x & 1) result += shift;
+        if (y & 1) result += shift * 2;
+        if (z & 1) result += shift * 4;
+        x >>>= 1;
+        y >>>= 1;
+        z >>>= 1;
+        shift *= 8;
     }
     return result;
 }
@@ -54,11 +52,14 @@ function xyzToMorton(x: number, y: number, z: number): number {
  */
 function mortonToXYZ(m: number): [number, number, number] {
     let x = 0, y = 0, z = 0;
-    for (let i = 0; i < 17; i++) {
-        const shift = i * 3;
-        x |= (Math.floor(m / Math.pow(2, shift)) & 1) << i;
-        y |= (Math.floor(m / Math.pow(2, shift + 1)) & 1) << i;
-        z |= (Math.floor(m / Math.pow(2, shift + 2)) & 1) << i;
+    let bit = 1;
+    while (m > 0) {
+        const triplet = m % 8;
+        if (triplet & 1) x |= bit;
+        if (triplet & 2) y |= bit;
+        if (triplet & 4) z |= bit;
+        bit <<= 1;
+        m = Math.trunc(m / 8);
     }
     return [x, y, z];
 }
