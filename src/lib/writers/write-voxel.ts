@@ -241,7 +241,6 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
                 );
 
                 if (overlapping.length === 0) {
-                    // Empty batch - skip GPU work
                     continue;
                 }
 
@@ -254,18 +253,25 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
                     opacityCutoff
                 );
 
-                // Accumulate blocks with Morton codes
-                for (let blockIdx = 0; blockIdx < result.blocks.length; blockIdx++) {
-                    const block = result.blocks[blockIdx];
-                    const maskLo = result.masks[blockIdx * 2];
-                    const maskHi = result.masks[blockIdx * 2 + 1];
+                // Accumulate non-empty blocks with Morton codes
+                const masks = result.masks;
+                const totalBatchBlocks = currBatchX * currBatchY * currBatchZ;
+                for (let blockIdx = 0; blockIdx < totalBatchBlocks; blockIdx++) {
+                    const maskLo = masks[blockIdx * 2];
+                    const maskHi = masks[blockIdx * 2 + 1];
 
-                    // Calculate absolute block coordinates
-                    const absBlockX = bx + block.x;
-                    const absBlockY = by + block.y;
-                    const absBlockZ = bz + block.z;
+                    // Skip empty blocks — vast majority are empty
+                    if (maskLo === 0 && maskHi === 0) continue;
 
-                    // Convert to Morton code and accumulate
+                    // Compute block coordinates directly from flat index
+                    const localX = blockIdx % currBatchX;
+                    const localY = (blockIdx / currBatchX | 0) % currBatchY;
+                    const localZ = (blockIdx / (currBatchX * currBatchY)) | 0;
+
+                    const absBlockX = bx + localX;
+                    const absBlockY = by + localY;
+                    const absBlockZ = bz + localZ;
+
                     const morton = xyzToMorton(absBlockX, absBlockY, absBlockZ);
                     accumulator.addBlock(morton, maskLo, maskHi);
                 }
