@@ -379,6 +379,9 @@ function buildSparseOctree(
     octreeStep++;
 
     // Build up level by level (8 steps for level processing, 1 for flatten)
+    // Track the actual tree depth (may be less than treeDepth if the tree
+    // converges to a single root before all levels are processed).
+    let actualDepth = treeDepth;
     const levelSteps = 8;
     for (let level = 0; level < treeDepth; level++) {
         // Report inner progress scaled to levelSteps
@@ -440,6 +443,7 @@ function buildSparseOctree(
         // because the reader reconstructs Morton codes starting from root Morton 0.
         if (currentLevel.size === 0 ||
             (currentLevel.size === 1 && currentLevel.has(0))) {
+            actualDepth = level + 1;
             break;
         }
     }
@@ -450,8 +454,9 @@ function buildSparseOctree(
         octreeStep++;
     }
 
-    // Flatten tree to arrays
-    const result = flattenTree(currentLevel, mixed.masks, gridBounds, gaussianBounds, voxelResolution, treeDepth);
+    // Flatten tree to arrays (use actualDepth, not treeDepth, so readVoxel and
+    // VoxelCollider know the real number of levels in the serialized tree)
+    const result = flattenTree(currentLevel, mixed.masks, gridBounds, gaussianBounds, voxelResolution, actualDepth);
 
     // Final step (10th)
     logger.progress.step();

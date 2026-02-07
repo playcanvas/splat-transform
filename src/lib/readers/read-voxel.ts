@@ -157,7 +157,6 @@ const collectLeafBlocks = (
 
         if (node === SOLID_LEAF_MARKER) {
             // Solid leaf - may be a collapsed parent if depth < treeDepth
-            // Estimate expansion size: 8^(treeDepth - depth)
             const levelsToExpand = treeDepth - depth;
             if (levelsToExpand === 0) {
                 // Already at leaf level, no expansion needed
