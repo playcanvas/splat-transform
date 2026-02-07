@@ -20,8 +20,7 @@ import {
     isEmpty,
     getChildOffset,
     BlockAccumulator,
-    SOLID_LEAF_MARKER,
-    MIXED_LEAF_MARKER
+    SOLID_LEAF_MARKER
 } from '../src/lib/voxel/sparse-octree.js';
 
 // ============================================================================
@@ -525,12 +524,12 @@ describe('buildSparseOctree', function () {
             assert.strictEqual(octree.leafData[0], 0xAAAAAAAA);
             assert.strictEqual(octree.leafData[1], 0x55555555);
 
-            // Check that a node has mixed leaf marker
-            // Mixed leaves have highByte=0x00 and bit 23 set
+            // Check that a node has mixed leaf encoding
+            // Mixed leaves have highByte=0x00 (lower 24 bits = leafData index)
             let hasMixedLeaf = false;
             for (let i = 0; i < octree.nodes.length; i++) {
                 const n = octree.nodes[i] >>> 0;
-                if (((n >> 24) & 0xFF) === 0x00 && (n & 0x00800000) !== 0) {
+                if (n !== SOLID_LEAF_MARKER && ((n >> 24) & 0xFF) === 0x00) {
                     hasMixedLeaf = true;
                     break;
                 }

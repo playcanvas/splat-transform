@@ -2,7 +2,7 @@ import { basename, dirname, join } from 'pathe';
 
 import { Column, DataTable } from '../data-table/data-table';
 import { ReadFileSystem, readFile } from '../io/read';
-import { getChildOffset, mortonToXYZ } from '../voxel/sparse-octree';
+import { getChildOffset, mortonToXYZ, SOLID_LEAF_MARKER } from '../voxel/sparse-octree';
 
 /** SH coefficient for color conversion */
 const C0 = 0.28209479177387814;
@@ -72,11 +72,13 @@ const collectLeafBlocks = (
     const leaves: LeafBlock[] = [];
 
     // Find root nodes: nodes that are never referenced as children.
-    // Interior nodes have highByte > 0 (childMask 0x01-0xFF).
-    // Leaf nodes have highByte === 0 (solid: 0x00000000, mixed: 0x00800000 | index).
+    // Interior nodes have nonzero high byte and are not the solid leaf sentinel.
+    // Solid leaves use the sentinel 0xFF000000.
+    // Mixed leaves have high byte === 0 (lower 24 bits = leafData index).
     const isChild = new Set<number>();
     for (let i = 0; i < nodes.length; i++) {
         const node = nodes[i] >>> 0;
+        if (node === SOLID_LEAF_MARKER) continue;
         const highByte = (node >> 24) & 0xFF;
         if (highByte !== 0x00) {
             // Interior node
@@ -104,27 +106,26 @@ const collectLeafBlocks = (
     while (queue.length > 0) {
         const { nodeIdx, morton, depth } = queue.shift()!;
         const node = nodes[nodeIdx] >>> 0;
-        const highByte = (node >> 24) & 0xFF;
 
-        if (highByte === 0x00) {
-            // Leaf node (highByte 0 = no children)
-            if (node & 0x00800000) {
-                // Mixed leaf (bit 23 set) - always at leaf level
+        if (node === SOLID_LEAF_MARKER) {
+            // Solid leaf - may be a collapsed parent if depth < treeDepth
+            expandSolid(morton, depth, treeDepth, leaves);
+        } else {
+            const highByte = (node >> 24) & 0xFF;
+            if (highByte === 0x00) {
+                // Mixed leaf (lower 24 bits = leafData index)
                 leaves.push({ morton, isSolid: false, leafMorton: morton });
             } else {
-                // Solid leaf - may be a collapsed parent if depth < treeDepth
-                expandSolid(morton, depth, treeDepth, leaves);
-            }
-        } else {
-            // Interior node - queue children
-            const childMask = highByte;
-            const baseOffset = node & 0x00FFFFFF;
-            for (let octant = 0; octant < 8; octant++) {
-                if (childMask & (1 << octant)) {
-                    const offset = getChildOffset(childMask, octant);
-                    const childIdx = baseOffset + offset;
-                    const childMorton = morton * 8 + octant;
-                    queue.push({ nodeIdx: childIdx, morton: childMorton, depth: depth + 1 });
+                // Interior node - queue children
+                const childMask = highByte;
+                const baseOffset = node & 0x00FFFFFF;
+                for (let octant = 0; octant < 8; octant++) {
+                    if (childMask & (1 << octant)) {
+                        const offset = getChildOffset(childMask, octant);
+                        const childIdx = baseOffset + offset;
+                        const childMorton = morton * 8 + octant;
+                        queue.push({ nodeIdx: childIdx, morton: childMorton, depth: depth + 1 });
+                    }
                 }
             }
         }

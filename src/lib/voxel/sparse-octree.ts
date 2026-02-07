@@ -9,11 +9,12 @@ import { logger } from '../utils/logger';
 /** All 64 bits set (as unsigned 32-bit) */
 const SOLID_MASK = 0xFFFFFFFF >>> 0;
 
-/** Solid leaf node marker: high byte = 0x00 (no children), lower bits all zero */
-const SOLID_LEAF_MARKER = 0x00000000 >>> 0;
-
-/** Mixed leaf node marker: high byte = 0x00, bit 23 set, lower 23 bits = leafData index */
-const MIXED_LEAF_MARKER = 0x00800000 >>> 0;
+/**
+ * Solid leaf node marker: childMask = 0xFF, baseOffset = 0.
+ * This is unambiguous because BFS layout guarantees children always come after
+ * their parent, so baseOffset = 0 is never valid for an interior node.
+ */
+const SOLID_LEAF_MARKER = 0xFF000000 >>> 0;
 
 // ============================================================================
 // Morton Code Functions
@@ -556,7 +557,7 @@ function flattenTree(
             const leafDataIndex = leafDataList.length / 2;
             leafDataList.push(mixedMasks[node.maskIndex * 2]);     // lo
             leafDataList.push(mixedMasks[node.maskIndex * 2 + 1]); // hi
-            nodes[i] = MIXED_LEAF_MARKER | (leafDataIndex & 0x007FFFFF);
+            nodes[i] = leafDataIndex & 0x00FFFFFF;
             numMixedLeaves++;
         }
     }
@@ -629,8 +630,7 @@ export {
     alignGridBounds,
 
     // Constants
-    SOLID_LEAF_MARKER,
-    MIXED_LEAF_MARKER
+    SOLID_LEAF_MARKER
 };
 
 export type { SparseOctree, Bounds };
