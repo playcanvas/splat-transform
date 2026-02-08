@@ -271,19 +271,19 @@ const enum BlockType {
     Mixed = 2
 }
 
-/** Intermediate node during construction */
-interface BuildNode {
-    /** Node type */
-    type: BlockType;
-
-    /** Morton code of this node (at its level) */
-    morton: number;
-
-    /** For mixed leaves: index into mask data */
-    maskIndex?: number;
-
-    /** For interior nodes: child nodes (sparse, indexed by octant 0-7) */
-    children?: (BuildNode | null)[];
+/**
+ * Per-level data stored during bottom-up construction.
+ * Uses Structure-of-Arrays layout to avoid per-node object allocation.
+ */
+interface LevelData {
+    /** Sorted Morton codes for nodes at this level */
+    mortons: number[];
+    /** Block type for each node (Solid or Mixed) */
+    types: number[];
+    /** For level-0 Mixed nodes: index into mixed.masks. Otherwise -1. */
+    maskIndices: number[];
+    /** For interior nodes (Mixed at level > 0): 8-bit child presence mask */
+    childMasks: number[];
 }
 
 // ============================================================================
@@ -292,6 +292,9 @@ interface BuildNode {
 
 /**
  * Build a sparse octree from accumulated voxelization blocks.
+ *
+ * Uses Structure-of-Arrays (SoA) representation and linear scans on sorted
+ * Morton codes instead of Maps and per-node objects for performance.
  *
  * @param accumulator - BlockAccumulator containing voxelized blocks
  * @param gridBounds - Grid bounds aligned to block boundaries
@@ -305,38 +308,55 @@ function buildSparseOctree(
     gaussianBounds: Bounds,
     voxelResolution: number
 ): SparseOctree {
+    const tProfile = performance.now();
+
     const mixed = accumulator.getMixedBlocks();
     const solid = accumulator.getSolidBlocks();
+    const totalBlocks = mixed.morton.length + solid.length;
 
-    // Combine all blocks into sorted array with type information
-    interface BlockEntry {
-        morton: number;
-        type: BlockType;
-        maskIndex: number; // Index into mixed.masks (only valid for mixed blocks)
-    }
+    // --- Phase 1: Combine blocks into SoA arrays and sort by Morton code ---
+    // Avoids creating per-block objects (BlockEntry) — uses parallel arrays.
 
-    const blocks: BlockEntry[] = [];
+    const mortons: number[] = new Array(totalBlocks);
+    const types: number[] = new Array(totalBlocks);
+    const maskIndices: number[] = new Array(totalBlocks);
 
-    // Add mixed blocks
+    let idx = 0;
     for (let i = 0; i < mixed.morton.length; i++) {
-        blocks.push({
-            morton: mixed.morton[i],
-            type: BlockType.Mixed,
-            maskIndex: i
-        });
+        mortons[idx] = mixed.morton[i];
+        types[idx] = BlockType.Mixed;
+        maskIndices[idx] = i;
+        idx++;
     }
-
-    // Add solid blocks
     for (let i = 0; i < solid.length; i++) {
-        blocks.push({
-            morton: solid[i],
-            type: BlockType.Solid,
-            maskIndex: -1
-        });
+        mortons[idx] = solid[i];
+        types[idx] = BlockType.Solid;
+        maskIndices[idx] = -1;
+        idx++;
     }
 
-    // Sort by Morton code
-    blocks.sort((a, b) => a.morton - b.morton);
+    // Co-sort by Morton code using an index permutation array
+    const sortOrder: number[] = new Array(totalBlocks);
+    for (let i = 0; i < totalBlocks; i++) sortOrder[i] = i;
+    sortOrder.sort((a: number, b: number) => mortons[a] - mortons[b]);
+
+    const sortedMortons: number[] = new Array(totalBlocks);
+    const sortedTypes: number[] = new Array(totalBlocks);
+    const sortedMaskIndices: number[] = new Array(totalBlocks);
+    for (let i = 0; i < totalBlocks; i++) {
+        const si = sortOrder[i];
+        sortedMortons[i] = mortons[si];
+        sortedTypes[i] = types[si];
+        sortedMaskIndices[i] = maskIndices[si];
+    }
+
+    const tSort = performance.now();
+
+    // --- Phase 2: Build tree bottom-up level by level using linear scan ---
+    // Instead of Map<number, BuildNode> per level, we use sorted parallel
+    // arrays and exploit the fact that sorted Morton codes make parent
+    // grouping a simple linear scan (consecutive entries with the same
+    // floor(morton/8) share a parent).
 
     // Inner progress: 10 anonymous steps
     logger.progress.begin(10);
@@ -356,33 +376,24 @@ function buildSparseOctree(
     );
     const treeDepth = Math.max(1, Math.ceil(Math.log2(blocksPerAxis)));
 
-    // Build tree bottom-up
-    // Start with leaf nodes, then merge upward level by level
+    // Store level data for each tree level (level 0 = leaves, higher = toward root)
+    const levels: LevelData[] = [];
 
-    // Level 0 = leaf blocks (4x4x4 voxels each)
-    // Each level up groups 8 children into 1 parent
-
-    // Map from Morton code to node at each level
-    let currentLevel = new Map<number, BuildNode>();
-
-    // Initialize leaf level from blocks
-    for (const block of blocks) {
-        currentLevel.set(block.morton, {
-            type: block.type,
-            morton: block.morton,
-            maskIndex: block.type === BlockType.Mixed ? block.maskIndex : undefined
-        });
-    }
+    // Current level data starts as the sorted leaf blocks
+    let curMortons = sortedMortons;
+    let curTypes = sortedTypes;
+    let curMaskIndices = sortedMaskIndices;
+    // Leaf level has no child masks (leaves have no children)
+    let curChildMasks: number[] = new Array(totalBlocks).fill(0);
 
     // 1 step for init
     logger.progress.step();
     octreeStep++;
 
-    // Build up level by level (8 steps for level processing, 1 for flatten)
-    // Track the actual tree depth (may be less than treeDepth if the tree
-    // converges to a single root before all levels are processed).
+    // Build up level by level
     let actualDepth = treeDepth;
     const levelSteps = 8;
+
     for (let level = 0; level < treeDepth; level++) {
         // Report inner progress scaled to levelSteps
         const targetStep = 1 + Math.min(levelSteps, Math.floor((level + 1) / treeDepth * levelSteps));
@@ -390,63 +401,79 @@ function buildSparseOctree(
             logger.progress.step();
             octreeStep++;
         }
-        const nextLevel = new Map<number, BuildNode>();
 
-        // Group nodes by parent Morton code
-        const parentGroups = new Map<number, BuildNode[]>();
+        // Save current level before building the next one above
+        levels.push({
+            mortons: curMortons,
+            types: curTypes,
+            maskIndices: curMaskIndices,
+            childMasks: curChildMasks
+        });
 
-        for (const [morton, node] of currentLevel) {
-            const parentMorton = Math.floor(morton / 8); // morton >>> 3
-            if (!parentGroups.has(parentMorton)) {
-                parentGroups.set(parentMorton, []);
-            }
-            parentGroups.get(parentMorton)!.push(node);
-        }
+        // Build next level using linear scan on sorted data.
+        // Since curMortons is sorted, entries sharing the same parent
+        // (floor(morton/8)) are contiguous — no Map needed.
+        const n = curMortons.length;
+        const nextMortons: number[] = [];
+        const nextTypes: number[] = [];
+        const nextMaskIndices: number[] = [];
+        const nextChildMasks: number[] = [];
 
-        // Create parent nodes
-        for (const [parentMorton, children] of parentGroups) {
-            // Check if all 8 children are solid
-            let allSolid = true;
+        let i = 0;
+        while (i < n) {
+            const parentMorton = Math.floor(curMortons[i] / 8);
             let childMask = 0;
-            const childNodes: (BuildNode | null)[] = [null, null, null, null, null, null, null, null];
+            let allSolid = true;
+            let childCount = 0;
 
-            for (const child of children) {
-                const octant = child.morton % 8; // child.morton & 7
+            // Scan all consecutive entries that share this parent
+            while (i < n && Math.floor(curMortons[i] / 8) === parentMorton) {
+                const octant = curMortons[i] % 8;
                 childMask |= (1 << octant);
-                childNodes[octant] = child;
-
-                if (child.type !== BlockType.Solid) {
+                if (curTypes[i] !== BlockType.Solid) {
                     allSolid = false;
                 }
+                childCount++;
+                i++;
             }
 
-            // If all 8 children exist and are solid, collapse to solid parent
-            if (allSolid && children.length === 8) {
-                nextLevel.set(parentMorton, {
-                    type: BlockType.Solid,
-                    morton: parentMorton
-                });
+            if (allSolid && childCount === 8) {
+                // All 8 children are solid — collapse to solid parent
+                nextMortons.push(parentMorton);
+                nextTypes.push(BlockType.Solid);
+                nextMaskIndices.push(-1);
+                nextChildMasks.push(0);
             } else {
-                // Create interior node
-                nextLevel.set(parentMorton, {
-                    type: BlockType.Mixed, // Interior nodes are treated as "mixed" (have children)
-                    morton: parentMorton,
-                    children: childNodes
-                });
+                // Interior node with sparse children
+                nextMortons.push(parentMorton);
+                nextTypes.push(BlockType.Mixed);
+                nextMaskIndices.push(-1);
+                nextChildMasks.push(childMask);
             }
         }
 
-        currentLevel = nextLevel;
+        curMortons = nextMortons;
+        curTypes = nextTypes;
+        curMaskIndices = nextMaskIndices;
+        curChildMasks = nextChildMasks;
 
         // Break when the tree is empty or has converged to a single root at Morton 0.
         // We must NOT break early if the single remaining node has a non-zero Morton,
         // because the reader reconstructs Morton codes starting from root Morton 0.
-        if (currentLevel.size === 0 ||
-            (currentLevel.size === 1 && currentLevel.has(0))) {
+        if (curMortons.length === 0 ||
+            (curMortons.length === 1 && curMortons[0] === 0)) {
             actualDepth = level + 1;
             break;
         }
     }
+
+    // Save the root level
+    levels.push({
+        mortons: curMortons,
+        types: curTypes,
+        maskIndices: curMaskIndices,
+        childMasks: curChildMasks
+    });
 
     // Flush remaining level steps
     while (octreeStep < 9) {
@@ -454,42 +481,58 @@ function buildSparseOctree(
         octreeStep++;
     }
 
-    // Flatten tree to arrays (use actualDepth, not treeDepth, so readVoxel and
-    // VoxelCollider know the real number of levels in the serialized tree)
-    const result = flattenTree(currentLevel, mixed.masks, gridBounds, gaussianBounds, voxelResolution, actualDepth);
+    const tBuild = performance.now();
+
+    // --- Phase 3: Flatten tree to Laine-Karras format ---
+    // Uses wave-based BFS on level arrays, avoiding BuildNode objects
+    // and the O(n²) queue.shift() of the original approach.
+    const result = flattenTreeFromLevels(
+        levels, mixed.masks, gridBounds, gaussianBounds, voxelResolution, actualDepth
+    );
+
+    const tFlatten = performance.now();
 
     // Final step (10th)
     logger.progress.step();
+
+    // Profiling output
+    logger.debug(
+        `[octree profiling] blocks: ${totalBlocks}, ` +
+        `sort: ${(tSort - tProfile).toFixed(1)}ms, ` +
+        `build: ${(tBuild - tSort).toFixed(1)}ms, ` +
+        `flatten: ${(tFlatten - tBuild).toFixed(1)}ms, ` +
+        `total: ${(tFlatten - tProfile).toFixed(1)}ms`
+    );
 
     return result;
 }
 
 /**
- * Flatten the constructed tree into Laine-Karras format arrays.
+ * Flatten the level-based tree into Laine-Karras format arrays using
+ * wave-based BFS traversal from root down through levels.
  *
- * @param rootLevel - Map of root-level nodes keyed by Morton code.
- * @param mixedMasks - Interleaved voxel masks for mixed blocks.
+ * Uses parallel arrays for BFS waves (no per-node object allocation)
+ * and binary search on sorted level mortons to locate children.
+ *
+ * @param levels - Array of per-level SoA data (index 0 = leaves, last = root).
+ * @param mixedMasks - Interleaved voxel masks for mixed leaf blocks.
  * @param gridBounds - Grid bounds aligned to block boundaries.
  * @param gaussianBounds - Original Gaussian scene bounds.
  * @param voxelResolution - Size of each voxel in world units.
  * @param treeDepth - Maximum tree depth.
  * @returns Sparse octree structure in Laine-Karras format.
  */
-function flattenTree(
-    rootLevel: Map<number, BuildNode>,
+function flattenTreeFromLevels(
+    levels: LevelData[],
     mixedMasks: number[],
     gridBounds: Bounds,
     gaussianBounds: Bounds,
     voxelResolution: number,
     treeDepth: number
 ): SparseOctree {
-    // Collect all nodes in breadth-first order
-    const nodeList: BuildNode[] = [];
-    const leafDataList: number[] = [];
+    const rootLevel = levels[levels.length - 1];
 
-    // Get root node
-    const rootNodes = Array.from(rootLevel.values());
-    if (rootNodes.length === 0) {
+    if (rootLevel.mortons.length === 0) {
         // Empty tree
         return {
             gridBounds,
@@ -504,68 +547,121 @@ function flattenTree(
         };
     }
 
-    // BFS to collect all nodes and assign indices
-    const queue: BuildNode[] = [...rootNodes];
-    const nodeIndices = new Map<BuildNode, number>();
-
-    while (queue.length > 0) {
-        const node = queue.shift()!;
-        nodeIndices.set(node, nodeList.length);
-        nodeList.push(node);
-
-        // Queue children if this is an interior node
-        if (node.children) {
-            for (let octant = 0; octant < 8; octant++) {
-                const child = node.children[octant];
-                if (child && !nodeIndices.has(child)) {
-                    queue.push(child);
-                }
-            }
-        }
+    // Upper bound on total nodes (not all may be reachable if solids collapsed)
+    let maxNodes = 0;
+    for (let l = 0; l < levels.length; l++) {
+        maxNodes += levels[l].mortons.length;
     }
 
-    // Now encode nodes to Laine-Karras format
-    const nodes = new Uint32Array(nodeList.length);
+    const nodes = new Uint32Array(maxNodes);
+    const leafDataList: number[] = [];
     let numInteriorNodes = 0;
     let numMixedLeaves = 0;
+    let emitPos = 0;
 
-    // First pass: count children and assign child base offsets
-    // Children of each interior node are allocated contiguously
-    let nextChildOffset = rootNodes.length; // Children start after root(s)
+    // BFS wave as parallel arrays (avoids object allocation per queue entry)
+    let waveLi: number[] = [];
+    let waveIi: number[] = [];
 
-    for (let i = 0; i < nodeList.length; i++) {
-        const node = nodeList[i];
+    // Initialize wave with root level entries
+    const rootLi = levels.length - 1;
+    for (let i = 0; i < rootLevel.mortons.length; i++) {
+        waveLi.push(rootLi);
+        waveIi.push(i);
+    }
 
-        if (node.children) {
-            // Interior node
-            numInteriorNodes++;
+    // Reusable arrays for tracking interior nodes within each wave
+    const intPos: number[] = [];
+    const intLi: number[] = [];
+    const intIi: number[] = [];
+    const intMask: number[] = [];
 
-            // Count existing children and build child mask
-            let childMask = 0;
-            let childCount = 0;
-            for (let octant = 0; octant < 8; octant++) {
-                if (node.children[octant]) {
-                    childMask |= (1 << octant);
-                    childCount++;
+    while (waveLi.length > 0) {
+        // Clear interior tracking arrays
+        intPos.length = 0;
+        intLi.length = 0;
+        intIi.length = 0;
+        intMask.length = 0;
+
+        // Emit all nodes in this wave
+        for (let w = 0; w < waveLi.length; w++) {
+            const li = waveLi[w];
+            const ii = waveIi[w];
+            const level = levels[li];
+            const type = level.types[ii];
+
+            // A node is a leaf if it's Solid (at any level, collapsed or original)
+            // or if it's at level 0 (the leaf block level).
+            const isLeaf = (type === BlockType.Solid) || (li === 0);
+
+            if (isLeaf) {
+                if (type === BlockType.Solid) {
+                    nodes[emitPos] = SOLID_LEAF_MARKER;
+                } else {
+                    // Mixed leaf — store index into leafData
+                    const maskIdx = level.maskIndices[ii];
+                    const leafDataIndex = leafDataList.length >> 1;
+                    leafDataList.push(mixedMasks[maskIdx * 2]);
+                    leafDataList.push(mixedMasks[maskIdx * 2 + 1]);
+                    nodes[emitPos] = leafDataIndex & 0x00FFFFFF;
+                    numMixedLeaves++;
                 }
+            } else {
+                // Interior node — record position for backfill after wave
+                intPos.push(emitPos);
+                intLi.push(li);
+                intIi.push(ii);
+                intMask.push(level.childMasks[ii]);
+                numInteriorNodes++;
+                // Placeholder (will be filled below)
+                nodes[emitPos] = 0;
+            }
+            emitPos++;
+        }
+
+        // Build next wave from children of interior nodes.
+        // Backfill interior node encodings with correct baseOffset.
+        const nextWaveLi: number[] = [];
+        const nextWaveIi: number[] = [];
+        let nextChildStart = emitPos;
+
+        for (let j = 0; j < intPos.length; j++) {
+            const childMask = intMask[j];
+            const childCount = popcount(childMask);
+
+            // Encode interior node: mask in high byte, baseOffset in low 24 bits
+            nodes[intPos[j]] = ((childMask & 0xFF) << 24) | (nextChildStart & 0x00FFFFFF);
+
+            // Find children in the level below using binary search.
+            // Since each level's mortons are sorted, this is O(log n) per lookup.
+            const childLi = intLi[j] - 1;
+            const childLevel = levels[childLi];
+            const myMorton = levels[intLi[j]].mortons[intIi[j]];
+            const childMortonBase = myMorton * 8;
+            const childMortonEnd = childMortonBase + 8;
+            const childMortons = childLevel.mortons;
+
+            // Binary search for first child with morton >= childMortonBase
+            let lo = 0;
+            let hi = childMortons.length;
+            while (lo < hi) {
+                const mid = (lo + hi) >> 1;
+                if (childMortons[mid] < childMortonBase) lo = mid + 1;
+                else hi = mid;
             }
 
-            // Encode: mask in high byte, offset in low 24 bits
-            const baseOffset = nextChildOffset;
-            nodes[i] = ((childMask & 0xFF) << 24) | (baseOffset & 0x00FFFFFF);
+            // Collect all children in morton order (they are contiguous in sorted array)
+            while (lo < childMortons.length && childMortons[lo] < childMortonEnd) {
+                nextWaveLi.push(childLi);
+                nextWaveIi.push(lo);
+                lo++;
+            }
 
-            nextChildOffset += childCount;
-        } else if (node.type === BlockType.Solid) {
-            // Solid leaf
-            nodes[i] = SOLID_LEAF_MARKER;
-        } else if (node.type === BlockType.Mixed && node.maskIndex !== undefined) {
-            // Mixed leaf - store index into leafData
-            const leafDataIndex = leafDataList.length / 2;
-            leafDataList.push(mixedMasks[node.maskIndex * 2]);     // lo
-            leafDataList.push(mixedMasks[node.maskIndex * 2 + 1]); // hi
-            nodes[i] = leafDataIndex & 0x00FFFFFF;
-            numMixedLeaves++;
+            nextChildStart += childCount;
         }
+
+        waveLi = nextWaveLi;
+        waveIi = nextWaveIi;
     }
 
     return {
@@ -576,7 +672,7 @@ function flattenTree(
         treeDepth,
         numInteriorNodes,
         numMixedLeaves,
-        nodes,
+        nodes: emitPos === maxNodes ? nodes : nodes.slice(0, emitPos),
         leafData: new Uint32Array(leafDataList)
     };
 }
