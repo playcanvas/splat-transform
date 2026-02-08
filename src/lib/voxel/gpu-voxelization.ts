@@ -62,6 +62,13 @@ struct Gaussian {
 @group(0) @binding(2) var<storage, read> indices: array<u32>;
 @group(0) @binding(3) var<storage, read_write> results: array<atomic<u32>>;
 
+// Shared memory for cooperative Gaussian loading.
+// All 64 threads in a workgroup load one Gaussian each, then all threads
+// evaluate against the shared chunk — reducing global memory reads by 64x.
+// 64 Gaussians * 64 bytes each = 4 KB (well within 16 KB WebGPU minimum).
+const tileSize = 64u;
+var<workgroup> sharedGaussians: array<Gaussian, tileSize>;
+
 fn mortonToXYZ(m: u32) -> vec3u {
     return vec3u(
         (m & 1u) | ((m >> 2u) & 2u),
@@ -116,19 +123,37 @@ fn main(
     let voxelCenter = blockMin + blockOffset + (vec3f(localPos) + 0.5) * uniforms.voxelResolution;
     let voxelHalfSize = uniforms.voxelResolution * 0.5;
     
-    // Extinction-based density accumulation
-    // Accumulate raw density (sigma), then convert to opacity at the end
+    // Extinction-based density accumulation with shared memory tiling.
+    // Instead of each thread independently reading Gaussians from global memory,
+    // all 64 threads cooperatively load a tile of 64 Gaussians into shared memory,
+    // then all threads evaluate against the shared tile before loading the next.
     var totalSigma = 0.0;
-    for (var i = 0u; i < uniforms.numIndices; i++) {
-        let gaussianIdx = indices[i];
-        let g = allGaussians[gaussianIdx];
-        totalSigma += evaluateGaussianForVoxel(voxelCenter, voxelHalfSize, g);
-        
-        // Early exit if density is already very high
-        // sigma of 7 gives opacity > 0.999
-        if (totalSigma >= 7.0) {
-            break;
+    let numTiles = (uniforms.numIndices + tileSize - 1u) / tileSize;
+    
+    for (var tile = 0u; tile < numTiles; tile++) {
+        // Cooperative load: each thread loads one Gaussian into shared memory
+        let loadIdx = tile * tileSize + voxelIdx;
+        if (loadIdx < uniforms.numIndices) {
+            let gaussianIdx = indices[loadIdx];
+            sharedGaussians[voxelIdx] = allGaussians[gaussianIdx];
         }
+        
+        // Wait for all threads to finish loading the tile
+        workgroupBarrier();
+        
+        // Evaluate all Gaussians in this tile (skip math if already saturated)
+        if (totalSigma < 7.0) {
+            let thisTileSize = min(tileSize, uniforms.numIndices - tile * tileSize);
+            for (var c = 0u; c < thisTileSize; c++) {
+                totalSigma += evaluateGaussianForVoxel(voxelCenter, voxelHalfSize, sharedGaussians[c]);
+                if (totalSigma >= 7.0) {
+                    break;
+                }
+            }
+        }
+        
+        // Wait before next tile overwrites shared memory
+        workgroupBarrier();
     }
     
     // Convert accumulated density to opacity using Beer-Lambert law
