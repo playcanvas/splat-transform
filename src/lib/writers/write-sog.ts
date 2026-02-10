@@ -6,6 +6,7 @@ import { Column, DataTable } from '../data-table/data-table';
 import { sortMortonOrder } from '../data-table/morton-order';
 import { type FileSystem, writeFile, ZipFileSystem } from '../io/write';
 import { kmeans } from '../spatial/k-means';
+import { quantize1d } from '../spatial/quantize-1d';
 import { logger } from '../utils/logger';
 import { sigmoid } from '../utils/math';
 import { WebPCodec } from '../utils/webp-codec';
@@ -56,56 +57,6 @@ const generateIndices = (dataTable: DataTable) => {
     }
     sortMortonOrder(dataTable, result);
     return result;
-};
-
-// convert a dataTable with multiple columns into a single column
-// calculate 256 clusters using kmeans
-// return
-//      - the resulting labels in a new datatable having same shape as the input
-//      - array of 256 centroids
-const cluster1d = async (dataTable: DataTable, iterations: number, device?: GraphicsDevice) => {
-    const { numColumns, numRows } = dataTable;
-
-    // construct 1d points from the columns of data
-    const data = new Float32Array(numRows * numColumns);
-    for (let i = 0; i < numColumns; ++i) {
-        data.set(dataTable.getColumn(i).data, i * numRows);
-    }
-
-    const src = new DataTable([new Column('data', data)]);
-
-    const { centroids, labels } = await kmeans(src, 256, iterations, device);
-
-    // order centroids smallest to largest
-    const centroidsData = centroids.getColumn(0).data;
-    const order = centroidsData.map((_, i) => i);
-    order.sort((a, b) => centroidsData[a] - centroidsData[b]);
-
-    // reorder centroids
-    const tmp = centroidsData.slice();
-    for (let i = 0; i < order.length; ++i) {
-        centroidsData[i] = tmp[order[i]];
-    }
-
-    const invOrder = [];
-    for (let i = 0; i < order.length; ++i) {
-        invOrder[order[i]] = i;
-    }
-
-    // reorder labels
-    for (let i = 0; i < labels.length; i++) {
-        labels[i] = invOrder[labels[i]];
-    }
-
-    const result = new DataTable(dataTable.columnNames.map(name => new Column(name, new Uint8Array(numRows))));
-    for (let i = 0; i < numColumns; ++i) {
-        result.getColumn(i).data.set((labels as Uint32Array).subarray(i * numRows, (i + 1) * numRows));
-    }
-
-    return {
-        centroids,
-        labels: result
-    };
 };
 
 let webPCodec: WebPCodec;
@@ -270,10 +221,8 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     };
 
     const writeScales = async () => {
-        const scaleData = await cluster1d(
-            new DataTable(['scale_0', 'scale_1', 'scale_2'].map(name => dataTable.getColumnByName(name))),
-            iterations,
-            gpuDevice
+        const scaleData = quantize1d(
+            new DataTable(['scale_0', 'scale_1', 'scale_2'].map(name => dataTable.getColumnByName(name)))
         );
 
         await writeTableData('scales.webp', scaleData.labels);
@@ -282,10 +231,8 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     };
 
     const writeColors = async () => {
-        const colorData = await cluster1d(
-            new DataTable(['f_dc_0', 'f_dc_1', 'f_dc_2'].map(name => dataTable.getColumnByName(name))),
-            iterations,
-            gpuDevice
+        const colorData = quantize1d(
+            new DataTable(['f_dc_0', 'f_dc_1', 'f_dc_2'].map(name => dataTable.getColumnByName(name)))
         );
 
         // generate and store sigmoid(opacity) [0..1]
@@ -319,7 +266,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
         const { centroids, labels } = await kmeans(shDataTable, paletteSize, iterations, gpuDevice);
 
         logger.progress.step('Quantizing spherical harmonics');
-        const codebook = await cluster1d(centroids, iterations, gpuDevice);
+        const codebook = quantize1d(centroids);
 
         // write centroids
         const centroidsBuf = new Uint8Array(64 * shCoeffs * Math.ceil(centroids.numRows / 64) * channels);
