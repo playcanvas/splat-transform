@@ -28,10 +28,10 @@ import {
     MemoryReadFileSystem,
     MemoryFileSystem,
     ZipReadFileSystem
-} from '../dist/index.mjs';
+} from '../src/lib/index.js';
 
 import { compareSummaries, compareDataTables } from './helpers/summary-compare.mjs';
-import { createMinimalTestData, encodePlyBinary } from './helpers/test-utils.mjs';
+import { createMinimalTestData, encodePlyBinary, createVoxelFixture } from './helpers/test-utils.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(__dirname, 'fixtures', 'splat');
@@ -425,14 +425,18 @@ describe('MJS Generator Format (Input Only)', () => {
 
 describe('Voxel Format (Input Only)', () => {
     let voxelFs;
-    const voxelJsonPath = join(__dirname, '..', 'lmsf.voxel.json');
+    let fixtureMetadata;
 
     before(async () => {
+        // Generate valid voxel fixture data using the library's own octree
+        // building functions (BlockAccumulator + buildSparseOctree).
+        // The fixture contains 4 solid + 2 mixed leaf blocks.
+        const { jsonBytes, binBytes, metadata } = await createVoxelFixture();
+        fixtureMetadata = metadata;
+
         voxelFs = new MemoryReadFileSystem();
-        const jsonBytes = await fsReadFile(voxelJsonPath);
-        const binBytes = await fsReadFile(join(__dirname, '..', 'lmsf.voxel.bin'));
-        voxelFs.set('lmsf.voxel.json', new Uint8Array(jsonBytes));
-        voxelFs.set('lmsf.voxel.bin', new Uint8Array(binBytes));
+        voxelFs.set('test.voxel.json', jsonBytes);
+        voxelFs.set('test.voxel.bin', binBytes);
     });
 
     it('should detect voxel format from filename', () => {
@@ -440,21 +444,41 @@ describe('Voxel Format (Input Only)', () => {
     });
 
     it('should read voxel file and produce DataTable with leaf blocks', async () => {
-        const dataTable = await readVoxel(voxelFs, 'lmsf.voxel.json');
+        const dataTable = await readVoxel(voxelFs, 'test.voxel.json');
 
         assert(dataTable.numRows > 0, 'Should have at least one leaf block');
         assert.strictEqual(dataTable.numColumns, 14);
 
-        const requiredColumns = ['x', 'y', 'z', 'scale_0', 'scale_1', 'scale_2', 'rot_0', 'rot_1', 'rot_2', 'rot_3', 'f_dc_0', 'f_dc_1', 'f_dc_2', 'opacity'];
+        const requiredColumns = [
+            'x', 'y', 'z',
+            'scale_0', 'scale_1', 'scale_2',
+            'rot_0', 'rot_1', 'rot_2', 'rot_3',
+            'f_dc_0', 'f_dc_1', 'f_dc_2',
+            'opacity'
+        ];
         for (const col of requiredColumns) {
             assert(dataTable.hasColumn(col), `Should have column ${col}`);
+        }
+
+        // All leaf blocks should have uniform scale and opacity
+        const scale0 = dataTable.getColumnByName('scale_0').data;
+        const opacities = dataTable.getColumnByName('opacity').data;
+        const blockSize = 4 * fixtureMetadata.voxelResolution;
+        const expectedScale = Math.log(blockSize * 0.4);
+
+        for (let i = 0; i < dataTable.numRows; i++) {
+            assert.ok(
+                Math.abs(scale0[i] - expectedScale) < 1e-5,
+                `scale_0[${i}] should be log(blockSize*0.4)`
+            );
+            assert.strictEqual(opacities[i], 5.0, `opacity[${i}] should be 5.0`);
         }
     });
 
     it('should read voxel via readFile and write to PLY', async () => {
         const tables = await readFile({
-            filename: 'lmsf.voxel.json',
-            inputFormat: getInputFormat('lmsf.voxel.json'),
+            filename: 'test.voxel.json',
+            inputFormat: getInputFormat('test.voxel.json'),
             options: {},
             params: [],
             fileSystem: voxelFs

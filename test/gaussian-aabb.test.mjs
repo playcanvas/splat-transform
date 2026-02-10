@@ -7,13 +7,12 @@ import assert from 'node:assert';
 
 import { Vec3 } from 'playcanvas';
 
+import { Column, DataTable } from '../src/lib/index.js';
 import {
-    Column,
-    DataTable,
     computeGaussianExtents,
     getGaussianAABB,
     gaussianOverlapsBox
-} from '../dist/index.mjs';
+} from '../src/lib/voxel/gaussian-aabb.js';
 
 describe('GaussianAABB', function () {
     describe('computeGaussianExtents', function () {

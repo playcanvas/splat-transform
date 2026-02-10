@@ -7,12 +7,9 @@ import assert from 'node:assert';
 
 import { Vec3 } from 'playcanvas';
 
-import {
-    Column,
-    DataTable,
-    computeGaussianExtents,
-    GaussianBVH
-} from '../dist/index.mjs';
+import { Column, DataTable } from '../src/lib/index.js';
+import { computeGaussianExtents } from '../src/lib/voxel/gaussian-aabb.js';
+import { GaussianBVH } from '../src/lib/voxel/gaussian-bvh.js';
 
 /**
  * Create a test DataTable with Gaussians at specified positions.

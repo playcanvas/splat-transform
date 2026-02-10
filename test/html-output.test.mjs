@@ -8,7 +8,7 @@ import assert from 'node:assert';
 import {
     writeHtml,
     MemoryFileSystem
-} from '../dist/index.mjs';
+} from '../src/lib/index.js';
 
 import { createMinimalTestData } from './helpers/test-utils.mjs';
 

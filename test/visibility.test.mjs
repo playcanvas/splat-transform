@@ -11,7 +11,7 @@ import {
     DataTable,
     processDataTable,
     sortByVisibility
-} from '../dist/index.mjs';
+} from '../src/lib/index.js';
 
 import { createMinimalTestData } from './helpers/test-utils.mjs';
 import { assertClose } from './helpers/summary-compare.mjs';

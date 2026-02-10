@@ -8,11 +8,6 @@ import assert from 'node:assert';
 import { Vec3 } from 'playcanvas';
 
 import {
-    buildSparseOctree,
-    alignGridBounds
-} from '../dist/index.mjs';
-
-import {
     xyzToMorton,
     mortonToXYZ,
     popcount,
@@ -20,6 +15,8 @@ import {
     isEmpty,
     getChildOffset,
     BlockAccumulator,
+    buildSparseOctree,
+    alignGridBounds,
     SOLID_LEAF_MARKER
 } from '../src/lib/voxel/sparse-octree.js';
 

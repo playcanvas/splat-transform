@@ -17,11 +17,14 @@ class WebPCodec {
     static async create() {
         const instance = new WebPCodec();
         instance.Module = await createModule({
-            locateFile: (path: string) => {
+            locateFile: (path: string, scriptDir: string) => {
                 if (path.endsWith('.wasm') && WebPCodec.wasmUrl) {
                     return WebPCodec.wasmUrl;
                 }
-                return new URL(`../lib/${path}`, import.meta.url).toString();
+                // Use the Emscripten module's own script directory (derived from
+                // webp.mjs's import.meta.url) so this works from both source and
+                // bundled locations.
+                return scriptDir + path;
             }
         });
         return instance;

@@ -2,7 +2,7 @@
  * Test utility functions for splat-transform tests.
  */
 
-import { Column, DataTable } from '../../dist/index.mjs';
+import { Column, DataTable } from '../../src/lib/index.js';
 
 /**
  * Creates a minimal DataTable with standard Gaussian splat columns.
@@ -166,4 +166,75 @@ function encodePlyBinary(dataTable) {
     return result;
 }
 
-export { createTestDataTable, createMinimalTestData, encodePlyBinary };
+/**
+ * Creates synthetic voxel fixture data (JSON + binary) using the library's
+ * own octree building functions. No GPU required.
+ *
+ * Produces a small octree with a mix of solid and mixed leaf blocks,
+ * suitable for testing the voxel reader round-trip.
+ *
+ * @returns {{ jsonBytes: Uint8Array, binBytes: Uint8Array }}
+ */
+async function createVoxelFixture() {
+    // Lazy imports — only pulled in when this helper is actually called,
+    // so tests that don't need voxel fixtures aren't affected.
+    const { Vec3 } = await import('playcanvas');
+    const {
+        BlockAccumulator,
+        xyzToMorton,
+        buildSparseOctree,
+        alignGridBounds
+    } = await import('../../src/lib/voxel/sparse-octree.js');
+
+    const acc = new BlockAccumulator();
+
+    // 4 solid blocks forming a 2x2x1 slab
+    acc.addBlock(xyzToMorton(0, 0, 0), 0xFFFFFFFF, 0xFFFFFFFF);
+    acc.addBlock(xyzToMorton(1, 0, 0), 0xFFFFFFFF, 0xFFFFFFFF);
+    acc.addBlock(xyzToMorton(0, 1, 0), 0xFFFFFFFF, 0xFFFFFFFF);
+    acc.addBlock(xyzToMorton(1, 1, 0), 0xFFFFFFFF, 0xFFFFFFFF);
+
+    // 2 mixed blocks with partial voxel fill
+    acc.addBlock(xyzToMorton(2, 0, 0), 0x12345678, 0x9ABCDEF0);
+    acc.addBlock(xyzToMorton(2, 1, 0), 0xAAAAAAAA, 0x55555555);
+
+    const voxelResolution = 0.25;
+    const gaussianBounds = { min: new Vec3(0, 0, 0), max: new Vec3(3, 2, 1) };
+    const gridBounds = alignGridBounds(0, 0, 0, 3, 2, 1, voxelResolution);
+
+    const octree = buildSparseOctree(acc, gridBounds, gaussianBounds, voxelResolution);
+
+    // Serialize to JSON (matches write-voxel.ts writeOctreeFiles)
+    const metadata = {
+        version: '1.0',
+        gridBounds: {
+            min: [octree.gridBounds.min.x, octree.gridBounds.min.y, octree.gridBounds.min.z],
+            max: [octree.gridBounds.max.x, octree.gridBounds.max.y, octree.gridBounds.max.z]
+        },
+        gaussianBounds: {
+            min: [octree.gaussianBounds.min.x, octree.gaussianBounds.min.y, octree.gaussianBounds.min.z],
+            max: [octree.gaussianBounds.max.x, octree.gaussianBounds.max.y, octree.gaussianBounds.max.z]
+        },
+        voxelResolution: octree.voxelResolution,
+        leafSize: octree.leafSize,
+        treeDepth: octree.treeDepth,
+        numInteriorNodes: octree.numInteriorNodes,
+        numMixedLeaves: octree.numMixedLeaves,
+        nodeCount: octree.nodes.length,
+        leafDataCount: octree.leafData.length
+    };
+
+    const jsonBytes = new TextEncoder().encode(JSON.stringify(metadata, null, 2));
+
+    // Serialize binary (nodes + leafData concatenated as Uint32)
+    const binarySize = (octree.nodes.length + octree.leafData.length) * 4;
+    const buffer = new ArrayBuffer(binarySize);
+    const view = new Uint32Array(buffer);
+    view.set(octree.nodes, 0);
+    view.set(octree.leafData, octree.nodes.length);
+    const binBytes = new Uint8Array(buffer);
+
+    return { jsonBytes, binBytes, metadata };
+}
+
+export { createTestDataTable, createMinimalTestData, encodePlyBinary, createVoxelFixture };
