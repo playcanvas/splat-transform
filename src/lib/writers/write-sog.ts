@@ -94,9 +94,6 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     const height = Math.ceil(numRows / width / 4) * 4;
     const channels = 4;
 
-    // Initialize GPU device if a creator was provided
-    const gpuDevice = createDevice ? await createDevice() : undefined;
-
     // the layout function determines how the data is packed into the output texture.
     const layout = identity; // rectChunks;
 
@@ -261,6 +258,9 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
         const shDataTable = new DataTable(shColumns);
 
         const paletteSize = Math.min(64, 2 ** Math.floor(Math.log2(indices.length / 1024))) * 1024;
+
+        // Create GPU device lazily — only needed for SH k-means clustering
+        const gpuDevice = createDevice ? await createDevice() : undefined;
 
         logger.progress.step('Compressing spherical harmonics');
         const { centroids, labels } = await kmeans(shDataTable, paletteSize, iterations, gpuDevice);
