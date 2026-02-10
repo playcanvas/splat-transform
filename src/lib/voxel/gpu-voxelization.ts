@@ -320,10 +320,17 @@ class GpuVoxelization {
             interleavedData[offset + 1] = y[i];
             interleavedData[offset + 2] = z[i];
             interleavedData[offset + 3] = opacity[i];
-            interleavedData[offset + 4] = rotW[i];
-            interleavedData[offset + 5] = rotX[i];
-            interleavedData[offset + 6] = rotY[i];
-            interleavedData[offset + 7] = rotZ[i];
+
+            // Normalize quaternion — the Rodrigues rotation in the shader
+            // assumes unit quaternions; non-normalized ones (common in MCMC
+            // training) would produce incorrect Mahalanobis distances.
+            const qw = rotW[i], qx = rotX[i], qy = rotY[i], qz = rotZ[i];
+            const qlen = Math.sqrt(qw * qw + qx * qx + qy * qy + qz * qz);
+            const invLen = qlen > 0 ? 1 / qlen : 0;
+            interleavedData[offset + 4] = qw * invLen;
+            interleavedData[offset + 5] = qx * invLen;
+            interleavedData[offset + 6] = qy * invLen;
+            interleavedData[offset + 7] = qz * invLen;
             interleavedData[offset + 8] = scaleX[i];
             interleavedData[offset + 9] = scaleY[i];
             interleavedData[offset + 10] = scaleZ[i];
