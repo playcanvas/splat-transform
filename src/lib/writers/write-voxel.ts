@@ -9,7 +9,9 @@ import {
     GaussianBVH,
     GpuVoxelization,
     buildSparseOctree,
-    alignGridBounds
+    alignGridBounds,
+    type BatchSpec,
+    type MultiBatchResult
 } from '../voxel/index';
 import {
     BlockAccumulator,
@@ -201,18 +203,130 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
 
     logger.log(`grid: ${numBlocksX} x ${numBlocksY} x ${numBlocksZ} blocks`);
 
-    // Phase 4: Voxelization with BlockAccumulator
+    // Phase 4: Double-buffered pipelined voxelization
+    // Uses two GPU dispatch slots so the CPU can prepare the next mega-dispatch
+    // (BVH queries + index copying) while the GPU executes the current one.
     const accumulator = new BlockAccumulator();
     const batchSize = 16;  // 16x16x16 = 4096 blocks max per batch
 
     logger.progress.step('Voxelizing');
 
+    // Mega-dispatch thresholds: flush when either limit is reached
+    const MEGA_MAX_BATCHES = 512;
+    const MEGA_MAX_INDICES = 4 * 1024 * 1024;  // 4M indices
+
+    const maxBlocks = GpuVoxelization.MAX_BLOCKS_PER_BATCH;
+    const numSlots = GpuVoxelization.NUM_SLOTS;
+
+    // Batch collection state — per-slot for double buffering
+    interface PendingBatch extends BatchSpec {
+        bx: number;  // absolute block start X (for Morton codes)
+        by: number;
+        bz: number;
+        numBlocksX: number;
+        numBlocksY: number;
+        numBlocksZ: number;
+    }
+
+    // Per-slot CPU-side index arrays
+    const slotIndexArrays: Uint32Array[] = [];
+    const slotCapacities: number[] = [];
+    for (let i = 0; i < numSlots; i++) {
+        slotCapacities.push(1024 * 1024);
+        slotIndexArrays.push(new Uint32Array(1024 * 1024));
+    }
+
+    let currentSlot = 0;
+    let indexOffset = 0;
+    const pendingBatches: PendingBatch[] = [];
+    let megaDispatchCount = 0;
+    let skippedEmpty = 0;
+
+    // Inflight dispatch from previous flush (for pipelining)
+    let inflight: {
+        resultPromise: Promise<MultiBatchResult>;
+        batches: PendingBatch[];
+    } | null = null;
+
+    /**
+     * Process GPU results back into the block accumulator.
+     */
+    const processResults = (masks: Uint32Array, batches: PendingBatch[]): void => {
+        for (let b = 0; b < batches.length; b++) {
+            const batch = batches[b];
+            const batchResultOffset = b * maxBlocks * 2;
+            const totalBatchBlocks = batch.numBlocksX * batch.numBlocksY * batch.numBlocksZ;
+
+            for (let blockIdx = 0; blockIdx < totalBatchBlocks; blockIdx++) {
+                const maskLo = masks[batchResultOffset + blockIdx * 2];
+                const maskHi = masks[batchResultOffset + blockIdx * 2 + 1];
+
+                // Skip empty blocks — vast majority are empty
+                if (maskLo === 0 && maskHi === 0) continue;
+
+                // Compute block coordinates directly from flat index
+                const localX = blockIdx % batch.numBlocksX;
+                const localY = (blockIdx / batch.numBlocksX | 0) % batch.numBlocksY;
+                const localZ = (blockIdx / (batch.numBlocksX * batch.numBlocksY)) | 0;
+
+                const absBlockX = batch.bx + localX;
+                const absBlockY = batch.by + localY;
+                const absBlockZ = batch.bz + localZ;
+
+                const morton = xyzToMorton(absBlockX, absBlockY, absBlockZ);
+                accumulator.addBlock(morton, maskLo, maskHi);
+            }
+        }
+    };
+
+    /**
+     * Submit pending batches as a GPU mega-dispatch and set up pipelining.
+     * The GPU dispatch is fire-and-forget — the result promise is stored
+     * in `inflight` and awaited on the NEXT flush, allowing the CPU to
+     * prepare more batches while the GPU is busy.
+     */
+    const flushPendingBatches = async (): Promise<void> => {
+        if (pendingBatches.length === 0) return;
+
+        // Capture current batch state before clearing
+        const batchesToSubmit = pendingBatches.slice();
+        const submitSlot = currentSlot;
+        const submitIndexArray = slotIndexArrays[submitSlot];
+        const submitIndexCount = indexOffset;
+
+        // Switch to the other slot for collecting the next round
+        currentSlot = (currentSlot + 1) % numSlots;
+        pendingBatches.length = 0;
+        indexOffset = 0;
+
+        // Submit new dispatch FIRST so GPU starts working immediately
+        const resultPromise = gpuVoxelization.submitMultiBatch(
+            submitSlot,
+            submitIndexArray,
+            submitIndexCount,
+            batchesToSubmit,
+            voxelResolution,
+            opacityCutoff
+        );
+
+        // THEN await and process the previous inflight dispatch
+        // (the GPU was computing it while the CPU prepared this batch)
+        if (inflight) {
+            const result = await inflight.resultPromise;
+            processResults(result.masks, inflight.batches);
+            megaDispatchCount++;
+        }
+
+        inflight = { resultPromise, batches: batchesToSubmit };
+    };
+
     // Inner progress for voxelization batches
     const numZBatches = Math.max(1, Math.ceil(numBlocksZ / batchSize));
     logger.progress.begin(10);
     let lastVoxelStep = 0;
+    let totalBatches = 0;
 
-    // Process the entire scene in batches
+    // Process the entire scene, collecting batches for multi-dispatch
     for (let bz = 0; bz < numBlocksZ; bz += batchSize) {
         // Report inner progress scaled to 10 steps
         const currentVoxelStep = Math.min(10, Math.floor(((bz / batchSize) + 1) / numZBatches * 10));
@@ -241,42 +355,53 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
                 );
 
                 if (overlapping.length === 0) {
+                    skippedEmpty++;
                     continue;
                 }
 
-                // Run GPU voxelization
-                const result = await gpuVoxelization.voxelizeBlocks(
-                    overlapping,
-                    { x: blockMinX, y: blockMinY, z: blockMinZ },
-                    currBatchX, currBatchY, currBatchZ,
-                    voxelResolution,
-                    opacityCutoff
-                );
+                // Ensure current slot's index array has enough capacity
+                const needed = indexOffset + overlapping.length;
+                if (needed > slotCapacities[currentSlot]) {
+                    slotCapacities[currentSlot] = Math.max(slotCapacities[currentSlot] * 2, needed);
+                    const newArray = new Uint32Array(slotCapacities[currentSlot]);
+                    newArray.set(slotIndexArrays[currentSlot].subarray(0, indexOffset));
+                    slotIndexArrays[currentSlot] = newArray;
+                }
 
-                // Accumulate non-empty blocks with Morton codes
-                const masks = result.masks;
-                const totalBatchBlocks = currBatchX * currBatchY * currBatchZ;
-                for (let blockIdx = 0; blockIdx < totalBatchBlocks; blockIdx++) {
-                    const maskLo = masks[blockIdx * 2];
-                    const maskHi = masks[blockIdx * 2 + 1];
+                // Copy overlapping Gaussian indices into current slot's array
+                slotIndexArrays[currentSlot].set(overlapping, indexOffset);
 
-                    // Skip empty blocks — vast majority are empty
-                    if (maskLo === 0 && maskHi === 0) continue;
+                // Record batch metadata
+                pendingBatches.push({
+                    indexOffset,
+                    indexCount: overlapping.length,
+                    blockMin: { x: blockMinX, y: blockMinY, z: blockMinZ },
+                    numBlocksX: currBatchX,
+                    numBlocksY: currBatchY,
+                    numBlocksZ: currBatchZ,
+                    bx, by, bz
+                });
 
-                    // Compute block coordinates directly from flat index
-                    const localX = blockIdx % currBatchX;
-                    const localY = (blockIdx / currBatchX | 0) % currBatchY;
-                    const localZ = (blockIdx / (currBatchX * currBatchY)) | 0;
+                indexOffset += overlapping.length;
+                totalBatches++;
 
-                    const absBlockX = bx + localX;
-                    const absBlockY = by + localY;
-                    const absBlockZ = bz + localZ;
-
-                    const morton = xyzToMorton(absBlockX, absBlockY, absBlockZ);
-                    accumulator.addBlock(morton, maskLo, maskHi);
+                // Flush when mega-dispatch thresholds are reached
+                if (pendingBatches.length >= MEGA_MAX_BATCHES || indexOffset >= MEGA_MAX_INDICES) {
+                    await flushPendingBatches();
                 }
             }
         }
+    }
+
+    // Flush remaining pending batches
+    await flushPendingBatches();
+
+    // Await and process the final inflight dispatch
+    if (inflight) {
+        const result = await inflight.resultPromise;
+        processResults(result.masks, inflight.batches);
+        megaDispatchCount++;
+        inflight = null;
     }
 
     // Flush remaining inner voxelization progress steps
@@ -289,6 +414,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     gpuVoxelization.destroy();
 
     logger.log(`voxelization complete: ${accumulator.count} non-empty blocks`);
+    logger.log(`pipelined: ${totalBatches} batches in ${megaDispatchCount} mega-dispatches, ${skippedEmpty} empty skips`);
 
     // Phase 5: Build sparse octree
     logger.progress.step('Building sparse octree');
