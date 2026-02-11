@@ -236,7 +236,7 @@ interface SparseOctree {
     gridBounds: Bounds;
 
     /** Original Gaussian scene bounds */
-    gaussianBounds: Bounds;
+    sceneBounds: Bounds;
 
     /** Size of each voxel in world units */
     voxelResolution: number;
@@ -298,14 +298,14 @@ interface LevelData {
  *
  * @param accumulator - BlockAccumulator containing voxelized blocks
  * @param gridBounds - Grid bounds aligned to block boundaries
- * @param gaussianBounds - Original scene bounds
+ * @param sceneBounds - Original scene bounds
  * @param voxelResolution - Size of each voxel in world units
  * @returns Sparse octree structure
  */
 function buildSparseOctree(
     accumulator: BlockAccumulator,
     gridBounds: Bounds,
-    gaussianBounds: Bounds,
+    sceneBounds: Bounds,
     voxelResolution: number
 ): SparseOctree {
     const tProfile = performance.now();
@@ -487,7 +487,7 @@ function buildSparseOctree(
     // Uses wave-based BFS on level arrays, avoiding BuildNode objects
     // and the O(n²) queue.shift() of the original approach.
     const result = flattenTreeFromLevels(
-        levels, mixed.masks, gridBounds, gaussianBounds, voxelResolution, actualDepth
+        levels, mixed.masks, gridBounds, sceneBounds, voxelResolution, actualDepth
     );
 
     const tFlatten = performance.now();
@@ -517,7 +517,7 @@ function buildSparseOctree(
  * @param levels - Array of per-level SoA data (index 0 = leaves, last = root).
  * @param mixedMasks - Interleaved voxel masks for mixed leaf blocks.
  * @param gridBounds - Grid bounds aligned to block boundaries.
- * @param gaussianBounds - Original Gaussian scene bounds.
+ * @param sceneBounds - Original Gaussian scene bounds.
  * @param voxelResolution - Size of each voxel in world units.
  * @param treeDepth - Maximum tree depth.
  * @returns Sparse octree structure in Laine-Karras format.
@@ -526,7 +526,7 @@ function flattenTreeFromLevels(
     levels: LevelData[],
     mixedMasks: number[],
     gridBounds: Bounds,
-    gaussianBounds: Bounds,
+    sceneBounds: Bounds,
     voxelResolution: number,
     treeDepth: number
 ): SparseOctree {
@@ -536,7 +536,7 @@ function flattenTreeFromLevels(
         // Empty tree
         return {
             gridBounds,
-            gaussianBounds,
+            sceneBounds,
             voxelResolution,
             leafSize: 4,
             treeDepth,
@@ -666,7 +666,7 @@ function flattenTreeFromLevels(
 
     return {
         gridBounds,
-        gaussianBounds,
+        sceneBounds,
         voxelResolution,
         leafSize: 4,
         treeDepth,

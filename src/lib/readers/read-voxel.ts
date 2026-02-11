@@ -13,7 +13,7 @@ const C0 = 0.28209479177387814;
 interface VoxelMetadata {
     version: string;
     gridBounds: { min: number[]; max: number[] };
-    gaussianBounds: { min: number[]; max: number[] };
+    sceneBounds: { min: number[]; max: number[] };
     voxelResolution: number;
     leafSize: number;
     treeDepth: number;

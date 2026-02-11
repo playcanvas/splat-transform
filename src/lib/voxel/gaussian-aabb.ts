@@ -2,6 +2,7 @@ import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { Column, DataTable } from '../data-table/data-table.js';
 import { logger } from '../utils/logger.js';
+import type { Bounds } from './sparse-octree.js';
 
 /**
  * Result of computing Gaussian extents.
@@ -17,10 +18,7 @@ interface GaussianExtentsResult {
     extents: DataTable;
 
     /** Scene bounds (union of all Gaussian AABBs) */
-    sceneBounds: {
-        min: Vec3;
-        max: Vec3;
-    };
+    sceneBounds: Bounds;
 
     /** Number of Gaussians skipped due to invalid values */
     invalidCount: number;

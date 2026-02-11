@@ -379,12 +379,12 @@ describe('buildSparseOctree', function () {
                 min: new Vec3(0, 0, 0),
                 max: new Vec3(1, 1, 1)
             };
-            const gaussianBounds = {
+            const sceneBounds = {
                 min: new Vec3(0, 0, 0),
                 max: new Vec3(1, 1, 1)
             };
 
-            const octree = buildSparseOctree(acc, gridBounds, gaussianBounds, 0.25);
+            const octree = buildSparseOctree(acc, gridBounds, sceneBounds, 0.25);
 
             assert.strictEqual(octree.nodes.length, 0);
             assert.strictEqual(octree.leafData.length, 0);
@@ -400,9 +400,9 @@ describe('buildSparseOctree', function () {
                 min: new Vec3(0, 0, 0),
                 max: new Vec3(1, 1, 1)
             };
-            const gaussianBounds = gridBounds;
+            const sceneBounds = gridBounds;
 
-            const octree = buildSparseOctree(acc, gridBounds, gaussianBounds, 0.25);
+            const octree = buildSparseOctree(acc, gridBounds, sceneBounds, 0.25);
 
             assert.ok(octree.nodes.length >= 1);
             assert.strictEqual(octree.numMixedLeaves, 0);
@@ -416,9 +416,9 @@ describe('buildSparseOctree', function () {
                 min: new Vec3(0, 0, 0),
                 max: new Vec3(1, 1, 1)
             };
-            const gaussianBounds = gridBounds;
+            const sceneBounds = gridBounds;
 
-            const octree = buildSparseOctree(acc, gridBounds, gaussianBounds, 0.25);
+            const octree = buildSparseOctree(acc, gridBounds, sceneBounds, 0.25);
 
             assert.ok(octree.nodes.length >= 1);
             assert.strictEqual(octree.numMixedLeaves, 1);
@@ -447,9 +447,9 @@ describe('buildSparseOctree', function () {
                 min: new Vec3(0, 0, 0),
                 max: new Vec3(2, 2, 2)
             };
-            const gaussianBounds = gridBounds;
+            const sceneBounds = gridBounds;
 
-            const octree = buildSparseOctree(acc, gridBounds, gaussianBounds, 0.25);
+            const octree = buildSparseOctree(acc, gridBounds, sceneBounds, 0.25);
 
             // Should collapse to a single solid node (or at most a few nodes)
             // The exact count depends on tree depth calculation
@@ -473,9 +473,9 @@ describe('buildSparseOctree', function () {
                 min: new Vec3(0, 0, 0),
                 max: new Vec3(2, 2, 2)
             };
-            const gaussianBounds = gridBounds;
+            const sceneBounds = gridBounds;
 
-            const octree = buildSparseOctree(acc, gridBounds, gaussianBounds, 0.25);
+            const octree = buildSparseOctree(acc, gridBounds, sceneBounds, 0.25);
 
             // Should have at least 8 leaf nodes (not collapsed)
             assert.strictEqual(octree.numMixedLeaves, 1);
@@ -544,12 +544,12 @@ describe('buildSparseOctree', function () {
                 min: new Vec3(-10, -5, -10),
                 max: new Vec3(10, 5, 10)
             };
-            const gaussianBounds = {
+            const sceneBounds = {
                 min: new Vec3(-9, -4, -9),
                 max: new Vec3(9, 4, 9)
             };
 
-            const octree = buildSparseOctree(acc, gridBounds, gaussianBounds, 0.05);
+            const octree = buildSparseOctree(acc, gridBounds, sceneBounds, 0.05);
 
             assert.strictEqual(octree.voxelResolution, 0.05);
             assert.strictEqual(octree.leafSize, 4);
@@ -558,7 +558,7 @@ describe('buildSparseOctree', function () {
                 [-10, -5, -10]
             );
             assert.deepStrictEqual(
-                [octree.gaussianBounds.min.x, octree.gaussianBounds.min.y, octree.gaussianBounds.min.z],
+                [octree.sceneBounds.min.x, octree.sceneBounds.min.y, octree.sceneBounds.min.z],
                 [-9, -4, -9]
             );
         });

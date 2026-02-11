@@ -203,20 +203,6 @@ fn main(
 };
 
 /**
- * Result of voxelizing a batch of 4x4x4 blocks.
- */
-interface VoxelizationResult {
-    /** Block coordinates (x, y, z) for each block */
-    blocks: Array<{ x: number; y: number; z: number }>;
-
-    /**
-     * Interleaved u32 voxel masks for each block.
-     * For block at index i: masks[i*2] = low bits (voxels 0-31), masks[i*2+1] = high bits (voxels 32-63)
-     */
-    masks: Uint32Array;
-}
-
-/**
  * Specification for a single batch in a multi-batch dispatch.
  */
 interface BatchSpec {
@@ -568,87 +554,6 @@ class GpuVoxelization {
     }
 
     /**
-     * Voxelize many batches of 4x4x4 blocks in a single GPU dispatch.
-     * Synchronous wrapper that awaits the result immediately.
-     *
-     * @param concatenatedIndices - Pre-built Uint32Array of all Gaussian indices
-     * @param totalIndices - Number of valid indices in the array
-     * @param batches - Per-batch metadata (index offset/count, block origin, dimensions)
-     * @param voxelResolution - Size of each voxel in world units
-     * @param opacityCutoff - Opacity threshold for solid voxels (0.0-1.0)
-     * @returns Promise resolving to multi-batch voxelization results
-     */
-    async voxelizeMultiBatch(
-        concatenatedIndices: Uint32Array,
-        totalIndices: number,
-        batches: BatchSpec[],
-        voxelResolution: number,
-        opacityCutoff: number
-    ): Promise<MultiBatchResult> {
-        return this.submitMultiBatch(0, concatenatedIndices, totalIndices, batches, voxelResolution, opacityCutoff);
-    }
-
-    /**
-     * Voxelize a single batch of 4x4x4 blocks.
-     * Convenience wrapper around voxelizeMultiBatch for backward compatibility.
-     *
-     * @param gaussianIndices - Indices of Gaussians to evaluate for this chunk
-     * @param blockMin - World-space minimum corner of the first block
-     * @param blockMin.x - X coordinate of block minimum
-     * @param blockMin.y - Y coordinate of block minimum
-     * @param blockMin.z - Z coordinate of block minimum
-     * @param numBlocksX - Number of blocks in X direction
-     * @param numBlocksY - Number of blocks in Y direction
-     * @param numBlocksZ - Number of blocks in Z direction
-     * @param voxelResolution - Size of each voxel in world units
-     * @param opacityCutoff - Opacity threshold for solid voxels (0.0-1.0)
-     * @returns Promise resolving to voxelization results
-     */
-    async voxelizeBlocks(
-        gaussianIndices: number[],
-        blockMin: { x: number; y: number; z: number },
-        numBlocksX: number,
-        numBlocksY: number,
-        numBlocksZ: number,
-        voxelResolution: number,
-        opacityCutoff: number
-    ): Promise<VoxelizationResult> {
-        const indicesU32 = new Uint32Array(gaussianIndices);
-        const result = await this.voxelizeMultiBatch(
-            indicesU32,
-            gaussianIndices.length,
-            [{
-                indexOffset: 0,
-                indexCount: gaussianIndices.length,
-                blockMin,
-                numBlocksX,
-                numBlocksY,
-                numBlocksZ
-            }],
-            voxelResolution,
-            opacityCutoff
-        );
-
-        const totalBlocks = numBlocksX * numBlocksY * numBlocksZ;
-        const blocks: Array<{ x: number; y: number; z: number }> = [];
-        const masks = new Uint32Array(totalBlocks * 2);
-
-        let blockIdx = 0;
-        for (let z = 0; z < numBlocksZ; z++) {
-            for (let y = 0; y < numBlocksY; y++) {
-                for (let x = 0; x < numBlocksX; x++) {
-                    blocks.push({ x, y, z });
-                    masks[blockIdx * 2] = result.masks[blockIdx * 2];
-                    masks[blockIdx * 2 + 1] = result.masks[blockIdx * 2 + 1];
-                    blockIdx++;
-                }
-            }
-        }
-
-        return { blocks, masks };
-    }
-
-    /**
      * Get the total number of Gaussians uploaded.
      *
      * @returns Total Gaussian count
@@ -674,4 +579,4 @@ class GpuVoxelization {
     }
 }
 
-export { GpuVoxelization, type VoxelizationResult, type BatchSpec, type MultiBatchResult };
+export { GpuVoxelization, type BatchSpec, type MultiBatchResult };

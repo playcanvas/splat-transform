@@ -60,7 +60,7 @@ interface VoxelMetadata {
     gridBounds: { min: number[]; max: number[] };
 
     /** Original Gaussian scene bounds */
-    gaussianBounds: { min: number[]; max: number[] };
+    sceneBounds: { min: number[]; max: number[] };
 
     /** Size of each voxel in world units */
     voxelResolution: number;
@@ -103,9 +103,9 @@ const writeOctreeFiles = async (
             min: [octree.gridBounds.min.x, octree.gridBounds.min.y, octree.gridBounds.min.z],
             max: [octree.gridBounds.max.x, octree.gridBounds.max.y, octree.gridBounds.max.z]
         },
-        gaussianBounds: {
-            min: [octree.gaussianBounds.min.x, octree.gaussianBounds.min.y, octree.gaussianBounds.min.z],
-            max: [octree.gaussianBounds.max.x, octree.gaussianBounds.max.y, octree.gaussianBounds.max.z]
+        sceneBounds: {
+            min: [octree.sceneBounds.min.x, octree.sceneBounds.min.y, octree.sceneBounds.min.z],
+            max: [octree.sceneBounds.max.x, octree.sceneBounds.max.y, octree.sceneBounds.max.z]
         },
         voxelResolution: octree.voxelResolution,
         leafSize: octree.leafSize,
@@ -430,7 +430,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     const octree = buildSparseOctree(
         accumulator,
         gridBounds,
-        bounds,  // Original Gaussian bounds
+        bounds,  // Original scene bounds
         voxelResolution
     );
 

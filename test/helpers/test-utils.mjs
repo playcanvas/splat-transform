@@ -199,10 +199,10 @@ async function createVoxelFixture() {
     acc.addBlock(xyzToMorton(2, 1, 0), 0xAAAAAAAA, 0x55555555);
 
     const voxelResolution = 0.25;
-    const gaussianBounds = { min: new Vec3(0, 0, 0), max: new Vec3(3, 2, 1) };
+    const sceneBounds = { min: new Vec3(0, 0, 0), max: new Vec3(3, 2, 1) };
     const gridBounds = alignGridBounds(0, 0, 0, 3, 2, 1, voxelResolution);
 
-    const octree = buildSparseOctree(acc, gridBounds, gaussianBounds, voxelResolution);
+    const octree = buildSparseOctree(acc, gridBounds, sceneBounds, voxelResolution);
 
     // Serialize to JSON (matches write-voxel.ts writeOctreeFiles)
     const metadata = {
@@ -211,9 +211,9 @@ async function createVoxelFixture() {
             min: [octree.gridBounds.min.x, octree.gridBounds.min.y, octree.gridBounds.min.z],
             max: [octree.gridBounds.max.x, octree.gridBounds.max.y, octree.gridBounds.max.z]
         },
-        gaussianBounds: {
-            min: [octree.gaussianBounds.min.x, octree.gaussianBounds.min.y, octree.gaussianBounds.min.z],
-            max: [octree.gaussianBounds.max.x, octree.gaussianBounds.max.y, octree.gaussianBounds.max.z]
+        sceneBounds: {
+            min: [octree.sceneBounds.min.x, octree.sceneBounds.min.y, octree.sceneBounds.min.z],
+            max: [octree.sceneBounds.max.x, octree.sceneBounds.max.y, octree.sceneBounds.max.z]
         },
         voxelResolution: octree.voxelResolution,
         leafSize: octree.leafSize,
