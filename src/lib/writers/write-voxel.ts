@@ -195,11 +195,18 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     const gpuVoxelization = new GpuVoxelization(device);
     gpuVoxelization.uploadAllGaussians(dataTable, extentsResult.extents);
 
-    // Calculate grid dimensions
+    // Align grid bounds to block boundaries BEFORE voxelization so the
+    // block coordinates used during voxelization match what the reader expects.
     const blockSize = 4 * voxelResolution;  // Each block is 4x4x4 voxels
-    const numBlocksX = Math.ceil((bounds.max.x - bounds.min.x) / blockSize);
-    const numBlocksY = Math.ceil((bounds.max.y - bounds.min.y) / blockSize);
-    const numBlocksZ = Math.ceil((bounds.max.z - bounds.min.z) / blockSize);
+    const gridBounds = alignGridBounds(
+        bounds.min.x, bounds.min.y, bounds.min.z,
+        bounds.max.x, bounds.max.y, bounds.max.z,
+        voxelResolution
+    );
+
+    const numBlocksX = Math.round((gridBounds.max.x - gridBounds.min.x) / blockSize);
+    const numBlocksY = Math.round((gridBounds.max.y - gridBounds.min.y) / blockSize);
+    const numBlocksZ = Math.round((gridBounds.max.z - gridBounds.min.z) / blockSize);
 
     logger.log(`grid: ${numBlocksX} x ${numBlocksY} x ${numBlocksZ} blocks`);
 
@@ -341,9 +348,9 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
                 const currBatchY = Math.min(batchSize, numBlocksY - by);
                 const currBatchZ = Math.min(batchSize, numBlocksZ - bz);
 
-                const blockMinX = bounds.min.x + bx * blockSize;
-                const blockMinY = bounds.min.y + by * blockSize;
-                const blockMinZ = bounds.min.z + bz * blockSize;
+                const blockMinX = gridBounds.min.x + bx * blockSize;
+                const blockMinY = gridBounds.min.y + by * blockSize;
+                const blockMinZ = gridBounds.min.z + bz * blockSize;
                 const blockMaxX = blockMinX + currBatchX * blockSize;
                 const blockMaxY = blockMinY + currBatchY * blockSize;
                 const blockMaxZ = blockMinZ + currBatchZ * blockSize;
@@ -419,14 +426,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     // Phase 5: Build sparse octree
     logger.progress.step('Building sparse octree');
 
-    // Align grid bounds to block boundaries
-    const gridBounds = alignGridBounds(
-        bounds.min.x, bounds.min.y, bounds.min.z,
-        bounds.max.x, bounds.max.y, bounds.max.z,
-        voxelResolution
-    );
-
-    // Build the sparse octree
+    // Build the sparse octree (gridBounds already computed before voxelization)
     const octree = buildSparseOctree(
         accumulator,
         gridBounds,
