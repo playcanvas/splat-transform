@@ -415,8 +415,7 @@ const main = async () => {
     const { files, options } = await parseArguments();
 
     // timing state for anonymous progress blocks
-    const hrtimeDelta = (start: [number, number], end: [number, number]) =>
-        (end[0] - start[0]) + (end[1] - start[1]) / 1e9;
+    const hrtimeDelta = (start: [number, number], end: [number, number]) => (end[0] - start[0]) + (end[1] - start[1]) / 1e9;
 
     let start: [number, number] | null = null;
 
