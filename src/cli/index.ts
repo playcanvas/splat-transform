@@ -414,10 +414,12 @@ const main = async () => {
     // read args
     const { files, options } = await parseArguments();
 
-    // timing state for anonymous progress blocks
-    const hrtimeDelta = (start: [number, number], end: [number, number]) => (end[0] - start[0]) + (end[1] - start[1]) / 1e9;
+    type Timing = [number, number];
 
-    let start: [number, number] | null = null;
+    // timing state for anonymous progress blocks
+    const hrtimeDelta = (start: Timing, end: Timing) => (end[0] - start[0]) + (end[1] - start[1]) / 1e9;
+
+    let start: Timing | null = null;
 
     // inject Node.js-specific logger - logs go to stderr, data output goes to stdout
     logger.setLogger({
