@@ -414,6 +414,12 @@ const main = async () => {
     // read args
     const { files, options } = await parseArguments();
 
+    // timing state for anonymous progress blocks
+    const hrtimeDelta = (start: [number, number], end: [number, number]) =>
+        (end[0] - start[0]) + (end[1] - start[1]) / 1e9;
+
+    let start: [number, number] | null = null;
+
     // inject Node.js-specific logger - logs go to stderr, data output goes to stdout
     logger.setLogger({
         log: (...args) => console.error(...args),
@@ -424,8 +430,14 @@ const main = async () => {
         onProgress: (node) => {
             if (node.stepName) {
                 console.error(`[${node.step}/${node.totalSteps}] ${node.stepName}`);
-            } else if (node.step > 0) {
-                process.stderr.write(node.step === node.totalSteps ? '# done 🎉\n' : '#');
+            } else {
+                if (node.step === 0) {
+                    start = hrtime();
+                } else if (node.step === node.totalSteps) {
+                    process.stderr.write(`# done in ${hrtimeDelta(start, hrtime()).toFixed(3)}s 🎉\n`);
+                } else {
+                    process.stderr.write('#');
+                }
             }
         }
     });
