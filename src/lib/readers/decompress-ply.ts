@@ -12,7 +12,7 @@ const isCompressedPly = (ply: PlyData): boolean => {
         });
     };
 
-    const chunkProperties = [
+    const requiredChunkProperties = [
         'min_x',
         'min_y',
         'min_z',
@@ -24,7 +24,10 @@ const isCompressedPly = (ply: PlyData): boolean => {
         'min_scale_z',
         'max_scale_x',
         'max_scale_y',
-        'max_scale_z',
+        'max_scale_z'
+    ];
+
+    const colorChunkProperties = [
         'min_r',
         'min_g',
         'min_b',
@@ -44,7 +47,15 @@ const isCompressedPly = (ply: PlyData): boolean => {
     if (numElements !== 2 && numElements !== 3) return false;
 
     const chunk = ply.elements.find(e => e.name === 'chunk');
-    if (!chunk || !hasShape(chunk.dataTable, chunkProperties, 'float32')) return false;
+    if (!chunk || !hasShape(chunk.dataTable, requiredChunkProperties, 'float32')) return false;
+
+    // accept either 12 (no per-chunk color) or 18 (with per-chunk color) chunk properties
+    const numChunkCols = chunk.dataTable.numColumns;
+    if (numChunkCols === requiredChunkProperties.length + colorChunkProperties.length) {
+        if (!hasShape(chunk.dataTable, colorChunkProperties, 'float32')) return false;
+    } else if (numChunkCols !== requiredChunkProperties.length) {
+        return false;
+    }
 
     const vertex = ply.elements.find(e => e.name === 'vertex');
     if (!vertex || !hasShape(vertex.dataTable, vertexProperties, 'uint32')) return false;
@@ -101,12 +112,13 @@ const decompressPly = (ply: PlyData): DataTable => {
     const max_scale_x = getChunk('max_scale_x');
     const max_scale_y = getChunk('max_scale_y');
     const max_scale_z = getChunk('max_scale_z');
-    const min_r = getChunk('min_r');
-    const min_g = getChunk('min_g');
-    const min_b = getChunk('min_b');
-    const max_r = getChunk('max_r');
-    const max_g = getChunk('max_g');
-    const max_b = getChunk('max_b');
+    const hasChunkColors = chunkData.hasColumn('min_r');
+    const min_r = hasChunkColors ? getChunk('min_r') : null;
+    const min_g = hasChunkColors ? getChunk('min_g') : null;
+    const min_b = hasChunkColors ? getChunk('min_b') : null;
+    const max_r = hasChunkColors ? getChunk('max_r') : null;
+    const max_g = hasChunkColors ? getChunk('max_g') : null;
+    const max_b = hasChunkColors ? getChunk('max_b') : null;
 
     const numSplats = vertexData.numRows;
 
@@ -202,9 +214,9 @@ const decompressPly = (ply: PlyData): DataTable => {
         os1[i] = lerp(min_scale_y[ci], max_scale_y[ci], s.y);
         os2[i] = lerp(min_scale_z[ci], max_scale_z[ci], s.z);
 
-        const cr = lerp(min_r[ci], max_r[ci], c.x);
-        const cg = lerp(min_g[ci], max_g[ci], c.y);
-        const cb = lerp(min_b[ci], max_b[ci], c.z);
+        const cr = hasChunkColors ? lerp(min_r[ci], max_r[ci], c.x) : c.x;
+        const cg = hasChunkColors ? lerp(min_g[ci], max_g[ci], c.y) : c.y;
+        const cb = hasChunkColors ? lerp(min_b[ci], max_b[ci], c.z) : c.z;
         of0[i] = (cr - 0.5) / SH_C0;
         of1[i] = (cg - 0.5) / SH_C0;
         of2[i] = (cb - 0.5) / SH_C0;
