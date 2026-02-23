@@ -190,13 +190,13 @@ const inverseTransforms: Record<string, (v: number) => number> = {
 
 // Forward transforms: convert raw PLY values to user-friendly space (for summary display).
 const forwardTransforms: Record<string, (v: number) => number> = {
-    'opacity': (v) => 1 / (1 + Math.exp(-v)),
+    'opacity': v => 1 / (1 + Math.exp(-v)),
     'scale_0': Math.exp,
     'scale_1': Math.exp,
     'scale_2': Math.exp,
-    'f_dc_0': (v) => 0.5 + v * SH_C0,
-    'f_dc_1': (v) => 0.5 + v * SH_C0,
-    'f_dc_2': (v) => 0.5 + v * SH_C0
+    'f_dc_0': v => 0.5 + v * SH_C0,
+    'f_dc_1': v => 0.5 + v * SH_C0,
+    'f_dc_2': v => 0.5 + v * SH_C0
 };
 
 // Maps `_raw` suffixed column names to their underlying PLY column.
