@@ -188,6 +188,17 @@ const inverseTransforms: Record<string, (v: number) => number> = {
     'f_dc_2': v => (v - 0.5) / SH_C0
 };
 
+// Forward transforms: convert raw PLY values to user-friendly space (for summary display).
+const forwardTransforms: Record<string, (v: number) => number> = {
+    'opacity': (v) => 1 / (1 + Math.exp(-v)),
+    'scale_0': Math.exp,
+    'scale_1': Math.exp,
+    'scale_2': Math.exp,
+    'f_dc_0': (v) => 0.5 + v * SH_C0,
+    'f_dc_1': (v) => 0.5 + v * SH_C0,
+    'f_dc_2': (v) => 0.5 + v * SH_C0
+};
+
 // Maps `_raw` suffixed column names to their underlying PLY column.
 const rawColumnMap: Record<string, string> = {
     'opacity_raw': 'opacity',
@@ -212,13 +223,15 @@ const formatMarkdown = (summary: SummaryData): string => {
     const rows: string[][] = [];
 
     for (const [name, stats] of Object.entries(summary.columns)) {
+        const fn = forwardTransforms[name];
+        const fmt = (v: number) => String(fn ? +(fn(v).toPrecision(6)) : v);
         rows.push([
             name,
-            String(stats.min),
-            String(stats.max),
-            String(stats.median),
-            String(stats.mean),
-            String(stats.stdDev),
+            fmt(stats.min),
+            fmt(stats.max),
+            fmt(stats.median),
+            fmt(stats.mean),
+            fmt(stats.stdDev),
             String(stats.nanCount),
             String(stats.infCount),
             stats.histogram
