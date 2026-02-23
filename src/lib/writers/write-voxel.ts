@@ -1,6 +1,3 @@
-import { dirname, resolve } from 'pathe';
-import { GraphicsDevice } from 'playcanvas';
-
 import { DataTable } from '../data-table/data-table';
 import { type FileSystem, writeFile } from '../io/write';
 import { logger } from '../utils/logger';
@@ -19,16 +16,7 @@ import {
     type SparseOctree
 } from '../voxel/sparse-octree';
 import { filterAndFillBlocks } from '../voxel/voxel-filter';
-
-/**
- * A function that creates a PlayCanvas GraphicsDevice on demand.
- *
- * Used for GPU-accelerated voxelization.
- * The application is responsible for caching if needed.
- *
- * @returns Promise resolving to a GraphicsDevice instance.
- */
-type DeviceCreator = () => Promise<GraphicsDevice>;
+import type { DeviceCreator } from './write-sog';
 
 /**
  * Options for writing a voxel octree file.
@@ -449,4 +437,4 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     logger.log(`total size: ${(totalBytes / 1024).toFixed(1)} KB`);
 };
 
-export { writeVoxel, type WriteVoxelOptions, type VoxelMetadata, type DeviceCreator };
+export { writeVoxel, type WriteVoxelOptions, type VoxelMetadata };

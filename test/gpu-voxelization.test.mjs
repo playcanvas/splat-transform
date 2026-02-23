@@ -20,9 +20,8 @@ describe('GpuVoxelization', function () {
 
     describe('WGSL shader generation', function () {
         it('should have proper shader structure', function () {
-            // The shader is generated internally, but we can verify the class exists
-            // and has the expected properties
-            assert.ok(GpuVoxelization.prototype.voxelizeBlocks, 'Should have voxelizeBlocks method');
+            assert.ok(GpuVoxelization.prototype.submitMultiBatch, 'Should have submitMultiBatch method');
+            assert.ok(GpuVoxelization.prototype.uploadAllGaussians, 'Should have uploadAllGaussians method');
             assert.ok(GpuVoxelization.prototype.destroy, 'Should have destroy method');
         });
     });
