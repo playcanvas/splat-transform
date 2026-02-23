@@ -1,3 +1,4 @@
+import type { DeviceCreator } from './write-sog';
 import { DataTable } from '../data-table/data-table';
 import { type FileSystem, writeFile } from '../io/write';
 import { logger } from '../utils/logger';
@@ -16,7 +17,6 @@ import {
     type SparseOctree
 } from '../voxel/sparse-octree';
 import { filterAndFillBlocks } from '../voxel/voxel-filter';
-import type { DeviceCreator } from './write-sog';
 
 /**
  * Options for writing a voxel octree file.
@@ -246,6 +246,9 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
 
     /**
      * Process GPU results back into the block accumulator.
+     *
+     * @param masks - Raw Uint32 voxel masks from the GPU readback.
+     * @param batches - Batch metadata used to decode block positions.
      */
     const processResults = (masks: Uint32Array, batches: PendingBatch[]): void => {
         for (let b = 0; b < batches.length; b++) {
@@ -375,7 +378,9 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
                     numBlocksX: currBatchX,
                     numBlocksY: currBatchY,
                     numBlocksZ: currBatchZ,
-                    bx, by, bz
+                    bx,
+                    by,
+                    bz
                 });
 
                 indexOffset += overlapping.length;

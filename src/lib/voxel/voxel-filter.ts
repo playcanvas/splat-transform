@@ -1,10 +1,10 @@
-import { logger } from '../utils/logger';
 import {
     BlockAccumulator,
     xyzToMorton,
     mortonToXYZ,
     popcount
 } from './sparse-octree';
+import { logger } from '../utils/logger';
 
 // ============================================================================
 // Edge mask constants for 4x4x4 voxel blocks
@@ -107,30 +107,42 @@ function filterAndFillBlocks(accumulator: BlockAccumulator): BlockAccumulator {
         // +X: our lx=3 face <- adjacent's lx=0 face (shifted left by 3)
         addCrossFace(bx + 1, by, bz, solidSet, mixedMap, masks,
             FACE_X3, FACE_X0, 3, true, pxLo, pxHi,
-            (lo, hi) => { pxLo = lo; pxHi = hi; });
+            (lo, hi) => {
+                pxLo = lo; pxHi = hi;
+            });
 
         // -X: our lx=0 face <- adjacent's lx=3 face (shifted right by 3)
         addCrossFace(bx - 1, by, bz, solidSet, mixedMap, masks,
             FACE_X0, FACE_X3, 3, false, mxLo, mxHi,
-            (lo, hi) => { mxLo = lo; mxHi = hi; });
+            (lo, hi) => {
+                mxLo = lo; mxHi = hi;
+            });
 
         // +Y: our ly=3 face <- adjacent's ly=0 face (shifted left by 12)
         addCrossFace(bx, by + 1, bz, solidSet, mixedMap, masks,
             FACE_Y3, FACE_Y0, 12, true, pyLo, pyHi,
-            (lo, hi) => { pyLo = lo; pyHi = hi; });
+            (lo, hi) => {
+                pyLo = lo; pyHi = hi;
+            });
 
         // -Y: our ly=0 face <- adjacent's ly=3 face (shifted right by 12)
         addCrossFace(bx, by - 1, bz, solidSet, mixedMap, masks,
             FACE_Y0, FACE_Y3, 12, false, myLo, myHi,
-            (lo, hi) => { myLo = lo; myHi = hi; });
+            (lo, hi) => {
+                myLo = lo; myHi = hi;
+            });
 
         // +Z: our lz=3 face (hi bits 16-31) <- adjacent's lz=0 face (lo bits 0-15)
         addCrossFaceZ(bx, by, bz + 1, solidSet, mixedMap, masks, true, pzLo, pzHi,
-            (lo, hi) => { pzLo = lo; pzHi = hi; });
+            (lo, hi) => {
+                pzLo = lo; pzHi = hi;
+            });
 
         // -Z: our lz=0 face (lo bits 0-15) <- adjacent's lz=3 face (hi bits 16-31)
         addCrossFaceZ(bx, by, bz - 1, solidSet, mixedMap, masks, false, mzLo, mzHi,
-            (lo, hi) => { mzLo = lo; mzHi = hi; });
+            (lo, hi) => {
+                mzLo = lo; mzHi = hi;
+            });
 
         // --- Apply operations ---
 
@@ -180,6 +192,20 @@ function filterAndFillBlocks(accumulator: BlockAccumulator): BlockAccumulator {
 
 /**
  * Add cross-block face contribution for X/Y directions (shift stays within lo/hi words).
+ *
+ * @param nx - Adjacent block X coordinate.
+ * @param ny - Adjacent block Y coordinate.
+ * @param nz - Adjacent block Z coordinate.
+ * @param solidSet - Set of Morton codes for solid blocks.
+ * @param mixedMap - Map from Morton code to index in the mixed masks array.
+ * @param masks - Interleaved voxel masks for mixed blocks [lo0, hi0, lo1, hi1, ...].
+ * @param ourFaceMask - Bit mask selecting our block's face positions.
+ * @param adjFaceMask - Bit mask selecting the adjacent block's opposite face positions.
+ * @param shiftAmount - Number of bits to shift the adjacent face into our face positions.
+ * @param shiftLeft - True to shift left, false to shift right.
+ * @param curLo - Current low 32 bits of the direction mask.
+ * @param curHi - Current high 32 bits of the direction mask.
+ * @param write - Callback to write the updated (lo, hi) direction mask.
  */
 function addCrossFace(
     nx: number, ny: number, nz: number,
@@ -223,6 +249,17 @@ function addCrossFace(
  *
  * +Z: our lz=3 (hi bits 16-31) <- adjacent's lz=0 (lo bits 0-15), shift left by 16
  * -Z: our lz=0 (lo bits 0-15) <- adjacent's lz=3 (hi bits 16-31), shift right by 16
+ *
+ * @param nx - Adjacent block X coordinate.
+ * @param ny - Adjacent block Y coordinate.
+ * @param nz - Adjacent block Z coordinate.
+ * @param solidSet - Set of Morton codes for solid blocks.
+ * @param mixedMap - Map from Morton code to index in the mixed masks array.
+ * @param masks - Interleaved voxel masks for mixed blocks [lo0, hi0, lo1, hi1, ...].
+ * @param plusZ - True for +Z direction, false for -Z.
+ * @param curLo - Current low 32 bits of the direction mask.
+ * @param curHi - Current high 32 bits of the direction mask.
+ * @param write - Callback to write the updated (lo, hi) direction mask.
  */
 function addCrossFaceZ(
     nx: number, ny: number, nz: number,

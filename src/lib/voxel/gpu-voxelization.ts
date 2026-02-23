@@ -346,8 +346,13 @@ class GpuVoxelization {
             compute.setParameter('batchInfos', batchInfoBuffer);
 
             this.slots.push({
-                indexBuffer, resultsBuffer, batchInfoBuffer, compute,
-                indexBufferSize, resultsBufferSize, batchInfoBufferSize
+                indexBuffer,
+                resultsBuffer,
+                batchInfoBuffer,
+                compute,
+                indexBufferSize,
+                resultsBufferSize,
+                batchInfoBufferSize
             });
         }
 
@@ -432,6 +437,13 @@ class GpuVoxelization {
 
     /**
      * Ensure a slot's buffer is at least the given size, growing if needed.
+     *
+     * @param slot - Dispatch slot to check.
+     * @param bufferKey - Key of the StorageBuffer property on the slot.
+     * @param sizeKey - Key of the corresponding size-tracking property.
+     * @param neededSize - Minimum required buffer size in bytes.
+     * @param usage - GPU buffer usage flags for the new buffer.
+     * @param paramName - Compute parameter name to rebind after replacement.
      */
     private ensureSlotBuffer(
         slot: DispatchSlot,
