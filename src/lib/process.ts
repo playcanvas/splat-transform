@@ -179,13 +179,13 @@ const SH_C0 = 0.28209479177387814;
 // Inverse transforms: convert user-friendly values to raw PLY space.
 // All transforms are monotonic increasing, so comparison direction is preserved.
 const inverseTransforms: Record<string, (v: number) => number> = {
-    'opacity': (v) => Math.log(v / (1 - v)),
+    'opacity': v => Math.log(v / (1 - v)),
     'scale_0': Math.log,
     'scale_1': Math.log,
     'scale_2': Math.log,
-    'f_dc_0': (v) => (v - 0.5) / SH_C0,
-    'f_dc_1': (v) => (v - 0.5) / SH_C0,
-    'f_dc_2': (v) => (v - 0.5) / SH_C0
+    'f_dc_0': v => (v - 0.5) / SH_C0,
+    'f_dc_1': v => (v - 0.5) / SH_C0,
+    'f_dc_2': v => (v - 0.5) / SH_C0
 };
 
 // Maps `_raw` suffixed column names to their underlying PLY column.
@@ -324,7 +324,8 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
                 break;
             }
             case 'filterByValue': {
-                let { columnName, comparator, value } = processAction;
+                const { comparator } = processAction;
+                let { columnName, value } = processAction;
 
                 if (rawColumnMap[columnName]) {
                     columnName = rawColumnMap[columnName];
