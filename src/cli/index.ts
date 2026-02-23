@@ -364,6 +364,9 @@ ACTIONS (can be repeated, in any order)
     -S, --filter-sphere    <x,y,z,radius>   Remove Gaussians outside sphere (center, radius)
     -V, --filter-value     <name,cmp,value> Keep Gaussians where <name> <cmp> <value>
                                               cmp ∈ {lt,lte,gt,gte,eq,neq}
+                                              opacity, scale_*, f_dc_* use transformed values
+                                              (linear opacity 0-1, exp scale, linear color 0-1).
+                                              Append _raw for raw PLY values (e.g. opacity_raw).
     -F, --filter-visibility <n|n%>          Keep the n most visible Gaussians (by opacity * volume)
                                               Use n% to keep a percentage of Gaussians
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
