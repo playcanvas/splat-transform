@@ -365,7 +365,7 @@ ACTIONS (can be repeated, in any order)
     -V, --filter-value     <name,cmp,value> Keep Gaussians where <name> <cmp> <value>
                                               cmp ∈ {lt,lte,gt,gte,eq,neq}
                                               opacity, scale_*, f_dc_* use transformed values
-                                              (linear opacity 0-1, exp scale, linear color 0-1).
+                                              (linear opacity 0-1, linear scale, linear color 0-1).
                                               Append _raw for raw PLY values (e.g. opacity_raw).
     -F, --filter-visibility <n|n%>          Keep the n most visible Gaussians (by opacity * volume)
                                               Use n% to keep a percentage of Gaussians
