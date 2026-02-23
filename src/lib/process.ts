@@ -47,6 +47,13 @@ type FilterNaN = {
 
 /**
  * Filter splats by comparing a column value.
+ *
+ * For `opacity`, `scale_0/1/2`, and `f_dc_0/1/2`, the value is specified in user-friendly
+ * (transformed) space: linear opacity (0-1), linear scale, and linear color (0-1).
+ * The value is automatically converted to raw PLY space before comparison.
+ *
+ * To compare against raw PLY values directly, use the `_raw` suffix
+ * (e.g. `opacity_raw`, `scale_0_raw`, `f_dc_0_raw`).
  */
 type FilterByValue = {
     /** Action type identifier. */
@@ -167,6 +174,42 @@ type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | Fi
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
+const SH_C0 = 0.28209479177387814;
+
+// Inverse transforms: convert user-friendly values to raw PLY space.
+// All transforms are monotonic increasing, so comparison direction is preserved.
+const inverseTransforms: Record<string, (v: number) => number> = {
+    'opacity': v => Math.log(v / (1 - v)),
+    'scale_0': Math.log,
+    'scale_1': Math.log,
+    'scale_2': Math.log,
+    'f_dc_0': v => (v - 0.5) / SH_C0,
+    'f_dc_1': v => (v - 0.5) / SH_C0,
+    'f_dc_2': v => (v - 0.5) / SH_C0
+};
+
+// Forward transforms: convert raw PLY values to user-friendly space (for summary display).
+const forwardTransforms: Record<string, (v: number) => number> = {
+    'opacity': v => 1 / (1 + Math.exp(-v)),
+    'scale_0': Math.exp,
+    'scale_1': Math.exp,
+    'scale_2': Math.exp,
+    'f_dc_0': v => 0.5 + v * SH_C0,
+    'f_dc_1': v => 0.5 + v * SH_C0,
+    'f_dc_2': v => 0.5 + v * SH_C0
+};
+
+// Maps `_raw` suffixed column names to their underlying PLY column.
+const rawColumnMap: Record<string, string> = {
+    'opacity_raw': 'opacity',
+    'scale_0_raw': 'scale_0',
+    'scale_1_raw': 'scale_1',
+    'scale_2_raw': 'scale_2',
+    'f_dc_0_raw': 'f_dc_0',
+    'f_dc_1_raw': 'f_dc_1',
+    'f_dc_2_raw': 'f_dc_2'
+};
+
 const formatMarkdown = (summary: SummaryData): string => {
     const lines: string[] = [];
 
@@ -180,13 +223,15 @@ const formatMarkdown = (summary: SummaryData): string => {
     const rows: string[][] = [];
 
     for (const [name, stats] of Object.entries(summary.columns)) {
+        const fn = forwardTransforms[name];
+        const fmt = (v: number) => String(fn ? +(fn(v).toPrecision(6)) : v);
         rows.push([
             name,
-            String(stats.min),
-            String(stats.max),
-            String(stats.median),
-            String(stats.mean),
-            String(stats.stdDev),
+            fmt(stats.min),
+            fmt(stats.max),
+            fmt(stats.median),
+            fmt(stats.mean),
+            fmt(stats.stdDev),
             String(stats.nanCount),
             String(stats.infCount),
             stats.histogram
@@ -247,6 +292,7 @@ const filter = (dataTable: DataTable, predicate: (row: any, rowIndex: number) =>
  *     { kind: 'scale', value: 0.5 },
  *     { kind: 'translate', value: new Vec3(0, 1, 0) },
  *     { kind: 'filterNaN' },
+ *     // opacity value is in linear space (0-1), automatically converted to logit for comparison
  *     { kind: 'filterByValue', columnName: 'opacity', comparator: 'gt', value: 0.1 }
  * ]);
  * ```
@@ -291,7 +337,15 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
                 break;
             }
             case 'filterByValue': {
-                const { columnName, comparator, value } = processAction;
+                const { comparator } = processAction;
+                let { columnName, value } = processAction;
+
+                if (rawColumnMap[columnName]) {
+                    columnName = rawColumnMap[columnName];
+                } else if (inverseTransforms[columnName]) {
+                    value = inverseTransforms[columnName](value);
+                }
+
                 const Predicates = {
                     'lt': (row: any, rowIndex: number) => row[columnName] < value,
                     'lte': (row: any, rowIndex: number) => row[columnName] <= value,
