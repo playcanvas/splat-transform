@@ -18,6 +18,7 @@ import {
     xyzToMorton,
     type SparseOctree
 } from '../voxel/sparse-octree';
+import { filterAndFillBlocks } from '../voxel/voxel-filter';
 
 /**
  * A function that creates a PlayCanvas GraphicsDevice on demand.
@@ -177,7 +178,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
 
     logger.log(`voxelizing scene (resolution: ${voxelResolution}, opacity cutoff: ${opacityCutoff})...`);
 
-    logger.progress.begin(6);
+    logger.progress.begin(7);
 
     // Phase 1: Compute Gaussian extents
     logger.progress.step('Computing Gaussian extents');
@@ -213,7 +214,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     // Phase 4: Double-buffered pipelined voxelization
     // Uses two GPU dispatch slots so the CPU can prepare the next mega-dispatch
     // (BVH queries + index copying) while the GPU executes the current one.
-    const accumulator = new BlockAccumulator();
+    let accumulator = new BlockAccumulator();
     const batchSize = 16;  // 16x16x16 = 4096 blocks max per batch
 
     logger.progress.step('Voxelizing');
@@ -423,7 +424,11 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     logger.log(`voxelization complete: ${accumulator.count} non-empty blocks`);
     logger.log(`pipelined: ${totalBatches} batches in ${megaDispatchCount} mega-dispatches, ${skippedEmpty} empty skips`);
 
-    // Phase 5: Build sparse octree
+    // Phase 5: Filter floaters and fill holes
+    logger.progress.step('Filtering voxels');
+    accumulator = filterAndFillBlocks(accumulator);
+
+    // Phase 6: Build sparse octree
     logger.progress.step('Building sparse octree');
 
     // Build the sparse octree (gridBounds already computed before voxelization)
@@ -436,7 +441,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
 
     logger.log(`octree: depth=${octree.treeDepth}, interior=${octree.numInteriorNodes}, mixed=${octree.numMixedLeaves}`);
 
-    // Phase 6: Write output files
+    // Phase 7: Write output files
     logger.progress.step('Writing output');
     await writeOctreeFiles(fs, filename, octree);
 
