@@ -5,7 +5,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 
-import { ReadStream, BufferedReadStream } from '../dist/index.mjs';
+import { ReadStream, BufferedReadStream } from '../src/lib/index.js';
 
 /**
  * Mock ReadStream that reads from a buffer and tracks pull() calls.

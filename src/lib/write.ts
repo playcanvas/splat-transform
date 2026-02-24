@@ -8,6 +8,7 @@ import { writeHtml } from './writers/write-html';
 import { writeLod } from './writers/write-lod';
 import { writePly } from './writers/write-ply';
 import { writeSog, type DeviceCreator } from './writers/write-sog';
+import { writeVoxel } from './writers/write-voxel';
 
 /**
  * Supported output file formats for Gaussian splat data.
@@ -20,8 +21,9 @@ import { writeSog, type DeviceCreator } from './writers/write-sog';
  * - `lod` - Multi-LOD format with chunked data
  * - `html` - Self-contained HTML viewer (separate assets)
  * - `html-bundle` - Self-contained HTML viewer (all assets embedded)
+ * - `voxel` - Sparse voxel octree format for collision detection
  */
-type OutputFormat = 'csv' | 'sog' | 'sog-bundle' | 'lod' | 'compressed-ply' | 'ply' | 'html' | 'html-bundle';
+type OutputFormat = 'csv' | 'sog' | 'sog-bundle' | 'lod' | 'compressed-ply' | 'ply' | 'html' | 'html-bundle' | 'voxel';
 
 /**
  * Options for writing a Gaussian splat file.
@@ -60,6 +62,8 @@ const getOutputFormat = (filename: string, options: Options): OutputFormat => {
 
     if (lowerFilename.endsWith('.csv')) {
         return 'csv';
+    } else if (lowerFilename.endsWith('.voxel.json')) {
+        return 'voxel';
     } else if (lowerFilename.endsWith('lod-meta.json')) {
         return 'lod';
     } else if (lowerFilename.endsWith('.sog')) {
@@ -152,6 +156,15 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
                 viewerSettingsJson: options.viewerSettingsJson,
                 bundle: outputFormat === 'html-bundle',
                 iterations: options.iterations,
+                createDevice
+            }, fs);
+            break;
+        case 'voxel':
+            await writeVoxel({
+                filename,
+                dataTable,
+                voxelResolution: options.voxelResolution,
+                opacityCutoff: options.opacityCutoff,
                 createDevice
             }, fs);
             break;

@@ -47,6 +47,7 @@ export { readPly } from './readers/read-ply';
 export { readSog } from './readers/read-sog';
 export { readSplat } from './readers/read-splat';
 export { readSpz } from './readers/read-spz';
+export { readVoxel } from './readers/read-voxel';
 
 // Individual writers (for advanced use)
 export { writeSog } from './writers/write-sog';
@@ -56,6 +57,8 @@ export { writeCompressedPly } from './writers/write-compressed-ply';
 export { writeCsv } from './writers/write-csv';
 export { writeHtml } from './writers/write-html';
 export { writeLod } from './writers/write-lod';
+export { writeVoxel } from './writers/write-voxel';
+export type { WriteVoxelOptions, VoxelMetadata } from './writers/write-voxel';
 
 // Types
 export type { Options, Param } from './types';

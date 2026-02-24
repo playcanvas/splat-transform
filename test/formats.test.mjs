@@ -13,11 +13,14 @@ import {
     Column,
     DataTable,
     computeSummary,
+    getInputFormat,
+    readFile,
     readPly,
     readSplat,
     readKsplat,
     readSpz,
     readSog,
+    readVoxel,
     writePly,
     writeCompressedPly,
     writeSog,
@@ -25,10 +28,10 @@ import {
     MemoryReadFileSystem,
     MemoryFileSystem,
     ZipReadFileSystem
-} from '../dist/index.mjs';
+} from '../src/lib/index.js';
 
 import { compareSummaries, compareDataTables } from './helpers/summary-compare.mjs';
-import { createMinimalTestData, encodePlyBinary } from './helpers/test-utils.mjs';
+import { createMinimalTestData, encodePlyBinary, createVoxelFixture } from './helpers/test-utils.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(__dirname, 'fixtures', 'splat');
@@ -417,5 +420,85 @@ describe('MJS Generator Format (Input Only)', () => {
         // Positions should span expected range
         assert(summary.columns.x.min < 0, 'x.min should be negative');
         assert(summary.columns.x.max > 0, 'x.max should be positive');
+    });
+});
+
+describe('Voxel Format (Input Only)', () => {
+    let voxelFs;
+    let fixtureMetadata;
+
+    before(async () => {
+        // Generate valid voxel fixture data using the library's own octree
+        // building functions (BlockAccumulator + buildSparseOctree).
+        // The fixture contains 4 solid + 2 mixed leaf blocks.
+        const { jsonBytes, binBytes, metadata } = await createVoxelFixture();
+        fixtureMetadata = metadata;
+
+        voxelFs = new MemoryReadFileSystem();
+        voxelFs.set('test.voxel.json', jsonBytes);
+        voxelFs.set('test.voxel.bin', binBytes);
+    });
+
+    it('should detect voxel format from filename', () => {
+        assert.strictEqual(getInputFormat('scene.voxel.json'), 'voxel');
+    });
+
+    it('should read voxel file and produce DataTable with leaf blocks', async () => {
+        const dataTable = await readVoxel(voxelFs, 'test.voxel.json');
+
+        assert(dataTable.numRows > 0, 'Should have at least one leaf block');
+        assert.strictEqual(dataTable.numColumns, 14);
+
+        const requiredColumns = [
+            'x', 'y', 'z',
+            'scale_0', 'scale_1', 'scale_2',
+            'rot_0', 'rot_1', 'rot_2', 'rot_3',
+            'f_dc_0', 'f_dc_1', 'f_dc_2',
+            'opacity'
+        ];
+        for (const col of requiredColumns) {
+            assert(dataTable.hasColumn(col), `Should have column ${col}`);
+        }
+
+        // All leaf blocks should have uniform scale and opacity
+        const scale0 = dataTable.getColumnByName('scale_0').data;
+        const opacities = dataTable.getColumnByName('opacity').data;
+        const blockSize = 4 * fixtureMetadata.voxelResolution;
+        const expectedScale = Math.log(blockSize * 0.4);
+
+        for (let i = 0; i < dataTable.numRows; i++) {
+            assert.ok(
+                Math.abs(scale0[i] - expectedScale) < 1e-5,
+                `scale_0[${i}] should be log(blockSize*0.4)`
+            );
+            assert.strictEqual(opacities[i], 5.0, `opacity[${i}] should be 5.0`);
+        }
+    });
+
+    it('should read voxel via readFile and write to PLY', async () => {
+        const tables = await readFile({
+            filename: 'test.voxel.json',
+            inputFormat: getInputFormat('test.voxel.json'),
+            options: {},
+            params: [],
+            fileSystem: voxelFs
+        });
+
+        assert.strictEqual(tables.length, 1);
+        const dataTable = tables[0];
+        assert(dataTable.numRows > 0);
+
+        const writeFs = new MemoryFileSystem();
+        await writePly({
+            filename: 'voxel-out.ply',
+            plyData: {
+                comments: ['Voxel leaf visualization'],
+                elements: [{ name: 'vertex', dataTable }]
+            }
+        }, writeFs);
+
+        const plyData = writeFs.results.get('voxel-out.ply');
+        assert(plyData, 'PLY should be written');
+        assert(plyData.length > 0, 'PLY should not be empty');
     });
 });

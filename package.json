@@ -63,6 +63,7 @@
     "publint": "0.3.17",
     "rollup": "4.57.1",
     "tslib": "2.8.1",
+    "tsx": "^4.21.0",
     "typedoc": "0.28.17",
     "typedoc-plugin-mdn-links": "5.1.1",
     "typescript": "5.9.3"
@@ -77,7 +78,7 @@
     "lint:fix": "eslint src --fix",
     "publint": "publint",
     "watch": "rollup -c -w",
-    "test": "node --test test/*.test.mjs",
+    "test": "node --import tsx/esm --test test/*.test.mjs",
     "test:fixtures": "node test/fixtures/create-fixtures.mjs"
   },
   "engines": {

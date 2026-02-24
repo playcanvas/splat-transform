@@ -19,6 +19,12 @@ type Options = {
 
     /** Approximate size of an LOD chunk in world units (meters). Default: 16 */
     lodChunkExtent: number;
+
+    /** Size of each voxel in world units for voxel output. Default: 0.05 */
+    voxelResolution?: number;
+
+    /** Opacity threshold for solid voxels - voxels below this are considered empty. Default: 0.5 */
+    opacityCutoff?: number;
 };
 
 /**

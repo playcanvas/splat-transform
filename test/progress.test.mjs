@@ -5,7 +5,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 
-import { MemoryReadFileSystem } from '../dist/index.mjs';
+import { MemoryReadFileSystem } from '../src/lib/index.js';
 
 describe('Progress Callbacks', () => {
 
