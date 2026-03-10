@@ -495,15 +495,6 @@ function buildSparseOctree(
     // Final step (10th)
     logger.progress.step();
 
-    // Profiling output
-    logger.debug(
-        `[octree profiling] blocks: ${totalBlocks}, ` +
-        `sort: ${(tSort - tProfile).toFixed(1)}ms, ` +
-        `build: ${(tBuild - tSort).toFixed(1)}ms, ` +
-        `flatten: ${(tFlatten - tBuild).toFixed(1)}ms, ` +
-        `total: ${(tFlatten - tProfile).toFixed(1)}ms`
-    );
-
     return result;
 }
 

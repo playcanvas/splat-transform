@@ -165,7 +165,7 @@ const kmeans = async (points: DataTable, k: number, iterations: number, device?:
     let converged = false;
     let steps = 0;
 
-    logger.debug(`Running k-means clustering: dims=${points.numColumns} points=${points.numRows} clusters=${k} iterations=${iterations}...`);
+    logger.debug(`running k-means clustering: dims=${points.numColumns} points=${points.numRows} clusters=${k} iterations=${iterations}...`);
 
     // Report iterations as anonymous nested steps
     logger.progress.begin(iterations);

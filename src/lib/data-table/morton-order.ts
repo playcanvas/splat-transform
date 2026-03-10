@@ -110,7 +110,6 @@ const sortMortonOrder = (dataTable: DataTable, indices: Uint32Array): void => {
             }
 
             if (end - start > 256) {
-                // logger.debug('sorting', end - start);
                 generate(indices.subarray(start, end));
             }
 
