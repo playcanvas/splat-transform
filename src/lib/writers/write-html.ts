@@ -19,7 +19,13 @@ const defaultSettings = {
         fringing: { enabled: false, intensity: 0.5 }
     },
     animTracks: [] as any[],
-    cameras: [] as any[],
+    cameras: [{
+        initial: {
+            position: [2, 2, -2],
+            target: [0, 0, 0],
+            fov: 50
+        }
+    }],
     annotations: [] as any[],
     startMode: 'default'
 };
@@ -51,7 +57,7 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
         return text.split('\n').map(line => whitespace + line).join('\n');
     };
 
-    const viewerSettings = viewerSettingsJson ?? defaultSettings;
+    const viewerSettings = viewerSettingsJson || defaultSettings;
 
     if (bundle) {
         // Bundled mode: embed everything in the HTML
