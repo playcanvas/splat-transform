@@ -18,9 +18,9 @@ const defaultSettings = {
         vignette: { enabled: false, intensity: 0.5, inner: 0.3, outer: 0.75, curvature: 1 },
         fringing: { enabled: false, intensity: 0.5 }
     },
-    animTracks: [],
-    cameras: [],
-    annotations: [],
+    animTracks: [] as any[],
+    cameras: [] as any[],
+    annotations: [] as any[],
     startMode: 'default'
 };
 
