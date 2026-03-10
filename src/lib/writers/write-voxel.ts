@@ -164,21 +164,15 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         throw new Error('writeVoxel requires a createDevice function for GPU voxelization');
     }
 
-    logger.log(`voxelizing scene (resolution: ${voxelResolution}, opacity cutoff: ${opacityCutoff})...`);
+    logger.progress.begin(4);
 
-    logger.progress.begin(7);
-
-    // Phase 1: Compute Gaussian extents
-    logger.progress.step('Computing Gaussian extents');
     const extentsResult = computeGaussianExtents(dataTable);
     const bounds = extentsResult.sceneBounds;
 
-    // Phase 2: Build BVH
     logger.progress.step('Building BVH');
-    const bvh = new GaussianBVH(dataTable, extentsResult.extents);
+    logger.debug(`scene extents: (${bounds.min.x.toFixed(2)},${bounds.min.y.toFixed(2)},${bounds.min.z.toFixed(2)}) - (${bounds.max.x.toFixed(2)},${bounds.max.y.toFixed(2)},${bounds.max.z.toFixed(2)})`);
 
-    // Phase 3: Create GPU device and voxelization
-    logger.progress.step('Creating GPU device');
+    const bvh = new GaussianBVH(dataTable, extentsResult.extents);
     const device = await createDevice();
 
     const gpuVoxelization = new GpuVoxelization(device);
@@ -197,8 +191,6 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     const numBlocksY = Math.round((gridBounds.max.y - gridBounds.min.y) / blockSize);
     const numBlocksZ = Math.round((gridBounds.max.z - gridBounds.min.z) / blockSize);
 
-    logger.log(`grid: ${numBlocksX} x ${numBlocksY} x ${numBlocksZ} blocks`);
-
     // Phase 4: Double-buffered pipelined voxelization
     // Uses two GPU dispatch slots so the CPU can prepare the next mega-dispatch
     // (BVH queries + index copying) while the GPU executes the current one.
@@ -206,6 +198,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     const batchSize = 16;  // 16x16x16 = 4096 blocks max per batch
 
     logger.progress.step('Voxelizing');
+    logger.debug(`voxel grid: (${numBlocksX} x ${numBlocksY} x ${numBlocksZ})`);
 
     // Mega-dispatch thresholds: flush when either limit is reached
     const MEGA_MAX_BATCHES = 512;
@@ -414,17 +407,9 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     // Cleanup GPU resources (device lifecycle managed by caller)
     gpuVoxelization.destroy();
 
-    logger.log(`voxelization complete: ${accumulator.count} non-empty blocks`);
-    logger.log(`pipelined: ${totalBatches} batches in ${megaDispatchCount} mega-dispatches, ${skippedEmpty} empty skips`);
-
-    // Phase 5: Filter floaters and fill holes
-    logger.progress.step('Filtering voxels');
+    logger.progress.step('Filtering');
     accumulator = filterAndFillBlocks(accumulator);
 
-    // Phase 6: Build sparse octree
-    logger.progress.step('Building sparse octree');
-
-    // Build the sparse octree (gridBounds already computed before voxelization)
     const octree = buildSparseOctree(
         accumulator,
         gridBounds,
@@ -432,14 +417,8 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         voxelResolution
     );
 
-    logger.log(`octree: depth=${octree.treeDepth}, interior=${octree.numInteriorNodes}, mixed=${octree.numMixedLeaves}`);
-
-    // Phase 7: Write output files
-    logger.progress.step('Writing output');
+    logger.progress.step('Writing');
     await writeOctreeFiles(fs, filename, octree);
-
-    const totalBytes = (octree.nodes.length + octree.leafData.length) * 4;
-    logger.log(`total size: ${(totalBytes / 1024).toFixed(1)} KB`);
 };
 
 export { writeVoxel, type WriteVoxelOptions, type VoxelMetadata };

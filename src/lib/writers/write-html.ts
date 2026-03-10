@@ -6,18 +6,28 @@ import { DataTable } from '../data-table/data-table';
 import { type FileSystem, MemoryFileSystem, writeFile } from '../io/write';
 import { toBase64 } from '../utils/base64';
 
-type ViewerSettings = {
-    camera?: {
-        fov?: number;
-        position?: [number, number, number];
-        target?: [number, number, number];
-        startAnim?: string;
-        animTrack?: string;
-    };
-    background?: {
-        color?: [number, number, number];
-    };
-    animTracks?: unknown[];
+const defaultSettings = {
+    version: 2,
+    tonemapping: 'none',
+    highPrecisionRendering: false,
+    background: { color: [0.4, 0.4, 0.4] },
+    postEffectSettings: {
+        sharpness: { enabled: false, amount: 0 },
+        bloom: { enabled: false, intensity: 1, blurLevel: 2 },
+        grading: { enabled: false, brightness: 0, contrast: 1, saturation: 1, tint: [1, 1, 1] },
+        vignette: { enabled: false, intensity: 0.5, inner: 0.3, outer: 0.75, curvature: 1 },
+        fringing: { enabled: false, intensity: 0.5 }
+    },
+    animTracks: [] as any[],
+    cameras: [{
+        initial: {
+            position: [2, 2, -2],
+            target: [0, 0, 0],
+            fov: 50
+        }
+    }],
+    annotations: [] as any[],
+    startMode: 'default'
 };
 
 type WriteHtmlOptions = {
@@ -47,25 +57,7 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
         return text.split('\n').map(line => whitespace + line).join('\n');
     };
 
-    // Load viewer settings from file if provided
-    const viewerSettings = (viewerSettingsJson ?? {})as ViewerSettings;
-
-    // Merge provided settings with defaults
-    const mergedSettings = {
-        camera: {
-            fov: 50,
-            position: [2, 2, -2] as [number, number, number],
-            target: [0, 0, 0] as [number, number, number],
-            startAnim: 'none',
-            animTrack: undefined as string | undefined,
-            ...viewerSettings.camera
-        },
-        background: {
-            color: [0.4, 0.4, 0.4] as [number, number, number],
-            ...viewerSettings.background
-        },
-        animTracks: viewerSettings.animTracks ?? []
-    };
+    const viewerSettings = viewerSettingsJson || defaultSettings;
 
     if (bundle) {
         // Bundled mode: embed everything in the HTML
@@ -91,7 +83,7 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
         const resultHtml = html
         .replace(style, `<style>\n${pad(css, 12)}\n        </style>`)
         .replace(script, js)
-        .replace(settings, `settings: ${JSON.stringify(mergedSettings)}`)
+        .replace(settings, `settings: ${JSON.stringify(viewerSettings)}`)
         .replace(content, `fetch("data:application/octet-stream;base64,${sogData}")`)
         .replace('.compressed.ply', '.sog');
 
@@ -125,7 +117,7 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
         const content = 'fetch(contentUrl)';
 
         const resultHtml = html
-        .replace(settings, `settings: ${JSON.stringify(mergedSettings)}`)
+        .replace(settings, `settings: ${JSON.stringify(viewerSettings)}`)
         .replace(content, `fetch("${sogFilename}")`)
         .replace('.compressed.ply', '.sog');
 

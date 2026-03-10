@@ -118,9 +118,6 @@ const createDevice = async (adapterName?: string): Promise<GraphicsDevice> => {
 
     await graphicsDevice.createDevice();
 
-    // print gpu info
-    logger.log(`Using GPU: ${adapterName || 'auto'}`);
-
     return graphicsDevice;
 };
 

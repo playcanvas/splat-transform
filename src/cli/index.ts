@@ -601,7 +601,7 @@ const main = async () => {
             outputArg.processActions
         );
 
-        logger.log(`Loaded ${dataTable.numRows} gaussians`);
+        logger.log(`Total gaussians loaded: ${dataTable.numRows}`);
 
         // Skip file writing for null output
         if (!isNullOutput) {
