@@ -530,6 +530,7 @@ const main = async () => {
                 const filesToCheck = [
                     join(outputDir, 'index.css'),
                     join(outputDir, 'index.js'),
+                    join(outputDir, 'settings.json'),
                     join(outputDir, `${baseFilename}.sog`)
                 ];
 
