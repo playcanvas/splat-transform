@@ -23,7 +23,7 @@ const defaultSettings = {
         initial: {
             position: [2, 2, -2],
             target: [0, 0, 0],
-            fov: 50
+            fov: 75
         }
     }],
     annotations: [] as any[],
@@ -112,12 +112,14 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
         const jsPath = join(outputDir, 'index.js');
         await writeFile(fs, jsPath, js);
 
+        // Write settings file
+        const settingsPath = join(outputDir, 'settings.json');
+        await writeFile(fs, settingsPath, JSON.stringify(viewerSettings, null, 4));
+
         // Generate HTML with external references
-        const settings = 'settings: fetch(settingsUrl).then(response => response.json())';
         const content = 'fetch(contentUrl)';
 
         const resultHtml = html
-        .replace(settings, `settings: ${JSON.stringify(viewerSettings)}`)
         .replace(content, `fetch("${sogFilename}")`)
         .replace('.compressed.ply', '.sog');
 
