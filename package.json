@@ -1,6 +1,6 @@
 {
   "name": "@playcanvas/splat-transform",
-  "version": "1.8.1",
+  "version": "1.8.2",
   "author": "PlayCanvas<support@playcanvas.com>",
   "homepage": "https://playcanvas.com",
   "description": "Library and CLI tool for 3D Gaussian splat format conversion and transformation",
