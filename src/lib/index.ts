@@ -57,6 +57,7 @@ export { writeCompressedPly } from './writers/write-compressed-ply';
 export { writeCsv } from './writers/write-csv';
 export { writeHtml } from './writers/write-html';
 export { writeLod } from './writers/write-lod';
+export { writeGlb } from './writers/write-glb';
 export { writeVoxel } from './writers/write-voxel';
 export type { WriteVoxelOptions, VoxelMetadata } from './writers/write-voxel';
 

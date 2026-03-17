@@ -12,7 +12,7 @@
 SplatTransform is an open source library and CLI tool for converting and editing Gaussian splats. It can:
 
 📥 Read PLY, Compressed PLY, SOG, SPLAT, KSPLAT, SPZ, LCC and Voxel formats  
-📤 Write PLY, Compressed PLY, SOG, CSV, HTML Viewer, LOD and Voxel formats  
+📤 Write PLY, Compressed PLY, SOG, GLB, CSV, HTML Viewer, LOD and Voxel formats  
 📊 Generate statistical summaries for data analysis  
 🔗 Merge multiple splats  
 🔄 Apply transformations to input splats  
@@ -60,6 +60,7 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 | `.splat` | ✅ | ❌ | Compressed splat format (antimatter15 format) |
 | `.spz` | ✅ | ❌ | Compressed splat format (Niantic format) |
 | `.mjs` | ✅ | ❌ | Generate a scene using an mjs script (Beta) |
+| `.glb` | ❌ | ✅ | Binary glTF with [KHR_gaussian_splatting](https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_gaussian_splatting) extension |
 | `.csv` | ❌ | ✅ | Comma-separated values spreadsheet |
 | `.html` | ❌ | ✅ | HTML viewer app (single-page or unbundled) based on SOG |
 | `.voxel.json` | ✅ | ✅ | Sparse voxel octree for collision detection |

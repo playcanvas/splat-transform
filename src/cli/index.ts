@@ -356,7 +356,7 @@ SUPPORTED INPUTS
     .ply   .compressed.ply   .sog   meta.json   .ksplat   .splat   .spz   .mjs   .lcc   .voxel.json
 
 SUPPORTED OUTPUTS
-    .ply   .compressed.ply   .sog   meta.json   lod-meta.json   .csv   .html   .voxel.json   null
+    .ply   .compressed.ply   .sog   meta.json   lod-meta.json   .glb   .csv   .html   .voxel.json   null
 
 ACTIONS (can be repeated, in any order)
     -t, --translate        <x,y,z>          Translate Gaussians by (x, y, z)
