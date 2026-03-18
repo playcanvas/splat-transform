@@ -19,6 +19,8 @@ const logit = (p: number) => {
 };
 
 const logAddExp = (a: number, b: number) => {
+    if (a === -Infinity) return b;
+    if (b === -Infinity) return a;
     const m = Math.max(a, b);
     return m + Math.log(Math.exp(a - m) + Math.exp(b - m));
 };
@@ -258,6 +260,8 @@ const buildPerSplatCache = (
 
 // ====================== COST FUNCTION ======================
 
+const _Sigm = new Float64Array(9);
+
 const computeEdgeCost = (
     i: number, j: number,
     cx: any, cy: any, cz: any,
@@ -289,30 +293,29 @@ const computeEdgeCost = (
     const dix = mux - mmx, diy = muy - mmy, diz = muz - mmz;
     const djx = mvx - mmx, djy = mvy - mmy, djz = mvz - mmz;
 
-    // Merged covariance (full 9-element)
-    const Sigm = new Float64Array(9);
+    // Merged covariance (full 9-element, reuse preallocated buffer)
     for (let a = 0; a < 9; a++) {
-        Sigm[a] = pi * cache.sigma[i9 + a] + pj * cache.sigma[j9 + a];
+        _Sigm[a] = pi * cache.sigma[i9 + a] + pj * cache.sigma[j9 + a];
     }
-    Sigm[0] += pi * dix * dix + pj * djx * djx;
-    Sigm[1] += pi * dix * diy + pj * djx * djy;
-    Sigm[2] += pi * dix * diz + pj * djx * djz;
-    Sigm[3] += pi * diy * dix + pj * djy * djx;
-    Sigm[4] += pi * diy * diy + pj * djy * djy;
-    Sigm[5] += pi * diy * diz + pj * djy * djz;
-    Sigm[6] += pi * diz * dix + pj * djz * djx;
-    Sigm[7] += pi * diz * diy + pj * djz * djy;
-    Sigm[8] += pi * diz * diz + pj * djz * djz;
+    _Sigm[0] += pi * dix * dix + pj * djx * djx;
+    _Sigm[1] += pi * dix * diy + pj * djx * djy;
+    _Sigm[2] += pi * dix * diz + pj * djx * djz;
+    _Sigm[3] += pi * diy * dix + pj * djy * djx;
+    _Sigm[4] += pi * diy * diy + pj * djy * djy;
+    _Sigm[5] += pi * diy * diz + pj * djy * djz;
+    _Sigm[6] += pi * diz * dix + pj * djz * djx;
+    _Sigm[7] += pi * diz * diy + pj * djz * djy;
+    _Sigm[8] += pi * diz * diz + pj * djz * djz;
 
     // Force symmetry + regularize
-    Sigm[1] = Sigm[3] = 0.5 * (Sigm[1] + Sigm[3]);
-    Sigm[2] = Sigm[6] = 0.5 * (Sigm[2] + Sigm[6]);
-    Sigm[5] = Sigm[7] = 0.5 * (Sigm[5] + Sigm[7]);
-    Sigm[0] += EPS_COV;
-    Sigm[4] += EPS_COV;
-    Sigm[8] += EPS_COV;
+    _Sigm[1] = _Sigm[3] = 0.5 * (_Sigm[1] + _Sigm[3]);
+    _Sigm[2] = _Sigm[6] = 0.5 * (_Sigm[2] + _Sigm[6]);
+    _Sigm[5] = _Sigm[7] = 0.5 * (_Sigm[5] + _Sigm[7]);
+    _Sigm[0] += EPS_COV;
+    _Sigm[4] += EPS_COV;
+    _Sigm[8] += EPS_COV;
 
-    const detm = Math.max(det3(Sigm, 0), 1e-30);
+    const detm = Math.max(det3(_Sigm, 0), 1e-30);
     const logdetm = Math.log(detm);
 
     // E_p[-log q_m] computed analytically as entropy of merged Gaussian
@@ -380,9 +383,7 @@ const momentMatch = (
     cop: any, cs0: any, cs1: any, cs2: any,
     cr0: any, cr1: any, cr2: any, cr3: any,
     out: { mu: Float64Array; sc: Float64Array; q: Float64Array; op: number; sh: Float64Array },
-    appData: any[], appColCount: number,
-    allAppearanceCols: string[],
-    current: DataTable
+    appData: any[], appColCount: number
 ) => {
     const sxi = Math.max(Math.exp(cs0[i] as number), 1e-12);
     const syi = Math.max(Math.exp(cs1[i] as number), 1e-12);
@@ -709,7 +710,7 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
             }
         }
 
-        // Merge pairs
+        // Merge pairs -- cache column refs and handled set once
         const mergeOut = {
             mu: new Float64Array(3),
             sc: new Float64Array(3),
@@ -718,40 +719,53 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
             sh: new Float64Array(allAppearanceCols.length)
         };
 
+        const dstXCol = newTable.getColumnByName('x')!;
+        const dstYCol = newTable.getColumnByName('y')!;
+        const dstZCol = newTable.getColumnByName('z')!;
+        const dstS0Col = newTable.getColumnByName('scale_0')!;
+        const dstS1Col = newTable.getColumnByName('scale_1')!;
+        const dstS2Col = newTable.getColumnByName('scale_2')!;
+        const dstR0Col = newTable.getColumnByName('rot_0')!;
+        const dstR1Col = newTable.getColumnByName('rot_1')!;
+        const dstR2Col = newTable.getColumnByName('rot_2')!;
+        const dstR3Col = newTable.getColumnByName('rot_3')!;
+        const dstOpCol = newTable.getColumnByName('opacity')!;
+        const dstAppCols = allAppearanceCols.map(name => newTable.getColumnByName(name));
+
+        const handledCols = new Set([
+            'x', 'y', 'z', 'opacity', 'scale_0', 'scale_1', 'scale_2',
+            'rot_0', 'rot_1', 'rot_2', 'rot_3', ...allAppearanceCols
+        ]);
+        const unhandledColPairs = cols
+            .filter(col => !handledCols.has(col.name))
+            .map(col => ({ src: col, dst: newTable.getColumnByName(col.name)! }))
+            .filter(pair => pair.dst);
+
         for (let p = 0; p < pairs.length; p++, dst++) {
             const pi = pairs[p][0], pj = pairs[p][1];
 
             momentMatch(pi, pj, cx, cy, cz, cop, cs0, cs1, cs2, cr0, cr1, cr2, cr3,
-                mergeOut, appData, appData.length, allAppearanceCols, current);
+                mergeOut, appData, appData.length);
 
-            newTable.getColumnByName('x')!.data[dst] = mergeOut.mu[0];
-            newTable.getColumnByName('y')!.data[dst] = mergeOut.mu[1];
-            newTable.getColumnByName('z')!.data[dst] = mergeOut.mu[2];
-            newTable.getColumnByName('scale_0')!.data[dst] = mergeOut.sc[0];
-            newTable.getColumnByName('scale_1')!.data[dst] = mergeOut.sc[1];
-            newTable.getColumnByName('scale_2')!.data[dst] = mergeOut.sc[2];
-            newTable.getColumnByName('rot_0')!.data[dst] = mergeOut.q[0];
-            newTable.getColumnByName('rot_1')!.data[dst] = mergeOut.q[1];
-            newTable.getColumnByName('rot_2')!.data[dst] = mergeOut.q[2];
-            newTable.getColumnByName('rot_3')!.data[dst] = mergeOut.q[3];
-            newTable.getColumnByName('opacity')!.data[dst] = logit(Math.max(0, Math.min(1, mergeOut.op)));
+            dstXCol.data[dst] = mergeOut.mu[0];
+            dstYCol.data[dst] = mergeOut.mu[1];
+            dstZCol.data[dst] = mergeOut.mu[2];
+            dstS0Col.data[dst] = mergeOut.sc[0];
+            dstS1Col.data[dst] = mergeOut.sc[1];
+            dstS2Col.data[dst] = mergeOut.sc[2];
+            dstR0Col.data[dst] = mergeOut.q[0];
+            dstR1Col.data[dst] = mergeOut.q[1];
+            dstR2Col.data[dst] = mergeOut.q[2];
+            dstR3Col.data[dst] = mergeOut.q[3];
+            dstOpCol.data[dst] = logit(Math.max(0, Math.min(1, mergeOut.op)));
 
-            for (let k = 0; k < allAppearanceCols.length; k++) {
-                const col = newTable.getColumnByName(allAppearanceCols[k]);
-                if (col) col.data[dst] = mergeOut.sh[k];
+            for (let k = 0; k < dstAppCols.length; k++) {
+                if (dstAppCols[k]) dstAppCols[k]!.data[dst] = mergeOut.sh[k];
             }
 
-            // Copy unhandled columns from dominant splat
             const dominant = cache.mass[pi] >= cache.mass[pj] ? pi : pj;
-            const handledCols = new Set([
-                'x', 'y', 'z', 'opacity', 'scale_0', 'scale_1', 'scale_2',
-                'rot_0', 'rot_1', 'rot_2', 'rot_3', ...allAppearanceCols
-            ]);
-            for (const col of cols) {
-                if (!handledCols.has(col.name)) {
-                    const dstCol = newTable.getColumnByName(col.name);
-                    if (dstCol) dstCol.data[dst] = col.data[dominant] as number;
-                }
+            for (let u = 0; u < unhandledColPairs.length; u++) {
+                unhandledColPairs[u].dst.data[dst] = unhandledColPairs[u].src.data[dominant] as number;
             }
         }
 

@@ -106,6 +106,11 @@ class KdTree {
     }
 
     findKNearest(point: Float32Array, k: number, filterFunc?: (index: number) => boolean) {
+        if (k <= 0) {
+            return { indices: new Int32Array(0), distances: new Float32Array(0) };
+        }
+        k = Math.min(k, this.centroids.numRows);
+
         const { centroids } = this;
         const { numColumns } = centroids;
 
