@@ -80,6 +80,16 @@ class Progress {
     }
 
     /**
+     * Cancel the current progress node, popping it from the stack without
+     * completing remaining steps. Use this before early exits (e.g. break)
+     * to keep the progress stack balanced.
+     */
+    cancel() {
+        if (!this.currentNode) return;
+        this.currentNode = this.currentNode.parent;
+    }
+
+    /**
      * Advance to the next step. Auto-increments the step counter.
      * Auto-ends when all steps are complete.
      * @param name - Optional name of the step.

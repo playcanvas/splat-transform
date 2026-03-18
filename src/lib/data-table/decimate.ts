@@ -15,7 +15,7 @@ const PROGRESS_TICKS = 100;
 // 4-pass LSD radix sort with 8-bit radix. Returns the number of valid
 // (finite-cost) edges written to `out`.
 const radixSortIndicesByFloat = (out: Uint32Array, count: number, keys: Float32Array): number => {
-    const keyBits = new Uint32Array(keys.buffer);
+    const keyBits = new Uint32Array(keys.buffer, keys.byteOffset, keys.length);
 
     const sortKeys = new Uint32Array(count);
     let validCount = 0;
@@ -673,9 +673,9 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
 
         logger.progress.step('Finding nearest neighbors');
 
-        const maxEdges = n * kEff;
-        const edgeU = new Uint32Array(maxEdges);
-        const edgeV = new Uint32Array(maxEdges);
+        let edgeCapacity = Math.ceil(n * kEff / 2);
+        let edgeU = new Uint32Array(edgeCapacity);
+        let edgeV = new Uint32Array(edgeCapacity);
         let edgeCount = 0;
         const queryPoint = new Float32Array(3);
 
@@ -691,6 +691,15 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
             for (let ki = 0; ki < knn.indices.length; ki++) {
                 const j = knn.indices[ki];
                 if (j <= i) continue;
+                if (edgeCount === edgeCapacity) {
+                    edgeCapacity *= 2;
+                    const newU = new Uint32Array(edgeCapacity);
+                    const newV = new Uint32Array(edgeCapacity);
+                    newU.set(edgeU);
+                    newV.set(edgeV);
+                    edgeU = newU;
+                    edgeV = newV;
+                }
                 edgeU[edgeCount] = i;
                 edgeV[edgeCount] = j;
                 edgeCount++;
@@ -699,7 +708,10 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
         }
         if (n % knnInterval !== 0) logger.progress.step();
 
-        if (edgeCount === 0) break;
+        if (edgeCount === 0) {
+            logger.progress.cancel();
+            break;
+        }
 
         logger.progress.step('Computing edge costs');
 
@@ -741,7 +753,10 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
             if (pairs.length >= mergesNeeded) break;
         }
 
-        if (pairs.length === 0) break;
+        if (pairs.length === 0) {
+            logger.progress.cancel();
+            break;
+        }
 
         // Mark which indices are consumed by merging
         const usedSet = new Uint8Array(n);
