@@ -1,6 +1,7 @@
 /**
- * Visibility filter tests for splat-transform.
- * Tests sortByVisibility function and filterVisibility action.
+ * Decimate tests for splat-transform.
+ * Tests sortByVisibility function, simplifyGaussians function,
+ * and decimate action (NanoGS progressive pairwise merging).
  */
 
 import { describe, it } from 'node:test';
@@ -10,7 +11,8 @@ import {
     Column,
     DataTable,
     processDataTable,
-    sortByVisibility
+    sortByVisibility,
+    simplifyGaussians
 } from '../src/lib/index.js';
 
 import { createMinimalTestData } from './helpers/test-utils.mjs';
@@ -64,11 +66,6 @@ function createVisibilityTestData(options = {}) {
 
 describe('sortByVisibility', () => {
     it('should sort indices by visibility score (descending)', () => {
-        // Create data with known visibility scores:
-        // Splat 0: opacity=0 (sigmoid=0.5), scales=0,0,0 (volume=1) -> score=0.5
-        // Splat 1: opacity=2.197 (sigmoid≈0.9), scales=0,0,0 (volume=1) -> score≈0.9
-        // Splat 2: opacity=-2.197 (sigmoid≈0.1), scales=0,0,0 (volume=1) -> score≈0.1
-        // Splat 3: opacity=0 (sigmoid=0.5), scales=ln(2),ln(2),ln(2) (volume=8) -> score=4.0
         const testData = createVisibilityTestData({
             count: 4,
             x: new Float32Array([0, 1, 2, 3]),
@@ -81,8 +78,6 @@ describe('sortByVisibility', () => {
         const indices = new Uint32Array([0, 1, 2, 3]);
         sortByVisibility(testData, indices);
 
-        // Expected order by visibility (highest first): 3, 1, 0, 2
-        // Scores: splat3=4.0, splat1≈0.9, splat0=0.5, splat2≈0.1
         assert.strictEqual(indices[0], 3, 'Highest visibility should be first');
         assert.strictEqual(indices[1], 1, 'Second highest should be second');
         assert.strictEqual(indices[2], 0, 'Third highest should be third');
@@ -93,14 +88,12 @@ describe('sortByVisibility', () => {
         const testData = createVisibilityTestData({ count: 4 });
         const indices = new Uint32Array(0);
 
-        // Should not throw
         sortByVisibility(testData, indices);
 
         assert.strictEqual(indices.length, 0, 'Empty indices should remain empty');
     });
 
     it('should handle missing columns gracefully', () => {
-        // Create DataTable without opacity column
         const testData = new DataTable([
             new Column('x', new Float32Array([0, 1, 2])),
             new Column('y', new Float32Array([0, 0, 0])),
@@ -110,7 +103,6 @@ describe('sortByVisibility', () => {
         const indices = new Uint32Array([0, 1, 2]);
         const originalIndices = indices.slice();
 
-        // Should not throw, should leave indices unchanged
         sortByVisibility(testData, indices);
 
         assert.deepStrictEqual(Array.from(indices), Array.from(originalIndices),
@@ -134,13 +126,117 @@ describe('sortByVisibility', () => {
     });
 });
 
-describe('filterVisibility - Count Mode', () => {
-    it('should keep exactly N splats in count mode', () => {
+describe('simplifyGaussians', () => {
+    it('should return all splats when targetCount >= numRows', () => {
+        const testData = createMinimalTestData();
+        const result = simplifyGaussians(testData, 1000);
+        assert.strictEqual(result.numRows, testData.numRows, 'Should keep all rows');
+    });
+
+    it('should return empty DataTable when targetCount is 0', () => {
+        const testData = createMinimalTestData();
+        const result = simplifyGaussians(testData, 0);
+        assert.strictEqual(result.numRows, 0, 'Should have 0 rows');
+    });
+
+    it('should reduce to target count', () => {
+        const testData = createMinimalTestData();
+        const result = simplifyGaussians(testData, 8);
+        assert.strictEqual(result.numRows, 8, 'Should have exactly 8 rows');
+    });
+
+    it('should preserve all columns', () => {
+        const testData = createMinimalTestData();
+        const originalCols = testData.columnNames.sort();
+        const result = simplifyGaussians(testData, 8);
+        const resultCols = result.columnNames.sort();
+        assert.deepStrictEqual(resultCols, originalCols, 'Should have same columns');
+    });
+
+    it('should produce merged positions within the bounding box of originals', () => {
+        const testData = createMinimalTestData();
+        const origX = testData.getColumnByName('x').data;
+        const origZ = testData.getColumnByName('z').data;
+
+        const minX = Math.min(...origX);
+        const maxX = Math.max(...origX);
+        const minZ = Math.min(...origZ);
+        const maxZ = Math.max(...origZ);
+
+        const result = simplifyGaussians(testData, 4);
+
+        const resX = result.getColumnByName('x').data;
+        const resZ = result.getColumnByName('z').data;
+        for (let i = 0; i < result.numRows; i++) {
+            assert(resX[i] >= minX - 0.01 && resX[i] <= maxX + 0.01,
+                `merged x[${i}]=${resX[i]} should be within original bounds [${minX}, ${maxX}]`);
+            assert(resZ[i] >= minZ - 0.01 && resZ[i] <= maxZ + 0.01,
+                `merged z[${i}]=${resZ[i]} should be within original bounds [${minZ}, ${maxZ}]`);
+        }
+    });
+
+    it('should produce valid opacity values', () => {
+        const testData = createMinimalTestData();
+        const result = simplifyGaussians(testData, 8);
+
+        const opacityData = result.getColumnByName('opacity').data;
+        for (let i = 0; i < result.numRows; i++) {
+            const linearOpacity = 1 / (1 + Math.exp(-opacityData[i]));
+            assert(linearOpacity > 0 && linearOpacity <= 1,
+                `opacity[${i}] sigmoid=${linearOpacity} should be in (0, 1]`);
+        }
+    });
+
+    it('should produce finite scale values', () => {
+        const testData = createMinimalTestData();
+        const result = simplifyGaussians(testData, 8);
+
+        for (const col of ['scale_0', 'scale_1', 'scale_2']) {
+            const data = result.getColumnByName(col).data;
+            for (let i = 0; i < result.numRows; i++) {
+                assert(isFinite(data[i]), `${col}[${i}]=${data[i]} should be finite`);
+            }
+        }
+    });
+
+    it('should produce normalized quaternion rotations', () => {
+        const testData = createMinimalTestData();
+        const result = simplifyGaussians(testData, 8);
+
+        const r0 = result.getColumnByName('rot_0').data;
+        const r1 = result.getColumnByName('rot_1').data;
+        const r2 = result.getColumnByName('rot_2').data;
+        const r3 = result.getColumnByName('rot_3').data;
+
+        for (let i = 0; i < result.numRows; i++) {
+            const len = Math.sqrt(r0[i] * r0[i] + r1[i] * r1[i] + r2[i] * r2[i] + r3[i] * r3[i]);
+            assertClose(len, 1.0, 0.01, `quaternion at row ${i} should be normalized`);
+        }
+    });
+
+    it('should fall back to visibility pruning when rotation columns are missing', () => {
+        const testData = new DataTable([
+            new Column('x', new Float32Array([0, 1, 2, 3])),
+            new Column('y', new Float32Array([0, 0, 0, 0])),
+            new Column('z', new Float32Array([0, 0, 0, 0])),
+            new Column('opacity', new Float32Array([0, 2.197, -2.197, 0])),
+            new Column('scale_0', new Float32Array([0, 0, 0, Math.log(2)])),
+            new Column('scale_1', new Float32Array([0, 0, 0, Math.log(2)])),
+            new Column('scale_2', new Float32Array([0, 0, 0, Math.log(2)]))
+        ]);
+
+        const result = simplifyGaussians(testData, 2);
+        assert.strictEqual(result.numRows, 2, 'Should produce 2 rows via fallback');
+    });
+});
+
+describe('decimate - Count Mode', () => {
+    it('should produce exactly N splats in count mode', () => {
         const testData = createMinimalTestData();
         const originalRows = testData.numRows;
 
         const result = processDataTable(testData, [{
-            kind: 'filterVisibility',
+            kind: 'decimate',
             count: 5,
             percent: null
         }]);
@@ -149,37 +245,12 @@ describe('filterVisibility - Count Mode', () => {
         assert(result.numRows < originalRows, 'Should have fewer rows than original');
     });
 
-    it('should keep the most visible splats', () => {
-        // Create data with distinct visibility scores
-        const testData = createVisibilityTestData({
-            count: 4,
-            x: new Float32Array([0, 1, 2, 3]),
-            opacity: new Float32Array([0, 2.197, -2.197, 0]),
-            scale_0: new Float32Array([0, 0, 0, Math.log(2)]),
-            scale_1: new Float32Array([0, 0, 0, Math.log(2)]),
-            scale_2: new Float32Array([0, 0, 0, Math.log(2)])
-        });
-
-        // Keep top 2 most visible (should be splats 3 and 1)
-        const result = processDataTable(testData, [{
-            kind: 'filterVisibility',
-            count: 2,
-            percent: null
-        }]);
-
-        assert.strictEqual(result.numRows, 2, 'Should have exactly 2 rows');
-
-        // Check that we kept splats 3 and 1 (the ones with x=3 and x=1)
-        const xValues = Array.from(result.getColumnByName('x').data).sort((a, b) => a - b);
-        assert.deepStrictEqual(xValues, [1, 3], 'Should keep splats with x=1 and x=3');
-    });
-
     it('should keep all splats when count exceeds numRows', () => {
         const testData = createMinimalTestData();
         const originalRows = testData.numRows;
 
         const result = processDataTable(testData, [{
-            kind: 'filterVisibility',
+            kind: 'decimate',
             count: 1000,
             percent: null
         }]);
@@ -191,27 +262,50 @@ describe('filterVisibility - Count Mode', () => {
         const testData = createMinimalTestData();
 
         const result = processDataTable(testData, [{
-            kind: 'filterVisibility',
+            kind: 'decimate',
             count: 0,
             percent: null
         }]);
 
         assert.strictEqual(result.numRows, 0, 'Should have 0 rows when count is 0');
     });
-});
 
-describe('filterVisibility - Percent Mode', () => {
-    it('should keep approximately X% of splats', () => {
-        const testData = createMinimalTestData();
-        const originalRows = testData.numRows; // 16
+    it('should produce merged splats with reasonable positions', () => {
+        const testData = createVisibilityTestData({
+            count: 4,
+            x: new Float32Array([0, 1, 2, 3]),
+            opacity: new Float32Array([0, 2.197, -2.197, 0]),
+            scale_0: new Float32Array([0, 0, 0, Math.log(2)]),
+            scale_1: new Float32Array([0, 0, 0, Math.log(2)]),
+            scale_2: new Float32Array([0, 0, 0, Math.log(2)])
+        });
 
         const result = processDataTable(testData, [{
-            kind: 'filterVisibility',
+            kind: 'decimate',
+            count: 2,
+            percent: null
+        }]);
+
+        assert.strictEqual(result.numRows, 2, 'Should have exactly 2 rows');
+
+        const xValues = Array.from(result.getColumnByName('x').data);
+        for (const x of xValues) {
+            assert(x >= 0 && x <= 3,
+                `merged x=${x} should be within original bounds [0, 3]`);
+        }
+    });
+});
+
+describe('decimate - Percent Mode', () => {
+    it('should keep approximately X% of splats', () => {
+        const testData = createMinimalTestData();
+
+        const result = processDataTable(testData, [{
+            kind: 'decimate',
             count: null,
             percent: 50
         }]);
 
-        // 50% of 16 = 8
         assert.strictEqual(result.numRows, 8, 'Should have 50% of rows (8)');
     });
 
@@ -220,7 +314,7 @@ describe('filterVisibility - Percent Mode', () => {
         const originalRows = testData.numRows;
 
         const result = processDataTable(testData, [{
-            kind: 'filterVisibility',
+            kind: 'decimate',
             count: null,
             percent: 100
         }]);
@@ -232,7 +326,7 @@ describe('filterVisibility - Percent Mode', () => {
         const testData = createMinimalTestData();
 
         const result = processDataTable(testData, [{
-            kind: 'filterVisibility',
+            kind: 'decimate',
             count: null,
             percent: 0
         }]);
@@ -242,23 +336,19 @@ describe('filterVisibility - Percent Mode', () => {
 
     it('should handle 25%', () => {
         const testData = createMinimalTestData();
-        const originalRows = testData.numRows; // 16
 
         const result = processDataTable(testData, [{
-            kind: 'filterVisibility',
+            kind: 'decimate',
             count: null,
             percent: 25
         }]);
 
-        // 25% of 16 = 4
         assert.strictEqual(result.numRows, 4, 'Should have 25% of rows (4)');
     });
 });
 
 describe('Visibility Score Calculation', () => {
     it('should correctly compute visibility from logit opacity and log scales', () => {
-        // Splat A: opacity=0 (logit) -> sigmoid=0.5, scales=0,0,0 -> volume=1, visibility=0.5
-        // Splat B: opacity=2.197 (logit) -> sigmoid≈0.9, scales=0,0,0 -> volume=1, visibility≈0.9
         const testData = createVisibilityTestData({
             count: 2,
             x: new Float32Array([0, 1]),
@@ -271,15 +361,11 @@ describe('Visibility Score Calculation', () => {
         const indices = new Uint32Array([0, 1]);
         sortByVisibility(testData, indices);
 
-        // Higher opacity splat (index 1) should come first
         assert.strictEqual(indices[0], 1, 'Higher opacity splat should be first');
         assert.strictEqual(indices[1], 0, 'Lower opacity splat should be second');
     });
 
     it('should correctly incorporate scale into visibility', () => {
-        // Both splats have same opacity (0 logit = 0.5 linear)
-        // Splat A: scales=0,0,0 -> volume=1, visibility=0.5
-        // Splat B: scales=ln(10),0,0 -> volume=10, visibility=5.0
         const testData = createVisibilityTestData({
             count: 2,
             x: new Float32Array([0, 1]),
@@ -292,15 +378,11 @@ describe('Visibility Score Calculation', () => {
         const indices = new Uint32Array([0, 1]);
         sortByVisibility(testData, indices);
 
-        // Larger scale splat (index 1) should come first
         assert.strictEqual(indices[0], 1, 'Larger scale splat should be first');
         assert.strictEqual(indices[1], 0, 'Smaller scale splat should be second');
     });
 
     it('should handle negative log scales (small splats)', () => {
-        // Small splats should have lower visibility
-        // Splat A: opacity=0, scales=-2,-2,-2 -> volume=exp(-6)≈0.0025, visibility≈0.00125
-        // Splat B: opacity=0, scales=0,0,0 -> volume=1, visibility=0.5
         const testData = createVisibilityTestData({
             count: 2,
             x: new Float32Array([0, 1]),
@@ -313,14 +395,11 @@ describe('Visibility Score Calculation', () => {
         const indices = new Uint32Array([0, 1]);
         sortByVisibility(testData, indices);
 
-        // Normal scale splat (index 1) should come first
         assert.strictEqual(indices[0], 1, 'Normal scale splat should be first');
         assert.strictEqual(indices[1], 0, 'Small scale splat should be second');
     });
 
     it('should handle very low opacity', () => {
-        // Splat A: opacity=-10 (logit) -> sigmoid≈0.00005
-        // Splat B: opacity=0 (logit) -> sigmoid=0.5
         const testData = createVisibilityTestData({
             count: 2,
             x: new Float32Array([0, 1]),
@@ -333,7 +412,6 @@ describe('Visibility Score Calculation', () => {
         const indices = new Uint32Array([0, 1]);
         sortByVisibility(testData, indices);
 
-        // Higher opacity splat (index 1) should come first
         assert.strictEqual(indices[0], 1, 'Higher opacity splat should be first');
         assert.strictEqual(indices[1], 0, 'Very low opacity splat should be second');
     });
@@ -346,7 +424,6 @@ describe('permuteRows with Smaller Indices', () => {
             new Column('b', new Float32Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]))
         ]);
 
-        // Select only 5 rows
         const indices = new Uint32Array([0, 2, 4, 6, 8]);
         const result = testData.permuteRows(indices);
 
@@ -387,29 +464,25 @@ describe('permuteRows with Smaller Indices', () => {
     });
 });
 
-describe('filterVisibility Integration', () => {
+describe('decimate Integration', () => {
     it('should chain with other transforms', () => {
         const testData = createMinimalTestData();
 
         const result = processDataTable(testData, [
             { kind: 'translate', value: new Vec3(10, 0, 0) },
-            { kind: 'filterVisibility', count: 8, percent: null },
+            { kind: 'decimate', count: 8, percent: null },
             { kind: 'scale', value: 2.0 }
         ]);
 
         assert.strictEqual(result.numRows, 8, 'Should have 8 rows after filtering');
 
-        // All x values should be shifted and scaled
         const xCol = result.getColumnByName('x').data;
         for (let i = 0; i < result.numRows; i++) {
-            // Original x was in range roughly -1.5 to 1.5, after translate +10 and scale *2
-            // x values should be > 10 (since they were > -1.5, after +10 = > 8.5, *2 = > 17)
             assert(xCol[i] > 10, `x[${i}] should be > 10 after transforms`);
         }
     });
 
-    it('should preserve column data integrity after filtering', () => {
-        // Create data with unique x values to track rows
+    it('should preserve all columns after merging', () => {
         const testData = createVisibilityTestData({
             count: 4,
             x: new Float32Array([100, 200, 300, 400]),
@@ -422,65 +495,51 @@ describe('filterVisibility Integration', () => {
         });
 
         const result = processDataTable(testData, [{
-            kind: 'filterVisibility',
+            kind: 'decimate',
             count: 2,
             percent: null
         }]);
 
         assert.strictEqual(result.numRows, 2, 'Should have 2 rows');
 
-        // Check that all columns are present
         assert(result.hasColumn('x'), 'Should have x column');
         assert(result.hasColumn('y'), 'Should have y column');
         assert(result.hasColumn('z'), 'Should have z column');
         assert(result.hasColumn('opacity'), 'Should have opacity column');
-
-        // Check row integrity - y and z values should match x values
-        const xCol = result.getColumnByName('x').data;
-        const yCol = result.getColumnByName('y').data;
-        const zCol = result.getColumnByName('z').data;
-
-        for (let i = 0; i < result.numRows; i++) {
-            const x = xCol[i];
-            // Based on our test data: y = x/100, z = x/10
-            assertClose(yCol[i], x / 100, 1e-5, `y[${i}] should match x[${i}]`);
-            assertClose(zCol[i], x / 10, 1e-5, `z[${i}] should match x[${i}]`);
-        }
+        assert(result.hasColumn('scale_0'), 'Should have scale_0 column');
+        assert(result.hasColumn('rot_0'), 'Should have rot_0 column');
+        assert(result.hasColumn('f_dc_0'), 'Should have f_dc_0 column');
     });
 
     it('should work with Morton ordering after filtering', () => {
         const testData = createMinimalTestData();
 
         const result = processDataTable(testData, [
-            { kind: 'filterVisibility', count: 8, percent: null },
+            { kind: 'decimate', count: 8, percent: null },
             { kind: 'mortonOrder' }
         ]);
 
         assert.strictEqual(result.numRows, 8, 'Should have 8 rows');
 
-        // Morton ordering should have reordered the data - just verify no errors
         assert(result.hasColumn('x'), 'Should have x column');
         assert(result.hasColumn('y'), 'Should have y column');
         assert(result.hasColumn('z'), 'Should have z column');
     });
 
-    it('should preserve all column values (just reordered and filtered)', () => {
+    it('should produce finite values in all columns', () => {
         const testData = createMinimalTestData();
-        const originalRows = testData.numRows;
-
-        // Get all original x values
-        const originalXValues = Array.from(testData.getColumnByName('x').data);
 
         const result = processDataTable(testData.clone(), [{
-            kind: 'filterVisibility',
+            kind: 'decimate',
             count: 8,
             percent: null
         }]);
 
-        // All result x values should be a subset of original x values
-        const resultXValues = Array.from(result.getColumnByName('x').data);
-        for (const x of resultXValues) {
-            assert(originalXValues.includes(x), `x value ${x} should be from original data`);
+        for (const col of result.columns) {
+            for (let i = 0; i < result.numRows; i++) {
+                assert(isFinite(col.data[i]),
+                    `${col.name}[${i}]=${col.data[i]} should be finite`);
+            }
         }
     });
 });

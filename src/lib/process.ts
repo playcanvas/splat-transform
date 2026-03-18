@@ -1,7 +1,7 @@
 import { Quat, Vec3 } from 'playcanvas';
 
 import { Column, DataTable } from './data-table/data-table';
-import { sortByVisibility } from './data-table/filter-visibility';
+import { simplifyGaussians } from './data-table/decimate';
 import { sortMortonOrder } from './data-table/morton-order';
 import { computeSummary, type SummaryData } from './data-table/summary';
 import { transform } from './data-table/transform';
@@ -139,14 +139,15 @@ type MortonOrder = {
 };
 
 /**
- * Filter splats by visibility score, keeping only the most visible ones.
+ * Simplify splats to a target count using NanoGS progressive pairwise merging.
  *
- * Visibility is computed as: linear_opacity * volume
- * where opacity is converted from logit and scales from log space.
+ * Instead of discarding low-visibility splats, this iteratively merges nearby
+ * similar splats into single approximating Gaussians using Mass-Preserving
+ * Moment Matching (MPMM), preserving scene structure and appearance.
  */
-type FilterVisibility = {
+type Decimate = {
     /** Action type identifier. */
-    kind: 'filterVisibility';
+    kind: 'decimate';
     /** Target number of splats to keep, or null for percentage mode. */
     count: number | null;
     /** Percentage of splats to keep (0-100), or null for count mode. */
@@ -168,9 +169,9 @@ type FilterVisibility = {
  * - `lod` - Assign LOD level to all splats
  * - `summary` - Print statistical summary to logger
  * - `mortonOrder` - Reorder splats by Morton code for spatial locality
- * - `filterVisibility` - Keep only the most visible splats by opacity * volume
+ * - `decimate` - Simplify to target count via progressive pairwise merging
  */
-type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | Param | Lod | Summary | MortonOrder | FilterVisibility;
+type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | Param | Lod | Summary | MortonOrder | Decimate;
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
@@ -430,14 +431,7 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
                 result.permuteRowsInPlace(indices);
                 break;
             }
-            case 'filterVisibility': {
-                const indices = new Uint32Array(result.numRows);
-                for (let i = 0; i < indices.length; i++) {
-                    indices[i] = i;
-                }
-                sortByVisibility(result, indices);
-
-                // Determine how many to keep
+            case 'decimate': {
                 let keepCount: number;
                 if (processAction.count !== null) {
                     keepCount = Math.min(processAction.count, result.numRows);
@@ -446,7 +440,7 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
                 }
                 keepCount = Math.max(0, keepCount);
 
-                result = result.permuteRows(indices.subarray(0, keepCount));
+                result = simplifyGaussians(result, keepCount);
                 break;
             }
         }
@@ -470,5 +464,5 @@ export {
     type Lod,
     type Summary,
     type MortonOrder,
-    type FilterVisibility
+    type Decimate
 };

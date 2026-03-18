@@ -104,6 +104,116 @@ class KdTree {
 
         return { index: mini, distanceSqr: mind, cnt };
     }
+
+    findKNearest(point: Float32Array, k: number, filterFunc?: (index: number) => boolean) {
+        if (k <= 0) {
+            return { indices: new Int32Array(0), distances: new Float32Array(0) };
+        }
+        k = Math.min(k, this.centroids.numRows);
+
+        const { centroids } = this;
+        const { numColumns } = centroids;
+
+        const calcDistance = (index: number) => {
+            let l = 0;
+            for (let i = 0; i < numColumns; ++i) {
+                const v = centroids.columns[i].data[index] - point[i];
+                l += v * v;
+            }
+            return l;
+        };
+
+        // Bounded max-heap: stores (distance, index) pairs sorted so the
+        // farthest element is at position 0, enabling O(1) pruning bound.
+        const heapDist = new Float32Array(k).fill(Infinity);
+        const heapIdx = new Int32Array(k).fill(-1);
+        let heapSize = 0;
+
+        const heapPush = (dist: number, idx: number) => {
+            if (heapSize < k) {
+                // Heap not full yet -- insert via sift-up
+                let pos = heapSize++;
+                heapDist[pos] = dist;
+                heapIdx[pos] = idx;
+                while (pos > 0) {
+                    const parent = (pos - 1) >> 1;
+                    if (heapDist[parent] < heapDist[pos]) {
+                        // swap
+                        const td = heapDist[parent]; heapDist[parent] = heapDist[pos]; heapDist[pos] = td;
+                        const ti = heapIdx[parent]; heapIdx[parent] = heapIdx[pos]; heapIdx[pos] = ti;
+                        pos = parent;
+                    } else {
+                        break;
+                    }
+                }
+            } else if (dist < heapDist[0]) {
+                // Replace root (farthest) and sift-down
+                heapDist[0] = dist;
+                heapIdx[0] = idx;
+                let pos = 0;
+                for (;;) {
+                    const left = 2 * pos + 1;
+                    const right = 2 * pos + 2;
+                    let largest = pos;
+                    if (left < k && heapDist[left] > heapDist[largest]) largest = left;
+                    if (right < k && heapDist[right] > heapDist[largest]) largest = right;
+                    if (largest === pos) break;
+                    const td = heapDist[pos]; heapDist[pos] = heapDist[largest]; heapDist[largest] = td;
+                    const ti = heapIdx[pos]; heapIdx[pos] = heapIdx[largest]; heapIdx[largest] = ti;
+                    pos = largest;
+                }
+            }
+        };
+
+        const recurse = (node: KdTreeNode, depth: number) => {
+            const axis = depth % numColumns;
+            const distance = point[axis] - centroids.columns[axis].data[node.index];
+            const next = (distance > 0) ? node.right : node.left;
+
+            if (next) {
+                recurse(next, depth + 1);
+            }
+
+            if (!filterFunc || filterFunc(node.index)) {
+                const thisd = calcDistance(node.index);
+                heapPush(thisd, node.index);
+            }
+
+            const bound = heapSize < k ? Infinity : heapDist[0];
+            if (distance * distance < bound) {
+                const other = next === node.right ? node.left : node.right;
+                if (other) {
+                    recurse(other, depth + 1);
+                }
+            }
+        };
+
+        recurse(this.root, 0);
+
+        // Extract results sorted by distance (ascending)
+        const resultIndices = new Int32Array(heapSize);
+        const resultDist = new Float32Array(heapSize);
+        for (let i = 0; i < heapSize; i++) {
+            resultIndices[i] = heapIdx[i];
+            resultDist[i] = heapDist[i];
+        }
+
+        // Simple insertion sort by distance (k is small)
+        for (let i = 1; i < heapSize; i++) {
+            const d = resultDist[i];
+            const idx = resultIndices[i];
+            let j = i - 1;
+            while (j >= 0 && resultDist[j] > d) {
+                resultDist[j + 1] = resultDist[j];
+                resultIndices[j + 1] = resultIndices[j];
+                j--;
+            }
+            resultDist[j + 1] = d;
+            resultIndices[j + 1] = idx;
+        }
+
+        return { indices: resultIndices, distances: resultDist };
+    }
 }
 
 export { KdTreeNode, KdTree };

@@ -6,7 +6,7 @@ export { transform } from './data-table/transform';
 export { computeSummary } from './data-table/summary';
 export type { ColumnStats, SummaryData } from './data-table/summary';
 export { sortMortonOrder } from './data-table/morton-order';
-export { sortByVisibility } from './data-table/filter-visibility';
+export { sortByVisibility, simplifyGaussians } from './data-table/decimate';
 
 // High-level read/write
 export { readFile, getInputFormat } from './read';
@@ -30,7 +30,7 @@ export type {
     Lod,
     Summary,
     MortonOrder,
-    FilterVisibility
+    Decimate
 } from './process';
 
 // File system abstractions
