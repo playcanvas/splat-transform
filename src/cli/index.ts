@@ -95,7 +95,7 @@ const parseArguments = async () => {
             'filter-harmonics': { type: 'string', short: 'H', multiple: true },
             'filter-box': { type: 'string', short: 'B', multiple: true },
             'filter-sphere': { type: 'string', short: 'S', multiple: true },
-            'filter-visibility': { type: 'string', short: 'F', multiple: true },
+            'decimate': { type: 'string', short: 'F', multiple: true },
             params: { type: 'string', short: 'p', multiple: true },
             lod: { type: 'string', short: 'l', multiple: true },
             summary: { type: 'boolean', short: 'm', multiple: true },
@@ -308,7 +308,7 @@ const parseArguments = async () => {
                         kind: 'mortonOrder'
                     });
                     break;
-                case 'filter-visibility': {
+                case 'decimate': {
                     const value = t.value.trim();
                     let count: number | null = null;
                     let percent: number | null = null;
@@ -317,18 +317,18 @@ const parseArguments = async () => {
                         // Percentage mode
                         percent = parseNumber(value.slice(0, -1));
                         if (percent < 0 || percent > 100) {
-                            throw new Error(`Invalid filter-visibility percentage: ${value}. Must be between 0% and 100%.`);
+                            throw new Error(`Invalid decimate percentage: ${value}. Must be between 0% and 100%.`);
                         }
                     } else {
                         // Count mode
                         count = parseInteger(value);
                         if (count < 0) {
-                            throw new Error(`Invalid filter-visibility count: ${value}. Must be a non-negative integer.`);
+                            throw new Error(`Invalid decimate count: ${value}. Must be a non-negative integer.`);
                         }
                     }
 
                     current.processActions.push({
-                        kind: 'filterVisibility',
+                        kind: 'decimate',
                         count,
                         percent
                     });
@@ -371,7 +371,7 @@ ACTIONS (can be repeated, in any order)
                                               opacity, scale_*, f_dc_* use transformed values
                                               (linear opacity 0-1, linear scale, linear color 0-1).
                                               Append _raw for raw PLY values (e.g. opacity_raw).
-    -F, --filter-visibility <n|n%>          Keep the n most visible Gaussians (by opacity * volume)
+    -F, --decimate         <n|n%>           Simplify to n Gaussians via progressive pairwise merging
                                               Use n% to keep a percentage of Gaussians
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
     -l, --lod              <n>              Specify the level of detail, n >= 0
