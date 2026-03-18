@@ -8,6 +8,61 @@ const OPACITY_PRUNE_THRESHOLD = 0.1;
 const KNN_K = 16;
 const MC_SAMPLES = 1;
 const EPS_COV = 1e-8;
+const PROGRESS_TICKS = 100;
+
+// Radix sort edge indices by their Float32 costs.
+// Converts floats to sortable uint32 keys (preserving order), then does
+// 4-pass LSD radix sort with 8-bit radix. Returns the number of valid
+// (finite-cost) edges written to `out`.
+const radixSortIndicesByFloat = (out: Uint32Array, count: number, keys: Float32Array): number => {
+    const keyBits = new Uint32Array(keys.buffer, keys.byteOffset, keys.length);
+
+    const sortKeys = new Uint32Array(count);
+    let validCount = 0;
+    for (let i = 0; i < count; i++) {
+        const bits = keyBits[i];
+        if ((bits & 0x7F800000) === 0x7F800000) continue;
+        sortKeys[validCount] = (bits & 0x80000000) ? ~bits >>> 0 : (bits | 0x80000000) >>> 0;
+        out[validCount] = i;
+        validCount++;
+    }
+
+    if (validCount <= 1) return validCount;
+
+    const n = validCount;
+    const temp = new Uint32Array(n);
+    const tempKeys = new Uint32Array(n);
+    const counts = new Uint32Array(256);
+
+    for (let pass = 0; pass < 4; pass++) {
+        const shift = pass << 3;
+        const srcIdx = (pass & 1) ? temp : out;
+        const dstIdx = (pass & 1) ? out : temp;
+        const srcK = (pass & 1) ? tempKeys : sortKeys;
+        const dstK = (pass & 1) ? sortKeys : tempKeys;
+
+        counts.fill(0);
+        for (let i = 0; i < n; i++) {
+            counts[(srcK[i] >>> shift) & 0xFF]++;
+        }
+
+        let sum = 0;
+        for (let b = 0; b < 256; b++) {
+            const c = counts[b];
+            counts[b] = sum;
+            sum += c;
+        }
+
+        for (let i = 0; i < n; i++) {
+            const bucket = (srcK[i] >>> shift) & 0xFF;
+            const pos = counts[bucket]++;
+            dstIdx[pos] = srcIdx[i];
+            dstK[pos] = srcK[i];
+        }
+    }
+
+    return validCount;
+};
 
 // ---------- sigmoid / logit ----------
 
@@ -579,7 +634,6 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
     let current: DataTable;
     if (keptIndices.length < N && keptIndices.length > targetCount) {
         current = dataTable.permuteRows(keptIndices);
-        logger.debug(`opacity pruning: ${N} -> ${current.numRows} splats (threshold=${pruneThreshold.toFixed(4)})`);
     } else {
         current = dataTable;
     }
@@ -592,7 +646,9 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
         const n = current.numRows;
         const kEff = Math.min(Math.max(1, KNN_K), Math.max(1, n - 1));
 
-        logger.debug(`merging iteration: ${n} -> ${targetCount} splats`);
+        logger.progress.begin(5);
+
+        logger.progress.step('Building KD-tree');
 
         const cx = current.getColumnByName('x')!.data;
         const cy = current.getColumnByName('y')!.data;
@@ -608,7 +664,6 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
 
         const cache = buildPerSplatCache(n, cx, cy, cz, cop, cs0, cs1, cs2, cr0, cr1, cr2, cr3);
 
-        // Build KNN graph
         const posTable = new DataTable([
             new Column('x', cx instanceof Float32Array ? cx : new Float32Array(cx as any)),
             new Column('y', cy instanceof Float32Array ? cy : new Float32Array(cy as any)),
@@ -616,9 +671,17 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
         ]);
         const kdTree = new KdTree(posTable);
 
-        const edgeSet = new Set<string>();
-        const edges: [number, number][] = [];
+        logger.progress.step('Finding nearest neighbors');
+
+        let edgeCapacity = Math.ceil(n * kEff / 2);
+        let edgeU = new Uint32Array(edgeCapacity);
+        let edgeV = new Uint32Array(edgeCapacity);
+        let edgeCount = 0;
         const queryPoint = new Float32Array(3);
+
+        const knnInterval = Math.max(1, Math.ceil(n / PROGRESS_TICKS));
+        const knnTicks = Math.ceil(n / knnInterval);
+        logger.progress.begin(knnTicks);
 
         for (let i = 0; i < n; i++) {
             queryPoint[0] = cx[i] as number;
@@ -627,58 +690,73 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
             const knn = kdTree.findKNearest(queryPoint, kEff + 1);
             for (let ki = 0; ki < knn.indices.length; ki++) {
                 const j = knn.indices[ki];
-                if (j === i || j < 0) continue;
-                const u = Math.min(i, j);
-                const v = Math.max(i, j);
-                const key = `${u},${v}`;
-                if (!edgeSet.has(key)) {
-                    edgeSet.add(key);
-                    edges.push([u, v]);
+                if (j <= i) continue;
+                if (edgeCount === edgeCapacity) {
+                    edgeCapacity *= 2;
+                    const newU = new Uint32Array(edgeCapacity);
+                    const newV = new Uint32Array(edgeCapacity);
+                    newU.set(edgeU);
+                    newV.set(edgeV);
+                    edgeU = newU;
+                    edgeV = newV;
                 }
+                edgeU[edgeCount] = i;
+                edgeV[edgeCount] = j;
+                edgeCount++;
             }
+            if ((i + 1) % knnInterval === 0) logger.progress.step();
+        }
+        if (n % knnInterval !== 0) logger.progress.step();
+
+        if (edgeCount === 0) {
+            logger.progress.cancel();
+            break;
         }
 
-        if (edges.length === 0) break;
+        logger.progress.step('Computing edge costs');
 
-        // Compute edge costs
         const appData: any[] = [];
         for (let ai = 0; ai < allAppearanceCols.length; ai++) {
             const col = current.getColumnByName(allAppearanceCols[ai]);
             if (col) appData.push(col.data);
         }
 
-        const costs = new Float32Array(edges.length);
-        for (let e = 0; e < edges.length; e++) {
-            costs[e] = computeEdgeCost(edges[e][0], edges[e][1], cx, cy, cz,
-                cache, Z, appData, appData.length);
-        }
-
-        // Greedy disjoint pair selection
-        const valid: number[] = [];
-        for (let i = 0; i < edges.length; i++) {
-            if (Number.isFinite(costs[i])) valid.push(i);
-        }
-        valid.sort((a, b) => {
-            const d = costs[a] - costs[b];
-            return d !== 0 ? d : a - b;
-        });
-
         const mergesNeeded = n - targetCount;
+        const costs = new Float32Array(edgeCount);
+
+        const costInterval = Math.max(1, Math.ceil(edgeCount / PROGRESS_TICKS));
+        const costTicks = Math.ceil(edgeCount / costInterval);
+        logger.progress.begin(costTicks);
+
+        for (let e = 0; e < edgeCount; e++) {
+            costs[e] = computeEdgeCost(edgeU[e], edgeV[e], cx, cy, cz,
+                cache, Z, appData, appData.length);
+            if ((e + 1) % costInterval === 0) logger.progress.step();
+        }
+        if (edgeCount % costInterval !== 0) logger.progress.step();
+
+        logger.progress.step('Merging splats');
+
+        // Sort and greedy disjoint pair selection
+        const sorted = new Uint32Array(edgeCount);
+        const validCount = radixSortIndicesByFloat(sorted, edgeCount, costs);
+
         const used = new Uint8Array(n);
         const pairs: [number, number][] = [];
 
-        for (let t = 0; t < valid.length; t++) {
-            const e = valid[t];
-            const u = edges[e][0], v = edges[e][1];
+        for (let t = 0; t < validCount; t++) {
+            const e = sorted[t];
+            const u = edgeU[e], v = edgeV[e];
             if (used[u] || used[v]) continue;
             used[u] = 1; used[v] = 1;
             pairs.push([u, v]);
             if (pairs.length >= mergesNeeded) break;
         }
 
-        if (pairs.length === 0) break;
-
-        logger.debug(`selected ${pairs.length} merge pairs from ${edges.length} edges`);
+        if (pairs.length === 0) {
+            logger.progress.cancel();
+            break;
+        }
 
         // Mark which indices are consumed by merging
         const usedSet = new Uint8Array(n);
@@ -710,7 +788,7 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
             }
         }
 
-        // Merge pairs -- cache column refs and handled set once
+        // Merge pairs
         const mergeOut = {
             mu: new Float64Array(3),
             sc: new Float64Array(3),
@@ -741,6 +819,10 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
         .map(col => ({ src: col, dst: newTable.getColumnByName(col.name)! }))
         .filter(pair => pair.dst);
 
+        const mergeInterval = Math.max(1, Math.ceil(pairs.length / PROGRESS_TICKS));
+        const mergeTicks = Math.ceil(pairs.length / mergeInterval);
+        logger.progress.begin(mergeTicks);
+
         for (let p = 0; p < pairs.length; p++, dst++) {
             const pi = pairs[p][0], pj = pairs[p][1];
 
@@ -767,7 +849,12 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
             for (let u = 0; u < unhandledColPairs.length; u++) {
                 unhandledColPairs[u].dst.data[dst] = unhandledColPairs[u].src.data[dominant] as number;
             }
+
+            if ((p + 1) % mergeInterval === 0) logger.progress.step();
         }
+        if (pairs.length % mergeInterval !== 0) logger.progress.step();
+
+        logger.progress.step('Finalizing');
 
         current = newTable;
     }
