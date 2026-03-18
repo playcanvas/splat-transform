@@ -737,9 +737,9 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
             'rot_0', 'rot_1', 'rot_2', 'rot_3', ...allAppearanceCols
         ]);
         const unhandledColPairs = cols
-            .filter(col => !handledCols.has(col.name))
-            .map(col => ({ src: col, dst: newTable.getColumnByName(col.name)! }))
-            .filter(pair => pair.dst);
+        .filter(col => !handledCols.has(col.name))
+        .map(col => ({ src: col, dst: newTable.getColumnByName(col.name)! }))
+        .filter(pair => pair.dst);
 
         for (let p = 0; p < pairs.length; p++, dst++) {
             const pi = pairs[p][0], pj = pairs[p][1];
