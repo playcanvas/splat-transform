@@ -449,13 +449,15 @@ const main = async () => {
         onProgress: (node) => {
             if (node.stepName) {
                 console.error(`[${node.step}/${node.totalSteps}] ${node.stepName}`);
+            } else if (node.step === 0) {
+                start = hrtime();
             } else {
-                if (node.step === 0) {
-                    start = hrtime();
-                } else if (node.step === node.totalSteps) {
-                    process.stderr.write(`# done in ${hrtimeDelta(start, hrtime()).toFixed(3)}s 🎉\n`);
-                } else {
-                    process.stderr.write('#');
+                const displaySteps = 10;
+                const curr = Math.round(displaySteps * node.step / node.totalSteps);
+                const prev = Math.round(displaySteps * (node.step - 1) / node.totalSteps);
+                if (curr > prev) process.stderr.write('#'.repeat(curr - prev));
+                if (node.step === node.totalSteps) {
+                    process.stderr.write(` done in ${hrtimeDelta(start, hrtime()).toFixed(3)}s 🎉\n`);
                 }
             }
         }
