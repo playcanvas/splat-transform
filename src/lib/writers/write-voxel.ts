@@ -432,12 +432,13 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         logger.log(`collision mesh (raw): ${rawMesh.positions.length / 3} vertices, ${rawMesh.indices.length / 3} triangles`);
 
         if (rawMesh.indices.length < 3) {
+            logger.progress.step('Simplifying collision mesh');
             logger.log('collision mesh: no triangles generated, skipping GLB output');
         } else {
             logger.progress.step('Simplifying collision mesh');
             await MeshoptSimplifier.ready;
 
-            const clampedSimplify = Math.min(1, Math.max(0, meshSimplify));
+            const clampedSimplify = Number.isFinite(meshSimplify) ? Math.min(1, Math.max(0, meshSimplify)) : 0.25;
             const targetIndexCount = Math.max(
                 3,
                 Math.min(

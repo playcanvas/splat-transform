@@ -186,8 +186,8 @@ const parseArguments = async () => {
         meshSimplify: parseNumber(v['mesh-simplify'])
     };
 
-    if (options.meshSimplify < 0 || options.meshSimplify > 1) {
-        throw new Error(`Invalid mesh-simplify value: ${options.meshSimplify}. Must be between 0 and 1.`);
+    if (!Number.isFinite(options.meshSimplify) || options.meshSimplify < 0 || options.meshSimplify > 1) {
+        throw new Error(`Invalid mesh-simplify value: ${options.meshSimplify}. Must be a finite number between 0 and 1.`);
     }
 
     for (const t of tokens) {
