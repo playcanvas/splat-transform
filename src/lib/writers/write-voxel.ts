@@ -1,7 +1,10 @@
+import { MeshoptSimplifier } from 'meshoptimizer/simplifier';
+
 import type { DeviceCreator } from './write-sog';
 import { DataTable } from '../data-table/data-table';
 import { type FileSystem, writeFile } from '../io/write';
 import { logger } from '../utils/logger';
+import { buildCollisionGlb } from '../voxel/collision-glb';
 import {
     computeGaussianExtents,
     GaussianBVH,
@@ -11,6 +14,7 @@ import {
     type BatchSpec,
     type MultiBatchResult
 } from '../voxel/index';
+import { marchingCubes } from '../voxel/marching-cubes';
 import {
     BlockAccumulator,
     xyzToMorton,
@@ -36,6 +40,12 @@ type WriteVoxelOptions = {
 
     /** Optional function to create a GPU device for voxelization */
     createDevice?: DeviceCreator;
+
+    /** Whether to generate a collision mesh (.collision.glb) alongside the voxel data. Default: false */
+    collisionMesh?: boolean;
+
+    /** Ratio of triangles to keep when simplifying the collision mesh (0-1). Default: 0.25 */
+    meshSimplify?: number;
 };
 
 /**
@@ -126,9 +136,10 @@ const writeOctreeFiles = async (
  * Voxelizes Gaussian splat data and writes the result as a sparse voxel octree.
  *
  * This function performs GPU-accelerated voxelization of Gaussian splat data
- * and outputs two files:
+ * and outputs two or three files:
  * - `filename` (.voxel.json) - JSON metadata including bounds, resolution, and array sizes
  * - Corresponding .voxel.bin - Binary octree data (nodes + leafData as Uint32 arrays)
+ * - Corresponding .collision.glb - Triangle mesh extracted via marching cubes (GLB format, optional)
  *
  * The binary file layout is:
  * - Bytes 0 to (nodeCount * 4 - 1): nodes array (Uint32, little-endian)
@@ -147,6 +158,7 @@ const writeOctreeFiles = async (
  *     dataTable: myDataTable,
  *     voxelResolution: 0.05,
  *     opacityCutoff: 0.5,
+ *     collisionMesh: true,
  *     createDevice: async () => myGraphicsDevice
  * }, fs);
  * ```
@@ -157,14 +169,16 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         dataTable,
         voxelResolution = 0.05,
         opacityCutoff = 0.5,
-        createDevice
+        createDevice,
+        collisionMesh = false,
+        meshSimplify = 0.25
     } = options;
 
     if (!createDevice) {
         throw new Error('writeVoxel requires a createDevice function for GPU voxelization');
     }
 
-    logger.progress.begin(4);
+    logger.progress.begin(collisionMesh ? 7 : 5);
 
     const extentsResult = computeGaussianExtents(dataTable);
     const bounds = extentsResult.sceneBounds;
@@ -410,6 +424,63 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     logger.progress.step('Filtering');
     accumulator = filterAndFillBlocks(accumulator);
 
+    let glbBytes: Uint8Array | null = null;
+
+    if (collisionMesh) {
+        logger.progress.step('Extracting collision mesh');
+        const rawMesh = marchingCubes(accumulator, gridBounds, voxelResolution);
+        logger.log(`collision mesh (raw): ${rawMesh.positions.length / 3} vertices, ${rawMesh.indices.length / 3} triangles`);
+
+        if (rawMesh.indices.length < 3) {
+            logger.progress.step('Simplifying collision mesh');
+            logger.log('collision mesh: no triangles generated, skipping GLB output');
+        } else {
+            logger.progress.step('Simplifying collision mesh');
+            await MeshoptSimplifier.ready;
+
+            const clampedSimplify = Number.isFinite(meshSimplify) ? Math.min(1, Math.max(0, meshSimplify)) : 0.25;
+            const targetIndexCount = Math.max(
+                3,
+                Math.min(
+                    rawMesh.indices.length,
+                    Math.floor(rawMesh.indices.length * clampedSimplify / 3) * 3
+                )
+            );
+            const [simplifiedIndices] = MeshoptSimplifier.simplify(
+                rawMesh.indices,
+                rawMesh.positions,
+                3,
+                targetIndexCount,
+                voxelResolution,
+                ['ErrorAbsolute']
+            );
+
+            const vertexRemap = new Map<number, number>();
+            let newVertexCount = 0;
+            for (let i = 0; i < simplifiedIndices.length; i++) {
+                if (!vertexRemap.has(simplifiedIndices[i])) {
+                    vertexRemap.set(simplifiedIndices[i], newVertexCount++);
+                }
+            }
+            const compactPositions = new Float32Array(newVertexCount * 3);
+            for (const [oldIdx, newIdx] of vertexRemap) {
+                compactPositions[newIdx * 3] = rawMesh.positions[oldIdx * 3];
+                compactPositions[newIdx * 3 + 1] = rawMesh.positions[oldIdx * 3 + 1];
+                compactPositions[newIdx * 3 + 2] = rawMesh.positions[oldIdx * 3 + 2];
+            }
+            const compactIndices = new Uint32Array(simplifiedIndices.length);
+            for (let i = 0; i < simplifiedIndices.length; i++) {
+                compactIndices[i] = vertexRemap.get(simplifiedIndices[i])!;
+            }
+
+            const reduction = (1 - simplifiedIndices.length / rawMesh.indices.length) * 100;
+            logger.log(`collision mesh (simplified): ${newVertexCount} vertices, ${simplifiedIndices.length / 3} triangles (${reduction.toFixed(0)}% reduction)`);
+
+            glbBytes = buildCollisionGlb(compactPositions, compactIndices);
+        }
+    }
+
+    logger.progress.step('Building octree');
     const octree = buildSparseOctree(
         accumulator,
         gridBounds,
@@ -417,8 +488,23 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         voxelResolution
     );
 
+    logger.log(`octree: depth=${octree.treeDepth}, interior=${octree.numInteriorNodes}, mixed=${octree.numMixedLeaves}`);
+
     logger.progress.step('Writing');
     await writeOctreeFiles(fs, filename, octree);
+
+    if (glbBytes) {
+        const glbFilename = filename.replace('.voxel.json', '.collision.glb');
+        logger.log(`writing '${glbFilename}'...`);
+        await writeFile(fs, glbFilename, glbBytes);
+    }
+
+    const totalBytes = (octree.nodes.length + octree.leafData.length) * 4;
+    if (glbBytes) {
+        logger.log(`total size: octree ${(totalBytes / 1024).toFixed(1)} KB, collision mesh ${(glbBytes.length / 1024).toFixed(1)} KB`);
+    } else {
+        logger.log(`total size: ${(totalBytes / 1024).toFixed(1)} KB`);
+    }
 };
 
 export { writeVoxel, type WriteVoxelOptions, type VoxelMetadata };

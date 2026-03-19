@@ -14,3 +14,7 @@ export {
 } from './sparse-octree.js';
 
 export type { SparseOctree, Bounds } from './sparse-octree.js';
+
+export { marchingCubes } from './marching-cubes.js';
+
+export type { MarchingCubesMesh } from './marching-cubes.js';

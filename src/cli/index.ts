@@ -84,7 +84,9 @@ const parseArguments = async () => {
             'lod-chunk-extent': { type: 'string', short: 'X', default: '16' },
             unbundled: { type: 'boolean', short: 'U', default: false },
             'voxel-resolution': { type: 'string', short: 'R', default: '0.05' },
-            'opacity-cutoff': { type: 'string', short: 'A', default: '0.5' },
+            'opacity-cutoff': { type: 'string', short: 'A', default: '0.1' },
+            'collision-mesh': { type: 'boolean', short: 'K', default: false },
+            'mesh-simplify': { type: 'string', short: 'T', default: '0.25' },
 
             // per-file options
             translate: { type: 'string', short: 't', multiple: true },
@@ -179,8 +181,14 @@ const parseArguments = async () => {
         lodChunkCount: parseInteger(v['lod-chunk-count']),
         lodChunkExtent: parseInteger(v['lod-chunk-extent']),
         voxelResolution: parseNumber(v['voxel-resolution']),
-        opacityCutoff: parseNumber(v['opacity-cutoff'])
+        opacityCutoff: parseNumber(v['opacity-cutoff']),
+        collisionMesh: v['collision-mesh'],
+        meshSimplify: parseNumber(v['mesh-simplify'])
     };
+
+    if (!Number.isFinite(options.meshSimplify) || options.meshSimplify < 0 || options.meshSimplify > 1) {
+        throw new Error(`Invalid mesh-simplify value: ${options.meshSimplify}. Must be a finite number between 0 and 1.`);
+    }
 
     for (const t of tokens) {
         if (t.kind === 'positional') {
@@ -392,7 +400,9 @@ GLOBAL OPTIONS
     -C, --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
     -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
     -R, --voxel-resolution <n>              Voxel size in world units for .voxel.json. Default: 0.05
-    -A, --opacity-cutoff   <n>              Opacity threshold for solid voxels. Default: 0.5
+    -A, --opacity-cutoff   <n>              Opacity threshold for solid voxels. Default: 0.1
+    -K, --collision-mesh                    Generate collision mesh (.collision.glb) with voxel output
+    -T, --mesh-simplify    <n>              Ratio of triangles to keep for collision mesh (0-1). Default: 0.25
 
 EXAMPLES
     # Scale then translate
@@ -410,8 +420,11 @@ EXAMPLES
     # Generate LOD with custom chunk size and node split size
     splat-transform -O 0,1,2 -C 1024 -X 32 input.lcc output/lod-meta.json
 
-    # Generate voxel collision data
+    # Generate voxel data
     splat-transform input.ply output.voxel.json
+
+    # Generate voxel data with collision mesh
+    splat-transform -K input.ply output.voxel.json
 
     # Generate voxel data with custom resolution and opacity threshold
     splat-transform -R 0.1 -A 0.3 input.ply output.voxel.json
