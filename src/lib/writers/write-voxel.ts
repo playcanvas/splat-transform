@@ -178,7 +178,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         throw new Error('writeVoxel requires a createDevice function for GPU voxelization');
     }
 
-    logger.progress.begin(collisionMesh ? 7 : 4);
+    logger.progress.begin(collisionMesh ? 7 : 5);
 
     const extentsResult = computeGaussianExtents(dataTable);
     const bounds = extentsResult.sceneBounds;
