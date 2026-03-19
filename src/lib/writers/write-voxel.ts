@@ -431,44 +431,52 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         const rawMesh = marchingCubes(accumulator, gridBounds, voxelResolution);
         logger.log(`collision mesh (raw): ${rawMesh.positions.length / 3} vertices, ${rawMesh.indices.length / 3} triangles`);
 
-        logger.progress.step('Simplifying collision mesh');
-        await MeshoptSimplifier.ready;
+        if (rawMesh.indices.length < 3) {
+            logger.log('collision mesh: no triangles generated, skipping GLB output');
+        } else {
+            logger.progress.step('Simplifying collision mesh');
+            await MeshoptSimplifier.ready;
 
-        const targetIndexCount = Math.max(
-            3,
-            Math.floor(rawMesh.indices.length * meshSimplify / 3) * 3
-        );
-        const [simplifiedIndices] = MeshoptSimplifier.simplify(
-            rawMesh.indices,
-            rawMesh.positions,
-            3,
-            targetIndexCount,
-            voxelResolution,
-            ['ErrorAbsolute']
-        );
+            const clampedSimplify = Math.min(1, Math.max(0, meshSimplify));
+            const targetIndexCount = Math.max(
+                3,
+                Math.min(
+                    rawMesh.indices.length,
+                    Math.floor(rawMesh.indices.length * clampedSimplify / 3) * 3
+                )
+            );
+            const [simplifiedIndices] = MeshoptSimplifier.simplify(
+                rawMesh.indices,
+                rawMesh.positions,
+                3,
+                targetIndexCount,
+                voxelResolution,
+                ['ErrorAbsolute']
+            );
 
-        const vertexRemap = new Map<number, number>();
-        let newVertexCount = 0;
-        for (let i = 0; i < simplifiedIndices.length; i++) {
-            if (!vertexRemap.has(simplifiedIndices[i])) {
-                vertexRemap.set(simplifiedIndices[i], newVertexCount++);
+            const vertexRemap = new Map<number, number>();
+            let newVertexCount = 0;
+            for (let i = 0; i < simplifiedIndices.length; i++) {
+                if (!vertexRemap.has(simplifiedIndices[i])) {
+                    vertexRemap.set(simplifiedIndices[i], newVertexCount++);
+                }
             }
-        }
-        const compactPositions = new Float32Array(newVertexCount * 3);
-        for (const [oldIdx, newIdx] of vertexRemap) {
-            compactPositions[newIdx * 3] = rawMesh.positions[oldIdx * 3];
-            compactPositions[newIdx * 3 + 1] = rawMesh.positions[oldIdx * 3 + 1];
-            compactPositions[newIdx * 3 + 2] = rawMesh.positions[oldIdx * 3 + 2];
-        }
-        const compactIndices = new Uint32Array(simplifiedIndices.length);
-        for (let i = 0; i < simplifiedIndices.length; i++) {
-            compactIndices[i] = vertexRemap.get(simplifiedIndices[i])!;
-        }
+            const compactPositions = new Float32Array(newVertexCount * 3);
+            for (const [oldIdx, newIdx] of vertexRemap) {
+                compactPositions[newIdx * 3] = rawMesh.positions[oldIdx * 3];
+                compactPositions[newIdx * 3 + 1] = rawMesh.positions[oldIdx * 3 + 1];
+                compactPositions[newIdx * 3 + 2] = rawMesh.positions[oldIdx * 3 + 2];
+            }
+            const compactIndices = new Uint32Array(simplifiedIndices.length);
+            for (let i = 0; i < simplifiedIndices.length; i++) {
+                compactIndices[i] = vertexRemap.get(simplifiedIndices[i])!;
+            }
 
-        const reduction = (1 - simplifiedIndices.length / rawMesh.indices.length) * 100;
-        logger.log(`collision mesh (simplified): ${newVertexCount} vertices, ${simplifiedIndices.length / 3} triangles (${reduction.toFixed(0)}% reduction)`);
+            const reduction = (1 - simplifiedIndices.length / rawMesh.indices.length) * 100;
+            logger.log(`collision mesh (simplified): ${newVertexCount} vertices, ${simplifiedIndices.length / 3} triangles (${reduction.toFixed(0)}% reduction)`);
 
-        glbBytes = buildCollisionGlb(compactPositions, compactIndices);
+            glbBytes = buildCollisionGlb(compactPositions, compactIndices);
+        }
     }
 
     logger.progress.step('Building octree');

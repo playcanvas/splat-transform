@@ -68,25 +68,13 @@ function buildOccupancyLookup(accumulator: BlockAccumulator): (vx: number, vy: n
     const masks = mixed.masks;
 
     return (vx: number, vy: number, vz: number): boolean => {
+        if (vx < 0 || vy < 0 || vz < 0) return false;
+
         const bx = vx >> 2;
         const by = vy >> 2;
         const bz = vz >> 2;
 
-        // Compute Morton code for the block
-        let morton = 0;
-        let x = bx, y = by, z = bz;
-        let shift = 1;
-        for (let i = 0; i < 17; i++) {
-            if (x & 1) morton += shift;
-            if (y & 1) morton += shift * 2;
-            if (z & 1) morton += shift * 4;
-            x >>>= 1;
-            y >>>= 1;
-            z >>>= 1;
-            shift *= 8;
-        }
-
-        const entry = blockMap.get(morton);
+        const entry = blockMap.get(xyzToMorton(bx, by, bz));
         if (entry === undefined) return false;
         if (entry === -1) return true; // solid block
 
@@ -204,7 +192,9 @@ function marchingCubes(
                     if (ownerBx !== bx || ownerBy !== by || ownerBz !== bz) {
                         // Cell belongs to a different block — skip if that
                         // block exists (it will process the cell itself).
-                        if (blockSet.has(xyzToMorton(ownerBx, ownerBy, ownerBz))) continue;
+                        // Guard negative coords: xyzToMorton assumes non-negative inputs.
+                        if (ownerBx >= 0 && ownerBy >= 0 && ownerBz >= 0 &&
+                            blockSet.has(xyzToMorton(ownerBx, ownerBy, ownerBz))) continue;
                     }
 
                     // Get corner values for this cell (8 corners)

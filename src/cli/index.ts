@@ -186,6 +186,10 @@ const parseArguments = async () => {
         meshSimplify: parseNumber(v['mesh-simplify'])
     };
 
+    if (options.meshSimplify < 0 || options.meshSimplify > 1) {
+        throw new Error(`Invalid mesh-simplify value: ${options.meshSimplify}. Must be between 0 and 1.`);
+    }
+
     for (const t of tokens) {
         if (t.kind === 'positional') {
             files.push({
@@ -416,7 +420,7 @@ EXAMPLES
     # Generate LOD with custom chunk size and node split size
     splat-transform -O 0,1,2 -C 1024 -X 32 input.lcc output/lod-meta.json
 
-    # Generate voxel collision data
+    # Generate voxel data
     splat-transform input.ply output.voxel.json
 
     # Generate voxel data with collision mesh
