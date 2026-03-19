@@ -45,6 +45,7 @@
     "lib/"
   ],
   "dependencies": {
+    "meshoptimizer": "^1.0.1",
     "webgpu": "^0.3.8"
   },
   "devDependencies": {

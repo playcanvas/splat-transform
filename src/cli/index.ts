@@ -85,6 +85,7 @@ const parseArguments = async () => {
             unbundled: { type: 'boolean', short: 'U', default: false },
             'voxel-resolution': { type: 'string', short: 'R', default: '0.05' },
             'opacity-cutoff': { type: 'string', short: 'A', default: '0.5' },
+            'collision-mesh': { type: 'boolean', short: 'K', default: false },
 
             // per-file options
             translate: { type: 'string', short: 't', multiple: true },
@@ -179,7 +180,8 @@ const parseArguments = async () => {
         lodChunkCount: parseInteger(v['lod-chunk-count']),
         lodChunkExtent: parseInteger(v['lod-chunk-extent']),
         voxelResolution: parseNumber(v['voxel-resolution']),
-        opacityCutoff: parseNumber(v['opacity-cutoff'])
+        opacityCutoff: parseNumber(v['opacity-cutoff']),
+        collisionMesh: v['collision-mesh']
     };
 
     for (const t of tokens) {
@@ -393,6 +395,7 @@ GLOBAL OPTIONS
     -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
     -R, --voxel-resolution <n>              Voxel size in world units for .voxel.json. Default: 0.05
     -A, --opacity-cutoff   <n>              Opacity threshold for solid voxels. Default: 0.5
+    -K, --collision-mesh                    Generate collision mesh (.collision.glb) with voxel output
 
 EXAMPLES
     # Scale then translate
@@ -412,6 +415,9 @@ EXAMPLES
 
     # Generate voxel collision data
     splat-transform input.ply output.voxel.json
+
+    # Generate voxel data with collision mesh
+    splat-transform -K input.ply output.voxel.json
 
     # Generate voxel data with custom resolution and opacity threshold
     splat-transform -R 0.1 -A 0.3 input.ply output.voxel.json

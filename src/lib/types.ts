@@ -25,6 +25,9 @@ type Options = {
 
     /** Opacity threshold for solid voxels - voxels below this are considered empty. Default: 0.5 */
     opacityCutoff?: number;
+
+    /** Whether to generate a collision mesh (.collision.glb) alongside voxel output. Default: false */
+    collisionMesh?: boolean;
 };
 
 /**

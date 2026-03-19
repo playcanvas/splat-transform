@@ -172,6 +172,7 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
                 dataTable,
                 voxelResolution: options.voxelResolution,
                 opacityCutoff: options.opacityCutoff,
+                collisionMesh: options.collisionMesh,
                 createDevice
             }, fs);
             break;

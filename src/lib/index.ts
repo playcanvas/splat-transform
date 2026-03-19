@@ -60,6 +60,8 @@ export { writeLod } from './writers/write-lod';
 export { writeGlb } from './writers/write-glb';
 export { writeVoxel } from './writers/write-voxel';
 export type { WriteVoxelOptions, VoxelMetadata } from './writers/write-voxel';
+export { marchingCubes } from './voxel/marching-cubes';
+export type { MarchingCubesMesh } from './voxel/marching-cubes';
 
 // Types
 export type { Options, Param } from './types';
