@@ -103,7 +103,7 @@ Actions can be repeated and applied in any order:
 -C, --lod-chunk-count  <n>              Approx number of Gaussians per LOD chunk in K. Default: 512
 -X, --lod-chunk-extent <n>              Approx size of an LOD chunk in world units (m). Default: 16
 -R, --voxel-resolution <n>              Voxel size in world units for .voxel.json. Default: 0.05
--A, --opacity-cutoff   <n>              Opacity threshold for solid voxels. Default: 0.5
+-A, --opacity-cutoff   <n>              Opacity threshold for solid voxels. Default: 0.1
 ```
 
 > [!NOTE]

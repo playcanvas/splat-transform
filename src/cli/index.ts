@@ -84,7 +84,7 @@ const parseArguments = async () => {
             'lod-chunk-extent': { type: 'string', short: 'X', default: '16' },
             unbundled: { type: 'boolean', short: 'U', default: false },
             'voxel-resolution': { type: 'string', short: 'R', default: '0.05' },
-            'opacity-cutoff': { type: 'string', short: 'A', default: '0.5' },
+            'opacity-cutoff': { type: 'string', short: 'A', default: '0.1' },
             'collision-mesh': { type: 'boolean', short: 'K', default: false },
             'mesh-simplify': { type: 'string', short: 'T', default: '0.25' },
 
@@ -400,7 +400,7 @@ GLOBAL OPTIONS
     -C, --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
     -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
     -R, --voxel-resolution <n>              Voxel size in world units for .voxel.json. Default: 0.05
-    -A, --opacity-cutoff   <n>              Opacity threshold for solid voxels. Default: 0.5
+    -A, --opacity-cutoff   <n>              Opacity threshold for solid voxels. Default: 0.1
     -K, --collision-mesh                    Generate collision mesh (.collision.glb) with voxel output
     -T, --mesh-simplify    <n>              Ratio of triangles to keep for collision mesh (0-1). Default: 0.25
 
