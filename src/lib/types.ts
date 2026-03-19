@@ -28,6 +28,9 @@ type Options = {
 
     /** Whether to generate a collision mesh (.collision.glb) alongside voxel output. Default: false */
     collisionMesh?: boolean;
+
+    /** Ratio of triangles to keep when simplifying the collision mesh (0-1). Default: 0.25 */
+    meshSimplify?: number;
 };
 
 /**

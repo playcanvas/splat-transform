@@ -44,8 +44,8 @@ type WriteVoxelOptions = {
     /** Whether to generate a collision mesh (.collision.glb) alongside the voxel data. Default: false */
     collisionMesh?: boolean;
 
-    /** Target ratio for collision mesh simplification (0-1). Default: 0.25 */
-    simplifyTarget?: number;
+    /** Ratio of triangles to keep when simplifying the collision mesh (0-1). Default: 0.25 */
+    meshSimplify?: number;
 };
 
 /**
@@ -171,7 +171,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         opacityCutoff = 0.5,
         createDevice,
         collisionMesh = false,
-        simplifyTarget = 0.25
+        meshSimplify = 0.25
     } = options;
 
     if (!createDevice) {
@@ -436,7 +436,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
 
         const targetIndexCount = Math.max(
             3,
-            Math.floor(rawMesh.indices.length * simplifyTarget / 3) * 3
+            Math.floor(rawMesh.indices.length * meshSimplify / 3) * 3
         );
         const [simplifiedIndices] = MeshoptSimplifier.simplify(
             rawMesh.indices,

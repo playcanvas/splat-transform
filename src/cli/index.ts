@@ -86,6 +86,7 @@ const parseArguments = async () => {
             'voxel-resolution': { type: 'string', short: 'R', default: '0.05' },
             'opacity-cutoff': { type: 'string', short: 'A', default: '0.5' },
             'collision-mesh': { type: 'boolean', short: 'K', default: false },
+            'mesh-simplify': { type: 'string', short: 'T', default: '0.25' },
 
             // per-file options
             translate: { type: 'string', short: 't', multiple: true },
@@ -181,7 +182,8 @@ const parseArguments = async () => {
         lodChunkExtent: parseInteger(v['lod-chunk-extent']),
         voxelResolution: parseNumber(v['voxel-resolution']),
         opacityCutoff: parseNumber(v['opacity-cutoff']),
-        collisionMesh: v['collision-mesh']
+        collisionMesh: v['collision-mesh'],
+        meshSimplify: parseNumber(v['mesh-simplify'])
     };
 
     for (const t of tokens) {
@@ -396,6 +398,7 @@ GLOBAL OPTIONS
     -R, --voxel-resolution <n>              Voxel size in world units for .voxel.json. Default: 0.05
     -A, --opacity-cutoff   <n>              Opacity threshold for solid voxels. Default: 0.5
     -K, --collision-mesh                    Generate collision mesh (.collision.glb) with voxel output
+    -T, --mesh-simplify    <n>              Ratio of triangles to keep for collision mesh (0-1). Default: 0.25
 
 EXAMPLES
     # Scale then translate
