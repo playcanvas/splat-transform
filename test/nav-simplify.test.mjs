@@ -2,8 +2,8 @@
  * Tests for capsule-traced navigation voxel simplification.
  *
  * Constructs small voxel scenes (hollow boxes, corridors) using BlockAccumulator,
- * runs simplifyForCapsule, and verifies the output uses negative space carving:
- * reachable cells are empty, everything else is solid.
+ * runs simplifyForCapsule, and verifies the output uses negative space carving
+ * with erosion to restore correct surface positions.
  */
 
 import { describe, it } from 'node:test';
@@ -106,7 +106,7 @@ describe('simplifyForCapsule', function () {
     const capsuleRadius = 0.2;
 
     describe('hollow box', function () {
-        it('should produce solid voxels for non-reachable space', function () {
+        it('should produce solid voxels around the navigable space', function () {
             const { acc, gridBounds } = buildHollowBox(6, voxelResolution);
 
             const centerWorld = (gridBounds.min.x + gridBounds.max.x) / 2;
@@ -116,21 +116,7 @@ describe('simplifyForCapsule', function () {
             const resultCount = countSolidVoxels(result);
 
             assert.ok(resultCount > 0,
-                'Should produce solid voxels for non-reachable space');
-        });
-
-        it('should have more solid voxels than original walls (fills non-reachable space)', function () {
-            const { acc, gridBounds } = buildHollowBox(6, voxelResolution);
-
-            const centerWorld = (gridBounds.min.x + gridBounds.max.x) / 2;
-            const seed = { x: centerWorld, y: centerWorld, z: centerWorld };
-
-            const originalCount = countSolidVoxels(acc);
-            const result = simplifyForCapsule(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
-            const resultCount = countSolidVoxels(result);
-
-            assert.ok(resultCount >= originalCount,
-                `Result (${resultCount}) should have at least as many solids as original walls (${originalCount})`);
+                'Should produce solid voxels around the navigable space');
         });
 
         it('should not include reachable cells as solid', function () {
@@ -196,7 +182,7 @@ describe('simplifyForCapsule', function () {
     });
 
     describe('single solid block', function () {
-        it('should fill non-reachable space around the block', function () {
+        it('should retain solid voxels around the block', function () {
             const acc = new BlockAccumulator();
             acc.addBlock(xyzToMorton(2, 2, 2), SOLID_LO, SOLID_HI);
 
@@ -207,13 +193,13 @@ describe('simplifyForCapsule', function () {
             const result = simplifyForCapsule(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
 
             const resultCount = countSolidVoxels(result);
-            assert.ok(resultCount >= 64,
-                'Should include at least the original block plus non-reachable cells');
+            assert.ok(resultCount > 0,
+                'Should retain solid voxels near the reachable space');
         });
     });
 
     describe('unreachable regions', function () {
-        it('should fill unreachable space outside a sealed room as solid', function () {
+        it('should fill unreachable exterior as solid', function () {
             const sizeBlocks = 6;
             const acc = new BlockAccumulator();
 
@@ -241,14 +227,14 @@ describe('simplifyForCapsule', function () {
             const resultCount = countSolidVoxels(result);
 
             assert.ok(resultCount > originalCount,
-                `Result (${resultCount}) should be larger than original walls (${originalCount}) because all unreachable exterior space is filled`);
+                `Result (${resultCount}) should be larger than original walls (${originalCount}) because unreachable exterior is filled solid`);
 
             const nx = Math.round((gridBounds.max.x - gridBounds.min.x) / voxelResolution);
             const ny = Math.round((gridBounds.max.y - gridBounds.min.y) / voxelResolution);
             const nz = Math.round((gridBounds.max.z - gridBounds.min.z) / voxelResolution);
             const totalCells = nx * ny * nz;
             assert.ok(resultCount < totalCells,
-                `Result (${resultCount}) should leave interior reachable cells empty (total: ${totalCells})`);
+                `Result (${resultCount}) should leave reachable interior empty (total: ${totalCells})`);
         });
     });
 });
