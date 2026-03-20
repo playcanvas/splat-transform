@@ -60,6 +60,8 @@ export { writeLod } from './writers/write-lod';
 export { writeGlb } from './writers/write-glb';
 export { writeVoxel } from './writers/write-voxel';
 export type { WriteVoxelOptions, VoxelMetadata } from './writers/write-voxel';
+export { simplifyForCapsule } from './voxel/nav-simplify';
+export type { NavSeed } from './voxel/nav-simplify';
 export { marchingCubes } from './voxel/marching-cubes';
 export type { MarchingCubesMesh } from './voxel/marching-cubes';
 

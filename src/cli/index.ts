@@ -87,6 +87,9 @@ const parseArguments = async () => {
             'opacity-cutoff': { type: 'string', short: 'A', default: '0.1' },
             'collision-mesh': { type: 'boolean', short: 'K', default: false },
             'mesh-simplify': { type: 'string', short: 'T', default: '0.25' },
+            'nav-capsule-height': { type: 'string', default: '' },
+            'nav-capsule-radius': { type: 'string', default: '' },
+            'nav-seed': { type: 'string', default: '' },
 
             // per-file options
             translate: { type: 'string', short: 't', multiple: true },
@@ -167,6 +170,28 @@ const parseArguments = async () => {
 
     const viewerSettingsPath = v['viewer-settings'];
 
+    // Parse nav capsule options
+    const navSeedStr = v['nav-seed'];
+    const hasNavCapsuleArgs = !!(v['nav-capsule-height'] || v['nav-capsule-radius']);
+    let navCapsule: { height: number; radius: number } | undefined;
+    let navSeed: { x: number; y: number; z: number } | undefined;
+
+    if (hasNavCapsuleArgs && !navSeedStr) {
+        throw new Error('--nav-seed <x,y,z> is required when using --nav-capsule-height or --nav-capsule-radius');
+    }
+
+    if (navSeedStr) {
+        const parts = navSeedStr.split(',').map(parseNumber);
+        if (parts.length !== 3) {
+            throw new Error(`Invalid nav-seed value: ${navSeedStr}. Expected x,y,z`);
+        }
+        navSeed = { x: parts[0], y: parts[1], z: parts[2] };
+        navCapsule = {
+            height: v['nav-capsule-height'] ? parseNumber(v['nav-capsule-height']) : 1.5,
+            radius: v['nav-capsule-radius'] ? parseNumber(v['nav-capsule-radius']) : 0.2
+        };
+    }
+
     const options: CliOptions = {
         overwrite: v.overwrite,
         help: v.help,
@@ -183,7 +208,9 @@ const parseArguments = async () => {
         voxelResolution: parseNumber(v['voxel-resolution']),
         opacityCutoff: parseNumber(v['opacity-cutoff']),
         collisionMesh: v['collision-mesh'],
-        meshSimplify: parseNumber(v['mesh-simplify'])
+        meshSimplify: parseNumber(v['mesh-simplify']),
+        navCapsule,
+        navSeed
     };
 
     if (!Number.isFinite(options.meshSimplify) || options.meshSimplify < 0 || options.meshSimplify > 1) {
@@ -403,39 +430,18 @@ GLOBAL OPTIONS
     -A, --opacity-cutoff   <n>              Opacity threshold for solid voxels. Default: 0.1
     -K, --collision-mesh                    Generate collision mesh (.collision.glb) with voxel output
     -T, --mesh-simplify    <n>              Ratio of triangles to keep for collision mesh (0-1). Default: 0.25
+        --nav-seed         <x,y,z>          Seed position for capsule navigation simplification
+        --nav-capsule-height <n>            Capsule height for nav simplification. Default: 1.5
+        --nav-capsule-radius <n>            Capsule radius for nav simplification. Default: 0.2
 
 EXAMPLES
-    # Scale then translate
+    # Scale and translate
     splat-transform bunny.ply -s 0.5 -t 0,0,10 bunny-scaled.ply
 
-    # Merge two files with transforms and compress to SOG format
+    # Merge two files with per-file transforms
     splat-transform -w cloudA.ply -r 0,90,0 cloudB.ply -s 2 merged.sog
 
-    # Generate unbundled HTML viewer with separate CSS, JS and SOG files
-    splat-transform -U bunny.ply bunny-viewer.html
-
-    # Generate synthetic splats using a generator script
-    splat-transform gen-grid.mjs -p width=500,height=500,scale=0.1 grid.ply
-
-    # Generate LOD with custom chunk size and node split size
-    splat-transform -O 0,1,2 -C 1024 -X 32 input.lcc output/lod-meta.json
-
-    # Generate voxel data
-    splat-transform input.ply output.voxel.json
-
-    # Generate voxel data with collision mesh
-    splat-transform -K input.ply output.voxel.json
-
-    # Generate voxel data with custom resolution and opacity threshold
-    splat-transform -R 0.1 -A 0.3 input.ply output.voxel.json
-
-    # Convert voxel data back to PLY for visualization
-    splat-transform scene.voxel.json scene-voxels.ply
-
-    # Print statistical summary, then write output
-    splat-transform bunny.ply --summary output.ply
-
-    # Print summary without writing a file (discard output)
+    # Print summary without writing a file
     splat-transform bunny.ply -m null
 `;
 
