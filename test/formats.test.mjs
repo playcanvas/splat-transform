@@ -87,6 +87,109 @@ class BufferReadStream {
     }
 }
 
+const packQuaternionSmallestThree = (x, y, z, w) => {
+    const q = [x, y, z, w];
+    const length = Math.hypot(x, y, z, w);
+    if (length === 0) {
+        throw new Error('Quaternion must be non-zero');
+    }
+
+    for (let i = 0; i < 4; i++) {
+        q[i] /= length;
+    }
+
+    let largestIndex = 0;
+    for (let i = 1; i < 4; i++) {
+        if (Math.abs(q[i]) > Math.abs(q[largestIndex])) {
+            largestIndex = i;
+        }
+    }
+
+    const negate = q[largestIndex] < 0;
+    const maxMag = (1 << 9) - 1;
+    let packed = largestIndex;
+
+    for (let i = 0; i < 4; i++) {
+        if (i !== largestIndex) {
+            const negbit = ((q[i] < 0) ? 1 : 0) ^ (negate ? 1 : 0);
+            const mag = Math.round(maxMag * (Math.abs(q[i]) / Math.SQRT1_2));
+            packed = (packed << 10) | (negbit << 9) | Math.min(maxMag, mag);
+        }
+    }
+
+    return packed >>> 0;
+};
+
+const createSpzV3Fixture = () => {
+    const count = 2;
+    const HEADER_SIZE = 16;
+    const positionsByteSize = count * 3 * 3;
+    const alphasByteSize = count;
+    const colorsByteSize = count * 3;
+    const scalesByteSize = count * 3;
+    const rotationsByteSize = count * 4;
+    const totalSize = HEADER_SIZE + positionsByteSize + alphasByteSize + colorsByteSize + scalesByteSize + rotationsByteSize;
+
+    const buffer = new ArrayBuffer(totalSize);
+    const view = new DataView(buffer);
+    const bytes = new Uint8Array(buffer);
+
+    view.setUint32(0, 0x5053474E, true);
+    view.setUint32(4, 3, true);
+    view.setUint32(8, count, true);
+    view.setUint8(12, 0);
+    view.setUint8(13, 8);
+    view.setUint8(14, 0);
+    view.setUint8(15, 0);
+
+    let offset = HEADER_SIZE;
+    const positions = [
+        [0, 0, 0],
+        [1, 0, 0]
+    ];
+    for (let i = 0; i < count; i++) {
+        const values = positions[i].map(value => (Math.round(value * 256) & 0xFFFFFF) >>> 0);
+        const posOffset = offset + i * 9;
+        for (let j = 0; j < 3; j++) {
+            bytes[posOffset + j * 3 + 0] = values[j] & 0xFF;
+            bytes[posOffset + j * 3 + 1] = (values[j] >> 8) & 0xFF;
+            bytes[posOffset + j * 3 + 2] = (values[j] >> 16) & 0xFF;
+        }
+    }
+    offset += positionsByteSize;
+
+    bytes[offset + 0] = 230;
+    bytes[offset + 1] = 230;
+    offset += alphasByteSize;
+
+    bytes[offset + 0] = 180;
+    bytes[offset + 1] = 90;
+    bytes[offset + 2] = 128;
+    bytes[offset + 3] = 90;
+    bytes[offset + 4] = 180;
+    bytes[offset + 5] = 128;
+    offset += colorsByteSize;
+
+    const encodedScale = Math.round((Math.log(0.1) + 10) * 16);
+    for (let i = 0; i < count; i++) {
+        bytes[offset + i * 3 + 0] = encodedScale;
+        bytes[offset + i * 3 + 1] = encodedScale;
+        bytes[offset + i * 3 + 2] = encodedScale;
+    }
+    offset += scalesByteSize;
+
+    const quaternions = [
+        [0, 0, 0, 1],
+        [0, 0, Math.sin(Math.PI / 4), Math.cos(Math.PI / 4)]
+    ];
+    for (let i = 0; i < count; i++) {
+        const [x, y, z, w] = quaternions[i];
+        view.setUint32(offset + i * 4, packQuaternionSmallestThree(x, y, z, w), true);
+    }
+
+    return new Uint8Array(buffer);
+};
+
 describe('PLY Format', () => {
     let testData;
     let plyBytes;
@@ -345,6 +448,45 @@ describe('SPZ Format (Input Only)', () => {
         for (const [name, stats] of Object.entries(summary.columns)) {
             assert.strictEqual(stats.nanCount, 0, `${name} has NaN values`);
         }
+    });
+
+    it('should read .spz v3 file with correct quaternion decoding', async () => {
+        const spzData = createSpzV3Fixture();
+        const source = new BufferReadSource(spzData);
+        const dataTable = await readSpz(source);
+
+        assert.strictEqual(dataTable.numRows, 2);
+
+        const requiredColumns = [
+            'x', 'y', 'z',
+            'scale_0', 'scale_1', 'scale_2',
+            'f_dc_0', 'f_dc_1', 'f_dc_2',
+            'opacity',
+            'rot_0', 'rot_1', 'rot_2', 'rot_3'
+        ];
+        for (const col of requiredColumns) {
+            assert(dataTable.hasColumn(col), `Missing column: ${col}`);
+        }
+
+        const summary = computeSummary(dataTable);
+        for (const [name, stats] of Object.entries(summary.columns)) {
+            assert.strictEqual(stats.nanCount, 0, `${name} has NaN values`);
+        }
+
+        const rot0 = dataTable.getColumnByName('rot_0').data;
+        const rot1 = dataTable.getColumnByName('rot_1').data;
+        const rot2 = dataTable.getColumnByName('rot_2').data;
+        const rot3 = dataTable.getColumnByName('rot_3').data;
+
+        assert(Math.abs(rot0[0] - 1.0) < 1e-6);
+        assert(Math.abs(rot1[0]) < 1e-6);
+        assert(Math.abs(rot2[0]) < 1e-6);
+        assert(Math.abs(rot3[0]) < 1e-6);
+
+        assert(Math.abs(rot0[1] - Math.cos(Math.PI / 4)) < 0.01);
+        assert(Math.abs(rot1[1]) < 0.01);
+        assert(Math.abs(rot2[1]) < 0.01);
+        assert(Math.abs(rot3[1] - Math.sin(Math.PI / 4)) < 0.01);
     });
 });
 

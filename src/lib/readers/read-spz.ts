@@ -32,11 +32,40 @@ function getFixed24(positionsView: DataView, elementIndex: number, memberIndex: 
 
 const HARMONICS_COMPONENT_COUNT = [0, 9, 24, 45];
 
+const decodeSpzQuaternionV3 = (packedRotation: number) => {
+    const rotation = [0.0, 0.0, 0.0, 0.0];
+    const cMask = (1 << 9) - 1;
+    const largestRotIndex = packedRotation >>> 30;
+    let sumSquares = 0;
+
+    for (let i = 3; i >= 0; --i) {
+        if (i !== largestRotIndex) {
+            const mag = packedRotation & cMask;
+            const negbit = (packedRotation >>> 9) & 1;
+            packedRotation >>>= 10;
+            rotation[i] = Math.SQRT1_2 * mag / cMask;
+            if (negbit === 1) {
+                rotation[i] = -rotation[i];
+            }
+            sumSquares += rotation[i] * rotation[i];
+        }
+    }
+
+    rotation[largestRotIndex] = Math.sqrt(Math.max(0.0, 1.0 - sumSquares));
+
+    return {
+        rot0: rotation[3], // w
+        rot1: rotation[0], // x
+        rot2: rotation[1], // y
+        rot3: rotation[2]  // z
+    };
+};
+
 /**
  * Reads a .spz file containing Niantic Labs compressed Gaussian splat data.
  *
  * The .spz format uses GZIP compression and fixed-point encoding to achieve
- * compact file sizes. Supports version 2 and 3 of the format.
+ * compact file sizes. Supports version 2 and 3 of the format for SH degrees 0-3.
  *
  * @see https://github.com/nianticlabs/spz
  *
@@ -81,14 +110,21 @@ const readSpz = async (source: ReadSource): Promise<DataTable> => {
     const numSplats = header.getUint32(8, true);
     const shDegree = header.getUint8(12);
     const fractionalBits = header.getUint8(13);
+    if (shDegree >= HARMONICS_COMPONENT_COUNT.length) {
+        throw new Error(`Unsupported SH degree ${shDegree}`);
+    }
 
     const positionsByteSize = numSplats * 3 * 3; // 3 * 24bit values
     const alphasByteSize = numSplats; // u8
     const colorsByteSize = numSplats * 3; // u8 * 3
     const scalesByteSize = numSplats * 3; // u8 * 3
-    const rotationsByteSize = numSplats * 3; // u8 * 3
+    const rotationsByteSize = numSplats * (version === 2 ? 3 : 4);
     const harmonicsComponentCount = HARMONICS_COMPONENT_COUNT[shDegree];
     const shByteSize = numSplats * harmonicsComponentCount;
+    const requiredSize = HEADER_SIZE + positionsByteSize + alphasByteSize + colorsByteSize + scalesByteSize + rotationsByteSize + shByteSize;
+    if (totalSize < requiredSize) {
+        throw new Error(`File too small for SPZ payload: expected at least ${requiredSize} bytes, got ${totalSize}`);
+    }
 
     const positionsView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset + HEADER_SIZE, positionsByteSize);
     const alphasView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset + HEADER_SIZE + positionsByteSize, alphasByteSize);
@@ -145,32 +181,19 @@ const readSpz = async (source: ReadSource): Promise<DataTable> => {
         const blue = colorsView.getUint8(splatIndex * 3 + 2);
         const opacity = alphasView.getUint8(splatIndex);
 
-        // Read rotation quaternion (4 × uint8)
-        const rotation = [0.0, 0.0, 0.0, 0.0];
+        let rot0Norm = 0.0;
+        let rot1Norm = 0.0;
+        let rot2Norm = 0.0;
+        let rot3Norm = 0.0;
         if (version === 2) {
-            rotation[1] = rotationsView.getUint8(splatIndex * 3 + 0);
-            rotation[2] = rotationsView.getUint8(splatIndex * 3 + 1);
-            rotation[3] = rotationsView.getUint8(splatIndex * 3 + 2);
+            rot1Norm = (rotationsView.getUint8(splatIndex * 3 + 0) / 127.5) - 1.0;
+            rot2Norm = (rotationsView.getUint8(splatIndex * 3 + 1) / 127.5) - 1.0;
+            rot3Norm = (rotationsView.getUint8(splatIndex * 3 + 2) / 127.5) - 1.0;
+            const rotationDot = rot1Norm * rot1Norm + rot2Norm * rot2Norm + rot3Norm * rot3Norm;
+            rot0Norm = Math.sqrt(Math.max(0.0, 1.0 - rotationDot));
         } else if (version === 3) {
-            // Copied from https://github.com/nianticlabs/spz/blob/e2101d6924b3936a6fb630cd4a881cb610c57d77/src/cc/load-spz.cc#L347
-            let packedRotation = rotationsView.getUint32(splatIndex);
-            const c_mask = (1 << 9) - 1;
-
-            const largestRotIndex = packedRotation >> 30;
-            let sum_squares = 0;
-            for (let i = 3; i >= 0; --i) {
-                if (i !== largestRotIndex) {
-                    const mag = packedRotation & c_mask;
-                    const negbit = (packedRotation >> 9) & 1;
-                    packedRotation >>= 10;
-                    rotation[i] = Math.SQRT1_2 * (mag) / c_mask;
-                    if (negbit === 1) {
-                        rotation[i] = -rotation[i];
-                    }
-                    sum_squares += rotation[i] * rotation[i];
-                }
-            }
-            rotation[largestRotIndex] = Math.sqrt(1.0 - sum_squares);
+            ({ rot0: rot0Norm, rot1: rot1Norm, rot2: rot2Norm, rot3: rot3Norm } =
+                decodeSpzQuaternionV3(rotationsView.getUint32(splatIndex * 4, true)));
         }
 
         // Store position
@@ -193,19 +216,6 @@ const readSpz = async (source: ReadSource): Promise<DataTable> => {
         const epsilon = 1e-6;
         const normalizedOpacity = Math.max(epsilon, Math.min(1.0 - epsilon, opacity / 255.0));
         (columns[9].data as Float32Array)[splatIndex] = Math.log(normalizedOpacity / (1.0 - normalizedOpacity));
-
-        // Store rotation quaternion (convert from uint8 [0,255] to float [-1,1])
-
-        let rot0Norm = 0.0;
-        const rot1Norm = (rotation[1] / 127.5) - 1.0;
-        const rot2Norm = (rotation[2] / 127.5) - 1.0;
-        const rot3Norm = (rotation[3] / 127.5) - 1.0;
-        if (version === 2) {
-            const rotationDot = rot1Norm * rot1Norm + rot2Norm * rot2Norm + rot3Norm * rot3Norm;
-            rot0Norm = Math.sqrt(Math.max(0.0, 1.0 - rotationDot));
-        } else if (version === 3) {
-            rot0Norm = (rotation[0] / 127.5) - 1.0;
-        }
 
         (columns[10].data as Float32Array)[splatIndex] = rot0Norm;
         (columns[11].data as Float32Array)[splatIndex] = rot1Norm;
