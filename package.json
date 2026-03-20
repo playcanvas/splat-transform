@@ -77,6 +77,7 @@
     "docs": "typedoc",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",
+    "prepare": "npm run build",
     "publint": "publint",
     "watch": "rollup -c -w",
     "test": "node --import tsx/esm --test test/*.test.mjs",
