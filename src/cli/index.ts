@@ -476,7 +476,7 @@ const main = async () => {
                 const prev = Math.round(displaySteps * (node.step - 1) / node.totalSteps);
                 if (curr > prev) process.stderr.write('#'.repeat(curr - prev));
                 if (node.step === node.totalSteps) {
-                    process.stderr.write(` done in ${hrtimeDelta(start, hrtime()).toFixed(3)}s 🎉\n`);
+                    process.stderr.write(` took ${hrtimeDelta(start, hrtime()).toFixed(3)}s\n`);
                 }
             }
         }

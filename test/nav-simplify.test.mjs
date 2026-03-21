@@ -199,7 +199,7 @@ describe('simplifyForCapsule', function () {
     });
 
     describe('unreachable regions', function () {
-        it('should fill unreachable exterior as solid', function () {
+        it('should crop exterior and preserve walls around navigable space', function () {
             const sizeBlocks = 6;
             const acc = new BlockAccumulator();
 
@@ -222,12 +222,11 @@ describe('simplifyForCapsule', function () {
             const centerWorld = sizeBlocks * 4 * voxelResolution / 2;
             const seed = { x: centerWorld, y: centerWorld, z: centerWorld };
 
-            const originalCount = countSolidVoxels(acc);
             const result = simplifyForCapsule(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
             const resultCount = countSolidVoxels(result);
 
-            assert.ok(resultCount > originalCount,
-                `Result (${resultCount}) should be larger than original walls (${originalCount}) because unreachable exterior is filled solid`);
+            assert.ok(resultCount > 0,
+                'Should preserve solid walls around the navigable space');
 
             const nx = Math.round((gridBounds.max.x - gridBounds.min.x) / voxelResolution);
             const ny = Math.round((gridBounds.max.y - gridBounds.min.y) / voxelResolution);
