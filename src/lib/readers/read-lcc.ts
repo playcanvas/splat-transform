@@ -166,6 +166,7 @@ const decodeRotationInto = (
 };
 
 // Decode a unit's splat data and write directly into the global output arrays at propertyOffset.
+// Uses typed array views instead of DataView for faster element access (assumes LE host).
 const processUnit = async (
     info: LccUnitInfo,
     targetLod: number,
@@ -185,13 +186,19 @@ const processUnit = async (
 
     // load data using range read
     const dataBytes = await dataSource.read(offset, offset + size).readAll();
-    const dataView = new DataView(dataBytes.buffer, dataBytes.byteOffset, dataBytes.byteLength);
+
+    // Typed array views over the same buffer -- avoids DataView overhead.
+    // 32-byte record: [f32 x, f32 y, f32 z, u8 r, u8 g, u8 b, u8 opacity,
+    //                  u16 s0, u16 s1, u16 s2, u16 rot_lo, u16 rot_hi, u16 nx, u16 ny, u16 nz]
+    const f32 = new Float32Array(dataBytes.buffer, dataBytes.byteOffset, dataBytes.byteLength >> 2);
+    const u16 = new Uint16Array(dataBytes.buffer, dataBytes.byteOffset, dataBytes.byteLength >> 1);
+    const u8 = dataBytes;
 
     // load sh data using range read
-    let shDataView: DataView | null = null;
+    let shU32: Uint32Array | null = null;
     if (shSource) {
         const shBytes = await shSource.read(offset * 2, offset * 2 + size * 2).readAll();
-        shDataView = new DataView(shBytes.buffer, shBytes.byteOffset, shBytes.byteLength);
+        shU32 = new Uint32Array(shBytes.buffer, shBytes.byteOffset, shBytes.byteLength >> 2);
     }
 
     // Extract array references once to avoid repeated property lookups in the hot loop
@@ -220,31 +227,38 @@ const processUnit = async (
 
     for (let i = 0; i < unitSplats; i++) {
         const g = propertyOffset + i;
-        const off = i * 32;
 
-        px[g] = dataView.getFloat32(off, true);
-        py[g] = dataView.getFloat32(off + 4, true);
-        pz[g] = dataView.getFloat32(off + 8, true);
+        // position: 3 x float32 at byte offsets 0, 4, 8 → f32 indices i*8+{0,1,2}
+        const fi = i << 3;
+        px[g] = f32[fi];
+        py[g] = f32[fi + 1];
+        pz[g] = f32[fi + 2];
 
-        pdc0[g] = invSH0ToColor(dataView.getUint8(off + 12) / 255.0);
-        pdc1[g] = invSH0ToColor(dataView.getUint8(off + 13) / 255.0);
-        pdc2[g] = invSH0ToColor(dataView.getUint8(off + 14) / 255.0);
-        pop[g] = invSigmoid(dataView.getUint8(off + 15) / 255.0);
+        // color + opacity: 4 x uint8 at byte offsets 12..15
+        const bi = i << 5;
+        pdc0[g] = invSH0ToColor(u8[bi + 12] / 255.0);
+        pdc1[g] = invSH0ToColor(u8[bi + 13] / 255.0);
+        pdc2[g] = invSH0ToColor(u8[bi + 14] / 255.0);
+        pop[g] = invSigmoid(u8[bi + 15] / 255.0);
 
-        ps0[g] = invLinearScale(mix(sMinX, sMaxX, dataView.getUint16(off + 16, true) / 65535.0));
-        ps1[g] = invLinearScale(mix(sMinY, sMaxY, dataView.getUint16(off + 18, true) / 65535.0));
-        ps2[g] = invLinearScale(mix(sMinZ, sMaxZ, dataView.getUint16(off + 20, true) / 65535.0));
+        // scale + rotation + normals: uint16 at byte offsets 16..31 → u16 indices i*16+{8..15}
+        const hi = i << 4;
+        ps0[g] = invLinearScale(mix(sMinX, sMaxX, u16[hi + 8] / 65535.0));
+        ps1[g] = invLinearScale(mix(sMinY, sMaxY, u16[hi + 9] / 65535.0));
+        ps2[g] = invLinearScale(mix(sMinZ, sMaxZ, u16[hi + 10] / 65535.0));
 
-        decodeRotationInto(dataView.getUint32(off + 22, true), pr0, pr1, pr2, pr3, g);
+        // rotation: uint32 at byte offset 22 (not 4-byte aligned), reconstruct from two uint16s
+        decodeRotationInto(u16[hi + 11] | (u16[hi + 12] << 16), pr0, pr1, pr2, pr3, g);
 
-        pnx[g] = dataView.getUint16(off + 26, true);
-        pny[g] = dataView.getUint16(off + 28, true);
-        pnz[g] = dataView.getUint16(off + 30, true);
+        pnx[g] = u16[hi + 13];
+        pny[g] = u16[hi + 14];
+        pnz[g] = u16[hi + 15];
 
-        if (shDataView && properties_f_rest) {
-            const shOff = i * 64;
+        // SH coefficients: 15 x uint32 per splat, 64-byte stride (16 uint32s)
+        if (shU32 && properties_f_rest) {
+            const si = i << 4;
             for (let j = 0; j < 15; j++) {
-                const enc = shDataView.getUint32(shOff + j * 4, true);
+                const enc = shU32[si + j];
                 properties_f_rest[j][g] = mix(shMinX, shMaxX, (enc & 0x7FF) / 2047.0);
                 properties_f_rest[j + 15][g] = mix(shMinY, shMaxY, ((enc >> 11) & 0x3FF) / 1023.0);
                 properties_f_rest[j + 30][g] = mix(shMinZ, shMaxZ, ((enc >> 21) & 0x7FF) / 2047.0);
