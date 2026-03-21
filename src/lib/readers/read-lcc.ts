@@ -186,6 +186,10 @@ const processUnit = async (
 
     // load data using range read
     const dataBytes = await dataSource.read(offset, offset + size).readAll();
+    const expectedDataSize = unitSplats * 32;
+    if (dataBytes.byteLength < expectedDataSize) {
+        throw new Error(`LCC unit data too short: expected ${expectedDataSize} bytes for ${unitSplats} splats, got ${dataBytes.byteLength}`);
+    }
 
     // Typed array views over the same buffer -- avoids DataView overhead.
     // 32-byte record: [f32 x, f32 y, f32 z, u8 r, u8 g, u8 b, u8 opacity,
@@ -198,6 +202,10 @@ const processUnit = async (
     let shU32: Uint32Array | null = null;
     if (shSource) {
         const shBytes = await shSource.read(offset * 2, offset * 2 + size * 2).readAll();
+        const expectedShSize = unitSplats * 64;
+        if (shBytes.byteLength < expectedShSize) {
+            throw new Error(`LCC unit SH data too short: expected ${expectedShSize} bytes for ${unitSplats} splats, got ${shBytes.byteLength}`);
+        }
         shU32 = new Uint32Array(shBytes.buffer, shBytes.byteOffset, shBytes.byteLength >> 2);
     }
 
