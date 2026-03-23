@@ -27,7 +27,8 @@ import {
     writeCsv,
     MemoryReadFileSystem,
     MemoryFileSystem,
-    ZipReadFileSystem
+    ZipReadFileSystem,
+    WebPCodec
 } from '../src/lib/index.js';
 
 import { compareSummaries, compareDataTables } from './helpers/summary-compare.mjs';
@@ -35,6 +36,7 @@ import { createMinimalTestData, encodePlyBinary, createVoxelFixture } from './he
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(__dirname, 'fixtures', 'splat');
+WebPCodec.wasmUrl = join(__dirname, '..', 'lib', 'webp.wasm');
 
 /**
  * Creates a ReadSource from a Uint8Array for testing readers.
