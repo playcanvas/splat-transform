@@ -566,7 +566,7 @@ const simplifyForCapsule = (
     bitA.fill(0); // reuse as visited bitfield
 
     const MAX_QUEUE = 1 << 25;
-    const queueCap = Math.min(1 << (32 - Math.clz32(totalVoxels - 1)), MAX_QUEUE);
+    const queueCap = MAX_QUEUE;
     const queueMask = queueCap - 1;
     const bfsQueue = new Uint32Array(queueCap);
     let qHead = 0;
