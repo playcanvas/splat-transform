@@ -420,6 +420,47 @@ const denseGridToAccumulator = (
 };
 
 /**
+ * Search outward from a blocked seed in expanding Chebyshev shells to find
+ * the nearest free (non-blocked) voxel in the dilated clearance grid.
+ *
+ * @param blocked - Dilated bitfield (1 = blocked).
+ * @param seedIx - Seed voxel X index.
+ * @param seedIy - Seed voxel Y index.
+ * @param seedIz - Seed voxel Z index.
+ * @param nx - Grid X dimension.
+ * @param ny - Grid Y dimension.
+ * @param nz - Grid Z dimension.
+ * @param stride - Row stride (nx * ny).
+ * @param maxRadius - Maximum Chebyshev distance to search.
+ * @returns Grid coordinates of the nearest free cell, or null if none found.
+ */
+const findNearestFreeCell = (
+    blocked: Uint32Array,
+    seedIx: number, seedIy: number, seedIz: number,
+    nx: number, ny: number, nz: number, stride: number,
+    maxRadius: number
+): { ix: number; iy: number; iz: number } | null => {
+    for (let r = 1; r <= maxRadius; r++) {
+        for (let dz = -r; dz <= r; dz++) {
+            for (let dy = -r; dy <= r; dy++) {
+                for (let dx = -r; dx <= r; dx++) {
+                    if (Math.abs(dx) !== r && Math.abs(dy) !== r && Math.abs(dz) !== r) continue;
+                    const ix = seedIx + dx;
+                    const iy = seedIy + dy;
+                    const iz = seedIz + dz;
+                    if (ix < 0 || ix >= nx || iy < 0 || iy >= ny || iz < 0 || iz >= nz) continue;
+                    const idx = ix + iy * nx + iz * stride;
+                    if (!((blocked[idx >>> 5] >>> (idx & 31)) & 1)) {
+                        return { ix, iy, iz };
+                    }
+                }
+            }
+        }
+    }
+    return null;
+};
+
+/**
  * Simplify voxel collision data for upright capsule navigation.
  *
  * Uses bitfield storage (1 bit per voxel) to reduce memory by 8x compared
@@ -496,19 +537,32 @@ const simplifyForCapsule = (
 
     // Phase 3: BFS flood fill from seed through free (non-blocked) cells.
     // Uses bitB as blocked mask and bitA as visited mask.
-    const seedIx = Math.floor((seed.x - gridBounds.min.x) / voxelResolution);
-    const seedIy = Math.floor((seed.y - gridBounds.min.y) / voxelResolution);
-    const seedIz = Math.floor((seed.z - gridBounds.min.z) / voxelResolution);
+    let seedIx = Math.floor((seed.x - gridBounds.min.x) / voxelResolution);
+    let seedIy = Math.floor((seed.y - gridBounds.min.y) / voxelResolution);
+    let seedIz = Math.floor((seed.z - gridBounds.min.z) / voxelResolution);
 
     if (seedIx < 0 || seedIx >= nx || seedIy < 0 || seedIy >= ny || seedIz < 0 || seedIz >= nz) {
         logger.warn(`nav simplify: seed (${seed.x}, ${seed.y}, ${seed.z}) outside grid, skipping`);
         return accumulator;
     }
 
-    const seedIdx = seedIx + seedIy * nx + seedIz * stride;
+    let seedIdx = seedIx + seedIy * nx + seedIz * stride;
     if ((bitB[seedIdx >>> 5] >>> (seedIdx & 31)) & 1) {
-        logger.warn(`nav simplify: seed (${seed.x}, ${seed.y}, ${seed.z}) in blocked region, skipping`);
-        return accumulator;
+        const maxRadius = Math.max(kernelR, yHalfExtent) * 2;
+        const found = findNearestFreeCell(bitB, seedIx, seedIy, seedIz, nx, ny, nz, stride, maxRadius);
+        if (!found) {
+            logger.warn(`nav simplify: seed (${seed.x}, ${seed.y}, ${seed.z}) blocked after dilation, no free cell within ${maxRadius} voxels, skipping`);
+            return accumulator;
+        }
+        const dist = Math.max(Math.abs(found.ix - seedIx), Math.abs(found.iy - seedIy), Math.abs(found.iz - seedIz));
+        const worldX = (gridBounds.min.x + (found.ix + 0.5) * voxelResolution).toFixed(2);
+        const worldY = (gridBounds.min.y + (found.iy + 0.5) * voxelResolution).toFixed(2);
+        const worldZ = (gridBounds.min.z + (found.iz + 0.5) * voxelResolution).toFixed(2);
+        logger.log(`nav simplify: seed (${seed.x}, ${seed.y}, ${seed.z}) blocked after dilation, adjusted to (${worldX}, ${worldY}, ${worldZ}) (distance: ${dist} voxels)`);
+        seedIx = found.ix;
+        seedIy = found.iy;
+        seedIz = found.iz;
+        seedIdx = seedIx + seedIy * nx + seedIz * stride;
     }
 
     t0 = performance.now();
