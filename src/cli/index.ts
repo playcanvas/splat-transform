@@ -465,16 +465,19 @@ const main = async () => {
 
     let start: Timing | null = null;
 
+    const err = console.error.bind(console);
+    const warn = console.warn.bind(console);
+
     // inject Node.js-specific logger - logs go to stderr, data output goes to stdout
     logger.setLogger({
-        log: (...args) => console.error(...args),
-        warn: (...args) => console.warn(...args),
-        error: (...args) => console.error(...args),
-        debug: (...args) => console.error(...args),
-        output: text => console.log(text),
+        log: err,
+        warn: warn,
+        error: err,
+        debug: err,
+        output: console.log.bind(console),
         onProgress: (node) => {
             if (node.stepName) {
-                console.error(`[${node.step}/${node.totalSteps}] ${node.stepName}`);
+                err(`[${node.step}/${node.totalSteps}] ${node.stepName}`);
             } else if (node.step === 0) {
                 start = hrtime();
             } else {
@@ -483,7 +486,7 @@ const main = async () => {
                 const prev = Math.round(displaySteps * (node.step - 1) / node.totalSteps);
                 if (curr > prev) process.stderr.write('#'.repeat(curr - prev));
                 if (node.step === node.totalSteps) {
-                    process.stderr.write(` took ${hrtimeDelta(start, hrtime()).toFixed(3)}s\n`);
+                    process.stderr.write(` (${hrtimeDelta(start, hrtime()).toFixed(3)}s)\n`);
                 }
             }
         }

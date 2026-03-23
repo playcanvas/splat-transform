@@ -3,7 +3,6 @@ import { Vec3 } from 'playcanvas';
 import {
     BlockAccumulator,
     mortonToXYZ,
-    popcount,
     xyzToMorton,
     type Bounds
 } from './sparse-octree';
@@ -519,23 +518,15 @@ const simplifyForCapsule = (
     const kernelR = Math.ceil(capsuleRadius / voxelResolution);
     const yHalfExtent = Math.ceil(capsuleHeight / (2 * voxelResolution));
 
-    const memoryMB = Math.round(wordCount * 4 * 2 / (1024 * 1024));
-    logger.debug(`nav simplify: grid ${nx}x${ny}x${nz} (${totalVoxels} voxels, ~${memoryMB} MB bitfield), clearance r=${kernelR}, y half=${yHalfExtent}`);
+    logger.progress.begin(6);
 
     // Phase 1: build dense bitfield grid from accumulator
-    let t0 = performance.now();
     const bitA = new Uint32Array(wordCount);
     fillDenseSolidGrid(accumulator, bitA, nx, ny, nz);
-
-    let solidCount = 0;
-    for (let w = 0; w < wordCount; w++) {
-        solidCount += popcount(bitA[w]);
-    }
-    logger.debug(`nav simplify: phase 1 (dense grid) ${(performance.now() - t0).toFixed(0)}ms, ${solidCount} solid voxels`);
+    logger.progress.step();
 
     // Phase 2: capsule clearance grid (Minkowski dilation of solid by capsule)
     // Three separable 1D sliding window passes (X, Z, Y).
-    t0 = performance.now();
     const bitB = new Uint32Array(wordCount);
 
     dilateX(bitA, bitB, nx, ny, nz, kernelR);
@@ -543,7 +534,7 @@ const simplifyForCapsule = (
     dilateZ(bitB, bitA, nx, ny, nz, kernelR);
     bitB.fill(0);
     dilateY(bitA, bitB, nx, ny, nz, yHalfExtent);
-    logger.debug(`nav simplify: phase 2 (dilation) ${(performance.now() - t0).toFixed(0)}ms`);
+    logger.progress.step();
 
     // Phase 3: BFS flood fill from seed through free (non-blocked) cells.
     // Uses bitB as blocked mask and bitA as visited mask.
@@ -553,6 +544,7 @@ const simplifyForCapsule = (
 
     if (seedIx < 0 || seedIx >= nx || seedIy < 0 || seedIy >= ny || seedIz < 0 || seedIz >= nz) {
         logger.warn(`nav simplify: seed (${seed.x}, ${seed.y}, ${seed.z}) outside grid, skipping`);
+        logger.progress.cancel();
         return { accumulator, gridBounds };
     }
 
@@ -562,20 +554,15 @@ const simplifyForCapsule = (
         const found = findNearestFreeCell(bitB, seedIx, seedIy, seedIz, nx, ny, nz, stride, maxRadius);
         if (!found) {
             logger.warn(`nav simplify: seed (${seed.x}, ${seed.y}, ${seed.z}) blocked after dilation, no free cell within ${maxRadius} voxels, skipping`);
+            logger.progress.cancel();
             return { accumulator, gridBounds };
         }
-        const dist = Math.max(Math.abs(found.ix - seedIx), Math.abs(found.iy - seedIy), Math.abs(found.iz - seedIz));
-        const worldX = (gridBounds.min.x + (found.ix + 0.5) * voxelResolution).toFixed(2);
-        const worldY = (gridBounds.min.y + (found.iy + 0.5) * voxelResolution).toFixed(2);
-        const worldZ = (gridBounds.min.z + (found.iz + 0.5) * voxelResolution).toFixed(2);
-        logger.log(`nav simplify: seed (${seed.x}, ${seed.y}, ${seed.z}) blocked after dilation, adjusted to (${worldX}, ${worldY}, ${worldZ}) (distance: ${dist} voxels)`);
         seedIx = found.ix;
         seedIy = found.iy;
         seedIz = found.iz;
         seedIdx = seedIx + seedIy * nx + seedIz * stride;
     }
 
-    t0 = performance.now();
     bitA.fill(0); // reuse as visited bitfield
 
     const MAX_QUEUE = 1 << 25;
@@ -585,7 +572,6 @@ const simplifyForCapsule = (
     let qHead = 0;
     let qTail = 0;
     let queueSize = 0;
-    let reachableCount = 0;
     let overflowed = false;
 
     const enqueue = (nIdx: number) => {
@@ -615,7 +601,6 @@ const simplifyForCapsule = (
         const idx = bfsQueue[qHead];
         qHead = (qHead + 1) & queueMask;
         queueSize--;
-        reachableCount++;
 
         const ix = idx % nx;
         const iy = Math.floor((idx % stride) / nx);
@@ -629,12 +614,11 @@ const simplifyForCapsule = (
         if (iz < nz - 1) enqueue(idx + stride);
     }
 
-    logger.debug(`nav simplify: phase 3 (flood fill) ${(performance.now() - t0).toFixed(0)}ms, ${reachableCount} reachable cells (${(reachableCount / totalVoxels * 100).toFixed(1)}%)`);
+    logger.progress.step();
 
     // Phase 4: invert reachable to solid (bitwise operation).
     // Reachable = visited AND NOT blocked = bitA AND NOT bitB.
     // Solid = NOT reachable = NOT bitA OR bitB = ~bitA | bitB.
-    t0 = performance.now();
     for (let w = 0; w < wordCount; w++) {
         bitB[w] |= ~bitA[w];
     }
@@ -645,14 +629,9 @@ const simplifyForCapsule = (
         bitB[wordCount - 1] &= (1 << tailBits) - 1;
     }
 
-    let outputCount = 0;
-    for (let w = 0; w < wordCount; w++) {
-        outputCount += popcount(bitB[w]);
-    }
-    logger.debug(`nav simplify: phase 4 (invert) ${(performance.now() - t0).toFixed(0)}ms, ${outputCount} solid voxels`);
+    logger.progress.step();
 
     // Phase 5: erode solid by capsule shape (Minkowski subtraction)
-    t0 = performance.now();
     bitA.fill(0);
     erodeX(bitB, bitA, nx, ny, nz, kernelR);
 
@@ -661,10 +640,9 @@ const simplifyForCapsule = (
 
     bitA.fill(0);
     erodeY(bitB, bitA, nx, ny, nz, yHalfExtent);
-    logger.debug(`nav simplify: phase 5 (erosion) ${(performance.now() - t0).toFixed(0)}ms`);
+    logger.progress.step();
 
     // Phase 6: crop to bounding box of empty (navigable) cells
-    t0 = performance.now();
     let minIx = nx, minIy = ny, minIz = nz;
     let maxIx = 0, maxIy = 0, maxIz = 0;
 
@@ -713,9 +691,7 @@ const simplifyForCapsule = (
         )
     };
 
-    const croppedBlocks = (cropMaxBx - cropMinBx) * (cropMaxBy - cropMinBy) * (cropMaxBz - cropMinBz);
-    const totalBlocks = nbx * nby * nbz;
-    logger.log(`nav simplify: phase 6 (crop) ${(performance.now() - t0).toFixed(0)}ms, ${cropMaxBx - cropMinBx}x${cropMaxBy - cropMinBy}x${cropMaxBz - cropMinBz} blocks (${croppedBlocks} of ${totalBlocks})`);
+    logger.progress.step();
 
     return {
         accumulator: denseGridToAccumulator(
