@@ -87,37 +87,16 @@ class BufferReadStream {
     }
 }
 
-const packQuaternionSmallestThree = (x, y, z, w) => {
-    const q = [x, y, z, w];
-    const length = Math.hypot(x, y, z, w);
-    if (length === 0) {
-        throw new Error('Quaternion must be non-zero');
-    }
-
-    for (let i = 0; i < 4; i++) {
-        q[i] /= length;
-    }
-
-    let largestIndex = 0;
-    for (let i = 1; i < 4; i++) {
-        if (Math.abs(q[i]) > Math.abs(q[largestIndex])) {
-            largestIndex = i;
-        }
-    }
-
-    const negate = q[largestIndex] < 0;
-    const maxMag = (1 << 9) - 1;
-    let packed = largestIndex;
-
-    for (let i = 0; i < 4; i++) {
-        if (i !== largestIndex) {
-            const negbit = ((q[i] < 0) ? 1 : 0) ^ (negate ? 1 : 0);
-            const mag = Math.round(maxMag * (Math.abs(q[i]) / Math.SQRT1_2));
-            packed = (packed << 10) | (negbit << 9) | Math.min(maxMag, mag);
-        }
-    }
-
-    return packed >>> 0;
+// Hardcoded packed uint32 values for known quaternions, verified against the
+// reference C++ smallest-three encoder in nianticlabs/spz.
+// Using hardcoded values avoids re-implementing the packing logic in tests,
+// which could mask spec/bit-layout bugs if both encoder and decoder share
+// the same mistake.
+const SPZ_V3_PACKED_QUATERNIONS = {
+    // Identity [x=0, y=0, z=0, w=1]: largestIndex=3 (w), all others zero
+    identity: 0xC0000000,
+    // 45-deg Z rotation [x=0, y=0, z=sin(pi/4), w=cos(pi/4)]: largestIndex=2 (z), w encodes as mag=511
+    rotate45Z: 0x800001FF
 };
 
 const createSpzV3Fixture = () => {
@@ -178,14 +157,8 @@ const createSpzV3Fixture = () => {
     }
     offset += scalesByteSize;
 
-    const quaternions = [
-        [0, 0, 0, 1],
-        [0, 0, Math.sin(Math.PI / 4), Math.cos(Math.PI / 4)]
-    ];
-    for (let i = 0; i < count; i++) {
-        const [x, y, z, w] = quaternions[i];
-        view.setUint32(offset + i * 4, packQuaternionSmallestThree(x, y, z, w), true);
-    }
+    view.setUint32(offset, SPZ_V3_PACKED_QUATERNIONS.identity, true);
+    view.setUint32(offset + 4, SPZ_V3_PACKED_QUATERNIONS.rotate45Z, true);
 
     return new Uint8Array(buffer);
 };

@@ -32,34 +32,8 @@ function getFixed24(positionsView: DataView, elementIndex: number, memberIndex: 
 
 const HARMONICS_COMPONENT_COUNT = [0, 9, 24, 45];
 
-const decodeSpzQuaternionV3 = (packedRotation: number) => {
-    const rotation = [0.0, 0.0, 0.0, 0.0];
-    const cMask = (1 << 9) - 1;
-    const largestRotIndex = packedRotation >>> 30;
-    let sumSquares = 0;
-
-    for (let i = 3; i >= 0; --i) {
-        if (i !== largestRotIndex) {
-            const mag = packedRotation & cMask;
-            const negbit = (packedRotation >>> 9) & 1;
-            packedRotation >>>= 10;
-            rotation[i] = Math.SQRT1_2 * mag / cMask;
-            if (negbit === 1) {
-                rotation[i] = -rotation[i];
-            }
-            sumSquares += rotation[i] * rotation[i];
-        }
-    }
-
-    rotation[largestRotIndex] = Math.sqrt(Math.max(0.0, 1.0 - sumSquares));
-
-    return {
-        rot0: rotation[3], // w
-        rot1: rotation[0], // x
-        rot2: rotation[1], // y
-        rot3: rotation[2]  // z
-    };
-};
+// Reusable scratch array for smallest-three quaternion decoding (avoids per-splat allocations)
+const tmpQuat = [0.0, 0.0, 0.0, 0.0];
 
 /**
  * Reads a .spz file containing Niantic Labs compressed Gaussian splat data.
@@ -189,11 +163,31 @@ const readSpz = async (source: ReadSource): Promise<DataTable> => {
             rot1Norm = (rotationsView.getUint8(splatIndex * 3 + 0) / 127.5) - 1.0;
             rot2Norm = (rotationsView.getUint8(splatIndex * 3 + 1) / 127.5) - 1.0;
             rot3Norm = (rotationsView.getUint8(splatIndex * 3 + 2) / 127.5) - 1.0;
-            const rotationDot = rot1Norm * rot1Norm + rot2Norm * rot2Norm + rot3Norm * rot3Norm;
-            rot0Norm = Math.sqrt(Math.max(0.0, 1.0 - rotationDot));
+            const dot = rot1Norm * rot1Norm + rot2Norm * rot2Norm + rot3Norm * rot3Norm;
+            rot0Norm = Math.sqrt(Math.max(0.0, 1.0 - dot));
         } else if (version === 3) {
-            ({ rot0: rot0Norm, rot1: rot1Norm, rot2: rot2Norm, rot3: rot3Norm } =
-                decodeSpzQuaternionV3(rotationsView.getUint32(splatIndex * 4, true)));
+            // Smallest-three quaternion decode from packed uint32
+            // SPZ stores as [x, y, z, w] (indices 0-3)
+            tmpQuat[0] = tmpQuat[1] = tmpQuat[2] = tmpQuat[3] = 0.0;
+            let packed = rotationsView.getUint32(splatIndex * 4, true);
+            const cMask = (1 << 9) - 1;
+            const largest = packed >>> 30;
+            let sumSq = 0;
+            for (let i = 3; i >= 0; --i) {
+                if (i !== largest) {
+                    const mag = packed & cMask;
+                    const neg = (packed >>> 9) & 1;
+                    packed >>>= 10;
+                    tmpQuat[i] = Math.SQRT1_2 * mag / cMask;
+                    if (neg === 1) tmpQuat[i] = -tmpQuat[i];
+                    sumSq += tmpQuat[i] * tmpQuat[i];
+                }
+            }
+            tmpQuat[largest] = Math.sqrt(Math.max(0.0, 1.0 - sumSq));
+            rot0Norm = tmpQuat[3]; // w
+            rot1Norm = tmpQuat[0]; // x
+            rot2Norm = tmpQuat[1]; // y
+            rot3Norm = tmpQuat[2]; // z
         }
 
         // Store position
