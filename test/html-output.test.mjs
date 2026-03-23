@@ -4,13 +4,19 @@
 
 import { describe, it, before } from 'node:test';
 import assert from 'node:assert';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
     writeHtml,
-    MemoryFileSystem
+    MemoryFileSystem,
+    WebPCodec
 } from '../src/lib/index.js';
 
 import { createMinimalTestData } from './helpers/test-utils.mjs';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+WebPCodec.wasmUrl = join(__dirname, '..', 'lib', 'webp.wasm');
 
 describe('HTML Format (Output Only)', () => {
     let testData;
