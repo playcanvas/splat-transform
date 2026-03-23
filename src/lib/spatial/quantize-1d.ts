@@ -101,8 +101,69 @@ const quantize1d = (dataTable: DataTable, k = 256, alpha = 0.5) => {
         return (prefWX[b + 1] - prefWX[a]) / w;
     };
 
-    // clamp k to number of non-empty bins
-    const nonEmpty = counts.reduce((n, c) => n + (c > 0 ? 1 : 0), 0);
+    let nonEmpty = counts.reduce((n, c) => n + (c > 0 ? 1 : 0), 0);
+
+    // If extreme outliers stretch the histogram range so that most bins are
+    // empty, rebuild over a percentile-trimmed range to restore resolution.
+    if (nonEmpty < k) {
+        const trimFrac = 0.001;
+        const trimCount = N * trimFrac;
+
+        let lowBin = 0;
+        let cumLow = 0;
+        for (let i = 0; i < H; ++i) {
+            cumLow += counts[i];
+            if (cumLow >= trimCount) {
+                lowBin = i;
+                break;
+            }
+        }
+
+        let highBin = H - 1;
+        let cumHigh = 0;
+        for (let i = H - 1; i >= 0; --i) {
+            cumHigh += counts[i];
+            if (cumHigh >= trimCount) {
+                highBin = i;
+                break;
+            }
+        }
+
+        const newMin = dataMin + lowBin * binWidth;
+        const newMax = dataMin + (highBin + 1) * binWidth;
+
+        if (newMax - newMin > 1e-20) {
+            const newBinWidth = (newMax - newMin) / H;
+
+            counts.fill(0);
+            sums.fill(0);
+            for (let i = 0; i < N; ++i) {
+                const bin = Math.max(0, Math.min(H - 1, Math.floor((data[i] - newMin) / newBinWidth)));
+                counts[bin]++;
+                sums[bin] += data[i];
+            }
+
+            for (let i = 0; i < H; ++i) {
+                centers[i] = counts[i] > 0 ? sums[i] / counts[i] : newMin + (i + 0.5) * newBinWidth;
+            }
+
+            for (let i = 0; i < H; ++i) {
+                weights[i] = counts[i] > 0 ? Math.pow(counts[i], alpha) : 0;
+            }
+
+            prefW[0] = 0;
+            prefWX[0] = 0;
+            prefWXX[0] = 0;
+            for (let i = 0; i < H; ++i) {
+                prefW[i + 1] = prefW[i] + weights[i];
+                prefWX[i + 1] = prefWX[i] + weights[i] * centers[i];
+                prefWXX[i + 1] = prefWXX[i] + weights[i] * centers[i] * centers[i];
+            }
+
+            nonEmpty = counts.reduce((n, c) => n + (c > 0 ? 1 : 0), 0);
+        }
+    }
+
     const effectiveK = Math.min(k, nonEmpty);
 
     // DP: dp[m][j] = min weighted SSE of quantizing bins 0..j into m centroids
