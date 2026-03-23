@@ -208,7 +208,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     // Align grid bounds to block boundaries BEFORE voxelization so the
     // block coordinates used during voxelization match what the reader expects.
     const blockSize = 4 * voxelResolution;  // Each block is 4x4x4 voxels
-    const gridBounds = alignGridBounds(
+    let gridBounds = alignGridBounds(
         bounds.min.x, bounds.min.y, bounds.min.z,
         bounds.max.x, bounds.max.y, bounds.max.z,
         voxelResolution
@@ -439,11 +439,13 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
 
     if (hasNav) {
         logger.progress.step('Nav simplification');
-        accumulator = simplifyForCapsule(
+        const navResult = simplifyForCapsule(
             accumulator, gridBounds, voxelResolution,
             navCapsule!.height, navCapsule!.radius,
             navSeed!
         );
+        accumulator = navResult.accumulator;
+        gridBounds = navResult.gridBounds;
     }
 
     let glbBytes: Uint8Array | null = null;

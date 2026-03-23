@@ -173,7 +173,7 @@ const parseArguments = async () => {
     // Parse nav simplification options
     const navCapsuleStr = v['nav-capsule'];
     const navSeedStr = v['nav-seed'];
-    const navSimplify = v['nav-simplify'] || !!(navCapsuleStr || navSeedStr);
+    const navSimplify = v['nav-simplify'];
     let navCapsule: { height: number; radius: number } | undefined;
     let navSeed: { x: number; y: number; z: number } | undefined;
 

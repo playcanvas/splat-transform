@@ -19,6 +19,14 @@ type NavSeed = {
 };
 
 /**
+ * Result of capsule navigation simplification.
+ */
+type NavSimplifyResult = {
+    accumulator: BlockAccumulator;
+    gridBounds: Bounds;
+};
+
+/**
  * Populate a bitfield grid from a BlockAccumulator.
  * Each bit in the Uint32Array represents one voxel (1 = solid).
  *
@@ -484,12 +492,12 @@ const findNearestFreeCell = (
  * in unsealed scenes.
  *
  * @param accumulator - BlockAccumulator with filtered voxelization results.
- * @param gridBounds - Grid bounds aligned to block boundaries.
+ * @param gridBounds - Grid bounds aligned to block boundaries (not mutated).
  * @param voxelResolution - Size of each voxel in world units.
  * @param capsuleHeight - Total capsule height in world units.
  * @param capsuleRadius - Capsule radius in world units.
  * @param seed - Seed position in world space (must be in a free region).
- * @returns New BlockAccumulator with simplified collision voxels.
+ * @returns Simplified accumulator and cropped grid bounds.
  */
 const simplifyForCapsule = (
     accumulator: BlockAccumulator,
@@ -498,7 +506,7 @@ const simplifyForCapsule = (
     capsuleHeight: number,
     capsuleRadius: number,
     seed: NavSeed
-): BlockAccumulator => {
+): NavSimplifyResult => {
     const nx = Math.round((gridBounds.max.x - gridBounds.min.x) / voxelResolution);
     const ny = Math.round((gridBounds.max.y - gridBounds.min.y) / voxelResolution);
     const nz = Math.round((gridBounds.max.z - gridBounds.min.z) / voxelResolution);
@@ -506,8 +514,10 @@ const simplifyForCapsule = (
     const stride = nx * ny;
     const wordCount = (totalVoxels + 31) >>> 5;
 
-    const kernelR = Math.ceil(capsuleRadius / voxelResolution) + 1;
-    const yHalfExtent = Math.ceil(capsuleHeight / (2 * voxelResolution)) + 1;
+    // Capsule approximated as an axis-aligned box (square XZ cross-section).
+    // Conservative: may reject narrow diagonal passages a true capsule could fit.
+    const kernelR = Math.ceil(capsuleRadius / voxelResolution);
+    const yHalfExtent = Math.ceil(capsuleHeight / (2 * voxelResolution));
 
     const memoryMB = Math.round(wordCount * 4 * 2 / (1024 * 1024));
     logger.debug(`nav simplify: grid ${nx}x${ny}x${nz} (${totalVoxels} voxels, ~${memoryMB} MB bitfield), clearance r=${kernelR}, y half=${yHalfExtent}`);
@@ -543,7 +553,7 @@ const simplifyForCapsule = (
 
     if (seedIx < 0 || seedIx >= nx || seedIy < 0 || seedIy >= ny || seedIz < 0 || seedIz >= nz) {
         logger.warn(`nav simplify: seed (${seed.x}, ${seed.y}, ${seed.z}) outside grid, skipping`);
-        return accumulator;
+        return { accumulator, gridBounds };
     }
 
     let seedIdx = seedIx + seedIy * nx + seedIz * stride;
@@ -552,7 +562,7 @@ const simplifyForCapsule = (
         const found = findNearestFreeCell(bitB, seedIx, seedIy, seedIz, nx, ny, nz, stride, maxRadius);
         if (!found) {
             logger.warn(`nav simplify: seed (${seed.x}, ${seed.y}, ${seed.z}) blocked after dilation, no free cell within ${maxRadius} voxels, skipping`);
-            return accumulator;
+            return { accumulator, gridBounds };
         }
         const dist = Math.max(Math.abs(found.ix - seedIx), Math.abs(found.iy - seedIy), Math.abs(found.iz - seedIz));
         const worldX = (gridBounds.min.x + (found.ix + 0.5) * voxelResolution).toFixed(2);
@@ -568,91 +578,55 @@ const simplifyForCapsule = (
     t0 = performance.now();
     bitA.fill(0); // reuse as visited bitfield
 
-    const QUEUE_BITS = 25;
-    const QUEUE_CAP = 1 << QUEUE_BITS;
-    const QUEUE_MASK = QUEUE_CAP - 1;
-    const bfsQueue = new Uint32Array(QUEUE_CAP);
+    const MAX_QUEUE = 1 << 25;
+    const queueCap = Math.min(totalVoxels, MAX_QUEUE);
+    const queueMask = queueCap - 1;
+    const bfsQueue = new Uint32Array(queueCap);
     let qHead = 0;
     let qTail = 0;
+    let queueSize = 0;
     let reachableCount = 0;
+    let overflowed = false;
 
-    // Mark seed as visited
+    const enqueue = (nIdx: number) => {
+        const w = nIdx >>> 5;
+        const m = 1 << (nIdx & 31);
+        if (!((bitB[w] | bitA[w]) & m)) {
+            if (queueSize >= queueCap) {
+                if (!overflowed) {
+                    logger.warn(`nav simplify: BFS queue overflow (cap ${queueCap}), results may be incomplete`);
+                    overflowed = true;
+                }
+                return;
+            }
+            bitA[w] |= m;
+            bfsQueue[qTail] = nIdx;
+            qTail = (qTail + 1) & queueMask;
+            queueSize++;
+        }
+    };
+
     bitA[seedIdx >>> 5] |= (1 << (seedIdx & 31));
     bfsQueue[qTail] = seedIdx;
-    qTail = (qTail + 1) & QUEUE_MASK;
+    qTail = (qTail + 1) & queueMask;
+    queueSize++;
 
     while (qHead !== qTail) {
         const idx = bfsQueue[qHead];
-        qHead = (qHead + 1) & QUEUE_MASK;
+        qHead = (qHead + 1) & queueMask;
+        queueSize--;
         reachableCount++;
 
         const ix = idx % nx;
         const iy = Math.floor((idx % stride) / nx);
         const iz = Math.floor(idx / stride);
 
-        // Check 6-connected neighbors: free = not blocked AND not visited.
-        // OR the blocked and visited words, then test a single bit.
-        let nIdx: number, w: number, m: number;
-        if (ix > 0) {
-            nIdx = idx - 1;
-            w = nIdx >>> 5;
-            m = 1 << (nIdx & 31);
-            if (!((bitB[w] | bitA[w]) & m)) {
-                bitA[w] |= m;
-                bfsQueue[qTail] = nIdx;
-                qTail = (qTail + 1) & QUEUE_MASK;
-            }
-        }
-        if (ix < nx - 1) {
-            nIdx = idx + 1;
-            w = nIdx >>> 5;
-            m = 1 << (nIdx & 31);
-            if (!((bitB[w] | bitA[w]) & m)) {
-                bitA[w] |= m;
-                bfsQueue[qTail] = nIdx;
-                qTail = (qTail + 1) & QUEUE_MASK;
-            }
-        }
-        if (iy > 0) {
-            nIdx = idx - nx;
-            w = nIdx >>> 5;
-            m = 1 << (nIdx & 31);
-            if (!((bitB[w] | bitA[w]) & m)) {
-                bitA[w] |= m;
-                bfsQueue[qTail] = nIdx;
-                qTail = (qTail + 1) & QUEUE_MASK;
-            }
-        }
-        if (iy < ny - 1) {
-            nIdx = idx + nx;
-            w = nIdx >>> 5;
-            m = 1 << (nIdx & 31);
-            if (!((bitB[w] | bitA[w]) & m)) {
-                bitA[w] |= m;
-                bfsQueue[qTail] = nIdx;
-                qTail = (qTail + 1) & QUEUE_MASK;
-            }
-        }
-        if (iz > 0) {
-            nIdx = idx - stride;
-            w = nIdx >>> 5;
-            m = 1 << (nIdx & 31);
-            if (!((bitB[w] | bitA[w]) & m)) {
-                bitA[w] |= m;
-                bfsQueue[qTail] = nIdx;
-                qTail = (qTail + 1) & QUEUE_MASK;
-            }
-        }
-        if (iz < nz - 1) {
-            nIdx = idx + stride;
-            w = nIdx >>> 5;
-            m = 1 << (nIdx & 31);
-            if (!((bitB[w] | bitA[w]) & m)) {
-                bitA[w] |= m;
-                bfsQueue[qTail] = nIdx;
-                qTail = (qTail + 1) & QUEUE_MASK;
-            }
-        }
+        if (ix > 0) enqueue(idx - 1);
+        if (ix < nx - 1) enqueue(idx + 1);
+        if (iy > 0) enqueue(idx - nx);
+        if (iy < ny - 1) enqueue(idx + nx);
+        if (iz > 0) enqueue(idx - stride);
+        if (iz < nz - 1) enqueue(idx + stride);
     }
 
     logger.debug(`nav simplify: phase 3 (flood fill) ${(performance.now() - t0).toFixed(0)}ms, ${reachableCount} reachable cells (${(reachableCount / totalVoxels * 100).toFixed(1)}%)`);
@@ -725,27 +699,33 @@ const simplifyForCapsule = (
     const cropMaxBz = Math.min(nbz, (maxIz >> 2) + 1 + MARGIN);
 
     const blockSize = 4 * voxelResolution;
-    gridBounds.min = new Vec3(
+    const croppedMin = new Vec3(
         gridBounds.min.x + cropMinBx * blockSize,
         gridBounds.min.y + cropMinBy * blockSize,
         gridBounds.min.z + cropMinBz * blockSize
     );
-    gridBounds.max = new Vec3(
-        gridBounds.min.x + (cropMaxBx - cropMinBx) * blockSize,
-        gridBounds.min.y + (cropMaxBy - cropMinBy) * blockSize,
-        gridBounds.min.z + (cropMaxBz - cropMinBz) * blockSize
-    );
+    const croppedBounds: Bounds = {
+        min: croppedMin,
+        max: new Vec3(
+            croppedMin.x + (cropMaxBx - cropMinBx) * blockSize,
+            croppedMin.y + (cropMaxBy - cropMinBy) * blockSize,
+            croppedMin.z + (cropMaxBz - cropMinBz) * blockSize
+        )
+    };
 
     const croppedBlocks = (cropMaxBx - cropMinBx) * (cropMaxBy - cropMinBy) * (cropMaxBz - cropMinBz);
     const totalBlocks = nbx * nby * nbz;
     logger.log(`nav simplify: phase 6 (crop) ${(performance.now() - t0).toFixed(0)}ms, ${cropMaxBx - cropMinBx}x${cropMaxBy - cropMinBy}x${cropMaxBz - cropMinBz} blocks (${croppedBlocks} of ${totalBlocks})`);
 
-    return denseGridToAccumulator(
-        bitA, nx, ny, nz,
-        cropMinBx, cropMinBy, cropMinBz,
-        cropMaxBx, cropMaxBy, cropMaxBz
-    );
+    return {
+        accumulator: denseGridToAccumulator(
+            bitA, nx, ny, nz,
+            cropMinBx, cropMinBy, cropMinBz,
+            cropMaxBx, cropMaxBy, cropMaxBz
+        ),
+        gridBounds: croppedBounds
+    };
 };
 
 export { simplifyForCapsule };
-export type { NavSeed };
+export type { NavSeed, NavSimplifyResult };

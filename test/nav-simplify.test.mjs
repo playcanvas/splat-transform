@@ -113,7 +113,7 @@ describe('simplifyForCapsule', function () {
             const seed = { x: centerWorld, y: centerWorld, z: centerWorld };
 
             const result = simplifyForCapsule(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
-            const resultCount = countSolidVoxels(result);
+            const resultCount = countSolidVoxels(result.accumulator);
 
             assert.ok(resultCount > 0,
                 'Should produce solid voxels around the navigable space');
@@ -127,7 +127,7 @@ describe('simplifyForCapsule', function () {
 
             const result = simplifyForCapsule(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
 
-            const resultCount = countSolidVoxels(result);
+            const resultCount = countSolidVoxels(result.accumulator);
             const nx = Math.round((gridBounds.max.x - gridBounds.min.x) / voxelResolution);
             const totalCells = nx * nx * nx;
 
@@ -143,7 +143,7 @@ describe('simplifyForCapsule', function () {
             const seed = { x: -100, y: -100, z: -100 };
             const result = simplifyForCapsule(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
 
-            assert.strictEqual(countSolidVoxels(result), countSolidVoxels(acc),
+            assert.strictEqual(countSolidVoxels(result.accumulator), countSolidVoxels(acc),
                 'Should return original when seed is outside grid');
         });
 
@@ -158,7 +158,7 @@ describe('simplifyForCapsule', function () {
             };
             const result = simplifyForCapsule(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
 
-            assert.strictEqual(countSolidVoxels(result), countSolidVoxels(acc),
+            assert.strictEqual(countSolidVoxels(result.accumulator), countSolidVoxels(acc),
                 'Should return original when seed is in blocked region');
         });
     });
@@ -170,7 +170,7 @@ describe('simplifyForCapsule', function () {
             const seed = { x: 0.5, y: 0.5, z: 0.5 };
 
             const result = simplifyForCapsule(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
-            const resultCount = countSolidVoxels(result);
+            const resultCount = countSolidVoxels(result.accumulator);
             const nx = Math.round((gridBounds.max.x - gridBounds.min.x) / voxelResolution);
             const ny = Math.round((gridBounds.max.y - gridBounds.min.y) / voxelResolution);
             const nz = Math.round((gridBounds.max.z - gridBounds.min.z) / voxelResolution);
@@ -192,7 +192,7 @@ describe('simplifyForCapsule', function () {
 
             const result = simplifyForCapsule(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
 
-            const resultCount = countSolidVoxels(result);
+            const resultCount = countSolidVoxels(result.accumulator);
             assert.ok(resultCount > 0,
                 'Should retain solid voxels near the reachable space');
         });
@@ -223,7 +223,7 @@ describe('simplifyForCapsule', function () {
             const seed = { x: centerWorld, y: centerWorld, z: centerWorld };
 
             const result = simplifyForCapsule(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
-            const resultCount = countSolidVoxels(result);
+            const resultCount = countSolidVoxels(result.accumulator);
 
             assert.ok(resultCount > 0,
                 'Should preserve solid walls around the navigable space');

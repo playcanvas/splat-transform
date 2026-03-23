@@ -167,7 +167,7 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
             }, fs);
             break;
         case 'voxel': {
-            const enableNav = options.navSimplify || !!(options.navCapsule && options.navSeed);
+            const enableNav = !!options.navSimplify;
             const navCapsule = enableNav ? (options.navCapsule ?? { height: 1.6, radius: 0.2 }) : undefined;
             const navSeed = enableNav ? (options.navSeed ?? { x: 0, y: 0, z: 0 }) : undefined;
             await writeVoxel({
