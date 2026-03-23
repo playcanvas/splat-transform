@@ -87,7 +87,7 @@ const parseArguments = async () => {
             'opacity-cutoff': { type: 'string', short: 'A', default: '0.1' },
             'collision-mesh': { type: 'boolean', short: 'K', default: false },
             'mesh-simplify': { type: 'string', short: 'T', default: '0.25' },
-            'nav-simplify': { type: 'boolean', short: 'n', default: false },
+            'nav-simplify': { type: 'boolean', short: 'n', default: true },
             'nav-capsule': { type: 'string', default: '' },
             'nav-seed': { type: 'string', default: '' },
 
@@ -437,7 +437,8 @@ GLOBAL OPTIONS
     -A, --opacity-cutoff   <n>              Opacity threshold for solid voxels. Default: 0.1
     -K, --collision-mesh                    Generate collision mesh (.collision.glb) with voxel output
     -T, --mesh-simplify    <n>              Ratio of triangles to keep for collision mesh (0-1). Default: 0.25
-    -n, --nav-simplify                      Enable capsule navigation simplification for voxel output
+    -n, --nav-simplify                      Capsule navigation simplification for voxel output (default: on)
+        --no-nav-simplify                   Disable navigation simplification
         --nav-capsule      <height,radius>  Capsule dimensions for nav simplification. Default: 1.6,0.2
         --nav-seed         <x,y,z>          Seed position for nav simplification. Default: 0,0,0
 
