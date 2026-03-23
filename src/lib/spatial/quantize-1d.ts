@@ -1,22 +1,23 @@
 import { Column, DataTable } from '../data-table/data-table';
 
 /**
- * Optimal 1D quantization using dynamic programming on a quantile-based
- * histogram.
+ * Optimal 1D quantization using dynamic programming on a histogram.
  *
  * Pools all columns of the input DataTable into a single 1D dataset,
- * sorts the values, bins them into equal-count quantile bins, then uses
- * DP to find k centroids that minimize weighted sum-of-squared-errors
- * (SSE).
+ * sorts the values, bins them using a blend of uniform and quantile
+ * positioning, then uses DP to find k centroids that minimize weighted
+ * sum-of-squared-errors (SSE).
  *
- * Quantile-based binning ensures every bin contains roughly the same
- * number of values, inherently handling outliers and skewed distributions
- * without special-case trimming. Dense regions receive many narrow bins
- * (fine resolution) while sparse tails receive fewer wide bins.
+ * Bin positions are an adaptive blend of uniform (value-space) and
+ * quantile (rank-space) positioning. The blend ratio is computed from
+ * the data's IQR-to-range ratio: extreme outlier distributions (small
+ * IQR relative to range) use near-pure quantile to give the dense
+ * center adequate bins, while moderate-tail distributions use more
+ * uniform to preserve tail resolution.
  *
  * Bin weights use sub-linear density weighting: weight = count^alpha.
- * With quantile bins counts are roughly equal, so alpha has reduced
- * effect compared to uniform binning.
+ * With alpha < 1, sparse tail regions earn meaningful influence on
+ * centroid placement.
  *
  * @param dataTable - Input data table whose columns are pooled into 1D.
  * @param k - Number of codebook entries (default 256).
@@ -38,48 +39,53 @@ const quantize1d = (dataTable: DataTable, k = 256, alpha = 0.5) => {
         data.set(dataTable.getColumn(i).data, i * numRows);
     }
 
-    // find global min/max
-    let dataMin = Infinity;
-    let dataMax = -Infinity;
-    for (let i = 0; i < N; ++i) {
-        const v = data[i];
-        if (v < dataMin) dataMin = v;
-        if (v > dataMax) dataMax = v;
-    }
+    // sort a copy for histogram binning (keep original for label assignment)
+    const sortedData = new Float32Array(data);
+    sortedData.sort();
+
+    const vMin = sortedData[0];
+    const vMax = sortedData[N - 1];
 
     // handle degenerate case where all values are identical
-    if (dataMax - dataMin < 1e-20) {
+    if (vMax - vMin < 1e-20) {
         const centroids = new DataTable([new Column('data', new Float32Array(k))]);
-        centroids.getColumn(0).data.fill(dataMin);
+        centroids.getColumn(0).data.fill(vMin);
 
         const result = new DataTable(dataTable.columnNames.map(name => new Column(name, new Uint8Array(numRows))));
         return { centroids, labels: result };
     }
 
-    // sort a copy for quantile-based binning (keep original for label assignment)
-    const sortedData = new Float32Array(data);
-    sortedData.sort();
-
-    // build quantile-based histogram: each bin spans an equal-count slice of sorted values
+    // build histogram using blended uniform/quantile bin positions
     const H = Math.min(1024, N);
-    const counts = new Float64Array(H);
-    const centers = new Float64Array(H);
+    const vRange = vMax - vMin;
 
+    // adaptive blend ratio: when outliers are extreme (IQR << range), lean
+    // toward quantile to give the dense center adequate bins; when the
+    // distribution has moderate tails (IQR ~ range), lean toward uniform
+    // to preserve tail resolution
+    const iqr = sortedData[Math.floor(N * 0.75)] - sortedData[Math.floor(N * 0.25)];
+    const beta = Math.max(0.5, Math.min(0.999, 1 - iqr / vRange));
+
+    const counts = new Float64Array(H);
+    const sums = new Float64Array(H);
+
+    for (let i = 0; i < N; ++i) {
+        const uniformPos = (sortedData[i] - vMin) / vRange;
+        const quantilePos = i / N;
+        const bin = Math.min(H - 1, Math.floor(H * (beta * quantilePos + (1 - beta) * uniformPos)));
+        counts[bin]++;
+        sums[bin] += sortedData[i];
+    }
+
+    const centers = new Float64Array(H);
     for (let i = 0; i < H; ++i) {
-        const lo = Math.floor(i * N / H);
-        const hi = Math.floor((i + 1) * N / H);
-        counts[i] = hi - lo;
-        let sum = 0;
-        for (let j = lo; j < hi; ++j) {
-            sum += sortedData[j];
-        }
-        centers[i] = sum / counts[i];
+        centers[i] = counts[i] > 0 ? sums[i] / counts[i] : vMin + (i + 0.5) / H * vRange;
     }
 
     // compute weights: w = count^alpha (sub-linear density weighting)
     const weights = new Float64Array(H);
     for (let i = 0; i < H; ++i) {
-        weights[i] = Math.pow(counts[i], alpha);
+        weights[i] = counts[i] > 0 ? Math.pow(counts[i], alpha) : 0;
     }
 
     // prefix sums for O(1) range cost queries
@@ -108,7 +114,8 @@ const quantize1d = (dataTable: DataTable, k = 256, alpha = 0.5) => {
         return (prefWX[b + 1] - prefWX[a]) / w;
     };
 
-    const effectiveK = Math.min(k, H);
+    const nonEmpty = counts.reduce((n, c) => n + (c > 0 ? 1 : 0), 0);
+    const effectiveK = Math.min(k, nonEmpty);
 
     // DP: dp[m][j] = min weighted SSE of quantizing bins 0..j into m centroids
     // Use two rows to save memory (only need previous row)
