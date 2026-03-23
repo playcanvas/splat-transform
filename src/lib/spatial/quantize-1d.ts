@@ -12,8 +12,8 @@ import { Column, DataTable } from '../data-table/data-table';
  * quantile (rank-space) positioning. The blend ratio is computed from
  * the data's IQR-to-range ratio: extreme outlier distributions (small
  * IQR relative to range) use near-pure quantile to give the dense
- * center adequate bins, while moderate-tail distributions use more
- * uniform to preserve tail resolution.
+ * center adequate bins, while moderate-tail distributions reduce
+ * quantile bias (but keep at least 50% quantile weighting).
  *
  * Bin weights use sub-linear density weighting: weight = count^alpha.
  * With alpha < 1, sparse tail regions earn meaningful influence on
@@ -34,6 +34,13 @@ const quantize1d = (dataTable: DataTable, k = 256, alpha = 0.5) => {
 
     // pool all columns into a flat 1D array
     const N = numRows * numColumns;
+
+    if (N === 0) {
+        const centroids = new DataTable([new Column('data', new Float32Array(k))]);
+        const labels = new DataTable(dataTable.columnNames.map(name => new Column(name, new Uint8Array(numRows))));
+        return { centroids, labels };
+    }
+
     const data = new Float32Array(N);
     for (let i = 0; i < numColumns; ++i) {
         data.set(dataTable.getColumn(i).data, i * numRows);
@@ -60,9 +67,9 @@ const quantize1d = (dataTable: DataTable, k = 256, alpha = 0.5) => {
     const vRange = vMax - vMin;
 
     // adaptive blend ratio: when outliers are extreme (IQR << range), lean
-    // toward quantile to give the dense center adequate bins; when the
-    // distribution has moderate tails (IQR ~ range), lean toward uniform
-    // to preserve tail resolution
+    // strongly toward quantile to give the dense center adequate bins; when
+    // the distribution has moderate tails (IQR ~ range), reduce quantile
+    // bias somewhat, but keep at least 50% quantile to preserve density
     const iqr = sortedData[Math.floor(N * 0.75)] - sortedData[Math.floor(N * 0.25)];
     const beta = Math.max(0.5, Math.min(0.999, 1 - iqr / vRange));
 
