@@ -509,6 +509,11 @@ const simplifyForCapsule = (
     const nx = Math.round((gridBounds.max.x - gridBounds.min.x) / voxelResolution);
     const ny = Math.round((gridBounds.max.y - gridBounds.min.y) / voxelResolution);
     const nz = Math.round((gridBounds.max.z - gridBounds.min.z) / voxelResolution);
+
+    if (nx % 4 !== 0 || ny % 4 !== 0 || nz % 4 !== 0) {
+        throw new Error(`Grid dimensions must be multiples of 4, got ${nx}x${ny}x${nz}`);
+    }
+
     const totalVoxels = nx * ny * nz;
     const stride = nx * ny;
     const wordCount = (totalVoxels + 31) >>> 5;
@@ -565,8 +570,7 @@ const simplifyForCapsule = (
 
     bitA.fill(0); // reuse as visited bitfield
 
-    const MAX_QUEUE = 1 << 25;
-    const queueCap = MAX_QUEUE;
+    const queueCap = 1 << Math.min(25, Math.ceil(Math.log2(totalVoxels + 1)));
     const queueMask = queueCap - 1;
     const bfsQueue = new Uint32Array(queueCap);
     let qHead = 0;

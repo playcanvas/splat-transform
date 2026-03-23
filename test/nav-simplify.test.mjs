@@ -148,9 +148,12 @@ describe('simplifyForCapsule', function () {
         });
 
         it('should return original accumulator if seed is in solid region', function () {
-            const { acc, gridBounds } = buildHollowBox(4, voxelResolution);
+            // 3-block box: walls at blocks 0 and 2, interior is only block 1
+            // (4 voxels per axis). After dilation by yHalfExtent=3 in Y the
+            // interior is fully blocked, so no free cell exists within search
+            // radius and the function returns the original accumulator.
+            const { acc, gridBounds } = buildHollowBox(3, voxelResolution);
 
-            // Seed at (0,0,0) which is inside a wall block
             const seed = {
                 x: gridBounds.min.x + voxelResolution,
                 y: gridBounds.min.y + voxelResolution,
