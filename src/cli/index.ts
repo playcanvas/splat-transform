@@ -87,8 +87,8 @@ const parseArguments = async () => {
             'opacity-cutoff': { type: 'string', short: 'A', default: '0.1' },
             'collision-mesh': { type: 'boolean', short: 'K', default: false },
             'mesh-simplify': { type: 'string', short: 'T', default: '0.25' },
-            'nav-capsule-height': { type: 'string', default: '' },
-            'nav-capsule-radius': { type: 'string', default: '' },
+            'nav-simplify': { type: 'boolean', short: 'n', default: false },
+            'nav-capsule': { type: 'string', default: '' },
             'nav-seed': { type: 'string', default: '' },
 
             // per-file options
@@ -170,26 +170,32 @@ const parseArguments = async () => {
 
     const viewerSettingsPath = v['viewer-settings'];
 
-    // Parse nav capsule options
+    // Parse nav simplification options
+    const navCapsuleStr = v['nav-capsule'];
     const navSeedStr = v['nav-seed'];
-    const hasNavCapsuleArgs = !!(v['nav-capsule-height'] || v['nav-capsule-radius']);
+    const navSimplify = v['nav-simplify'] || !!(navCapsuleStr || navSeedStr);
     let navCapsule: { height: number; radius: number } | undefined;
     let navSeed: { x: number; y: number; z: number } | undefined;
 
-    if (hasNavCapsuleArgs && !navSeedStr) {
-        throw new Error('--nav-seed <x,y,z> is required when using --nav-capsule-height or --nav-capsule-radius');
-    }
-
-    if (navSeedStr) {
-        const parts = navSeedStr.split(',').map(parseNumber);
-        if (parts.length !== 3) {
-            throw new Error(`Invalid nav-seed value: ${navSeedStr}. Expected x,y,z`);
+    if (navSimplify) {
+        if (navCapsuleStr) {
+            const parts = navCapsuleStr.split(',').map(parseNumber);
+            if (parts.length !== 2) {
+                throw new Error(`Invalid nav-capsule value: ${navCapsuleStr}. Expected height,radius`);
+            }
+            navCapsule = { height: parts[0], radius: parts[1] };
+        } else {
+            navCapsule = { height: 1.6, radius: 0.2 };
         }
-        navSeed = { x: parts[0], y: parts[1], z: parts[2] };
-        navCapsule = {
-            height: v['nav-capsule-height'] ? parseNumber(v['nav-capsule-height']) : 1.5,
-            radius: v['nav-capsule-radius'] ? parseNumber(v['nav-capsule-radius']) : 0.2
-        };
+        if (navSeedStr) {
+            const parts = navSeedStr.split(',').map(parseNumber);
+            if (parts.length !== 3) {
+                throw new Error(`Invalid nav-seed value: ${navSeedStr}. Expected x,y,z`);
+            }
+            navSeed = { x: parts[0], y: parts[1], z: parts[2] };
+        } else {
+            navSeed = { x: 0, y: 0, z: 0 };
+        }
     }
 
     const options: CliOptions = {
@@ -209,6 +215,7 @@ const parseArguments = async () => {
         opacityCutoff: parseNumber(v['opacity-cutoff']),
         collisionMesh: v['collision-mesh'],
         meshSimplify: parseNumber(v['mesh-simplify']),
+        navSimplify,
         navCapsule,
         navSeed
     };
@@ -430,9 +437,9 @@ GLOBAL OPTIONS
     -A, --opacity-cutoff   <n>              Opacity threshold for solid voxels. Default: 0.1
     -K, --collision-mesh                    Generate collision mesh (.collision.glb) with voxel output
     -T, --mesh-simplify    <n>              Ratio of triangles to keep for collision mesh (0-1). Default: 0.25
-        --nav-seed         <x,y,z>          Seed position for capsule navigation simplification
-        --nav-capsule-height <n>            Capsule height for nav simplification. Default: 1.5
-        --nav-capsule-radius <n>            Capsule radius for nav simplification. Default: 0.2
+    -n, --nav-simplify                      Enable capsule navigation simplification for voxel output
+        --nav-capsule      <height,radius>  Capsule dimensions for nav simplification. Default: 1.6,0.2
+        --nav-seed         <x,y,z>          Seed position for nav simplification. Default: 0,0,0
 
 EXAMPLES
     # Scale and translate

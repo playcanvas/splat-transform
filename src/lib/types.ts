@@ -32,10 +32,13 @@ type Options = {
     /** Ratio of triangles to keep when simplifying the collision mesh (0-1). Default: 0.25 */
     meshSimplify?: number;
 
-    /** Capsule dimensions for navigation simplification. When set with navSeed, simplifies voxel output. */
+    /** Enable navigation simplification with default capsule (height 1.6, radius 0.2) and seed (0,0,0). */
+    navSimplify?: boolean;
+
+    /** Capsule dimensions (height, radius) for navigation simplification. Default: { height: 1.6, radius: 0.2 } */
     navCapsule?: { height: number; radius: number };
 
-    /** Seed position in world space for navigation flood fill. Required when navCapsule is set. */
+    /** Seed position in world space for navigation flood fill. Default: { x: 0, y: 0, z: 0 } */
     navSeed?: { x: number; y: number; z: number };
 };
 
