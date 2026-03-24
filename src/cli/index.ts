@@ -196,7 +196,11 @@ const parseArguments = async () => {
             if (parts.length !== 3) {
                 throw new Error(`Invalid nav-seed value: ${navSeedStr}. Expected x,y,z`);
             }
-            navSeed = { x: parts[0], y: parts[1], z: parts[2] };
+            const [x, y, z] = parts;
+            if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+                throw new Error(`Invalid nav-seed value: ${navSeedStr}. x, y, and z must be finite numbers`);
+            }
+            navSeed = { x, y, z };
         } else {
             navSeed = { x: 0, y: 0, z: 0 };
         }

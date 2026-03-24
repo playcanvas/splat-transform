@@ -487,8 +487,9 @@ const findNearestFreeCell = (
  *    step 2 so the runtime capsule query produces correct collisions.
  * 6. Crop to bounding box of navigable cells.
  *
- * Grid boundaries are treated as solid, so the fill is always bounded even
- * in unsealed scenes.
+ * The flood fill is bounded by the finite grid extents: out-of-bounds cells
+ * are never visited, but grid boundaries are not explicitly modeled as solid.
+ * This means unsealed scenes may allow navigation up to the edge of the grid.
  *
  * @param accumulator - BlockAccumulator with filtered voxelization results.
  * @param gridBounds - Grid bounds aligned to block boundaries (not mutated).
@@ -506,6 +507,16 @@ const simplifyForCapsule = (
     capsuleRadius: number,
     seed: NavSeed
 ): NavSimplifyResult => {
+    if (!Number.isFinite(voxelResolution) || voxelResolution <= 0) {
+        throw new Error(`nav simplify: voxelResolution must be finite and > 0, got ${voxelResolution}`);
+    }
+    if (!Number.isFinite(capsuleHeight) || capsuleHeight <= 0) {
+        throw new Error(`nav simplify: capsuleHeight must be finite and > 0, got ${capsuleHeight}`);
+    }
+    if (!Number.isFinite(capsuleRadius) || capsuleRadius < 0) {
+        throw new Error(`nav simplify: capsuleRadius must be finite and >= 0, got ${capsuleRadius}`);
+    }
+
     const nx = Math.round((gridBounds.max.x - gridBounds.min.x) / voxelResolution);
     const ny = Math.round((gridBounds.max.y - gridBounds.min.y) / voxelResolution);
     const nz = Math.round((gridBounds.max.z - gridBounds.min.z) / voxelResolution);
@@ -517,16 +528,6 @@ const simplifyForCapsule = (
     const totalVoxels = nx * ny * nz;
     const stride = nx * ny;
     const wordCount = (totalVoxels + 31) >>> 5;
-
-    if (!Number.isFinite(voxelResolution) || voxelResolution <= 0) {
-        throw new Error(`nav simplify: voxelResolution must be finite and > 0, got ${voxelResolution}`);
-    }
-    if (!Number.isFinite(capsuleHeight) || capsuleHeight <= 0) {
-        throw new Error(`nav simplify: capsuleHeight must be finite and > 0, got ${capsuleHeight}`);
-    }
-    if (!Number.isFinite(capsuleRadius) || capsuleRadius < 0) {
-        throw new Error(`nav simplify: capsuleRadius must be finite and >= 0, got ${capsuleRadius}`);
-    }
 
     // Capsule approximated as an axis-aligned box (square XZ cross-section).
     // Conservative: may reject narrow diagonal passages a true capsule could fit.
