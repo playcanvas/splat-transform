@@ -570,24 +570,28 @@ const simplifyForCapsule = (
 
     bitA.fill(0); // reuse as visited bitfield
 
-    const queueCap = 1 << Math.min(25, Math.ceil(Math.log2(totalVoxels + 1)));
-    const queueMask = queueCap - 1;
-    const bfsQueue = new Uint32Array(queueCap);
+    let queueCap = 1 << Math.min(25, Math.ceil(Math.log2(totalVoxels + 1)));
+    let queueMask = queueCap - 1;
+    let bfsQueue = new Uint32Array(queueCap);
     let qHead = 0;
     let qTail = 0;
     let queueSize = 0;
-    let overflowed = false;
 
     const enqueue = (nIdx: number) => {
         const w = nIdx >>> 5;
         const m = 1 << (nIdx & 31);
         if (!((bitB[w] | bitA[w]) & m)) {
             if (queueSize >= queueCap) {
-                if (!overflowed) {
-                    logger.warn(`nav simplify: BFS queue overflow (cap ${queueCap}), results may be incomplete`);
-                    overflowed = true;
+                const newCap = queueCap << 1;
+                const newQueue = new Uint32Array(newCap);
+                for (let i = 0; i < queueSize; i++) {
+                    newQueue[i] = bfsQueue[(qHead + i) & queueMask];
                 }
-                return;
+                bfsQueue = newQueue;
+                queueCap = newCap;
+                queueMask = newCap - 1;
+                qHead = 0;
+                qTail = queueSize;
             }
             bitA[w] |= m;
             bfsQueue[qTail] = nIdx;

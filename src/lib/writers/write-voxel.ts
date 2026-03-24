@@ -187,6 +187,9 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         throw new Error('writeVoxel requires a createDevice function for GPU voxelization');
     }
 
+    if ((navCapsule && !navSeed) || (!navCapsule && navSeed)) {
+        logger.warn('writeVoxel: both navCapsule and navSeed must be provided for nav simplification, skipping');
+    }
     const hasNav = !!(navCapsule && navSeed);
     let stepCount = 5;
     if (collisionMesh) stepCount += 2;

@@ -442,13 +442,40 @@ GLOBAL OPTIONS
         --nav-seed         <x,y,z>          Seed position for nav simplification. Default: 0,0,0
 
 EXAMPLES
-    # Scale and translate
+    # Scale then translate
     splat-transform bunny.ply -s 0.5 -t 0,0,10 bunny-scaled.ply
 
-    # Merge two files with per-file transforms
+    # Merge two files with transforms and compress to SOG format
     splat-transform -w cloudA.ply -r 0,90,0 cloudB.ply -s 2 merged.sog
 
-    # Print summary without writing a file
+    # Generate unbundled HTML viewer with separate CSS, JS and SOG files
+    splat-transform -U bunny.ply bunny-viewer.html
+
+    # Generate synthetic splats using a generator script
+    splat-transform gen-grid.mjs -p width=500,height=500,scale=0.1 grid.ply
+
+    # Generate LOD with custom chunk size and node split size
+    splat-transform -O 0,1,2 -C 1024 -X 32 input.lcc output/lod-meta.json
+
+    # Generate voxel data
+    splat-transform input.ply output.voxel.json
+
+    # Generate voxel data with collision mesh
+    splat-transform -K input.ply output.voxel.json
+
+    # Generate voxel data with custom resolution and opacity threshold
+    splat-transform -R 0.1 -A 0.3 input.ply output.voxel.json
+
+    # Generate voxel data with nav simplification disabled
+    splat-transform -n input.ply output.voxel.json
+
+    # Convert voxel data back to PLY for visualization
+    splat-transform scene.voxel.json scene-voxels.ply
+
+    # Print statistical summary, then write output
+    splat-transform bunny.ply --summary output.ply
+
+    # Print summary without writing a file (discard output)
     splat-transform bunny.ply -m null
 `;
 
