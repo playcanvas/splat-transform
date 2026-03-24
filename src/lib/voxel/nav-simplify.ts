@@ -525,6 +525,10 @@ const simplifyForCapsule = (
         throw new Error(`Grid dimensions must be multiples of 4, got ${nx}x${ny}x${nz}`);
     }
 
+    if (accumulator.count === 0) {
+        return { accumulator, gridBounds };
+    }
+
     const totalVoxels = nx * ny * nz;
     const stride = nx * ny;
     const wordCount = (totalVoxels + 31) >>> 5;
@@ -535,191 +539,199 @@ const simplifyForCapsule = (
     const yHalfExtent = Math.ceil(capsuleHeight / (2 * voxelResolution));
 
     logger.progress.begin(6);
+    let progressComplete = false;
 
-    // Phase 1: build dense bitfield grid from accumulator
-    const bitA = new Uint32Array(wordCount);
-    fillDenseSolidGrid(accumulator, bitA, nx, ny, nz);
-    logger.progress.step();
+    try {
 
-    // Phase 2: capsule clearance grid (Minkowski dilation of solid by capsule)
-    // Three separable 1D sliding window passes (X, Z, Y).
-    const bitB = new Uint32Array(wordCount);
+        // Phase 1: build dense bitfield grid from accumulator
+        const bitA = new Uint32Array(wordCount);
+        fillDenseSolidGrid(accumulator, bitA, nx, ny, nz);
+        logger.progress.step();
 
-    dilateX(bitA, bitB, nx, ny, nz, kernelR);
-    bitA.fill(0);
-    dilateZ(bitB, bitA, nx, ny, nz, kernelR);
-    bitB.fill(0);
-    dilateY(bitA, bitB, nx, ny, nz, yHalfExtent);
-    logger.progress.step();
+        // Phase 2: capsule clearance grid (Minkowski dilation of solid by capsule)
+        // Three separable 1D sliding window passes (X, Z, Y).
+        const bitB = new Uint32Array(wordCount);
 
-    // Phase 3: BFS flood fill from seed through free (non-blocked) cells.
-    // Uses bitB as blocked mask and bitA as visited mask.
-    let seedIx = Math.floor((seed.x - gridBounds.min.x) / voxelResolution);
-    let seedIy = Math.floor((seed.y - gridBounds.min.y) / voxelResolution);
-    let seedIz = Math.floor((seed.z - gridBounds.min.z) / voxelResolution);
+        dilateX(bitA, bitB, nx, ny, nz, kernelR);
+        bitA.fill(0);
+        dilateZ(bitB, bitA, nx, ny, nz, kernelR);
+        bitB.fill(0);
+        dilateY(bitA, bitB, nx, ny, nz, yHalfExtent);
+        logger.progress.step();
 
-    if (seedIx < 0 || seedIx >= nx || seedIy < 0 || seedIy >= ny || seedIz < 0 || seedIz >= nz) {
-        logger.warn(`nav simplify: seed (${seed.x}, ${seed.y}, ${seed.z}) outside grid, skipping`);
-        logger.progress.cancel();
-        return { accumulator, gridBounds };
-    }
+        // Phase 3: BFS flood fill from seed through free (non-blocked) cells.
+        // Uses bitB as blocked mask and bitA as visited mask.
+        let seedIx = Math.floor((seed.x - gridBounds.min.x) / voxelResolution);
+        let seedIy = Math.floor((seed.y - gridBounds.min.y) / voxelResolution);
+        let seedIz = Math.floor((seed.z - gridBounds.min.z) / voxelResolution);
 
-    let seedIdx = seedIx + seedIy * nx + seedIz * stride;
-    if ((bitB[seedIdx >>> 5] >>> (seedIdx & 31)) & 1) {
-        const maxRadius = Math.max(kernelR, yHalfExtent) * 2;
-        const found = findNearestFreeCell(bitB, seedIx, seedIy, seedIz, nx, ny, nz, stride, maxRadius);
-        if (!found) {
-            logger.warn(`nav simplify: seed (${seed.x}, ${seed.y}, ${seed.z}) blocked after dilation, no free cell within ${maxRadius} voxels, skipping`);
-            logger.progress.cancel();
+        if (seedIx < 0 || seedIx >= nx || seedIy < 0 || seedIy >= ny || seedIz < 0 || seedIz >= nz) {
+            logger.warn(`nav simplify: seed (${seed.x}, ${seed.y}, ${seed.z}) outside grid, skipping`);
             return { accumulator, gridBounds };
         }
-        seedIx = found.ix;
-        seedIy = found.iy;
-        seedIz = found.iz;
-        seedIdx = seedIx + seedIy * nx + seedIz * stride;
-    }
 
-    bitA.fill(0); // reuse as visited bitfield
-
-    let queueCap = 1 << Math.min(25, Math.ceil(Math.log2(totalVoxels + 1)));
-    let queueMask = queueCap - 1;
-    let bfsQueue = new Uint32Array(queueCap);
-    let qHead = 0;
-    let qTail = 0;
-    let queueSize = 0;
-
-    const enqueue = (nIdx: number) => {
-        const w = nIdx >>> 5;
-        const m = 1 << (nIdx & 31);
-        if (!((bitB[w] | bitA[w]) & m)) {
-            if (queueSize >= queueCap) {
-                const newCap = queueCap << 1;
-                const newQueue = new Uint32Array(newCap);
-                for (let i = 0; i < queueSize; i++) {
-                    newQueue[i] = bfsQueue[(qHead + i) & queueMask];
-                }
-                bfsQueue = newQueue;
-                queueCap = newCap;
-                queueMask = newCap - 1;
-                qHead = 0;
-                qTail = queueSize;
+        let seedIdx = seedIx + seedIy * nx + seedIz * stride;
+        if ((bitB[seedIdx >>> 5] >>> (seedIdx & 31)) & 1) {
+            const maxRadius = Math.max(kernelR, yHalfExtent) * 2;
+            const found = findNearestFreeCell(bitB, seedIx, seedIy, seedIz, nx, ny, nz, stride, maxRadius);
+            if (!found) {
+                logger.warn(`nav simplify: seed (${seed.x}, ${seed.y}, ${seed.z}) blocked after dilation, no free cell within ${maxRadius} voxels, skipping`);
+                return { accumulator, gridBounds };
             }
-            bitA[w] |= m;
-            bfsQueue[qTail] = nIdx;
-            qTail = (qTail + 1) & queueMask;
-            queueSize++;
+            seedIx = found.ix;
+            seedIy = found.iy;
+            seedIz = found.iz;
+            seedIdx = seedIx + seedIy * nx + seedIz * stride;
         }
-    };
 
-    bitA[seedIdx >>> 5] |= (1 << (seedIdx & 31));
-    bfsQueue[qTail] = seedIdx;
-    qTail = (qTail + 1) & queueMask;
-    queueSize++;
+        bitA.fill(0); // reuse as visited bitfield
 
-    while (qHead !== qTail) {
-        const idx = bfsQueue[qHead];
-        qHead = (qHead + 1) & queueMask;
-        queueSize--;
+        let queueCap = 1 << Math.min(25, Math.ceil(Math.log2(totalVoxels + 1)));
+        let queueMask = queueCap - 1;
+        let bfsQueue = new Uint32Array(queueCap);
+        let qHead = 0;
+        let qTail = 0;
+        let queueSize = 0;
 
-        const ix = idx % nx;
-        const iy = Math.floor((idx % stride) / nx);
-        const iz = Math.floor(idx / stride);
+        const enqueue = (nIdx: number) => {
+            const w = nIdx >>> 5;
+            const m = 1 << (nIdx & 31);
+            if (!((bitB[w] | bitA[w]) & m)) {
+                if (queueSize >= queueCap) {
+                    const newCap = queueCap << 1;
+                    const newQueue = new Uint32Array(newCap);
+                    for (let i = 0; i < queueSize; i++) {
+                        newQueue[i] = bfsQueue[(qHead + i) & queueMask];
+                    }
+                    bfsQueue = newQueue;
+                    queueCap = newCap;
+                    queueMask = newCap - 1;
+                    qHead = 0;
+                    qTail = queueSize;
+                }
+                bitA[w] |= m;
+                bfsQueue[qTail] = nIdx;
+                qTail = (qTail + 1) & queueMask;
+                queueSize++;
+            }
+        };
 
-        if (ix > 0) enqueue(idx - 1);
-        if (ix < nx - 1) enqueue(idx + 1);
-        if (iy > 0) enqueue(idx - nx);
-        if (iy < ny - 1) enqueue(idx + nx);
-        if (iz > 0) enqueue(idx - stride);
-        if (iz < nz - 1) enqueue(idx + stride);
-    }
+        bitA[seedIdx >>> 5] |= (1 << (seedIdx & 31));
+        bfsQueue[qTail] = seedIdx;
+        qTail = (qTail + 1) & queueMask;
+        queueSize++;
 
-    logger.progress.step();
+        while (qHead !== qTail) {
+            const idx = bfsQueue[qHead];
+            qHead = (qHead + 1) & queueMask;
+            queueSize--;
 
-    // Phase 4: invert reachable to solid (bitwise operation).
-    // Reachable = visited AND NOT blocked = bitA AND NOT bitB.
-    // Solid = NOT reachable = NOT bitA OR bitB = ~bitA | bitB.
-    for (let w = 0; w < wordCount; w++) {
-        bitB[w] |= ~bitA[w];
-    }
+            const ix = idx % nx;
+            const iy = Math.floor((idx % stride) / nx);
+            const iz = Math.floor(idx / stride);
 
-    // Clear padding bits in the last word to avoid phantom solids
-    const tailBits = totalVoxels & 31;
-    if (tailBits) {
-        bitB[wordCount - 1] &= (1 << tailBits) - 1;
-    }
+            if (ix > 0) enqueue(idx - 1);
+            if (ix < nx - 1) enqueue(idx + 1);
+            if (iy > 0) enqueue(idx - nx);
+            if (iy < ny - 1) enqueue(idx + nx);
+            if (iz > 0) enqueue(idx - stride);
+            if (iz < nz - 1) enqueue(idx + stride);
+        }
 
-    logger.progress.step();
+        logger.progress.step();
 
-    // Phase 5: erode solid by capsule shape (Minkowski subtraction)
-    bitA.fill(0);
-    erodeX(bitB, bitA, nx, ny, nz, kernelR);
+        // Phase 4: invert reachable to solid (bitwise operation).
+        // Reachable = visited AND NOT blocked = bitA AND NOT bitB.
+        // Solid = NOT reachable = NOT bitA OR bitB = ~bitA | bitB.
+        for (let w = 0; w < wordCount; w++) {
+            bitB[w] |= ~bitA[w];
+        }
 
-    bitB.fill(0);
-    erodeZ(bitA, bitB, nx, ny, nz, kernelR);
+        // Clear padding bits in the last word to avoid phantom solids
+        const tailBits = totalVoxels & 31;
+        if (tailBits) {
+            bitB[wordCount - 1] &= (1 << tailBits) - 1;
+        }
 
-    bitA.fill(0);
-    erodeY(bitB, bitA, nx, ny, nz, yHalfExtent);
-    logger.progress.step();
+        logger.progress.step();
 
-    // Phase 6: crop to bounding box of empty (navigable) cells
-    let minIx = nx, minIy = ny, minIz = nz;
-    let maxIx = 0, maxIy = 0, maxIz = 0;
+        // Phase 5: erode solid by capsule shape (Minkowski subtraction)
+        bitA.fill(0);
+        erodeX(bitB, bitA, nx, ny, nz, kernelR);
 
-    for (let iz = 0; iz < nz; iz++) {
-        const zOff = iz * stride;
-        for (let iy = 0; iy < ny; iy++) {
-            const rowOff = zOff + iy * nx;
-            for (let ix = 0; ix < nx; ix++) {
-                const idx = rowOff + ix;
-                if (!((bitA[idx >>> 5] >>> (idx & 31)) & 1)) {
-                    if (ix < minIx) minIx = ix;
-                    if (ix > maxIx) maxIx = ix;
-                    if (iy < minIy) minIy = iy;
-                    if (iy > maxIy) maxIy = iy;
-                    if (iz < minIz) minIz = iz;
-                    if (iz > maxIz) maxIz = iz;
+        bitB.fill(0);
+        erodeZ(bitA, bitB, nx, ny, nz, kernelR);
+
+        bitA.fill(0);
+        erodeY(bitB, bitA, nx, ny, nz, yHalfExtent);
+        logger.progress.step();
+
+        // Phase 6: crop to bounding box of empty (navigable) cells
+        let minIx = nx, minIy = ny, minIz = nz;
+        let maxIx = 0, maxIy = 0, maxIz = 0;
+
+        for (let iz = 0; iz < nz; iz++) {
+            const zOff = iz * stride;
+            for (let iy = 0; iy < ny; iy++) {
+                const rowOff = zOff + iy * nx;
+                for (let ix = 0; ix < nx; ix++) {
+                    const idx = rowOff + ix;
+                    if (!((bitA[idx >>> 5] >>> (idx & 31)) & 1)) {
+                        if (ix < minIx) minIx = ix;
+                        if (ix > maxIx) maxIx = ix;
+                        if (iy < minIy) minIy = iy;
+                        if (iy > maxIy) maxIy = iy;
+                        if (iz < minIz) minIz = iz;
+                        if (iz > maxIz) maxIz = iz;
+                    }
                 }
             }
         }
+
+        const nbx = nx >> 2;
+        const nby = ny >> 2;
+        const nbz = nz >> 2;
+
+        const MARGIN = 1;
+        const cropMinBx = Math.max(0, (minIx >> 2) - MARGIN);
+        const cropMinBy = Math.max(0, (minIy >> 2) - MARGIN);
+        const cropMinBz = Math.max(0, (minIz >> 2) - MARGIN);
+        const cropMaxBx = Math.min(nbx, (maxIx >> 2) + 1 + MARGIN);
+        const cropMaxBy = Math.min(nby, (maxIy >> 2) + 1 + MARGIN);
+        const cropMaxBz = Math.min(nbz, (maxIz >> 2) + 1 + MARGIN);
+
+        const blockSize = 4 * voxelResolution;
+        const croppedMin = new Vec3(
+            gridBounds.min.x + cropMinBx * blockSize,
+            gridBounds.min.y + cropMinBy * blockSize,
+            gridBounds.min.z + cropMinBz * blockSize
+        );
+        const croppedBounds: Bounds = {
+            min: croppedMin,
+            max: new Vec3(
+                croppedMin.x + (cropMaxBx - cropMinBx) * blockSize,
+                croppedMin.y + (cropMaxBy - cropMinBy) * blockSize,
+                croppedMin.z + (cropMaxBz - cropMinBz) * blockSize
+            )
+        };
+
+        logger.progress.step();
+        progressComplete = true;
+
+        return {
+            accumulator: denseGridToAccumulator(
+                bitA, nx, ny, nz,
+                cropMinBx, cropMinBy, cropMinBz,
+                cropMaxBx, cropMaxBy, cropMaxBz
+            ),
+            gridBounds: croppedBounds
+        };
+
+    } finally {
+        if (!progressComplete) {
+            logger.progress.cancel();
+        }
     }
-
-    const nbx = nx >> 2;
-    const nby = ny >> 2;
-    const nbz = nz >> 2;
-
-    const MARGIN = 1;
-    const cropMinBx = Math.max(0, (minIx >> 2) - MARGIN);
-    const cropMinBy = Math.max(0, (minIy >> 2) - MARGIN);
-    const cropMinBz = Math.max(0, (minIz >> 2) - MARGIN);
-    const cropMaxBx = Math.min(nbx, (maxIx >> 2) + 1 + MARGIN);
-    const cropMaxBy = Math.min(nby, (maxIy >> 2) + 1 + MARGIN);
-    const cropMaxBz = Math.min(nbz, (maxIz >> 2) + 1 + MARGIN);
-
-    const blockSize = 4 * voxelResolution;
-    const croppedMin = new Vec3(
-        gridBounds.min.x + cropMinBx * blockSize,
-        gridBounds.min.y + cropMinBy * blockSize,
-        gridBounds.min.z + cropMinBz * blockSize
-    );
-    const croppedBounds: Bounds = {
-        min: croppedMin,
-        max: new Vec3(
-            croppedMin.x + (cropMaxBx - cropMinBx) * blockSize,
-            croppedMin.y + (cropMaxBy - cropMinBy) * blockSize,
-            croppedMin.z + (cropMaxBz - cropMinBz) * blockSize
-        )
-    };
-
-    logger.progress.step();
-
-    return {
-        accumulator: denseGridToAccumulator(
-            bitA, nx, ny, nz,
-            cropMinBx, cropMinBy, cropMinBz,
-            cropMaxBx, cropMaxBy, cropMaxBz
-        ),
-        gridBounds: croppedBounds
-    };
 };
 
 export { simplifyForCapsule };

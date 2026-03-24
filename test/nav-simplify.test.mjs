@@ -11,7 +11,6 @@ import assert from 'node:assert';
 import {
     BlockAccumulator,
     xyzToMorton,
-    mortonToXYZ,
     alignGridBounds,
     popcount
 } from '../src/lib/voxel/sparse-octree.js';
@@ -19,43 +18,6 @@ import { simplifyForCapsule } from '../src/lib/voxel/nav-simplify.js';
 
 const SOLID_LO = 0xFFFFFFFF >>> 0;
 const SOLID_HI = 0xFFFFFFFF >>> 0;
-
-/**
- * Build a Set of all solid voxel indices (ix, iy, iz) from a BlockAccumulator.
- */
-function extractSolidVoxels(acc) {
-    const set = new Set();
-    const solid = acc.getSolidBlocks();
-    for (let i = 0; i < solid.length; i++) {
-        const [bx, by, bz] = mortonToXYZ(solid[i]);
-        for (let lz = 0; lz < 4; lz++) {
-            for (let ly = 0; ly < 4; ly++) {
-                for (let lx = 0; lx < 4; lx++) {
-                    set.add(`${(bx << 2) + lx},${(by << 2) + ly},${(bz << 2) + lz}`);
-                }
-            }
-        }
-    }
-    const mixed = acc.getMixedBlocks();
-    for (let i = 0; i < mixed.morton.length; i++) {
-        const [bx, by, bz] = mortonToXYZ(mixed.morton[i]);
-        const lo = mixed.masks[i * 2];
-        const hi = mixed.masks[i * 2 + 1];
-        for (let lz = 0; lz < 4; lz++) {
-            for (let ly = 0; ly < 4; ly++) {
-                for (let lx = 0; lx < 4; lx++) {
-                    const bitIdx = lx + ly * 4 + lz * 16;
-                    const word = bitIdx < 32 ? lo : hi;
-                    const bit = bitIdx < 32 ? bitIdx : bitIdx - 32;
-                    if ((word >>> bit) & 1) {
-                        set.add(`${(bx << 2) + lx},${(by << 2) + ly},${(bz << 2) + lz}`);
-                    }
-                }
-            }
-        }
-    }
-    return set;
-}
 
 /**
  * Count total solid voxels in a BlockAccumulator.
