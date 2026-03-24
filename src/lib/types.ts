@@ -32,7 +32,7 @@ type Options = {
     /** Ratio of triangles to keep when simplifying the collision mesh (0-1). Default: 0.25 */
     meshSimplify?: number;
 
-    /** Enable navigation simplification with default capsule (height 1.6, radius 0.2) and seed (0,0,0). */
+    /** Enable navigation simplification for voxel output. Default: true; set to false to disable. */
     navSimplify?: boolean;
 
     /** Capsule dimensions (height, radius) for navigation simplification. Default: { height: 1.6, radius: 0.2 } */
