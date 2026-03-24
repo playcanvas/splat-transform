@@ -621,7 +621,7 @@ const simplifyForCapsule = (
         qTail = (qTail + 1) & queueMask;
         queueSize++;
 
-        while (qHead !== qTail) {
+        while (queueSize > 0) {
             const idx = bfsQueue[qHead];
             qHead = (qHead + 1) & queueMask;
             queueSize--;
