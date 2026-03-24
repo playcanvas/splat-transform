@@ -15,6 +15,7 @@ import {
     type MultiBatchResult
 } from '../voxel/index';
 import { marchingCubes } from '../voxel/marching-cubes';
+import { simplifyForCapsule, type NavSeed } from '../voxel/nav-simplify';
 import {
     BlockAccumulator,
     xyzToMorton,
@@ -46,6 +47,12 @@ type WriteVoxelOptions = {
 
     /** Ratio of triangles to keep when simplifying the collision mesh (0-1). Default: 0.25 */
     meshSimplify?: number;
+
+    /** Capsule dimensions for navigation simplification. When set, only voxels contactable from the seed are kept. */
+    navCapsule?: { height: number; radius: number };
+
+    /** Seed position in world space for navigation flood fill. Required when navCapsule is set. */
+    navSeed?: NavSeed;
 };
 
 /**
@@ -171,14 +178,23 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         opacityCutoff = 0.5,
         createDevice,
         collisionMesh = false,
-        meshSimplify = 0.25
+        meshSimplify = 0.25,
+        navCapsule,
+        navSeed
     } = options;
 
     if (!createDevice) {
         throw new Error('writeVoxel requires a createDevice function for GPU voxelization');
     }
 
-    logger.progress.begin(collisionMesh ? 7 : 5);
+    if ((navCapsule && !navSeed) || (!navCapsule && navSeed)) {
+        logger.warn('writeVoxel: both navCapsule and navSeed must be provided for nav simplification, skipping');
+    }
+    const hasNav = !!(navCapsule && navSeed);
+    let stepCount = 5;
+    if (collisionMesh) stepCount += 2;
+    if (hasNav) stepCount += 1;
+    logger.progress.begin(stepCount);
 
     const extentsResult = computeGaussianExtents(dataTable);
     const bounds = extentsResult.sceneBounds;
@@ -195,7 +211,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     // Align grid bounds to block boundaries BEFORE voxelization so the
     // block coordinates used during voxelization match what the reader expects.
     const blockSize = 4 * voxelResolution;  // Each block is 4x4x4 voxels
-    const gridBounds = alignGridBounds(
+    let gridBounds = alignGridBounds(
         bounds.min.x, bounds.min.y, bounds.min.z,
         bounds.max.x, bounds.max.y, bounds.max.z,
         voxelResolution
@@ -423,6 +439,17 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
 
     logger.progress.step('Filtering');
     accumulator = filterAndFillBlocks(accumulator);
+
+    if (hasNav) {
+        logger.progress.step('Nav simplification');
+        const navResult = simplifyForCapsule(
+            accumulator, gridBounds, voxelResolution,
+            navCapsule!.height, navCapsule!.radius,
+            navSeed!
+        );
+        accumulator = navResult.accumulator;
+        gridBounds = navResult.gridBounds;
+    }
 
     let glbBytes: Uint8Array | null = null;
 

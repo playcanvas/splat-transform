@@ -166,7 +166,10 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
                 createDevice
             }, fs);
             break;
-        case 'voxel':
+        case 'voxel': {
+            const enableNav = options.navSimplify !== false;
+            const navCapsule = enableNav ? (options.navCapsule ?? { height: 1.6, radius: 0.2 }) : undefined;
+            const navSeed = enableNav ? (options.navSeed ?? { x: 0, y: 0, z: 0 }) : undefined;
             await writeVoxel({
                 filename,
                 dataTable,
@@ -174,9 +177,12 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
                 opacityCutoff: options.opacityCutoff,
                 collisionMesh: options.collisionMesh,
                 meshSimplify: options.meshSimplify,
+                navCapsule,
+                navSeed,
                 createDevice
             }, fs);
             break;
+        }
     }
 };
 

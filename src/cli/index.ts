@@ -87,6 +87,9 @@ const parseArguments = async () => {
             'opacity-cutoff': { type: 'string', short: 'A', default: '0.1' },
             'collision-mesh': { type: 'boolean', short: 'K', default: false },
             'mesh-simplify': { type: 'string', short: 'T', default: '0.25' },
+            'no-nav-simplify': { type: 'boolean', short: 'n', default: false },
+            'nav-capsule': { type: 'string', default: '' },
+            'nav-seed': { type: 'string', default: '' },
 
             // per-file options
             translate: { type: 'string', short: 't', multiple: true },
@@ -167,6 +170,42 @@ const parseArguments = async () => {
 
     const viewerSettingsPath = v['viewer-settings'];
 
+    // Parse nav simplification options
+    const navCapsuleStr = v['nav-capsule'];
+    const navSeedStr = v['nav-seed'];
+    const navSimplify = !v['no-nav-simplify'];
+    let navCapsule: { height: number; radius: number } | undefined;
+    let navSeed: { x: number; y: number; z: number } | undefined;
+
+    if (navSimplify) {
+        if (navCapsuleStr) {
+            const parts = navCapsuleStr.split(',').map(parseNumber);
+            if (parts.length !== 2) {
+                throw new Error(`Invalid nav-capsule value: ${navCapsuleStr}. Expected height,radius`);
+            }
+            const [height, radius] = parts;
+            if (!Number.isFinite(height) || !Number.isFinite(radius) || height <= 0 || radius < 0) {
+                throw new Error(`Invalid nav-capsule value: ${navCapsuleStr}. Height must be > 0 and radius must be >= 0`);
+            }
+            navCapsule = { height, radius };
+        } else {
+            navCapsule = { height: 1.6, radius: 0.2 };
+        }
+        if (navSeedStr) {
+            const parts = navSeedStr.split(',').map(parseNumber);
+            if (parts.length !== 3) {
+                throw new Error(`Invalid nav-seed value: ${navSeedStr}. Expected x,y,z`);
+            }
+            const [x, y, z] = parts;
+            if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+                throw new Error(`Invalid nav-seed value: ${navSeedStr}. x, y, and z must be finite numbers`);
+            }
+            navSeed = { x, y, z };
+        } else {
+            navSeed = { x: 0, y: 0, z: 0 };
+        }
+    }
+
     const options: CliOptions = {
         overwrite: v.overwrite,
         help: v.help,
@@ -183,7 +222,10 @@ const parseArguments = async () => {
         voxelResolution: parseNumber(v['voxel-resolution']),
         opacityCutoff: parseNumber(v['opacity-cutoff']),
         collisionMesh: v['collision-mesh'],
-        meshSimplify: parseNumber(v['mesh-simplify'])
+        meshSimplify: parseNumber(v['mesh-simplify']),
+        navSimplify,
+        navCapsule,
+        navSeed
     };
 
     if (!Number.isFinite(options.meshSimplify) || options.meshSimplify < 0 || options.meshSimplify > 1) {
@@ -403,6 +445,9 @@ GLOBAL OPTIONS
     -A, --opacity-cutoff   <n>              Opacity threshold for solid voxels. Default: 0.1
     -K, --collision-mesh                    Generate collision mesh (.collision.glb) with voxel output
     -T, --mesh-simplify    <n>              Ratio of triangles to keep for collision mesh (0-1). Default: 0.25
+    -n, --no-nav-simplify                   Disable capsule navigation simplification for voxel output
+        --nav-capsule      <height,radius>  Capsule dimensions for nav simplification. Default: 1.6,0.2
+        --nav-seed         <x,y,z>          Seed position for nav simplification. Default: 0,0,0
 
 EXAMPLES
     # Scale then translate
@@ -429,6 +474,9 @@ EXAMPLES
     # Generate voxel data with custom resolution and opacity threshold
     splat-transform -R 0.1 -A 0.3 input.ply output.voxel.json
 
+    # Generate voxel data with nav simplification disabled
+    splat-transform -n input.ply output.voxel.json
+
     # Convert voxel data back to PLY for visualization
     splat-transform scene.voxel.json scene-voxels.ply
 
@@ -452,16 +500,19 @@ const main = async () => {
 
     let start: Timing | null = null;
 
+    const err = console.error.bind(console);
+    const warn = console.warn.bind(console);
+
     // inject Node.js-specific logger - logs go to stderr, data output goes to stdout
     logger.setLogger({
-        log: (...args) => console.error(...args),
-        warn: (...args) => console.warn(...args),
-        error: (...args) => console.error(...args),
-        debug: (...args) => console.error(...args),
-        output: text => console.log(text),
+        log: err,
+        warn: warn,
+        error: err,
+        debug: err,
+        output: console.log.bind(console),
         onProgress: (node) => {
             if (node.stepName) {
-                console.error(`[${node.step}/${node.totalSteps}] ${node.stepName}`);
+                err(`[${node.step}/${node.totalSteps}] ${node.stepName}`);
             } else if (node.step === 0) {
                 start = hrtime();
             } else {
@@ -470,7 +521,7 @@ const main = async () => {
                 const prev = Math.round(displaySteps * (node.step - 1) / node.totalSteps);
                 if (curr > prev) process.stderr.write('#'.repeat(curr - prev));
                 if (node.step === node.totalSteps) {
-                    process.stderr.write(` done in ${hrtimeDelta(start, hrtime()).toFixed(3)}s 🎉\n`);
+                    process.stderr.write(` (${hrtimeDelta(start, hrtime()).toFixed(3)}s)\n`);
                 }
             }
         }
