@@ -183,7 +183,11 @@ const parseArguments = async () => {
             if (parts.length !== 2) {
                 throw new Error(`Invalid nav-capsule value: ${navCapsuleStr}. Expected height,radius`);
             }
-            navCapsule = { height: parts[0], radius: parts[1] };
+            const [height, radius] = parts;
+            if (!Number.isFinite(height) || !Number.isFinite(radius) || height <= 0 || radius < 0) {
+                throw new Error(`Invalid nav-capsule value: ${navCapsuleStr}. Height must be > 0 and radius must be >= 0`);
+            }
+            navCapsule = { height, radius };
         } else {
             navCapsule = { height: 1.6, radius: 0.2 };
         }

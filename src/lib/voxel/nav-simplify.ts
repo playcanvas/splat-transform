@@ -518,6 +518,16 @@ const simplifyForCapsule = (
     const stride = nx * ny;
     const wordCount = (totalVoxels + 31) >>> 5;
 
+    if (!Number.isFinite(voxelResolution) || voxelResolution <= 0) {
+        throw new Error(`nav simplify: voxelResolution must be finite and > 0, got ${voxelResolution}`);
+    }
+    if (!Number.isFinite(capsuleHeight) || capsuleHeight <= 0) {
+        throw new Error(`nav simplify: capsuleHeight must be finite and > 0, got ${capsuleHeight}`);
+    }
+    if (!Number.isFinite(capsuleRadius) || capsuleRadius < 0) {
+        throw new Error(`nav simplify: capsuleRadius must be finite and >= 0, got ${capsuleRadius}`);
+    }
+
     // Capsule approximated as an axis-aligned box (square XZ cross-section).
     // Conservative: may reject narrow diagonal passages a true capsule could fit.
     const kernelR = Math.ceil(capsuleRadius / voxelResolution);
