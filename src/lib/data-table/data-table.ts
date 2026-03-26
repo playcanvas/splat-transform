@@ -198,6 +198,12 @@ class DataTable {
                 throw new Error('DataTable.clone: "columns" must contain at least one column name.');
             }
 
+            const uniqueNames = new Set(columnNames);
+            if (uniqueNames.size !== columnNames.length) {
+                const dupes = columnNames.filter((n, i) => columnNames.indexOf(n) !== i);
+                throw new Error(`DataTable.clone: duplicate column name(s): ${[...new Set(dupes)].join(', ')}`);
+            }
+
             const missingColumns = columnNames.filter(name => !this.getColumnByName(name));
             if (missingColumns.length > 0) {
                 throw new Error(`DataTable.clone: unknown column name(s): ${missingColumns.join(', ')}`);

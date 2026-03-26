@@ -67,7 +67,7 @@ interface VoxelMetadata {
     /** Grid bounds aligned to 4x4x4 block boundaries */
     gridBounds: { min: number[]; max: number[] };
 
-    /** Original Gaussian scene bounds */
+    /** Scene bounds (in PlayCanvas coordinate space for v1.1+) */
     sceneBounds: { min: number[]; max: number[] };
 
     /** Size of each voxel in world units */
