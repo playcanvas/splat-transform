@@ -220,7 +220,7 @@ const readVoxel = async (
     const jsonBytes = await load(basename(filename));
     const metadata = JSON.parse(new TextDecoder().decode(jsonBytes)) as VoxelMetadata;
 
-    if (metadata.version !== '1.0') {
+    if (metadata.version !== '1.0' && metadata.version !== '1.1') {
         throw new Error(`Unsupported voxel format version: ${metadata.version}`);
     }
 

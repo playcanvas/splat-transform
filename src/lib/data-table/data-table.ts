@@ -191,9 +191,22 @@ class DataTable {
         const rows = options?.rows;
         const columnNames = options?.columns;
 
-        const srcColumns = columnNames ?
-            columnNames.map(name => this.getColumnByName(name)!) :
-            this.columns;
+        let srcColumns: Column[];
+
+        if (columnNames !== undefined) {
+            if (columnNames.length === 0) {
+                throw new Error('DataTable.clone: "columns" must contain at least one column name.');
+            }
+
+            const missingColumns = columnNames.filter(name => !this.getColumnByName(name));
+            if (missingColumns.length > 0) {
+                throw new Error(`DataTable.clone: unknown column name(s): ${missingColumns.join(', ')}`);
+            }
+
+            srcColumns = columnNames.map(name => this.getColumnByName(name)!);
+        } else {
+            srcColumns = this.columns;
+        }
 
         if (!rows) {
             return new DataTable(srcColumns.map(c => c.clone()));
