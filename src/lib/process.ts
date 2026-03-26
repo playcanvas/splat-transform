@@ -272,7 +272,7 @@ const filter = (dataTable: DataTable, predicate: (row: any, rowIndex: number) =>
         }
     }
 
-    return dataTable.permuteRows(indices.subarray(0, index));
+    return dataTable.clone({ rows: indices.subarray(0, index) });
 };
 
 /**

@@ -593,7 +593,7 @@ const sortByVisibility = (dataTable: DataTable, indices: Uint32Array): void => {
 const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable => {
     const N = dataTable.numRows;
     if (N <= targetCount || targetCount <= 0) {
-        return targetCount <= 0 ? dataTable.permuteRows([]) : dataTable;
+        return targetCount <= 0 ? dataTable.clone({ rows: [] }) : dataTable;
     }
 
     const requiredCols = ['x', 'y', 'z', 'opacity', 'scale_0', 'scale_1', 'scale_2',
@@ -604,7 +604,7 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
             const indices = new Uint32Array(N);
             for (let i = 0; i < N; i++) indices[i] = i;
             sortByVisibility(dataTable, indices);
-            return dataTable.permuteRows(indices.subarray(0, targetCount));
+            return dataTable.clone({ rows: indices.subarray(0, targetCount) });
         }
     }
 
@@ -633,7 +633,7 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
 
     let current: DataTable;
     if (keptIndices.length < N && keptIndices.length > targetCount) {
-        current = dataTable.permuteRows(keptIndices);
+        current = dataTable.clone({ rows: keptIndices });
     } else {
         current = dataTable;
     }

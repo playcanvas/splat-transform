@@ -417,7 +417,7 @@ describe('Visibility Score Calculation', () => {
     });
 });
 
-describe('permuteRows with Smaller Indices', () => {
+describe('clone with row selection', () => {
     it('should create smaller DataTable when indices.length < numRows', () => {
         const testData = new DataTable([
             new Column('a', new Float32Array([10, 20, 30, 40, 50, 60, 70, 80, 90, 100])),
@@ -425,7 +425,7 @@ describe('permuteRows with Smaller Indices', () => {
         ]);
 
         const indices = new Uint32Array([0, 2, 4, 6, 8]);
-        const result = testData.permuteRows(indices);
+        const result = testData.clone({ rows: indices });
 
         assert.strictEqual(result.numRows, 5, 'Should have exactly 5 rows');
         assert.deepStrictEqual(
@@ -446,7 +446,7 @@ describe('permuteRows with Smaller Indices', () => {
         ]);
 
         const indices = new Uint32Array([2]);
-        const result = testData.permuteRows(indices);
+        const result = testData.clone({ rows: indices });
 
         assert.strictEqual(result.numRows, 1, 'Should have exactly 1 row');
         assert.strictEqual(result.getColumnByName('a').data[0], 30, 'Should have value from index 2');
@@ -458,7 +458,7 @@ describe('permuteRows with Smaller Indices', () => {
         ]);
 
         const indices = new Uint32Array(0);
-        const result = testData.permuteRows(indices);
+        const result = testData.clone({ rows: indices });
 
         assert.strictEqual(result.numRows, 0, 'Should have 0 rows');
     });
