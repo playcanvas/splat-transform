@@ -58,7 +58,7 @@ const transform = (dataTable: DataTable, t: Vec3, r: Quat, s: number): void => {
             row.rot_3 = q.z;
         }
 
-        if (hasScale) {
+        if (hasScale && s !== 1) {
             row.scale_0 = Math.log(Math.exp(row.scale_0) * s);
             row.scale_1 = Math.log(Math.exp(row.scale_1) * s);
             row.scale_2 = Math.log(Math.exp(row.scale_2) * s);

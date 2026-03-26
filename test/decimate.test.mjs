@@ -417,7 +417,7 @@ describe('Visibility Score Calculation', () => {
     });
 });
 
-describe('permuteRows with Smaller Indices', () => {
+describe('clone with row selection', () => {
     it('should create smaller DataTable when indices.length < numRows', () => {
         const testData = new DataTable([
             new Column('a', new Float32Array([10, 20, 30, 40, 50, 60, 70, 80, 90, 100])),
@@ -425,7 +425,7 @@ describe('permuteRows with Smaller Indices', () => {
         ]);
 
         const indices = new Uint32Array([0, 2, 4, 6, 8]);
-        const result = testData.permuteRows(indices);
+        const result = testData.clone({ rows: indices });
 
         assert.strictEqual(result.numRows, 5, 'Should have exactly 5 rows');
         assert.deepStrictEqual(
@@ -446,7 +446,7 @@ describe('permuteRows with Smaller Indices', () => {
         ]);
 
         const indices = new Uint32Array([2]);
-        const result = testData.permuteRows(indices);
+        const result = testData.clone({ rows: indices });
 
         assert.strictEqual(result.numRows, 1, 'Should have exactly 1 row');
         assert.strictEqual(result.getColumnByName('a').data[0], 30, 'Should have value from index 2');
@@ -458,9 +458,103 @@ describe('permuteRows with Smaller Indices', () => {
         ]);
 
         const indices = new Uint32Array(0);
-        const result = testData.permuteRows(indices);
+        const result = testData.clone({ rows: indices });
 
         assert.strictEqual(result.numRows, 0, 'Should have 0 rows');
+    });
+});
+
+describe('clone with column selection', () => {
+    it('should return only the requested columns', () => {
+        const testData = new DataTable([
+            new Column('x', new Float32Array([1, 2, 3])),
+            new Column('y', new Float32Array([4, 5, 6])),
+            new Column('z', new Float32Array([7, 8, 9]))
+        ]);
+
+        const result = testData.clone({ columns: ['x', 'z'] });
+
+        assert.strictEqual(result.numColumns, 2, 'Should have 2 columns');
+        assert.deepStrictEqual(result.columnNames, ['x', 'z'], 'Should preserve column order');
+        assert.deepStrictEqual(Array.from(result.getColumnByName('x').data), [1, 2, 3]);
+        assert.deepStrictEqual(Array.from(result.getColumnByName('z').data), [7, 8, 9]);
+        assert.strictEqual(result.getColumnByName('y'), undefined, 'Should not include y');
+    });
+
+    it('should preserve typed array types', () => {
+        const testData = new DataTable([
+            new Column('a', new Uint8Array([1, 2, 3])),
+            new Column('b', new Int32Array([4, 5, 6])),
+            new Column('c', new Float64Array([7, 8, 9]))
+        ]);
+
+        const result = testData.clone({ columns: ['a', 'c'] });
+
+        assert(result.getColumnByName('a').data instanceof Uint8Array, 'Should preserve Uint8Array');
+        assert(result.getColumnByName('c').data instanceof Float64Array, 'Should preserve Float64Array');
+    });
+
+    it('should produce an independent copy', () => {
+        const testData = new DataTable([
+            new Column('x', new Float32Array([1, 2, 3])),
+            new Column('y', new Float32Array([4, 5, 6]))
+        ]);
+
+        const result = testData.clone({ columns: ['x'] });
+        result.getColumnByName('x').data[0] = 999;
+
+        assert.strictEqual(testData.getColumnByName('x').data[0], 1, 'Source should be unmodified');
+    });
+
+    it('should throw on unknown column names', () => {
+        const testData = new DataTable([
+            new Column('x', new Float32Array([1, 2, 3]))
+        ]);
+
+        assert.throws(
+            () => testData.clone({ columns: ['x', 'missing'] }),
+            /unknown column name\(s\): missing/
+        );
+    });
+
+    it('should throw on empty columns array', () => {
+        const testData = new DataTable([
+            new Column('x', new Float32Array([1, 2, 3]))
+        ]);
+
+        assert.throws(
+            () => testData.clone({ columns: [] }),
+            /must contain at least one column name/
+        );
+    });
+});
+
+describe('clone with rows and columns combined', () => {
+    it('should select specific rows and columns', () => {
+        const testData = new DataTable([
+            new Column('x', new Float32Array([10, 20, 30, 40])),
+            new Column('y', new Float32Array([1, 2, 3, 4])),
+            new Column('z', new Float32Array([100, 200, 300, 400]))
+        ]);
+
+        const result = testData.clone({ rows: [1, 3], columns: ['x', 'z'] });
+
+        assert.strictEqual(result.numRows, 2, 'Should have 2 rows');
+        assert.strictEqual(result.numColumns, 2, 'Should have 2 columns');
+        assert.deepStrictEqual(Array.from(result.getColumnByName('x').data), [20, 40]);
+        assert.deepStrictEqual(Array.from(result.getColumnByName('z').data), [200, 400]);
+    });
+
+    it('should handle rows reordering with column filter', () => {
+        const testData = new DataTable([
+            new Column('a', new Float32Array([10, 20, 30])),
+            new Column('b', new Float32Array([1, 2, 3]))
+        ]);
+
+        const result = testData.clone({ rows: [2, 0, 1], columns: ['a'] });
+
+        assert.strictEqual(result.numColumns, 1, 'Should have 1 column');
+        assert.deepStrictEqual(Array.from(result.getColumnByName('a').data), [30, 10, 20]);
     });
 });
 

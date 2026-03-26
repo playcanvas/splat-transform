@@ -173,24 +173,64 @@ class DataTable {
 
     // general
 
-    clone(): DataTable {
-        return new DataTable(this.columns.map(c => c.clone()));
-    }
+    /**
+     * Creates a copy of this DataTable, optionally selecting specific rows and/or columns.
+     *
+     * @param options - Optional selection criteria.
+     * @param options.rows - Row indices to include (and their order). If omitted, all rows are copied.
+     * @param options.columns - Column names to include. If omitted, all columns are copied.
+     * @returns A new DataTable with copied data.
+     *
+     * @example
+     * ```ts
+     * const full = table.clone();
+     * const subset = table.clone({ rows: [0, 2, 4], columns: ['x', 'y', 'z'] });
+     * ```
+     */
+    clone(options?: { rows?: Uint32Array | number[]; columns?: string[] }): DataTable {
+        const rows = options?.rows;
+        const columnNames = options?.columns;
 
-    // return a new table containing the rows referenced in indices
-    permuteRows(indices: Uint32Array | number[]): DataTable {
-        const result = new DataTable(this.columns.map((c) => {
+        let srcColumns: Column[];
+
+        if (columnNames !== undefined) {
+            if (columnNames.length === 0) {
+                throw new Error('DataTable.clone: "columns" must contain at least one column name.');
+            }
+
+            const uniqueNames = new Set(columnNames);
+            if (uniqueNames.size !== columnNames.length) {
+                const dupes = columnNames.filter((n, i) => columnNames.indexOf(n) !== i);
+                throw new Error(`DataTable.clone: duplicate column name(s): ${[...new Set(dupes)].join(', ')}`);
+            }
+
+            const missingColumns = columnNames.filter(name => !this.getColumnByName(name));
+            if (missingColumns.length > 0) {
+                throw new Error(`DataTable.clone: unknown column name(s): ${missingColumns.join(', ')}`);
+            }
+
+            srcColumns = columnNames.map(name => this.getColumnByName(name)!);
+        } else {
+            srcColumns = this.columns;
+        }
+
+        if (!rows) {
+            return new DataTable(srcColumns.map(c => c.clone()));
+        }
+
+        const result = new DataTable(srcColumns.map((c) => {
             const constructor = c.data.constructor as new (length: number) => TypedArray;
-            return new Column(c.name, new constructor(indices.length));
+            return new Column(c.name, new constructor(rows.length));
         }));
 
-        for (let i = 0; i < this.numColumns; ++i) {
-            const src = this.getColumn(i).data;
+        for (let i = 0; i < result.numColumns; ++i) {
+            const src = srcColumns[i].data;
             const dst = result.getColumn(i).data;
-            for (let j = 0; j < indices.length; j++) {
-                dst[j] = src[indices[j]];
+            for (let j = 0; j < rows.length; j++) {
+                dst[j] = src[rows[j]];
             }
         }
+
         return result;
     }
 
@@ -198,7 +238,7 @@ class DataTable {
      * Permutes the rows of this DataTable in-place according to the given indices.
      * After calling, row `i` will contain the data that was previously at row `indices[i]`.
      *
-     * This is a memory-efficient alternative to `permuteRows` that modifies the table
+     * This is a memory-efficient alternative to `clone({ rows })` that modifies the table
      * in-place rather than creating a copy. It reuses ArrayBuffers between columns to
      * minimize memory allocations.
      *

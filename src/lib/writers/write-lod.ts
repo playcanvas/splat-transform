@@ -306,7 +306,7 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
             }
 
             // construct a new table from the ordered data
-            const unitDataTable = dataTable.permuteRows(indices);
+            const unitDataTable = dataTable.clone({ rows: indices });
 
             // reset indices since we've generated ordering on the individual subunits
             for (let j = 0; j < indices.length; ++j) {

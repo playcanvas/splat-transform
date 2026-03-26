@@ -1,7 +1,9 @@
 import { MeshoptSimplifier } from 'meshoptimizer/simplifier';
+import { Quat, Vec3 } from 'playcanvas';
 
 import type { DeviceCreator } from './write-sog';
 import { DataTable } from '../data-table/data-table';
+import { transform } from '../data-table/transform';
 import { type FileSystem, writeFile } from '../io/write';
 import { logger } from '../utils/logger';
 import { buildCollisionGlb } from '../voxel/collision-glb';
@@ -65,7 +67,7 @@ interface VoxelMetadata {
     /** Grid bounds aligned to 4x4x4 block boundaries */
     gridBounds: { min: number[]; max: number[] };
 
-    /** Original Gaussian scene bounds */
+    /** Scene bounds (in PlayCanvas coordinate space for v1.1+) */
     sceneBounds: { min: number[]; max: number[] };
 
     /** Size of each voxel in world units */
@@ -104,7 +106,7 @@ const writeOctreeFiles = async (
 ): Promise<void> => {
     // Build metadata object
     const metadata: VoxelMetadata = {
-        version: '1.0',
+        version: '1.1',
         gridBounds: {
             min: [octree.gridBounds.min.x, octree.gridBounds.min.y, octree.gridBounds.min.z],
             max: [octree.gridBounds.max.x, octree.gridBounds.max.y, octree.gridBounds.max.z]
@@ -196,17 +198,31 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     if (hasNav) stepCount += 1;
     logger.progress.begin(stepCount);
 
-    const extentsResult = computeGaussianExtents(dataTable);
+    // Build a copy containing only the columns needed for voxelization and
+    // transform it by (0, 0, 180) to orient data into PlayCanvas space.
+    // Using a copy avoids mutating the caller's DataTable and keeps SH out
+    // of the transform since those columns aren't present.
+    const pcDataTable = dataTable.clone({
+        columns: [
+            'x', 'y', 'z',
+            'rot_0', 'rot_1', 'rot_2', 'rot_3',
+            'scale_0', 'scale_1', 'scale_2',
+            'opacity'
+        ]
+    });
+    transform(pcDataTable, Vec3.ZERO, new Quat().setFromEulerAngles(0, 0, 180), 1);
+
+    const extentsResult = computeGaussianExtents(pcDataTable);
     const bounds = extentsResult.sceneBounds;
 
     logger.progress.step('Building BVH');
     logger.debug(`scene extents: (${bounds.min.x.toFixed(2)},${bounds.min.y.toFixed(2)},${bounds.min.z.toFixed(2)}) - (${bounds.max.x.toFixed(2)},${bounds.max.y.toFixed(2)},${bounds.max.z.toFixed(2)})`);
 
-    const bvh = new GaussianBVH(dataTable, extentsResult.extents);
+    const bvh = new GaussianBVH(pcDataTable, extentsResult.extents);
     const device = await createDevice();
 
     const gpuVoxelization = new GpuVoxelization(device);
-    gpuVoxelization.uploadAllGaussians(dataTable, extentsResult.extents);
+    gpuVoxelization.uploadAllGaussians(pcDataTable, extentsResult.extents);
 
     // Align grid bounds to block boundaries BEFORE voxelization so the
     // block coordinates used during voxelization match what the reader expects.
@@ -511,7 +527,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     const octree = buildSparseOctree(
         accumulator,
         gridBounds,
-        bounds,  // Original scene bounds
+        bounds,
         voxelResolution
     );
 
