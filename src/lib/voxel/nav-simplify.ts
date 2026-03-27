@@ -497,6 +497,7 @@ const findNearestFreeCell = (
  * @param capsuleHeight - Total capsule height in world units.
  * @param capsuleRadius - Capsule radius in world units.
  * @param seed - Seed position in world space (must be in a free region).
+ * @param debugStage - Stop after this stage (6-10) and return intermediate state.
  * @returns Simplified accumulator and cropped grid bounds.
  */
 const simplifyForCapsule = (
@@ -505,7 +506,8 @@ const simplifyForCapsule = (
     voxelResolution: number,
     capsuleHeight: number,
     capsuleRadius: number,
-    seed: NavSeed
+    seed: NavSeed,
+    debugStage?: number
 ): NavSimplifyResult => {
     if (!Number.isFinite(voxelResolution) || voxelResolution <= 0) {
         throw new Error(`nav simplify: voxelResolution must be finite and > 0, got ${voxelResolution}`);
@@ -538,17 +540,31 @@ const simplifyForCapsule = (
     const kernelR = Math.ceil(capsuleRadius / voxelResolution);
     const yHalfExtent = Math.ceil(capsuleHeight / (2 * voxelResolution));
 
-    logger.progress.begin(6);
+    const nbx = nx >> 2;
+    const nby = ny >> 2;
+    const nbz = nz >> 2;
+
+    const buildFullResult = (grid: Uint32Array): NavSimplifyResult => ({
+        accumulator: denseGridToAccumulator(grid, nx, ny, nz, 0, 0, 0, nbx, nby, nbz),
+        gridBounds
+    });
+
+    logger.progress.begin(5);
     let progressComplete = false;
 
     try {
 
-        // Phase 1: build dense bitfield grid from accumulator
+        // Phase 6: build dense bitfield grid from accumulator
         const bitA = new Uint32Array(wordCount);
         fillDenseSolidGrid(accumulator, bitA, nx, ny, nz);
         logger.progress.step();
 
-        // Phase 2: capsule clearance grid (Minkowski dilation of solid by capsule)
+        if (debugStage === 6) {
+            progressComplete = true;
+            return buildFullResult(bitA);
+        }
+
+        // Phase 7: capsule clearance grid (Minkowski dilation of solid by capsule)
         // Three separable 1D sliding window passes (X, Z, Y).
         const bitB = new Uint32Array(wordCount);
 
@@ -559,7 +575,12 @@ const simplifyForCapsule = (
         dilateY(bitA, bitB, nx, ny, nz, yHalfExtent);
         logger.progress.step();
 
-        // Phase 3: BFS flood fill from seed through free (non-blocked) cells.
+        if (debugStage === 7) {
+            progressComplete = true;
+            return buildFullResult(bitB);
+        }
+
+        // Phase 8: BFS flood fill from seed + invert reachable to solid.
         // Uses bitB as blocked mask and bitA as visited mask.
         let seedIx = Math.floor((seed.x - gridBounds.min.x) / voxelResolution);
         let seedIy = Math.floor((seed.y - gridBounds.min.y) / voxelResolution);
@@ -638,11 +659,7 @@ const simplifyForCapsule = (
             if (iz < nz - 1) enqueue(idx + stride);
         }
 
-        logger.progress.step();
-
-        // Phase 4: invert reachable to solid (bitwise operation).
-        // Reachable = visited AND NOT blocked = bitA AND NOT bitB.
-        // Solid = NOT reachable = NOT bitA OR bitB = ~bitA | bitB.
+        // Invert reachable to solid: solid = NOT reachable = ~bitA | bitB
         for (let w = 0; w < wordCount; w++) {
             bitB[w] |= ~bitA[w];
         }
@@ -655,7 +672,12 @@ const simplifyForCapsule = (
 
         logger.progress.step();
 
-        // Phase 5: erode solid by capsule shape (Minkowski subtraction)
+        if (debugStage === 8) {
+            progressComplete = true;
+            return buildFullResult(bitB);
+        }
+
+        // Phase 9: erode solid by capsule shape (Minkowski subtraction)
         bitA.fill(0);
         erodeX(bitB, bitA, nx, ny, nz, kernelR);
 
@@ -666,7 +688,12 @@ const simplifyForCapsule = (
         erodeY(bitB, bitA, nx, ny, nz, yHalfExtent);
         logger.progress.step();
 
-        // Phase 6: crop to bounding box of empty (navigable) cells
+        if (debugStage === 9) {
+            progressComplete = true;
+            return buildFullResult(bitA);
+        }
+
+        // Phase 10: crop to bounding box of empty (navigable) cells
         let minIx = nx, minIy = ny, minIz = nz;
         let maxIx = 0, maxIy = 0, maxIz = 0;
 
@@ -688,9 +715,15 @@ const simplifyForCapsule = (
             }
         }
 
-        const nbx = nx >> 2;
-        const nby = ny >> 2;
-        const nbz = nz >> 2;
+        if (minIx > maxIx) {
+            logger.warn('nav simplify: no navigable cells remain, returning empty result');
+            logger.progress.step();
+            progressComplete = true;
+            return {
+                accumulator: new BlockAccumulator(),
+                gridBounds: { min: gridBounds.min.clone(), max: gridBounds.min.clone() }
+            };
+        }
 
         const MARGIN = 1;
         const cropMinBx = Math.max(0, (minIx >> 2) - MARGIN);
@@ -734,5 +767,260 @@ const simplifyForCapsule = (
     }
 };
 
-export { simplifyForCapsule };
+/**
+ * Fill exterior void space outside enclosed levels.
+ *
+ * Uses the same bitfield approach as simplifyForCapsule but with inverse
+ * flood fill logic: instead of flooding FROM the seed to find reachable
+ * interior, this floods FROM the grid boundary to find exterior void, then
+ * fills it in.
+ *
+ * Algorithm:
+ * 1. Build dense bitfield grid from the accumulator.
+ * 2. Dilate solid by a uniform box (same half-extent in all 3 axes).
+ * 3. BFS flood fill from all 6 grid boundary faces through free cells to
+ *    find exterior-reachable empty space.
+ * 4. If the seed is reached by the boundary flood, the level is not enclosed
+ *    -- skip the operation and return the original data.
+ * 5. Fill exterior: mark all boundary-reachable cells as solid.
+ * 6. Erode by the same uniform half-extent to undo the dilation.
+ * 7. Crop to bounding box of remaining empty (navigable) cells.
+ *
+ * @param accumulator - BlockAccumulator with filtered voxelization results.
+ * @param gridBounds - Grid bounds aligned to block boundaries (not mutated).
+ * @param voxelResolution - Size of each voxel in world units.
+ * @param dilation - Dilation distance in world units (uniform in all axes).
+ * @param seed - Seed position in world space; skipped if reachable from outside.
+ * @param debugStage - Stop after this stage (1-6) and return intermediate state.
+ * @returns Simplified accumulator and (possibly cropped) grid bounds.
+ */
+const fillExterior = (
+    accumulator: BlockAccumulator,
+    gridBounds: Bounds,
+    voxelResolution: number,
+    dilation: number,
+    seed: NavSeed,
+    debugStage?: number
+): NavSimplifyResult => {
+    if (!Number.isFinite(voxelResolution) || voxelResolution <= 0) {
+        throw new Error(`fillExterior: voxelResolution must be finite and > 0, got ${voxelResolution}`);
+    }
+    if (!Number.isFinite(dilation) || dilation <= 0) {
+        throw new Error(`fillExterior: dilation must be finite and > 0, got ${dilation}`);
+    }
+
+    const nx = Math.round((gridBounds.max.x - gridBounds.min.x) / voxelResolution);
+    const ny = Math.round((gridBounds.max.y - gridBounds.min.y) / voxelResolution);
+    const nz = Math.round((gridBounds.max.z - gridBounds.min.z) / voxelResolution);
+
+    if (nx % 4 !== 0 || ny % 4 !== 0 || nz % 4 !== 0) {
+        throw new Error(`Grid dimensions must be multiples of 4, got ${nx}x${ny}x${nz}`);
+    }
+
+    if (accumulator.count === 0) {
+        return { accumulator, gridBounds };
+    }
+
+    const totalVoxels = nx * ny * nz;
+    const stride = nx * ny;
+    const wordCount = (totalVoxels + 31) >>> 5;
+    const halfExtent = Math.ceil(dilation / voxelResolution);
+
+    const nbx = nx >> 2;
+    const nby = ny >> 2;
+    const nbz = nz >> 2;
+
+    const buildFullResult = (grid: Uint32Array): NavSimplifyResult => ({
+        accumulator: denseGridToAccumulator(grid, nx, ny, nz, 0, 0, 0, nbx, nby, nbz),
+        gridBounds
+    });
+
+    // Stage 1: build dense bitfield grid from accumulator
+    const bitA = new Uint32Array(wordCount);
+    fillDenseSolidGrid(accumulator, bitA, nx, ny, nz);
+
+    if (debugStage === 1) return buildFullResult(bitA);
+
+    // Save original solid for combining after BFS dilation
+    const bitOriginal = new Uint32Array(bitA);
+
+    // Stage 2: uniform dilation (same half-extent in all 3 axes)
+    const bitB = new Uint32Array(wordCount);
+
+    dilateX(bitA, bitB, nx, ny, nz, halfExtent);
+    bitA.fill(0);
+    dilateZ(bitB, bitA, nx, ny, nz, halfExtent);
+    bitB.fill(0);
+    dilateY(bitA, bitB, nx, ny, nz, halfExtent);
+
+    if (debugStage === 2) return buildFullResult(bitB);
+
+    // Stage 3: BFS flood fill from boundary + fill exterior
+    // bitB = blocked mask (dilated solid), bitA reused as visited.
+    bitA.fill(0);
+
+    let queueCap = 1 << Math.min(25, Math.ceil(Math.log2(totalVoxels + 1)));
+    let queueMask = queueCap - 1;
+    let bfsQueue = new Uint32Array(queueCap);
+    let qHead = 0;
+    let qTail = 0;
+    let queueSize = 0;
+
+    const enqueue = (nIdx: number) => {
+        const w = nIdx >>> 5;
+        const m = 1 << (nIdx & 31);
+        if (!((bitB[w] | bitA[w]) & m)) {
+            if (queueSize >= queueCap) {
+                const newCap = queueCap << 1;
+                const newQueue = new Uint32Array(newCap);
+                for (let i = 0; i < queueSize; i++) {
+                    newQueue[i] = bfsQueue[(qHead + i) & queueMask];
+                }
+                bfsQueue = newQueue;
+                queueCap = newCap;
+                queueMask = newCap - 1;
+                qHead = 0;
+                qTail = queueSize;
+            }
+            bitA[w] |= m;
+            bfsQueue[qTail] = nIdx;
+            qTail = (qTail + 1) & queueMask;
+            queueSize++;
+        }
+    };
+
+    // Seed from all 6 boundary faces
+    for (let iz = 0; iz < nz; iz++) {
+        for (let iy = 0; iy < ny; iy++) {
+            enqueue(iy * nx + iz * stride);
+            enqueue((nx - 1) + iy * nx + iz * stride);
+        }
+    }
+    for (let iz = 0; iz < nz; iz++) {
+        for (let ix = 0; ix < nx; ix++) {
+            enqueue(ix + iz * stride);
+            enqueue(ix + (ny - 1) * nx + iz * stride);
+        }
+    }
+    for (let iy = 0; iy < ny; iy++) {
+        for (let ix = 0; ix < nx; ix++) {
+            enqueue(ix + iy * nx);
+            enqueue(ix + iy * nx + (nz - 1) * stride);
+        }
+    }
+
+    while (queueSize > 0) {
+        const idx = bfsQueue[qHead];
+        qHead = (qHead + 1) & queueMask;
+        queueSize--;
+
+        const ix = idx % nx;
+        const iy = Math.floor((idx % stride) / nx);
+        const iz = Math.floor(idx / stride);
+
+        if (ix > 0) enqueue(idx - 1);
+        if (ix < nx - 1) enqueue(idx + 1);
+        if (iy > 0) enqueue(idx - nx);
+        if (iy < ny - 1) enqueue(idx + nx);
+        if (iz > 0) enqueue(idx - stride);
+        if (iz < nz - 1) enqueue(idx + stride);
+    }
+
+    // Check if seed is reachable from outside (level not enclosed → skip)
+    const seedIx = Math.floor((seed.x - gridBounds.min.x) / voxelResolution);
+    const seedIy = Math.floor((seed.y - gridBounds.min.y) / voxelResolution);
+    const seedIz = Math.floor((seed.z - gridBounds.min.z) / voxelResolution);
+
+    if (seedIx >= 0 && seedIx < nx && seedIy >= 0 && seedIy < ny && seedIz >= 0 && seedIz < nz) {
+        const seedIdx = seedIx + seedIy * nx + seedIz * stride;
+        if ((bitA[seedIdx >>> 5] >>> (seedIdx & 31)) & 1) {
+            logger.log('fillExterior: seed reachable from outside, skipping');
+            return { accumulator, gridBounds };
+        }
+    }
+
+    if (debugStage === 3) return buildFullResult(bitA);
+
+    // Stage 4: L-infinity dilate BFS-visited cells by same halfExtent,
+    // then combine with original (pre-dilation) solid.
+    // bitA = BFS visited, bitB = stale dilated solid from Stage 2.
+    // Critical: zero bitB before reuse as dilation destination.
+    bitB.fill(0);
+    dilateX(bitA, bitB, nx, ny, nz, halfExtent);
+    bitA.fill(0);
+    dilateZ(bitB, bitA, nx, ny, nz, halfExtent);
+    bitB.fill(0);
+    dilateY(bitA, bitB, nx, ny, nz, halfExtent);
+
+    // bitB = L-infinity dilated BFS. Combine with original solid.
+    for (let w = 0; w < wordCount; w++) {
+        bitA[w] = bitOriginal[w] | bitB[w];
+    }
+
+    if (debugStage === 4) return buildFullResult(bitA);
+
+    // Stage 5: crop to bounding box of empty (navigable) cells
+    let minIx = nx, minIy = ny, minIz = nz;
+    let maxIx = 0, maxIy = 0, maxIz = 0;
+
+    for (let iz = 0; iz < nz; iz++) {
+        const zOff = iz * stride;
+        for (let iy = 0; iy < ny; iy++) {
+            const rowOff = zOff + iy * nx;
+            for (let ix = 0; ix < nx; ix++) {
+                const idx = rowOff + ix;
+                if (!((bitA[idx >>> 5] >>> (idx & 31)) & 1)) {
+                    if (ix < minIx) minIx = ix;
+                    if (ix > maxIx) maxIx = ix;
+                    if (iy < minIy) minIy = iy;
+                    if (iy > maxIy) maxIy = iy;
+                    if (iz < minIz) minIz = iz;
+                    if (iz > maxIz) maxIz = iz;
+                }
+            }
+        }
+    }
+
+    if (minIx > maxIx) {
+        logger.warn('fillExterior: no navigable cells remain, returning empty result');
+        return {
+            accumulator: new BlockAccumulator(),
+            gridBounds: { min: gridBounds.min.clone(), max: gridBounds.min.clone() }
+        };
+    }
+
+    const MARGIN = 1;
+    const cropMinBx = Math.max(0, (minIx >> 2) - MARGIN);
+    const cropMinBy = Math.max(0, (minIy >> 2) - MARGIN);
+    const cropMinBz = Math.max(0, (minIz >> 2) - MARGIN);
+    const cropMaxBx = Math.min(nbx, (maxIx >> 2) + 1 + MARGIN);
+    const cropMaxBy = Math.min(nby, (maxIy >> 2) + 1 + MARGIN);
+    const cropMaxBz = Math.min(nbz, (maxIz >> 2) + 1 + MARGIN);
+
+    const blockSize = 4 * voxelResolution;
+    const croppedMin = new Vec3(
+        gridBounds.min.x + cropMinBx * blockSize,
+        gridBounds.min.y + cropMinBy * blockSize,
+        gridBounds.min.z + cropMinBz * blockSize
+    );
+    const croppedBounds: Bounds = {
+        min: croppedMin,
+        max: new Vec3(
+            croppedMin.x + (cropMaxBx - cropMinBx) * blockSize,
+            croppedMin.y + (cropMaxBy - cropMinBy) * blockSize,
+            croppedMin.z + (cropMaxBz - cropMinBz) * blockSize
+        )
+    };
+
+    return {
+        accumulator: denseGridToAccumulator(
+            bitA, nx, ny, nz,
+            cropMinBx, cropMinBy, cropMinBz,
+            cropMaxBx, cropMaxBy, cropMaxBz
+        ),
+        gridBounds: croppedBounds
+    };
+};
+
+export { fillExterior, simplifyForCapsule };
 export type { NavSeed, NavSimplifyResult };

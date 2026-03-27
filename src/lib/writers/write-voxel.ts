@@ -17,7 +17,7 @@ import {
     type MultiBatchResult
 } from '../voxel/index';
 import { marchingCubes } from '../voxel/marching-cubes';
-import { simplifyForCapsule, type NavSeed } from '../voxel/nav-simplify';
+import { fillExterior, simplifyForCapsule, type NavSeed } from '../voxel/nav-simplify';
 import {
     BlockAccumulator,
     xyzToMorton,
@@ -47,14 +47,20 @@ type WriteVoxelOptions = {
     /** Whether to generate a collision mesh (.collision.glb) alongside the voxel data. Default: false */
     collisionMesh?: boolean;
 
-    /** Ratio of triangles to keep when simplifying the collision mesh (0-1). Default: 0.25 */
-    meshSimplify?: number;
+    /** Maximum geometric error for collision mesh simplification as a fraction of voxelResolution. Default: 0.08 */
+    meshSimplifyError?: number;
 
     /** Capsule dimensions for navigation simplification. When set, only voxels contactable from the seed are kept. */
     navCapsule?: { height: number; radius: number };
 
     /** Seed position in world space for navigation flood fill. Required when navCapsule is set. */
     navSeed?: NavSeed;
+
+    /** Dilation distance in world units for exterior void filling. Defaults to 1.6 when nav simplification is active. */
+    navFillDilation?: number;
+
+    /** Stop nav processing at this stage and output intermediate state. 1-5: fillExterior, 6-10: simplifyForCapsule. */
+    navDebugStage?: number;
 };
 
 /**
@@ -180,9 +186,11 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         opacityCutoff = 0.5,
         createDevice,
         collisionMesh = false,
-        meshSimplify = 0.25,
+        meshSimplifyError,
         navCapsule,
-        navSeed
+        navSeed,
+        navFillDilation,
+        navDebugStage
     } = options;
 
     if (!createDevice) {
@@ -192,9 +200,15 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     if ((navCapsule && !navSeed) || (!navCapsule && navSeed)) {
         logger.warn('writeVoxel: both navCapsule and navSeed must be provided for nav simplification, skipping');
     }
-    const hasNav = !!(navCapsule && navSeed);
+    const fillDebugStage = navDebugStage && navDebugStage <= 5 ? navDebugStage : undefined;
+    const simplifyDebugStage = navDebugStage && navDebugStage >= 6 ? navDebugStage : undefined;
+    const hasNavBase = !!(navCapsule && navSeed);
+    const fillDilation = hasNavBase ? (navFillDilation ?? 1.6) : navFillDilation;
+    const hasFillExterior = !!(fillDilation && navSeed);
+    const hasNav = hasNavBase && !fillDebugStage;
     let stepCount = 5;
     if (collisionMesh) stepCount += 2;
+    if (hasFillExterior) stepCount += 1;
     if (hasNav) stepCount += 1;
     logger.progress.begin(stepCount);
 
@@ -456,12 +470,24 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     logger.progress.step('Filtering');
     accumulator = filterAndFillBlocks(accumulator);
 
+    if (hasFillExterior) {
+        logger.progress.step('Fill exterior');
+        const fillResult = fillExterior(
+            accumulator, gridBounds, voxelResolution,
+            fillDilation!, navSeed!,
+            fillDebugStage
+        );
+        accumulator = fillResult.accumulator;
+        gridBounds = fillResult.gridBounds;
+    }
+
     if (hasNav) {
         logger.progress.step('Nav simplification');
         const navResult = simplifyForCapsule(
             accumulator, gridBounds, voxelResolution,
             navCapsule!.height, navCapsule!.radius,
-            navSeed!
+            navSeed!,
+            simplifyDebugStage
         );
         accumulator = navResult.accumulator;
         gridBounds = navResult.gridBounds;
@@ -481,20 +507,13 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             logger.progress.step('Simplifying collision mesh');
             await MeshoptSimplifier.ready;
 
-            const clampedSimplify = Number.isFinite(meshSimplify) ? Math.min(1, Math.max(0, meshSimplify)) : 0.25;
-            const targetIndexCount = Math.max(
-                3,
-                Math.min(
-                    rawMesh.indices.length,
-                    Math.floor(rawMesh.indices.length * clampedSimplify / 3) * 3
-                )
-            );
+            const simplifyError = (meshSimplifyError ?? 0.08) * voxelResolution;
             const [simplifiedIndices] = MeshoptSimplifier.simplify(
                 rawMesh.indices,
                 rawMesh.positions,
                 3,
-                targetIndexCount,
-                voxelResolution,
+                0,
+                simplifyError,
                 ['ErrorAbsolute']
             );
 

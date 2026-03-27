@@ -86,10 +86,12 @@ const parseArguments = async () => {
             'voxel-resolution': { type: 'string', short: 'R', default: '0.05' },
             'opacity-cutoff': { type: 'string', short: 'A', default: '0.1' },
             'collision-mesh': { type: 'boolean', short: 'K', default: false },
-            'mesh-simplify': { type: 'string', short: 'T', default: '0.25' },
-            'no-nav-simplify': { type: 'boolean', short: 'n', default: false },
+            'mesh-simplify-error': { type: 'string', default: '' },
+            'nav-simplify': { type: 'boolean', short: 'n', default: true },
             'nav-capsule': { type: 'string', default: '' },
             'nav-seed': { type: 'string', default: '' },
+            'nav-fill-dilation': { type: 'string', default: '' },
+            'nav-debug-stage': { type: 'string', default: '' },
 
             // per-file options
             translate: { type: 'string', short: 't', multiple: true },
@@ -173,7 +175,7 @@ const parseArguments = async () => {
     // Parse nav simplification options
     const navCapsuleStr = v['nav-capsule'];
     const navSeedStr = v['nav-seed'];
-    const navSimplify = !v['no-nav-simplify'];
+    const navSimplify = v['nav-simplify'];
     let navCapsule: { height: number; radius: number } | undefined;
     let navSeed: { x: number; y: number; z: number } | undefined;
 
@@ -206,6 +208,25 @@ const parseArguments = async () => {
         }
     }
 
+    // Parse fill exterior options
+    const navFillDilationStr = v['nav-fill-dilation'];
+    const navDebugStageStr = v['nav-debug-stage'];
+    let navFillDilation: number | undefined;
+    let navDebugStage: number | undefined;
+
+    if (navFillDilationStr) {
+        navFillDilation = parseNumber(navFillDilationStr);
+        if (!Number.isFinite(navFillDilation) || navFillDilation <= 0) {
+            throw new Error(`Invalid nav-fill-dilation value: ${navFillDilationStr}. Must be > 0`);
+        }
+    }
+    if (navDebugStageStr) {
+        navDebugStage = parseInteger(navDebugStageStr);
+        if (navDebugStage < 1 || navDebugStage > 10) {
+            throw new Error(`Invalid nav-debug-stage value: ${navDebugStageStr}. Must be 1-10`);
+        }
+    }
+
     const options: CliOptions = {
         overwrite: v.overwrite,
         help: v.help,
@@ -222,15 +243,13 @@ const parseArguments = async () => {
         voxelResolution: parseNumber(v['voxel-resolution']),
         opacityCutoff: parseNumber(v['opacity-cutoff']),
         collisionMesh: v['collision-mesh'],
-        meshSimplify: parseNumber(v['mesh-simplify']),
+        meshSimplifyError: parseNumber(v['mesh-simplify-error']) || undefined,
         navSimplify,
         navCapsule,
-        navSeed
+        navSeed,
+        navFillDilation,
+        navDebugStage
     };
-
-    if (!Number.isFinite(options.meshSimplify) || options.meshSimplify < 0 || options.meshSimplify > 1) {
-        throw new Error(`Invalid mesh-simplify value: ${options.meshSimplify}. Must be a finite number between 0 and 1.`);
-    }
 
     for (const t of tokens) {
         if (t.kind === 'positional') {
@@ -444,10 +463,12 @@ GLOBAL OPTIONS
     -R, --voxel-resolution <n>              Voxel size in world units for .voxel.json. Default: 0.05
     -A, --opacity-cutoff   <n>              Opacity threshold for solid voxels. Default: 0.1
     -K, --collision-mesh                    Generate collision mesh (.collision.glb) with voxel output
-    -T, --mesh-simplify    <n>              Ratio of triangles to keep for collision mesh (0-1). Default: 0.25
-    -n, --no-nav-simplify                   Disable capsule navigation simplification for voxel output
+        --mesh-simplify-error <n>           Max geometric error for collision mesh simplification as a fraction of voxelResolution. Default: 0.08
+    -n, --nav-simplify                      Enable capsule navigation simplification for voxel output. Default: true.
         --nav-capsule      <height,radius>  Capsule dimensions for nav simplification. Default: 1.6,0.2
         --nav-seed         <x,y,z>          Seed position for nav simplification. Default: 0,0,0
+        --nav-fill-dilation <n>             Fill exterior void dilation in world units (default: 1.6 when nav active)
+        --nav-debug-stage  <1-10>           Stop nav processing at stage N (1-5: fill exterior, 6-10: capsule simplify)
 
 EXAMPLES
     # Scale then translate

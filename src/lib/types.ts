@@ -29,8 +29,8 @@ type Options = {
     /** Whether to generate a collision mesh (.collision.glb) alongside voxel output. Default: false */
     collisionMesh?: boolean;
 
-    /** Ratio of triangles to keep when simplifying the collision mesh (0-1). Default: 0.25 */
-    meshSimplify?: number;
+    /** Maximum geometric error for collision mesh simplification as a fraction of voxelResolution. Default: 0.08 */
+    meshSimplifyError?: number;
 
     /** Enable navigation simplification with default capsule (height 1.6, radius 0.2) and seed (0,0,0). Default: true (set to false to disable). */
     navSimplify?: boolean;
@@ -40,6 +40,12 @@ type Options = {
 
     /** Seed position in world space for navigation flood fill. Default: { x: 0, y: 0, z: 0 } */
     navSeed?: { x: number; y: number; z: number };
+
+    /** Dilation distance in world units for exterior void filling. When set, fills empty space outside enclosed levels. */
+    navFillDilation?: number;
+
+    /** Stop nav processing at this stage and output intermediate state. 1-5: fillExterior, 6-10: simplifyForCapsule. */
+    navDebugStage?: number;
 };
 
 /**
