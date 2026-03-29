@@ -464,7 +464,7 @@ GLOBAL OPTIONS
     -A, --opacity-cutoff   <n>              Opacity threshold for solid voxels. Default: 0.1
     -K, --collision-mesh                    Generate collision mesh (.collision.glb) with voxel output
         --mesh-simplify-error <n>           Max geometric error for collision mesh simplification as a fraction of voxelResolution. Default: 0.08
-    -n, --nav-simplify                      Enable capsule navigation simplification for voxel output. Default: true.
+    -n, --nav-simplify                      Enable nav simplification for voxel output. Default: true.
         --nav-capsule      <height,radius>  Capsule dimensions for nav simplification. Default: 1.6,0.2
         --nav-seed         <x,y,z>          Seed position for nav simplification. Default: 0,0,0
         --nav-fill-dilation <n>             Fill exterior void dilation in world units (default: 1.6 when nav active)

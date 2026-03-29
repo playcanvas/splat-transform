@@ -482,7 +482,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     }
 
     if (hasNav) {
-        logger.progress.step('Nav simplification');
+        logger.progress.step('Carve interior');
         const navResult = simplifyForCapsule(
             accumulator, gridBounds, voxelResolution,
             navCapsule!.height, navCapsule!.radius,
