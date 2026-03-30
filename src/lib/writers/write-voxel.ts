@@ -258,7 +258,8 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     const batchSize = 16;  // 16x16x16 = 4096 blocks max per batch
 
     logger.progress.step('Voxelizing');
-    logger.debug(`voxel grid: (${numBlocksX} x ${numBlocksY} x ${numBlocksZ})`);
+    logger.debug(`blocks: ${numBlocksX} x ${numBlocksY} x ${numBlocksZ} (${(numBlocksX * numBlocksY * numBlocksZ / 1e6).toFixed(1)}M)`);
+    logger.debug(`voxels: ${numBlocksX * 4} x ${numBlocksY * 4} x ${numBlocksZ * 4} (${(numBlocksX * numBlocksY * numBlocksZ * 64 / 1e9).toFixed(2)}B)`);
 
     // Mega-dispatch thresholds: flush when either limit is reached
     const MEGA_MAX_BATCHES = 512;

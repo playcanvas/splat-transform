@@ -524,6 +524,12 @@ const main = async () => {
     const err = console.error.bind(console);
     const warn = console.warn.bind(console);
 
+    const formatMem = () => {
+        const m = process.memoryUsage();
+        const mb = (n: number) => `${(n / (1024 * 1024)).toFixed(0)}MB`;
+        return `  [rss: ${mb(m.rss)}, heap: ${mb(m.heapUsed)}, ab: ${mb(m.arrayBuffers)}]`;
+    };
+
     // inject Node.js-specific logger - logs go to stderr, data output goes to stdout
     logger.setLogger({
         log: err,
@@ -533,7 +539,7 @@ const main = async () => {
         output: console.log.bind(console),
         onProgress: (node) => {
             if (node.stepName) {
-                err(`[${node.step}/${node.totalSteps}] ${node.stepName}`);
+                err(`[${node.step}/${node.totalSteps}] ${node.stepName}${formatMem()}`);
             } else if (node.step === 0) {
                 start = hrtime();
             } else {
@@ -542,7 +548,7 @@ const main = async () => {
                 const prev = Math.round(displaySteps * (node.step - 1) / node.totalSteps);
                 if (curr > prev) process.stderr.write('#'.repeat(curr - prev));
                 if (node.step === node.totalSteps) {
-                    process.stderr.write(` (${hrtimeDelta(start, hrtime()).toFixed(3)}s)\n`);
+                    process.stderr.write(` (${hrtimeDelta(start, hrtime()).toFixed(3)}s)${formatMem()}\n`);
                 }
             }
         }
