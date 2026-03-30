@@ -29,14 +29,14 @@ type Options = {
     /** Enable navigation simplification with default capsule (height 1.6, radius 0.2) and seed (0,0,0). Default: true (set to false to disable). */
     navSimplify?: boolean;
 
+    /** Exterior fill radius in world units. When set, fills empty space outside enclosed levels. */
+    navExteriorRadius?: number;
+
     /** Capsule dimensions (height, radius) for navigation simplification. Default: { height: 1.6, radius: 0.2 } */
     navCapsule?: { height: number; radius: number };
 
     /** Seed position in world space for navigation flood fill. Default: { x: 0, y: 0, z: 0 } */
     navSeed?: { x: number; y: number; z: number };
-
-    /** Exterior fill radius in world units. When set, fills empty space outside enclosed levels. */
-    navExteriorRadius?: number;
 
     /** Whether to generate a collision mesh (.collision.glb) alongside voxel output. Default: false */
     collisionMesh?: boolean;

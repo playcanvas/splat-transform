@@ -44,14 +44,14 @@ type WriteVoxelOptions = {
     /** Optional function to create a GPU device for voxelization */
     createDevice?: DeviceCreator;
 
+    /** Exterior fill radius in world units. Defaults to 1.6 when nav simplification is active. */
+    navExteriorRadius?: number;
+
     /** Capsule dimensions for navigation simplification. When set, only voxels contactable from the seed are kept. */
     navCapsule?: { height: number; radius: number };
 
     /** Seed position in world space for navigation flood fill. Required when navCapsule is set. */
     navSeed?: NavSeed;
-
-    /** Exterior fill radius in world units. Defaults to 1.6 when nav simplification is active. */
-    navExteriorRadius?: number;
 
     /** Whether to generate a collision mesh (.collision.glb) alongside the voxel data. Default: false */
     collisionMesh?: boolean;
@@ -182,9 +182,9 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         voxelResolution = 0.05,
         opacityCutoff = 0.5,
         createDevice,
+        navExteriorRadius,
         navCapsule,
         navSeed,
-        navExteriorRadius,
         collisionMesh = false,
         meshSimplifyError
     } = options;
@@ -199,7 +199,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     const hasNavBase = !!(navCapsule && navSeed);
     const exteriorRadius = hasNavBase ? (navExteriorRadius ?? 1.6) : navExteriorRadius;
     const hasFillExterior = !!(exteriorRadius && navSeed);
-    const hasNav = hasNavBase;
+    const hasNav = hasNavBase && navCapsule!.height > 0;
     let stepCount = 5;
     if (collisionMesh) stepCount += 2;
     if (hasFillExterior) stepCount += 1;

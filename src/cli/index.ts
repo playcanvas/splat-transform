@@ -88,9 +88,9 @@ const parseArguments = async () => {
             'voxel-resolution': { type: 'string', short: 'R', default: '0.05' },
             'opacity-cutoff': { type: 'string', short: 'A', default: '0.1' },
             'nav-simplify': { type: 'boolean', short: 'n', default: true },
+            'nav-exterior-radius': { type: 'string', default: '' },
             'nav-capsule': { type: 'string', default: '' },
             'nav-seed': { type: 'string', default: '' },
-            'nav-exterior-radius': { type: 'string', default: '' },
             'collision-mesh': { type: 'boolean', short: 'K', default: false },
             'mesh-simplify-error': { type: 'string', default: '' },
 
@@ -127,12 +127,12 @@ const parseArguments = async () => {
         return result;
     };
 
-    const parseVec3 = (value: string): Vec3 => {
+    const parseVec = (value: string, count: number): number[] => {
         const parts = value.split(',').map(parseNumber);
-        if (parts.length !== 3 || parts.some(isNaN)) {
-            throw new Error(`Invalid Vec3 value: ${value}`);
+        if (parts.length !== count) {
+            throw new Error(`Expected ${count} comma-separated values, got ${parts.length}: ${value}`);
         }
-        return new Vec3(parts[0], parts[1], parts[2]);
+        return parts;
     };
 
     const parseComparator = (value: string): 'lt' | 'lte' | 'gt' | 'gte' | 'eq' | 'neq' => {
@@ -182,27 +182,16 @@ const parseArguments = async () => {
 
     if (navSimplify) {
         if (navCapsuleStr) {
-            const parts = navCapsuleStr.split(',').map(parseNumber);
-            if (parts.length !== 2) {
-                throw new Error(`Invalid nav-capsule value: ${navCapsuleStr}. Expected height,radius`);
-            }
-            const [height, radius] = parts;
-            if (!Number.isFinite(height) || !Number.isFinite(radius) || height <= 0 || radius < 0) {
-                throw new Error(`Invalid nav-capsule value: ${navCapsuleStr}. Height must be > 0 and radius must be >= 0`);
+            const [height, radius] = parseVec(navCapsuleStr, 2);
+            if (height < 0 || radius < 0) {
+                throw new Error(`Invalid nav-capsule value: ${navCapsuleStr}. Height and radius must be >= 0`);
             }
             navCapsule = { height, radius };
         } else {
             navCapsule = { height: 1.6, radius: 0.2 };
         }
         if (navSeedStr) {
-            const parts = navSeedStr.split(',').map(parseNumber);
-            if (parts.length !== 3) {
-                throw new Error(`Invalid nav-seed value: ${navSeedStr}. Expected x,y,z`);
-            }
-            const [x, y, z] = parts;
-            if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
-                throw new Error(`Invalid nav-seed value: ${navSeedStr}. x, y, and z must be finite numbers`);
-            }
+            const [x, y, z] = parseVec(navSeedStr, 3);
             navSeed = { x, y, z };
         } else {
             navSeed = { x: 0, y: 0, z: 0 };
@@ -215,8 +204,8 @@ const parseArguments = async () => {
 
     if (navExteriorRadiusStr) {
         navExteriorRadius = parseNumber(navExteriorRadiusStr);
-        if (!Number.isFinite(navExteriorRadius) || navExteriorRadius <= 0) {
-            throw new Error(`Invalid nav-exterior-radius value: ${navExteriorRadiusStr}. Must be > 0`);
+        if (!Number.isFinite(navExteriorRadius) || navExteriorRadius < 0) {
+            throw new Error(`Invalid nav-exterior-radius value: ${navExteriorRadiusStr}. Must be >= 0`);
         }
     }
 
@@ -237,9 +226,9 @@ const parseArguments = async () => {
         voxelResolution: parseNumber(v['voxel-resolution']),
         opacityCutoff: parseNumber(v['opacity-cutoff']),
         navSimplify,
+        navExteriorRadius,
         navCapsule,
         navSeed,
-        navExteriorRadius,
         collisionMesh: v['collision-mesh'],
         meshSimplifyError: parseNumber(v['mesh-simplify-error']) || undefined
     };
@@ -253,18 +242,22 @@ const parseArguments = async () => {
         } else if (t.kind === 'option' && files.length > 0) {
             const current = files[files.length - 1];
             switch (t.name) {
-                case 'translate':
+                case 'translate': {
+                    const [x, y, z] = parseVec(t.value, 3);
                     current.processActions.push({
                         kind: 'translate',
-                        value: parseVec3(t.value)
+                        value: new Vec3(x, y, z)
                     });
                     break;
-                case 'rotate':
+                }
+                case 'rotate': {
+                    const [x, y, z] = parseVec(t.value, 3);
                     current.processActions.push({
                         kind: 'rotate',
-                        value: parseVec3(t.value)
+                        value: new Vec3(x, y, z)
                     });
                     break;
+                }
                 case 'scale':
                     current.processActions.push({
                         kind: 'scale',
@@ -457,9 +450,9 @@ GLOBAL OPTIONS
     -R, --voxel-resolution <n>              Voxel size in world units for .voxel.json. Default: 0.05
     -A, --opacity-cutoff   <n>              Opacity threshold for solid voxels. Default: 0.1
     -n, --nav-simplify                      Enable nav simplification for voxel output. Default: true.
+        --nav-exterior-radius <n>           Exterior fill radius in world units (default: 1.6 when nav active)
         --nav-capsule      <height,radius>  Capsule dimensions for nav simplification. Default: 1.6,0.2
         --nav-seed         <x,y,z>          Seed position for nav simplification. Default: 0,0,0
-        --nav-exterior-radius <n>           Exterior fill radius in world units (default: 1.6 when nav active)
     -K, --collision-mesh                    Generate collision mesh (.collision.glb) with voxel output
         --mesh-simplify-error <n>           Max geometric error for collision mesh simplification as a fraction of voxelResolution. Default: 0.08
 
