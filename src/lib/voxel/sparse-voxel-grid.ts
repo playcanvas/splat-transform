@@ -1,3 +1,4 @@
+import { MaskStore } from './mask-store';
 import {
     BlockAccumulator,
     mortonToXYZ,
@@ -39,8 +40,8 @@ const FACE_MASKS_HI = [
 //
 // Each block has a type stored in blockType[blockIdx]:
 //   0 (EMPTY):  no voxels set
-//   1 (SOLID):  all 64 voxels set, no Map entry
-//   2 (MIXED):  partial voxels, [lo, hi] mask in masks Map
+//   1 (SOLID):  all 64 voxels set, no mask entry
+//   2 (MIXED):  partial voxels, lo/hi mask in MaskStore
 //
 // An occupancy bitfield is maintained in parallel for fast scanning
 // of occupied blocks (used by active-pair computation in dilation).
@@ -57,7 +58,7 @@ class SparseVoxelGrid {
 
     blockType: Uint8Array;
     occupancy: Uint32Array;
-    masks: Map<number, [number, number]>;
+    masks: MaskStore;
 
     constructor(nx: number, ny: number, nz: number) {
         this.nx = nx;
@@ -70,7 +71,7 @@ class SparseVoxelGrid {
         const totalBlocks = this.nbx * this.nby * this.nbz;
         this.blockType = new Uint8Array(totalBlocks);
         this.occupancy = new Uint32Array(((totalBlocks) + 31) >>> 5);
-        this.masks = new Map();
+        this.masks = new MaskStore();
     }
 
     getVoxel(ix: number, iy: number, iz: number): number {
@@ -78,9 +79,9 @@ class SparseVoxelGrid {
         const bt = this.blockType[blockIdx];
         if (bt === BLOCK_EMPTY) return 0;
         if (bt === BLOCK_SOLID) return 1;
-        const mask = this.masks.get(blockIdx)!;
+        const s = this.masks.slot(blockIdx);
         const bitIdx = (ix & 3) + ((iy & 3) << 2) + ((iz & 3) << 4);
-        return bitIdx < 32 ? (mask[0] >>> bitIdx) & 1 : (mask[1] >>> (bitIdx - 32)) & 1;
+        return bitIdx < 32 ? (this.masks.lo[s] >>> bitIdx) & 1 : (this.masks.hi[s] >>> (bitIdx - 32)) & 1;
     }
 
     setVoxel(ix: number, iy: number, iz: number): void {
@@ -89,20 +90,20 @@ class SparseVoxelGrid {
         if (bt === BLOCK_SOLID) return;
         const bitIdx = (ix & 3) + ((iy & 3) << 2) + ((iz & 3) << 4);
         if (bt === BLOCK_MIXED) {
-            const mask = this.masks.get(blockIdx)!;
-            if (bitIdx < 32) mask[0] = (mask[0] | (1 << bitIdx)) >>> 0;
-            else mask[1] = (mask[1] | (1 << (bitIdx - 32))) >>> 0;
-            if (mask[0] === SOLID_LO && mask[1] === SOLID_HI) {
-                this.masks.delete(blockIdx);
+            const s = this.masks.slot(blockIdx);
+            if (bitIdx < 32) this.masks.lo[s] = (this.masks.lo[s] | (1 << bitIdx)) >>> 0;
+            else this.masks.hi[s] = (this.masks.hi[s] | (1 << (bitIdx - 32))) >>> 0;
+            if (this.masks.lo[s] === SOLID_LO && this.masks.hi[s] === SOLID_HI) {
+                this.masks.removeAt(s);
                 this.blockType[blockIdx] = BLOCK_SOLID;
             }
         } else {
             this.blockType[blockIdx] = BLOCK_MIXED;
             this.occupancy[blockIdx >>> 5] |= (1 << (blockIdx & 31));
-            this.masks.set(blockIdx, [
+            this.masks.set(blockIdx,
                 bitIdx < 32 ? (1 << bitIdx) >>> 0 : 0,
                 bitIdx >= 32 ? (1 << (bitIdx - 32)) >>> 0 : 0
-            ]);
+            );
         }
     }
 
@@ -111,11 +112,11 @@ class SparseVoxelGrid {
         const bt = this.blockType[blockIdx];
         if (bt === BLOCK_SOLID) return;
         if (bt === BLOCK_MIXED) {
-            const mask = this.masks.get(blockIdx)!;
-            mask[0] = (mask[0] | lo) >>> 0;
-            mask[1] = (mask[1] | hi) >>> 0;
-            if (mask[0] === SOLID_LO && mask[1] === SOLID_HI) {
-                this.masks.delete(blockIdx);
+            const s = this.masks.slot(blockIdx);
+            this.masks.lo[s] = (this.masks.lo[s] | lo) >>> 0;
+            this.masks.hi[s] = (this.masks.hi[s] | hi) >>> 0;
+            if (this.masks.lo[s] === SOLID_LO && this.masks.hi[s] === SOLID_HI) {
+                this.masks.removeAt(s);
                 this.blockType[blockIdx] = BLOCK_SOLID;
             }
         } else {
@@ -124,16 +125,9 @@ class SparseVoxelGrid {
                 this.blockType[blockIdx] = BLOCK_SOLID;
             } else {
                 this.blockType[blockIdx] = BLOCK_MIXED;
-                this.masks.set(blockIdx, [lo >>> 0, hi >>> 0]);
+                this.masks.set(blockIdx, lo >>> 0, hi >>> 0);
             }
         }
-    }
-
-    getBlockMask(blockIdx: number): [number, number] | null {
-        const bt = this.blockType[blockIdx];
-        if (bt === BLOCK_EMPTY) return null;
-        if (bt === BLOCK_SOLID) return [SOLID_LO, SOLID_HI];
-        return this.masks.get(blockIdx)!;
     }
 
     clear(): void {
@@ -146,9 +140,7 @@ class SparseVoxelGrid {
         const g = new SparseVoxelGrid(this.nx, this.ny, this.nz);
         g.blockType.set(this.blockType);
         g.occupancy.set(this.occupancy);
-        for (const [k, v] of this.masks) {
-            g.masks.set(k, [v[0], v[1]]);
-        }
+        g.masks = this.masks.clone();
         return g;
     }
 
@@ -167,7 +159,7 @@ class SparseVoxelGrid {
             const blockIdx = bx + by * g.nbx + bz * g.bStride;
             g.blockType[blockIdx] = BLOCK_MIXED;
             g.occupancy[blockIdx >>> 5] |= (1 << (blockIdx & 31));
-            g.masks.set(blockIdx, [mixed.masks[i * 2], mixed.masks[i * 2 + 1]]);
+            g.masks.set(blockIdx, mixed.masks[i * 2], mixed.masks[i * 2 + 1]);
         }
         return g;
     }
@@ -188,9 +180,9 @@ class SparseVoxelGrid {
                         lo = SOLID_LO;
                         hi = SOLID_HI;
                     } else if (bt === BLOCK_MIXED) {
-                        const mask = this.masks.get(blockIdx)!;
-                        lo = mask[0];
-                        hi = mask[1];
+                        const s = this.masks.slot(blockIdx);
+                        lo = this.masks.lo[s];
+                        hi = this.masks.hi[s];
                     } else if (defaultSolid) {
                         lo = SOLID_LO;
                         hi = SOLID_HI;
@@ -223,9 +215,9 @@ class SparseVoxelGrid {
                     if (bt === BLOCK_SOLID) {
                         continue;
                     } else if (bt === BLOCK_MIXED) {
-                        const mask = this.masks.get(blockIdx)!;
-                        lo = (~mask[0]) >>> 0;
-                        hi = (~mask[1]) >>> 0;
+                        const s = this.masks.slot(blockIdx);
+                        lo = (~this.masks.lo[s]) >>> 0;
+                        hi = (~this.masks.hi[s]) >>> 0;
                     } else {
                         lo = SOLID_LO;
                         hi = SOLID_HI;

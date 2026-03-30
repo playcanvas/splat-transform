@@ -108,8 +108,8 @@ function extractLineX(grid: SparseVoxelGrid, iy: number, iz: number, buf: Uint32
         if (bt === BLOCK_SOLID) {
             row4 = 0xF;
         } else {
-            const mask = grid.masks.get(blockIdx)!;
-            row4 = ((inHi ? mask[1] : mask[0]) >>> shift) & 0xF;
+            const s = grid.masks.slot(blockIdx);
+            row4 = ((inHi ? grid.masks.hi[s] : grid.masks.lo[s]) >>> shift) & 0xF;
         }
         if (row4) {
             const ix = bx << 2;
@@ -149,8 +149,8 @@ function extractLineY(grid: SparseVoxelGrid, ix: number, iz: number, buf: Uint32
         if (bt === BLOCK_SOLID) {
             row4 = 0xF;
         } else {
-            const mask = grid.masks.get(blockIdx)!;
-            const word = inHi ? mask[1] : mask[0];
+            const s = grid.masks.slot(blockIdx);
+            const word = inHi ? grid.masks.hi[s] : grid.masks.lo[s];
             row4 = ((word >>> base) & 1) |
                    (((word >>> (base + 4)) & 1) << 1) |
                    (((word >>> (base + 8)) & 1) << 2) |
@@ -195,11 +195,11 @@ function extractLineZ(grid: SparseVoxelGrid, ix: number, iy: number, buf: Uint32
         if (bt === BLOCK_SOLID) {
             row4 = 0xF;
         } else {
-            const mask = grid.masks.get(blockIdx)!;
-            row4 = ((mask[0] >>> base) & 1) |
-                   (((mask[0] >>> (base + 16)) & 1) << 1) |
-                   (((mask[1] >>> base) & 1) << 2) |
-                   (((mask[1] >>> (base + 16)) & 1) << 3);
+            const s = grid.masks.slot(blockIdx);
+            row4 = ((grid.masks.lo[s] >>> base) & 1) |
+                   (((grid.masks.lo[s] >>> (base + 16)) & 1) << 1) |
+                   (((grid.masks.hi[s] >>> base) & 1) << 2) |
+                   (((grid.masks.hi[s] >>> (base + 16)) & 1) << 3);
         }
         if (row4) {
             const iz = bz << 2;
@@ -387,11 +387,10 @@ function sparseDilate3(
     sparseDilateZ(a, b, halfExtentXZ);
     a.clear();
     logger.progress.step();
-    const c = new SparseVoxelGrid(nx, ny, nz);
-    sparseDilateY(b, c, halfExtentY);
+    sparseDilateY(b, a, halfExtentY);
     b.clear();
     logger.progress.step();
-    return c;
+    return a;
 }
 
 // ============================================================================
@@ -408,8 +407,15 @@ function computeEmptyGrid(visited: SparseVoxelGrid, blocked: SparseVoxelGrid): S
             const blockIdx = w * 32 + bitPos;
             if (blockIdx >= totalBlocks) break;
             const vbt = visited.blockType[blockIdx];
-            const vLo = vbt === BLOCK_SOLID ? SOLID_LO : visited.masks.get(blockIdx)![0];
-            const vHi = vbt === BLOCK_SOLID ? SOLID_HI : visited.masks.get(blockIdx)![1];
+            let vLo: number, vHi: number;
+            if (vbt === BLOCK_SOLID) {
+                vLo = SOLID_LO;
+                vHi = SOLID_HI;
+            } else {
+                const vs = visited.masks.slot(blockIdx);
+                vLo = visited.masks.lo[vs];
+                vHi = visited.masks.hi[vs];
+            }
             const bbt = blocked.blockType[blockIdx];
             let lo: number, hi: number;
             if (bbt === BLOCK_EMPTY) {
@@ -419,9 +425,9 @@ function computeEmptyGrid(visited: SparseVoxelGrid, blocked: SparseVoxelGrid): S
                 lo = 0;
                 hi = 0;
             } else {
-                const bMask = blocked.masks.get(blockIdx)!;
-                lo = (vLo & ~bMask[0]) >>> 0;
-                hi = (vHi & ~bMask[1]) >>> 0;
+                const bs = blocked.masks.slot(blockIdx);
+                lo = (vLo & ~blocked.masks.lo[bs]) >>> 0;
+                hi = (vHi & ~blocked.masks.hi[bs]) >>> 0;
             }
             if (lo || hi) {
                 empty.orBlock(blockIdx, lo, hi);
@@ -445,8 +451,8 @@ function sparseOrGrids(a: SparseVoxelGrid, b: SparseVoxelGrid): SparseVoxelGrid 
             if (bt === BLOCK_SOLID) {
                 result.orBlock(blockIdx, SOLID_LO, SOLID_HI);
             } else {
-                const mask = b.masks.get(blockIdx)!;
-                result.orBlock(blockIdx, mask[0], mask[1]);
+                const s = b.masks.slot(blockIdx);
+                result.orBlock(blockIdx, b.masks.lo[s], b.masks.hi[s]);
             }
             bits &= bits - 1;
         }
@@ -526,12 +532,27 @@ function buildInvertedAccumulator(
                     lo = SOLID_LO;
                     hi = SOLID_HI;
                 } else {
-                    const vMask = visited.getBlockMask(blockIdx)!;
-                    const bMask = blocked.getBlockMask(blockIdx);
-                    const bLo = bMask ? bMask[0] : 0;
-                    const bHi = bMask ? bMask[1] : 0;
-                    lo = (bLo | ~vMask[0]) >>> 0;
-                    hi = (bHi | ~vMask[1]) >>> 0;
+                    let vLo: number, vHi: number;
+                    if (vbt === BLOCK_SOLID) {
+                        vLo = SOLID_LO;
+                        vHi = SOLID_HI;
+                    } else {
+                        const vs = visited.masks.slot(blockIdx);
+                        vLo = visited.masks.lo[vs];
+                        vHi = visited.masks.hi[vs];
+                    }
+                    const bbt = blocked.blockType[blockIdx];
+                    let bLo = 0, bHi = 0;
+                    if (bbt === BLOCK_SOLID) {
+                        bLo = SOLID_LO;
+                        bHi = SOLID_HI;
+                    } else if (bbt === BLOCK_MIXED) {
+                        const bs = blocked.masks.slot(blockIdx);
+                        bLo = blocked.masks.lo[bs];
+                        bHi = blocked.masks.hi[bs];
+                    }
+                    lo = (bLo | ~vLo) >>> 0;
+                    hi = (bHi | ~vHi) >>> 0;
                 }
                 if (lo || hi) {
                     acc.addBlock(xyzToMorton(bx, by, bz), lo, hi);
@@ -571,9 +592,9 @@ function twoLevelBFS(
     const bStride = nbx * nby;
 
     const blockedBT = blocked.blockType;
-    const blockedMasks = blocked.masks;
+    const bMasks = blocked.masks;
     const visitedBT = visited.blockType;
-    const visitedMasks = visited.masks;
+    const vMasks = visited.masks;
     const visitedOcc = visited.occupancy;
 
     // Block queue (ring buffer of block indices)
@@ -654,25 +675,28 @@ function twoLevelBFS(
         const vbt = visitedBT[nBlockIdx];
         if (vbt === BLOCK_SOLID) return;
 
-        const bMask = blockedMasks.get(nBlockIdx)!;
-        const vMask = vbt === BLOCK_MIXED ? visitedMasks.get(nBlockIdx)! : null;
-        const vLo = vMask ? vMask[0] : 0;
-        const vHi = vMask ? vMask[1] : 0;
+        const bs = bMasks.slot(nBlockIdx);
+        let vLo = 0, vHi = 0;
+        let vs = -1;
+        if (vbt === BLOCK_MIXED) {
+            vs = vMasks.slot(nBlockIdx);
+            vLo = vMasks.lo[vs];
+            vHi = vMasks.hi[vs];
+        }
 
-        const freeLo = (FACE_MASKS_LO[face] & ~bMask[0] & ~vLo) >>> 0;
-        const freeHi = (FACE_MASKS_HI[face] & ~bMask[1] & ~vHi) >>> 0;
+        const freeLo = (FACE_MASKS_LO[face] & ~bMasks.lo[bs] & ~vLo) >>> 0;
+        const freeHi = (FACE_MASKS_HI[face] & ~bMasks.hi[bs] & ~vHi) >>> 0;
         if (freeLo === 0 && freeHi === 0) return;
 
-        // Update visited mask in batch
         if (vbt === BLOCK_EMPTY) {
             visitedBT[nBlockIdx] = BLOCK_MIXED;
             visitedOcc[nBlockIdx >>> 5] |= (1 << (nBlockIdx & 31));
-            visitedMasks.set(nBlockIdx, [freeLo, freeHi]);
+            vMasks.set(nBlockIdx, freeLo, freeHi);
         } else {
-            vMask![0] = (vMask![0] | freeLo) >>> 0;
-            vMask![1] = (vMask![1] | freeHi) >>> 0;
-            if (vMask![0] === SOLID_LO && vMask![1] === SOLID_HI) {
-                visitedMasks.delete(nBlockIdx);
+            vMasks.lo[vs] = (vMasks.lo[vs] | freeLo) >>> 0;
+            vMasks.hi[vs] = (vMasks.hi[vs] | freeHi) >>> 0;
+            if (vMasks.lo[vs] === SOLID_LO && vMasks.hi[vs] === SOLID_HI) {
+                vMasks.removeAt(vs);
                 visitedBT[nBlockIdx] = BLOCK_SOLID;
             }
         }
@@ -762,34 +786,29 @@ function twoLevelBFS(
         }
 
         // BLOCK_MIXED: check specific voxel against blocked mask
-        const bMask = blockedMasks.get(blockIdx)!;
+        const bs = bMasks.slot(blockIdx);
         const bitIdx = (ix & 3) + ((iy & 3) << 2) + ((iz & 3) << 4);
-        if (bitIdx < 32 ? (bMask[0] >>> bitIdx) & 1 : (bMask[1] >>> (bitIdx - 32)) & 1) return;
+        if (bitIdx < 32 ? (bMasks.lo[bs] >>> bitIdx) & 1 : (bMasks.hi[bs] >>> (bitIdx - 32)) & 1) return;
 
-        // Check visited
+        // Check and set visited
         const vbt = visitedBT[blockIdx];
         if (vbt === BLOCK_SOLID) return;
         if (vbt === BLOCK_MIXED) {
-            const vMask = visitedMasks.get(blockIdx)!;
-            if (bitIdx < 32 ? (vMask[0] >>> bitIdx) & 1 : (vMask[1] >>> (bitIdx - 32)) & 1) return;
-        }
-
-        // Set visited
-        if (vbt === BLOCK_MIXED) {
-            const vMask = visitedMasks.get(blockIdx)!;
-            if (bitIdx < 32) vMask[0] = (vMask[0] | (1 << bitIdx)) >>> 0;
-            else vMask[1] = (vMask[1] | (1 << (bitIdx - 32))) >>> 0;
-            if (vMask[0] === SOLID_LO && vMask[1] === SOLID_HI) {
-                visitedMasks.delete(blockIdx);
+            const vs = vMasks.slot(blockIdx);
+            if (bitIdx < 32 ? (vMasks.lo[vs] >>> bitIdx) & 1 : (vMasks.hi[vs] >>> (bitIdx - 32)) & 1) return;
+            if (bitIdx < 32) vMasks.lo[vs] = (vMasks.lo[vs] | (1 << bitIdx)) >>> 0;
+            else vMasks.hi[vs] = (vMasks.hi[vs] | (1 << (bitIdx - 32))) >>> 0;
+            if (vMasks.lo[vs] === SOLID_LO && vMasks.hi[vs] === SOLID_HI) {
+                vMasks.removeAt(vs);
                 visitedBT[blockIdx] = BLOCK_SOLID;
             }
         } else {
             visitedBT[blockIdx] = BLOCK_MIXED;
             visitedOcc[blockIdx >>> 5] |= (1 << (blockIdx & 31));
-            visitedMasks.set(blockIdx, [
+            vMasks.set(blockIdx,
                 bitIdx < 32 ? (1 << bitIdx) >>> 0 : 0,
                 bitIdx >= 32 ? (1 << (bitIdx - 32)) >>> 0 : 0
-            ]);
+            );
         }
 
         enqueueVoxel(ix, iy, iz);
@@ -1084,11 +1103,11 @@ const fillExterior = (
                 return;
             }
             // BLOCK_MIXED: seed only the free voxels on the grid boundary face
-            const bMask = dilated.masks.get(blockIdx)!;
+            const ms = dilated.masks.slot(blockIdx);
             const faceLo = FACE_MASKS_LO[face];
             const faceHi = FACE_MASKS_HI[face];
-            let freeLo = (faceLo & ~bMask[0]) >>> 0;
-            let freeHi = (faceHi & ~bMask[1]) >>> 0;
+            let freeLo = (faceLo & ~dilated.masks.lo[ms]) >>> 0;
+            let freeHi = (faceHi & ~dilated.masks.hi[ms]) >>> 0;
             if (freeLo === 0 && freeHi === 0) return;
             const baseIx = bx << 2;
             const baseIy = by << 2;
@@ -1193,8 +1212,8 @@ const fillExterior = (
                     const bt = combined.blockType[blockIdx];
                     if (bt === BLOCK_SOLID) continue;
                     if (bt === BLOCK_MIXED) {
-                        const mask = combined.masks.get(blockIdx)!;
-                        if (mask[0] === SOLID_LO && mask[1] === SOLID_HI) continue;
+                        const cs = combined.masks.slot(blockIdx);
+                        if (combined.masks.lo[cs] === SOLID_LO && combined.masks.hi[cs] === SOLID_HI) continue;
                     }
                     const baseX = bx << 2;
                     const baseY = by << 2;
