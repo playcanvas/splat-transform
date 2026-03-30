@@ -449,7 +449,7 @@ GLOBAL OPTIONS
     -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
     -R, --voxel-resolution <n>              Voxel size in world units for .voxel.json. Default: 0.05
     -A, --opacity-cutoff   <n>              Opacity threshold for solid voxels. Default: 0.1
-    -n, --nav-simplify                      Enable nav simplification for voxel output. Default: true.
+    -n, --nav-simplify                      Enable nav simplification for voxel output. Default: true
         --nav-exterior-radius <n>           Exterior fill radius in world units (default: 1.6 when nav active)
         --nav-capsule      <height,radius>  Capsule dimensions for nav simplification. Default: 1.6,0.2
         --nav-seed         <x,y,z>          Seed position for nav simplification. Default: 0,0,0
