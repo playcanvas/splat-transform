@@ -44,12 +44,6 @@ type WriteVoxelOptions = {
     /** Optional function to create a GPU device for voxelization */
     createDevice?: DeviceCreator;
 
-    /** Whether to generate a collision mesh (.collision.glb) alongside the voxel data. Default: false */
-    collisionMesh?: boolean;
-
-    /** Maximum geometric error for collision mesh simplification as a fraction of voxelResolution. Default: 0.08 */
-    meshSimplifyError?: number;
-
     /** Capsule dimensions for navigation simplification. When set, only voxels contactable from the seed are kept. */
     navCapsule?: { height: number; radius: number };
 
@@ -58,6 +52,12 @@ type WriteVoxelOptions = {
 
     /** Exterior fill radius in world units. Defaults to 1.6 when nav simplification is active. */
     navExteriorRadius?: number;
+
+    /** Whether to generate a collision mesh (.collision.glb) alongside the voxel data. Default: false */
+    collisionMesh?: boolean;
+
+    /** Maximum geometric error for collision mesh simplification as a fraction of voxelResolution. Default: 0.08 */
+    meshSimplifyError?: number;
 };
 
 /**
@@ -182,11 +182,11 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         voxelResolution = 0.05,
         opacityCutoff = 0.5,
         createDevice,
-        collisionMesh = false,
-        meshSimplifyError,
         navCapsule,
         navSeed,
-        navExteriorRadius
+        navExteriorRadius,
+        collisionMesh = false,
+        meshSimplifyError
     } = options;
 
     if (!createDevice) {

@@ -26,12 +26,6 @@ type Options = {
     /** Opacity threshold for solid voxels - voxels below this are considered empty. Default: 0.5 */
     opacityCutoff?: number;
 
-    /** Whether to generate a collision mesh (.collision.glb) alongside voxel output. Default: false */
-    collisionMesh?: boolean;
-
-    /** Maximum geometric error for collision mesh simplification as a fraction of voxelResolution. Default: 0.08 */
-    meshSimplifyError?: number;
-
     /** Enable navigation simplification with default capsule (height 1.6, radius 0.2) and seed (0,0,0). Default: true (set to false to disable). */
     navSimplify?: boolean;
 
@@ -43,6 +37,12 @@ type Options = {
 
     /** Exterior fill radius in world units. When set, fills empty space outside enclosed levels. */
     navExteriorRadius?: number;
+
+    /** Whether to generate a collision mesh (.collision.glb) alongside voxel output. Default: false */
+    collisionMesh?: boolean;
+
+    /** Maximum geometric error for collision mesh simplification as a fraction of voxelResolution. Default: 0.08 */
+    meshSimplifyError?: number;
 };
 
 /**

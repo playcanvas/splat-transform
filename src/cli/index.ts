@@ -86,13 +86,13 @@ const parseArguments = async () => {
             unbundled: { type: 'boolean', short: 'U', default: false },
             'voxel-resolution': { type: 'string', short: 'R', default: '0.05' },
             'opacity-cutoff': { type: 'string', short: 'A', default: '0.1' },
-            'collision-mesh': { type: 'boolean', short: 'K', default: false },
-            'mesh-simplify-error': { type: 'string', default: '' },
             mem: { type: 'boolean', default: false },
             'nav-simplify': { type: 'boolean', short: 'n', default: true },
             'nav-capsule': { type: 'string', default: '' },
             'nav-seed': { type: 'string', default: '' },
             'nav-exterior-radius': { type: 'string', default: '' },
+            'collision-mesh': { type: 'boolean', short: 'K', default: false },
+            'mesh-simplify-error': { type: 'string', default: '' },
 
             // per-file options
             translate: { type: 'string', short: 't', multiple: true },
@@ -236,12 +236,12 @@ const parseArguments = async () => {
         lodChunkExtent: parseInteger(v['lod-chunk-extent']),
         voxelResolution: parseNumber(v['voxel-resolution']),
         opacityCutoff: parseNumber(v['opacity-cutoff']),
-        collisionMesh: v['collision-mesh'],
-        meshSimplifyError: parseNumber(v['mesh-simplify-error']) || undefined,
         navSimplify,
         navCapsule,
         navSeed,
-        navExteriorRadius
+        navExteriorRadius,
+        collisionMesh: v['collision-mesh'],
+        meshSimplifyError: parseNumber(v['mesh-simplify-error']) || undefined
     };
 
     for (const t of tokens) {
@@ -456,12 +456,12 @@ GLOBAL OPTIONS
     -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
     -R, --voxel-resolution <n>              Voxel size in world units for .voxel.json. Default: 0.05
     -A, --opacity-cutoff   <n>              Opacity threshold for solid voxels. Default: 0.1
-    -K, --collision-mesh                    Generate collision mesh (.collision.glb) with voxel output
-        --mesh-simplify-error <n>           Max geometric error for collision mesh simplification as a fraction of voxelResolution. Default: 0.08
     -n, --nav-simplify                      Enable nav simplification for voxel output. Default: true.
         --nav-capsule      <height,radius>  Capsule dimensions for nav simplification. Default: 1.6,0.2
         --nav-seed         <x,y,z>          Seed position for nav simplification. Default: 0,0,0
         --nav-exterior-radius <n>           Exterior fill radius in world units (default: 1.6 when nav active)
+    -K, --collision-mesh                    Generate collision mesh (.collision.glb) with voxel output
+        --mesh-simplify-error <n>           Max geometric error for collision mesh simplification as a fraction of voxelResolution. Default: 0.08
 
 EXAMPLES
     # Scale then translate
