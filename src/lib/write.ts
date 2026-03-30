@@ -179,8 +179,7 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
                 meshSimplifyError: options.meshSimplifyError,
                 navCapsule,
                 navSeed,
-                navFillDilation: options.navFillDilation,
-                navDebugStage: options.navDebugStage,
+                navExteriorRadius: options.navExteriorRadius,
                 createDevice
             }, fs);
             break;

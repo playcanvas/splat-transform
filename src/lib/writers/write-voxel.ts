@@ -56,11 +56,8 @@ type WriteVoxelOptions = {
     /** Seed position in world space for navigation flood fill. Required when navCapsule is set. */
     navSeed?: NavSeed;
 
-    /** Dilation distance in world units for exterior void filling. Defaults to 1.6 when nav simplification is active. */
-    navFillDilation?: number;
-
-    /** Stop nav processing at this stage and output intermediate state. 1-5: fillExterior, 6-10: simplifyForCapsule. */
-    navDebugStage?: number;
+    /** Exterior fill radius in world units. Defaults to 1.6 when nav simplification is active. */
+    navExteriorRadius?: number;
 };
 
 /**
@@ -189,8 +186,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         meshSimplifyError,
         navCapsule,
         navSeed,
-        navFillDilation,
-        navDebugStage
+        navExteriorRadius
     } = options;
 
     if (!createDevice) {
@@ -200,12 +196,10 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     if ((navCapsule && !navSeed) || (!navCapsule && navSeed)) {
         logger.warn('writeVoxel: both navCapsule and navSeed must be provided for nav simplification, skipping');
     }
-    const fillDebugStage = navDebugStage && navDebugStage <= 5 ? navDebugStage : undefined;
-    const simplifyDebugStage = navDebugStage && navDebugStage >= 6 ? navDebugStage : undefined;
     const hasNavBase = !!(navCapsule && navSeed);
-    const fillDilation = hasNavBase ? (navFillDilation ?? 1.6) : navFillDilation;
-    const hasFillExterior = !!(fillDilation && navSeed);
-    const hasNav = hasNavBase && !fillDebugStage;
+    const exteriorRadius = hasNavBase ? (navExteriorRadius ?? 1.6) : navExteriorRadius;
+    const hasFillExterior = !!(exteriorRadius && navSeed);
+    const hasNav = hasNavBase;
     let stepCount = 5;
     if (collisionMesh) stepCount += 2;
     if (hasFillExterior) stepCount += 1;
@@ -475,8 +469,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         logger.progress.step('Fill exterior');
         const fillResult = fillExterior(
             accumulator, gridBounds, voxelResolution,
-            fillDilation!, navSeed!,
-            fillDebugStage
+            exteriorRadius!, navSeed!
         );
         accumulator = fillResult.accumulator;
         gridBounds = fillResult.gridBounds;
@@ -487,8 +480,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         const navResult = simplifyForCapsule(
             accumulator, gridBounds, voxelResolution,
             navCapsule!.height, navCapsule!.radius,
-            navSeed!,
-            simplifyDebugStage
+            navSeed!
         );
         accumulator = navResult.accumulator;
         gridBounds = navResult.gridBounds;

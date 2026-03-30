@@ -41,11 +41,8 @@ type Options = {
     /** Seed position in world space for navigation flood fill. Default: { x: 0, y: 0, z: 0 } */
     navSeed?: { x: number; y: number; z: number };
 
-    /** Dilation distance in world units for exterior void filling. When set, fills empty space outside enclosed levels. */
-    navFillDilation?: number;
-
-    /** Stop nav processing at this stage and output intermediate state. 1-5: fillExterior, 6-10: simplifyForCapsule. */
-    navDebugStage?: number;
+    /** Exterior fill radius in world units. When set, fills empty space outside enclosed levels. */
+    navExteriorRadius?: number;
 };
 
 /**

@@ -29,6 +29,7 @@ interface CliOptions extends LibOptions {
     help: boolean;
     version: boolean;
     quiet: boolean;
+    mem: boolean;
     listGpus: boolean;
     deviceIdx: number;  // -1 = auto, -2 = CPU, 0+ = GPU index
 }
@@ -87,11 +88,11 @@ const parseArguments = async () => {
             'opacity-cutoff': { type: 'string', short: 'A', default: '0.1' },
             'collision-mesh': { type: 'boolean', short: 'K', default: false },
             'mesh-simplify-error': { type: 'string', default: '' },
+            mem: { type: 'boolean', default: false },
             'nav-simplify': { type: 'boolean', short: 'n', default: true },
             'nav-capsule': { type: 'string', default: '' },
             'nav-seed': { type: 'string', default: '' },
-            'nav-fill-dilation': { type: 'string', default: '' },
-            'nav-debug-stage': { type: 'string', default: '' },
+            'nav-exterior-radius': { type: 'string', default: '' },
 
             // per-file options
             translate: { type: 'string', short: 't', multiple: true },
@@ -208,22 +209,14 @@ const parseArguments = async () => {
         }
     }
 
-    // Parse fill exterior options
-    const navFillDilationStr = v['nav-fill-dilation'];
-    const navDebugStageStr = v['nav-debug-stage'];
-    let navFillDilation: number | undefined;
-    let navDebugStage: number | undefined;
+    // Parse exterior radius option
+    const navExteriorRadiusStr = v['nav-exterior-radius'];
+    let navExteriorRadius: number | undefined;
 
-    if (navFillDilationStr) {
-        navFillDilation = parseNumber(navFillDilationStr);
-        if (!Number.isFinite(navFillDilation) || navFillDilation <= 0) {
-            throw new Error(`Invalid nav-fill-dilation value: ${navFillDilationStr}. Must be > 0`);
-        }
-    }
-    if (navDebugStageStr) {
-        navDebugStage = parseInteger(navDebugStageStr);
-        if (navDebugStage < 1 || navDebugStage > 10) {
-            throw new Error(`Invalid nav-debug-stage value: ${navDebugStageStr}. Must be 1-10`);
+    if (navExteriorRadiusStr) {
+        navExteriorRadius = parseNumber(navExteriorRadiusStr);
+        if (!Number.isFinite(navExteriorRadius) || navExteriorRadius <= 0) {
+            throw new Error(`Invalid nav-exterior-radius value: ${navExteriorRadiusStr}. Must be > 0`);
         }
     }
 
@@ -232,6 +225,7 @@ const parseArguments = async () => {
         help: v.help,
         version: v.version,
         quiet: v.quiet,
+        mem: v.mem,
         iterations: parseInteger(v.iterations),
         listGpus: v['list-gpus'],
         deviceIdx,
@@ -247,8 +241,7 @@ const parseArguments = async () => {
         navSimplify,
         navCapsule,
         navSeed,
-        navFillDilation,
-        navDebugStage
+        navExteriorRadius
     };
 
     for (const t of tokens) {
@@ -451,6 +444,7 @@ GLOBAL OPTIONS
     -h, --help                              Show this help and exit
     -v, --version                           Show version and exit
     -q, --quiet                             Suppress non-error output
+        --mem                               Show memory usage in progress output
     -w, --overwrite                         Overwrite output file if it exists
     -i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10
     -L, --list-gpus                         List available GPU adapters and exit
@@ -467,8 +461,7 @@ GLOBAL OPTIONS
     -n, --nav-simplify                      Enable nav simplification for voxel output. Default: true.
         --nav-capsule      <height,radius>  Capsule dimensions for nav simplification. Default: 1.6,0.2
         --nav-seed         <x,y,z>          Seed position for nav simplification. Default: 0,0,0
-        --nav-fill-dilation <n>             Fill exterior void dilation in world units (default: 1.6 when nav active)
-        --nav-debug-stage  <1-10>           Stop nav processing at stage N (1-5: fill exterior, 6-10: capsule simplify)
+        --nav-exterior-radius <n>           Exterior fill radius in world units (default: 1.6 when nav active)
 
 EXAMPLES
     # Scale then translate
@@ -524,11 +517,11 @@ const main = async () => {
     const err = console.error.bind(console);
     const warn = console.warn.bind(console);
 
-    const formatMem = () => {
+    const formatMem = options.mem ? () => {
         const m = process.memoryUsage();
         const mb = (n: number) => `${(n / (1024 * 1024)).toFixed(0)}MB`;
         return `  [rss: ${mb(m.rss)}, heap: ${mb(m.heapUsed)}, ab: ${mb(m.arrayBuffers)}]`;
-    };
+    } : () => '';
 
     // inject Node.js-specific logger - logs go to stderr, data output goes to stdout
     logger.setLogger({

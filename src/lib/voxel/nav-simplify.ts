@@ -517,52 +517,6 @@ function getOccupiedBlockBounds(grid: SparseVoxelGrid): {
     return minBx <= maxBx ? { minBx, minBy, minBz, maxBx, maxBy, maxBz } : null;
 }
 
-function buildInvertedAccumulator(
-    blocked: SparseVoxelGrid, visited: SparseVoxelGrid
-): BlockAccumulator {
-    const acc = new BlockAccumulator();
-    const { nbx, nby, nbz, bStride } = blocked;
-    for (let bz = 0; bz < nbz; bz++) {
-        for (let by = 0; by < nby; by++) {
-            for (let bx = 0; bx < nbx; bx++) {
-                const blockIdx = bx + by * nbx + bz * bStride;
-                const vbt = visited.blockType[blockIdx];
-                let lo: number, hi: number;
-                if (vbt === BLOCK_EMPTY) {
-                    lo = SOLID_LO;
-                    hi = SOLID_HI;
-                } else {
-                    let vLo: number, vHi: number;
-                    if (vbt === BLOCK_SOLID) {
-                        vLo = SOLID_LO;
-                        vHi = SOLID_HI;
-                    } else {
-                        const vs = visited.masks.slot(blockIdx);
-                        vLo = visited.masks.lo[vs];
-                        vHi = visited.masks.hi[vs];
-                    }
-                    const bbt = blocked.blockType[blockIdx];
-                    let bLo = 0, bHi = 0;
-                    if (bbt === BLOCK_SOLID) {
-                        bLo = SOLID_LO;
-                        bHi = SOLID_HI;
-                    } else if (bbt === BLOCK_MIXED) {
-                        const bs = blocked.masks.slot(blockIdx);
-                        bLo = blocked.masks.lo[bs];
-                        bHi = blocked.masks.hi[bs];
-                    }
-                    lo = (bLo | ~vLo) >>> 0;
-                    hi = (bHi | ~vHi) >>> 0;
-                }
-                if (lo || hi) {
-                    acc.addBlock(xyzToMorton(bx, by, bz), lo, hi);
-                }
-            }
-        }
-    }
-    return acc;
-}
-
 // ============================================================================
 // Two-Level BFS
 //
@@ -866,8 +820,7 @@ const simplifyForCapsule = (
     voxelResolution: number,
     capsuleHeight: number,
     capsuleRadius: number,
-    seed: NavSeed,
-    debugStage?: number
+    seed: NavSeed
 ): NavSimplifyResult => {
     if (!Number.isFinite(voxelResolution) || voxelResolution <= 0) {
         throw new Error(`nav simplify: voxelResolution must be finite and > 0, got ${voxelResolution}`);
@@ -910,18 +863,8 @@ const simplifyForCapsule = (
         const gridA = SparseVoxelGrid.fromAccumulator(accumulator, nx, ny, nz);
         logger.progress.step();
 
-        if (debugStage === 6) {
-            progressComplete = true;
-            return buildResult(gridA);
-        }
-
         // Phase 7: capsule clearance grid (Minkowski dilation)
         const blocked = sparseDilate3(gridA, kernelR, yHalfExtent);
-
-        if (debugStage === 7) {
-            progressComplete = true;
-            return buildResult(blocked);
-        }
 
         // Phase 8: BFS flood fill from seed
         let seedIx = Math.floor((seed.x - gridBounds.min.x) / voxelResolution);
@@ -952,27 +895,11 @@ const simplifyForCapsule = (
         const visited = twoLevelBFS(blocked, bSeeds, vSeeds, nx, ny, nz);
         logger.progress.step();
 
-        if (debugStage === 8) {
-            progressComplete = true;
-            return {
-                accumulator: buildInvertedAccumulator(blocked, visited),
-                gridBounds
-            };
-        }
-
         // Phase 9: erode(blocked | ~visited) = NOT dilate(visited & ~blocked)
         const emptyGrid = computeEmptyGrid(visited, blocked);
         logger.progress.step();
 
         const navRegion = sparseDilate3(emptyGrid, kernelR, yHalfExtent);
-
-        if (debugStage === 9) {
-            progressComplete = true;
-            return {
-                accumulator: navRegion.toAccumulatorInverted(0, 0, 0, nbx, nby, nbz),
-                gridBounds
-            };
-        }
 
         // Phase 10: crop to bounding box of navigable cells
         const navBounds = getOccupiedBlockBounds(navRegion);
@@ -1037,8 +964,7 @@ const fillExterior = (
     gridBounds: Bounds,
     voxelResolution: number,
     dilation: number,
-    seed: NavSeed,
-    debugStage?: number
+    seed: NavSeed
 ): NavSimplifyResult => {
     if (!Number.isFinite(voxelResolution) || voxelResolution <= 0) {
         throw new Error(`fillExterior: voxelResolution must be finite and > 0, got ${voxelResolution}`);
@@ -1077,18 +1003,8 @@ const fillExterior = (
         const gridOriginal = SparseVoxelGrid.fromAccumulator(accumulator, nx, ny, nz);
         logger.progress.step();
 
-        if (debugStage === 1) {
-            progressComplete = true;
-            return buildResult(gridOriginal);
-        }
-
         // Stage 2: uniform dilation
         const dilated = sparseDilate3(gridOriginal, halfExtent, halfExtent);
-
-        if (debugStage === 2) {
-            progressComplete = true;
-            return buildResult(dilated);
-        }
 
         // Stage 3: BFS flood fill from all 6 boundary faces (block-level seeding)
         const bStride = nbx * nby;
@@ -1184,22 +1100,12 @@ const fillExterior = (
 
         logger.progress.step();
 
-        if (debugStage === 3) {
-            progressComplete = true;
-            return buildResult(visited);
-        }
-
         // Stage 4: dilate BFS-visited
         const dilatedVisited = sparseDilate3(visited, halfExtent, halfExtent);
 
         // Stage 5: combine with original
         const combined = sparseOrGrids(gridOriginal, dilatedVisited);
         logger.progress.step();
-
-        if (debugStage === 4) {
-            progressComplete = true;
-            return buildResult(combined);
-        }
 
         // Stage 6: crop to bounding box of empty (navigable) cells
         let minIx = nx, minIy = ny, minIz = nz;
