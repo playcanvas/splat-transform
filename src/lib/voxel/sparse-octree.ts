@@ -277,13 +277,13 @@ const enum BlockType {
  */
 interface LevelData {
     /** Sorted Morton codes for nodes at this level */
-    mortons: number[];
+    mortons: Uint32Array | number[];
     /** Block type for each node (Solid or Mixed) */
-    types: number[];
+    types: Uint8Array | number[];
     /** For level-0 Mixed nodes: index into mixed.masks. Otherwise -1. */
-    maskIndices: number[];
-    /** For interior nodes (Mixed at level > 0): 8-bit child presence mask */
-    childMasks: number[];
+    maskIndices: Int32Array | number[];
+    /** For interior nodes (Mixed at level > 0): 8-bit child presence mask. Null for leaf level. */
+    childMasks: number[] | null;
 }
 
 // ============================================================================
@@ -315,39 +315,45 @@ function buildSparseOctree(
     const totalBlocks = mixed.morton.length + solid.length;
 
     // --- Phase 1: Combine blocks into SoA arrays and sort by Morton code ---
-    // Avoids creating per-block objects (BlockEntry) — uses parallel arrays.
+    // Uses typed arrays to reduce per-element memory overhead. The block scope
+    // allows the unsorted intermediates (mortons, types, maskIndices, sortOrder)
+    // to be GC'd before Phase 2 begins.
 
-    const mortons: number[] = new Array(totalBlocks);
-    const types: number[] = new Array(totalBlocks);
-    const maskIndices: number[] = new Array(totalBlocks);
+    let sortedMortons!: Uint32Array;
+    let sortedTypes!: Uint8Array;
+    let sortedMaskIndices!: Int32Array;
+    {
+        const mortons = new Uint32Array(totalBlocks);
+        const types = new Uint8Array(totalBlocks);
+        const maskIndices = new Int32Array(totalBlocks);
 
-    let idx = 0;
-    for (let i = 0; i < mixed.morton.length; i++) {
-        mortons[idx] = mixed.morton[i];
-        types[idx] = BlockType.Mixed;
-        maskIndices[idx] = i;
-        idx++;
-    }
-    for (let i = 0; i < solid.length; i++) {
-        mortons[idx] = solid[i];
-        types[idx] = BlockType.Solid;
-        maskIndices[idx] = -1;
-        idx++;
-    }
+        let idx = 0;
+        for (let i = 0; i < mixed.morton.length; i++) {
+            mortons[idx] = mixed.morton[i];
+            types[idx] = BlockType.Mixed;
+            maskIndices[idx] = i;
+            idx++;
+        }
+        for (let i = 0; i < solid.length; i++) {
+            mortons[idx] = solid[i];
+            types[idx] = BlockType.Solid;
+            maskIndices[idx] = -1;
+            idx++;
+        }
 
-    // Co-sort by Morton code using an index permutation array
-    const sortOrder: number[] = new Array(totalBlocks);
-    for (let i = 0; i < totalBlocks; i++) sortOrder[i] = i;
-    sortOrder.sort((a: number, b: number) => mortons[a] - mortons[b]);
+        const sortOrder = new Uint32Array(totalBlocks);
+        for (let i = 0; i < totalBlocks; i++) sortOrder[i] = i;
+        sortOrder.sort((a: number, b: number) => mortons[a] - mortons[b]);
 
-    const sortedMortons: number[] = new Array(totalBlocks);
-    const sortedTypes: number[] = new Array(totalBlocks);
-    const sortedMaskIndices: number[] = new Array(totalBlocks);
-    for (let i = 0; i < totalBlocks; i++) {
-        const si = sortOrder[i];
-        sortedMortons[i] = mortons[si];
-        sortedTypes[i] = types[si];
-        sortedMaskIndices[i] = maskIndices[si];
+        sortedMortons = new Uint32Array(totalBlocks);
+        sortedTypes = new Uint8Array(totalBlocks);
+        sortedMaskIndices = new Int32Array(totalBlocks);
+        for (let i = 0; i < totalBlocks; i++) {
+            const si = sortOrder[i];
+            sortedMortons[i] = mortons[si];
+            sortedTypes[i] = types[si];
+            sortedMaskIndices[i] = maskIndices[si];
+        }
     }
 
     const tSort = performance.now();
@@ -380,11 +386,10 @@ function buildSparseOctree(
     const levels: LevelData[] = [];
 
     // Current level data starts as the sorted leaf blocks
-    let curMortons = sortedMortons;
-    let curTypes = sortedTypes;
-    let curMaskIndices = sortedMaskIndices;
-    // Leaf level has no child masks (leaves have no children)
-    let curChildMasks: number[] = new Array(totalBlocks).fill(0);
+    let curMortons: Uint32Array | number[] = sortedMortons;
+    let curTypes: Uint8Array | number[] = sortedTypes;
+    let curMaskIndices: Int32Array | number[] = sortedMaskIndices;
+    let curChildMasks: number[] | null = null;
 
     // 1 step for init
     logger.progress.step();
@@ -602,7 +607,7 @@ function flattenTreeFromLevels(
                 intPos.push(emitPos);
                 intLi.push(li);
                 intIi.push(ii);
-                intMask.push(level.childMasks[ii]);
+                intMask.push(level.childMasks![ii]);
                 numInteriorNodes++;
                 // Placeholder (will be filled below)
                 nodes[emitPos] = 0;
