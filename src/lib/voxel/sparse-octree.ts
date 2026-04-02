@@ -277,7 +277,7 @@ const enum BlockType {
  */
 interface LevelData {
     /** Sorted Morton codes for nodes at this level */
-    mortons: Uint32Array | number[];
+    mortons: Float64Array | number[];
     /** Block type for each node (Solid or Mixed) */
     types: Uint8Array | number[];
     /** For level-0 Mixed nodes: index into mixed.masks. Otherwise -1. */
@@ -319,11 +319,11 @@ function buildSparseOctree(
     // allows the unsorted intermediates (mortons, types, maskIndices, sortOrder)
     // to be GC'd before Phase 2 begins.
 
-    let sortedMortons!: Uint32Array;
+    let sortedMortons!: Float64Array;
     let sortedTypes!: Uint8Array;
     let sortedMaskIndices!: Int32Array;
     {
-        const mortons = new Uint32Array(totalBlocks);
+        const mortons = new Float64Array(totalBlocks);
         const types = new Uint8Array(totalBlocks);
         const maskIndices = new Int32Array(totalBlocks);
 
@@ -345,7 +345,7 @@ function buildSparseOctree(
         for (let i = 0; i < totalBlocks; i++) sortOrder[i] = i;
         sortOrder.sort((a: number, b: number) => mortons[a] - mortons[b]);
 
-        sortedMortons = new Uint32Array(totalBlocks);
+        sortedMortons = new Float64Array(totalBlocks);
         sortedTypes = new Uint8Array(totalBlocks);
         sortedMaskIndices = new Int32Array(totalBlocks);
         for (let i = 0; i < totalBlocks; i++) {
@@ -386,7 +386,7 @@ function buildSparseOctree(
     const levels: LevelData[] = [];
 
     // Current level data starts as the sorted leaf blocks
-    let curMortons: Uint32Array | number[] = sortedMortons;
+    let curMortons: Float64Array | number[] = sortedMortons;
     let curTypes: Uint8Array | number[] = sortedTypes;
     let curMaskIndices: Int32Array | number[] = sortedMaskIndices;
     let curChildMasks: number[] | null = null;
