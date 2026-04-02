@@ -17,7 +17,7 @@ class MaskStore {
     private _mask: number;
 
     constructor(initialCapacity = 4096) {
-        const cap = Math.max(16, initialCapacity);
+        const cap = 1 << (32 - Math.clz32(Math.max(15, initialCapacity - 1)));
         this._capacity = cap;
         this._mask = cap - 1;
         this._size = 0;

@@ -561,9 +561,9 @@ function twoLevelBFS(
 
     // Voxel queue (ring buffer of coordinates)
     let vqCap = 1 << 14;
-    let vqIx = new Uint16Array(vqCap);
-    let vqIy = new Uint16Array(vqCap);
-    let vqIz = new Uint16Array(vqCap);
+    let vqIx = new Uint32Array(vqCap);
+    let vqIy = new Uint32Array(vqCap);
+    let vqIz = new Uint32Array(vqCap);
     let vqMask = vqCap - 1;
     let vqHead = 0;
     let vqTail = 0;
@@ -582,9 +582,9 @@ function twoLevelBFS(
 
     const growVoxelQueue = (): void => {
         const newCap = vqCap << 1;
-        const nix = new Uint16Array(newCap);
-        const niy = new Uint16Array(newCap);
-        const niz = new Uint16Array(newCap);
+        const nix = new Uint32Array(newCap);
+        const niy = new Uint32Array(newCap);
+        const niz = new Uint32Array(newCap);
         for (let i = 0; i < vqSize; i++) {
             const j = (vqHead + i) & vqMask;
             nix[i] = vqIx[j];

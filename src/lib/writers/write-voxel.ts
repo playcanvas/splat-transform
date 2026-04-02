@@ -500,7 +500,8 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             logger.progress.step('Simplifying collision mesh');
             await MeshoptSimplifier.ready;
 
-            const simplifyError = (meshSimplifyError ?? 0.08) * voxelResolution;
+            const errorFraction = Number.isFinite(meshSimplifyError) && meshSimplifyError >= 0 ? meshSimplifyError : 0.08;
+            const simplifyError = errorFraction * voxelResolution;
             const [simplifiedIndices] = MeshoptSimplifier.simplify(
                 rawMesh.indices,
                 rawMesh.positions,

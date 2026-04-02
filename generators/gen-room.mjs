@@ -12,9 +12,9 @@
  *   hole     Floor hole size in world units (default: 0). When set, a tunnel
  *            of length hole*2 extends downward from the opening.
  *
- * Example with fill exterior:
+ * Example with exterior fill:
  *   splat-transform generators/gen-room.mjs -p size=4,spacing=0.04 \
- *     output.voxel.json --nav-fill-dilation 0.5 --nav-fill-debug-stage 3
+ *     output.voxel.json --nav-exterior-radius 0.5
  */
 
 // Per-face layout: [uAxis, vAxis, fixedAxis, fixedSide (0=min 1=max)]

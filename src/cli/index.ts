@@ -230,7 +230,7 @@ const parseArguments = async () => {
         navCapsule,
         navSeed,
         collisionMesh: v['collision-mesh'],
-        meshSimplifyError: parseNumber(v['mesh-simplify-error']) || undefined
+        meshSimplifyError: v['mesh-simplify-error'] ? parseNumber(v['mesh-simplify-error']) : undefined
     };
 
     for (const t of tokens) {
