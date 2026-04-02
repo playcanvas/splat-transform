@@ -47,10 +47,10 @@ type WriteVoxelOptions = {
     /** Exterior fill radius in world units. Set to 0 to disable exterior fill. Defaults to 1.6 when nav simplification is active. */
     navExteriorRadius?: number;
 
-    /** Capsule dimensions for navigation simplification. Height of 0 disables interior carve. When set, only voxels contactable from the seed are kept. */
+    /** Capsule dimensions for navigation simplification. Height of 0 disables interior carve. When height > 0, only voxels contactable from the seed are kept. */
     navCapsule?: { height: number; radius: number };
 
-    /** Seed position in world space for navigation flood fill. Required when navCapsule is set. */
+    /** Seed position in world space for navigation flood fill. Required when navCapsule is set with height > 0. */
     navSeed?: NavSeed;
 
     /** Whether to generate a collision mesh (.collision.glb) alongside the voxel data. Default: false */
