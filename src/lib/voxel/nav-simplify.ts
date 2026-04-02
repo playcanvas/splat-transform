@@ -1087,6 +1087,11 @@ const fillExterior = (
                 progressComplete = true;
                 return { accumulator, gridBounds };
             }
+        } else {
+            logger.log('fillExterior: seed outside grid bounds, skipping exterior fill');
+            logger.progress.cancel();
+            progressComplete = true;
+            return { accumulator, gridBounds };
         }
 
         logger.progress.step();

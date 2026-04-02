@@ -111,10 +111,13 @@ const parseArguments = async () => {
         }
     });
 
-    const parseNumber = (value: string): number => {
+    const parseNumber = (value: string, min?: number): number => {
         const result = Number(value);
         if (!Number.isFinite(result)) {
             throw new Error(`Invalid number value: ${value}`);
+        }
+        if (min !== undefined && result < min) {
+            throw new Error(`Value must be >= ${min}, got ${value}`);
         }
         return result;
     };
@@ -198,16 +201,8 @@ const parseArguments = async () => {
         }
     }
 
-    // Parse exterior radius option
-    const navExteriorRadiusStr = v['nav-exterior-radius'];
-    let navExteriorRadius: number | undefined;
-
-    if (navExteriorRadiusStr) {
-        navExteriorRadius = parseNumber(navExteriorRadiusStr);
-        if (!Number.isFinite(navExteriorRadius) || navExteriorRadius < 0) {
-            throw new Error(`Invalid nav-exterior-radius value: ${navExteriorRadiusStr}. Must be >= 0`);
-        }
-    }
+    const navExteriorRadius = v['nav-exterior-radius'] ? parseNumber(v['nav-exterior-radius'], 0) : undefined;
+    const meshSimplifyError = v['mesh-simplify-error'] ? parseNumber(v['mesh-simplify-error'], 0) : undefined;
 
     const options: CliOptions = {
         overwrite: v.overwrite,
@@ -230,7 +225,7 @@ const parseArguments = async () => {
         navCapsule,
         navSeed,
         collisionMesh: v['collision-mesh'],
-        meshSimplifyError: v['mesh-simplify-error'] ? parseNumber(v['mesh-simplify-error']) : undefined
+        meshSimplifyError
     };
 
     for (const t of tokens) {
