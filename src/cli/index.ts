@@ -29,6 +29,7 @@ interface CliOptions extends LibOptions {
     help: boolean;
     version: boolean;
     quiet: boolean;
+    mem: boolean;
     listGpus: boolean;
     deviceIdx: number;  // -1 = auto, -2 = CPU, 0+ = GPU index
 }
@@ -75,6 +76,7 @@ const parseArguments = async () => {
             help: { type: 'boolean', short: 'h', default: false },
             version: { type: 'boolean', short: 'v', default: false },
             quiet: { type: 'boolean', short: 'q', default: false },
+            mem: { type: 'boolean', default: false },
             iterations: { type: 'string', short: 'i', default: '10' },
             'list-gpus': { type: 'boolean', short: 'L', default: false },
             gpu: { type: 'string', short: 'g', default: '-1' },
@@ -85,11 +87,12 @@ const parseArguments = async () => {
             unbundled: { type: 'boolean', short: 'U', default: false },
             'voxel-resolution': { type: 'string', short: 'R', default: '0.05' },
             'opacity-cutoff': { type: 'string', short: 'A', default: '0.1' },
-            'collision-mesh': { type: 'boolean', short: 'K', default: false },
-            'mesh-simplify': { type: 'string', short: 'T', default: '0.25' },
-            'no-nav-simplify': { type: 'boolean', short: 'n', default: false },
+            'nav-simplify': { type: 'boolean', default: true },
+            'nav-exterior-radius': { type: 'string', default: '' },
             'nav-capsule': { type: 'string', default: '' },
             'nav-seed': { type: 'string', default: '' },
+            'collision-mesh': { type: 'boolean', short: 'K', default: false },
+            'mesh-simplify-error': { type: 'string', default: '' },
 
             // per-file options
             translate: { type: 'string', short: 't', multiple: true },
@@ -108,10 +111,13 @@ const parseArguments = async () => {
         }
     });
 
-    const parseNumber = (value: string): number => {
+    const parseNumber = (value: string, min?: number): number => {
         const result = Number(value);
-        if (isNaN(result)) {
+        if (!Number.isFinite(result)) {
             throw new Error(`Invalid number value: ${value}`);
+        }
+        if (min !== undefined && result < min) {
+            throw new Error(`Value must be >= ${min}, got ${value}`);
         }
         return result;
     };
@@ -124,12 +130,12 @@ const parseArguments = async () => {
         return result;
     };
 
-    const parseVec3 = (value: string): Vec3 => {
-        const parts = value.split(',').map(parseNumber);
-        if (parts.length !== 3 || parts.some(isNaN)) {
-            throw new Error(`Invalid Vec3 value: ${value}`);
+    const parseVec = (value: string, count: number): number[] => {
+        const parts = value.split(',').map(p => parseNumber(p));
+        if (parts.length !== count) {
+            throw new Error(`Expected ${count} comma-separated values, got ${parts.length}: ${value}`);
         }
-        return new Vec3(parts[0], parts[1], parts[2]);
+        return parts;
     };
 
     const parseComparator = (value: string): 'lt' | 'lte' | 'gt' | 'gte' | 'eq' | 'neq' => {
@@ -173,44 +179,37 @@ const parseArguments = async () => {
     // Parse nav simplification options
     const navCapsuleStr = v['nav-capsule'];
     const navSeedStr = v['nav-seed'];
-    const navSimplify = !v['no-nav-simplify'];
+    const navSimplify = v['nav-simplify'];
     let navCapsule: { height: number; radius: number } | undefined;
     let navSeed: { x: number; y: number; z: number } | undefined;
 
     if (navSimplify) {
         if (navCapsuleStr) {
-            const parts = navCapsuleStr.split(',').map(parseNumber);
-            if (parts.length !== 2) {
-                throw new Error(`Invalid nav-capsule value: ${navCapsuleStr}. Expected height,radius`);
-            }
-            const [height, radius] = parts;
-            if (!Number.isFinite(height) || !Number.isFinite(radius) || height <= 0 || radius < 0) {
-                throw new Error(`Invalid nav-capsule value: ${navCapsuleStr}. Height must be > 0 and radius must be >= 0`);
+            const [height, radius] = parseVec(navCapsuleStr, 2);
+            if (height < 0 || radius < 0) {
+                throw new Error(`Invalid nav-capsule value: ${navCapsuleStr}. Height and radius must be >= 0`);
             }
             navCapsule = { height, radius };
         } else {
             navCapsule = { height: 1.6, radius: 0.2 };
         }
         if (navSeedStr) {
-            const parts = navSeedStr.split(',').map(parseNumber);
-            if (parts.length !== 3) {
-                throw new Error(`Invalid nav-seed value: ${navSeedStr}. Expected x,y,z`);
-            }
-            const [x, y, z] = parts;
-            if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
-                throw new Error(`Invalid nav-seed value: ${navSeedStr}. x, y, and z must be finite numbers`);
-            }
+            const [x, y, z] = parseVec(navSeedStr, 3);
             navSeed = { x, y, z };
         } else {
             navSeed = { x: 0, y: 0, z: 0 };
         }
     }
 
+    const navExteriorRadius = v['nav-exterior-radius'] ? parseNumber(v['nav-exterior-radius'], 0) : undefined;
+    const meshSimplifyError = v['mesh-simplify-error'] ? parseNumber(v['mesh-simplify-error'], 0) : undefined;
+
     const options: CliOptions = {
         overwrite: v.overwrite,
         help: v.help,
         version: v.version,
         quiet: v.quiet,
+        mem: v.mem,
         iterations: parseInteger(v.iterations),
         listGpus: v['list-gpus'],
         deviceIdx,
@@ -221,16 +220,13 @@ const parseArguments = async () => {
         lodChunkExtent: parseInteger(v['lod-chunk-extent']),
         voxelResolution: parseNumber(v['voxel-resolution']),
         opacityCutoff: parseNumber(v['opacity-cutoff']),
-        collisionMesh: v['collision-mesh'],
-        meshSimplify: parseNumber(v['mesh-simplify']),
         navSimplify,
+        navExteriorRadius,
         navCapsule,
-        navSeed
+        navSeed,
+        collisionMesh: v['collision-mesh'],
+        meshSimplifyError
     };
-
-    if (!Number.isFinite(options.meshSimplify) || options.meshSimplify < 0 || options.meshSimplify > 1) {
-        throw new Error(`Invalid mesh-simplify value: ${options.meshSimplify}. Must be a finite number between 0 and 1.`);
-    }
 
     for (const t of tokens) {
         if (t.kind === 'positional') {
@@ -241,18 +237,22 @@ const parseArguments = async () => {
         } else if (t.kind === 'option' && files.length > 0) {
             const current = files[files.length - 1];
             switch (t.name) {
-                case 'translate':
+                case 'translate': {
+                    const [x, y, z] = parseVec(t.value, 3);
                     current.processActions.push({
                         kind: 'translate',
-                        value: parseVec3(t.value)
+                        value: new Vec3(x, y, z)
                     });
                     break;
-                case 'rotate':
+                }
+                case 'rotate': {
+                    const [x, y, z] = parseVec(t.value, 3);
                     current.processActions.push({
                         kind: 'rotate',
-                        value: parseVec3(t.value)
+                        value: new Vec3(x, y, z)
                     });
                     break;
+                }
                 case 'scale':
                     current.processActions.push({
                         kind: 'scale',
@@ -432,6 +432,7 @@ GLOBAL OPTIONS
     -h, --help                              Show this help and exit
     -v, --version                           Show version and exit
     -q, --quiet                             Suppress non-error output
+        --mem                               Show memory usage in progress output
     -w, --overwrite                         Overwrite output file if it exists
     -i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10
     -L, --list-gpus                         List available GPU adapters and exit
@@ -443,11 +444,12 @@ GLOBAL OPTIONS
     -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
     -R, --voxel-resolution <n>              Voxel size in world units for .voxel.json. Default: 0.05
     -A, --opacity-cutoff   <n>              Opacity threshold for solid voxels. Default: 0.1
-    -K, --collision-mesh                    Generate collision mesh (.collision.glb) with voxel output
-    -T, --mesh-simplify    <n>              Ratio of triangles to keep for collision mesh (0-1). Default: 0.25
-    -n, --no-nav-simplify                   Disable capsule navigation simplification for voxel output
-        --nav-capsule      <height,radius>  Capsule dimensions for nav simplification. Default: 1.6,0.2
+        --nav-simplify                      Enable nav simplification for voxel output. Default: true
+        --nav-exterior-radius <n>           Exterior fill radius in world units (0 to disable). Default: 1.6 when nav active
+        --nav-capsule      <height,radius>  Capsule dimensions for nav simplification (height=0 disables interior carve). Default: 1.6,0.2
         --nav-seed         <x,y,z>          Seed position for nav simplification. Default: 0,0,0
+    -K, --collision-mesh                    Generate collision mesh (.collision.glb) with voxel output
+        --mesh-simplify-error <n>           Max geometric error for collision mesh simplification as a fraction of voxelResolution. Default: 0.08
 
 EXAMPLES
     # Scale then translate
@@ -503,6 +505,12 @@ const main = async () => {
     const err = console.error.bind(console);
     const warn = console.warn.bind(console);
 
+    const formatMem = options.mem ? () => {
+        const m = process.memoryUsage();
+        const mb = (n: number) => `${(n / (1024 * 1024)).toFixed(0)}MB`;
+        return `  [rss: ${mb(m.rss)}, heap: ${mb(m.heapUsed)}, ab: ${mb(m.arrayBuffers)}]`;
+    } : () => '';
+
     // inject Node.js-specific logger - logs go to stderr, data output goes to stdout
     logger.setLogger({
         log: err,
@@ -512,7 +520,7 @@ const main = async () => {
         output: console.log.bind(console),
         onProgress: (node) => {
             if (node.stepName) {
-                err(`[${node.step}/${node.totalSteps}] ${node.stepName}`);
+                err(`[${node.step}/${node.totalSteps}] ${node.stepName}${formatMem()}`);
             } else if (node.step === 0) {
                 start = hrtime();
             } else {
@@ -521,7 +529,7 @@ const main = async () => {
                 const prev = Math.round(displaySteps * (node.step - 1) / node.totalSteps);
                 if (curr > prev) process.stderr.write('#'.repeat(curr - prev));
                 if (node.step === node.totalSteps) {
-                    process.stderr.write(` (${hrtimeDelta(start, hrtime()).toFixed(3)}s)\n`);
+                    process.stderr.write(` (${hrtimeDelta(start, hrtime()).toFixed(3)}s)${formatMem()}\n`);
                 }
             }
         }

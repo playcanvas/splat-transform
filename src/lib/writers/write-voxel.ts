@@ -17,7 +17,7 @@ import {
     type MultiBatchResult
 } from '../voxel/index';
 import { marchingCubes } from '../voxel/marching-cubes';
-import { simplifyForCapsule, type NavSeed } from '../voxel/nav-simplify';
+import { fillExterior, simplifyForCapsule, type NavSeed } from '../voxel/nav-simplify';
 import {
     BlockAccumulator,
     xyzToMorton,
@@ -44,17 +44,20 @@ type WriteVoxelOptions = {
     /** Optional function to create a GPU device for voxelization */
     createDevice?: DeviceCreator;
 
+    /** Exterior fill radius in world units. Set to 0 to disable exterior fill. Defaults to 1.6 when nav simplification is active. Requires navSeed to be set; ignored without it. */
+    navExteriorRadius?: number;
+
+    /** Capsule dimensions for navigation simplification. Height of 0 disables interior carve. When height > 0, only voxels contactable from the seed are kept. */
+    navCapsule?: { height: number; radius: number };
+
+    /** Seed position in world space for navigation flood fill. Required when navCapsule is set with height > 0. */
+    navSeed?: NavSeed;
+
     /** Whether to generate a collision mesh (.collision.glb) alongside the voxel data. Default: false */
     collisionMesh?: boolean;
 
-    /** Ratio of triangles to keep when simplifying the collision mesh (0-1). Default: 0.25 */
-    meshSimplify?: number;
-
-    /** Capsule dimensions for navigation simplification. When set, only voxels contactable from the seed are kept. */
-    navCapsule?: { height: number; radius: number };
-
-    /** Seed position in world space for navigation flood fill. Required when navCapsule is set. */
-    navSeed?: NavSeed;
+    /** Maximum geometric error for collision mesh simplification as a fraction of voxelResolution. Default: 0.08 */
+    meshSimplifyError?: number;
 };
 
 /**
@@ -179,22 +182,27 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         voxelResolution = 0.05,
         opacityCutoff = 0.5,
         createDevice,
-        collisionMesh = false,
-        meshSimplify = 0.25,
+        navExteriorRadius,
         navCapsule,
-        navSeed
+        navSeed,
+        collisionMesh = false,
+        meshSimplifyError
     } = options;
 
     if (!createDevice) {
         throw new Error('writeVoxel requires a createDevice function for GPU voxelization');
     }
 
-    if ((navCapsule && !navSeed) || (!navCapsule && navSeed)) {
-        logger.warn('writeVoxel: both navCapsule and navSeed must be provided for nav simplification, skipping');
+    if (navCapsule && !navSeed) {
+        logger.warn('writeVoxel: navCapsule requires navSeed for interior nav carving, skipping nav carving');
     }
-    const hasNav = !!(navCapsule && navSeed);
+    const hasNavBase = !!(navCapsule && navSeed);
+    const hasNav = hasNavBase && navCapsule!.height > 0;
+    const exteriorRadius = hasNav ? (navExteriorRadius ?? 1.6) : navExteriorRadius;
+    const hasFillExterior = !!(exteriorRadius && navSeed);
     let stepCount = 5;
     if (collisionMesh) stepCount += 2;
+    if (hasFillExterior) stepCount += 1;
     if (hasNav) stepCount += 1;
     logger.progress.begin(stepCount);
 
@@ -244,7 +252,8 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     const batchSize = 16;  // 16x16x16 = 4096 blocks max per batch
 
     logger.progress.step('Voxelizing');
-    logger.debug(`voxel grid: (${numBlocksX} x ${numBlocksY} x ${numBlocksZ})`);
+    logger.debug(`blocks: ${numBlocksX} x ${numBlocksY} x ${numBlocksZ} (${(numBlocksX * numBlocksY * numBlocksZ / 1e6).toFixed(1)}M)`);
+    logger.debug(`voxels: ${numBlocksX * 4} x ${numBlocksY * 4} x ${numBlocksZ * 4} (${(numBlocksX * numBlocksY * numBlocksZ * 64 / 1e9).toFixed(2)}B)`);
 
     // Mega-dispatch thresholds: flush when either limit is reached
     const MEGA_MAX_BATCHES = 512;
@@ -456,8 +465,18 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     logger.progress.step('Filtering');
     accumulator = filterAndFillBlocks(accumulator);
 
+    if (hasFillExterior) {
+        logger.progress.step('Fill exterior');
+        const fillResult = fillExterior(
+            accumulator, gridBounds, voxelResolution,
+            exteriorRadius!, navSeed!
+        );
+        accumulator = fillResult.accumulator;
+        gridBounds = fillResult.gridBounds;
+    }
+
     if (hasNav) {
-        logger.progress.step('Nav simplification');
+        logger.progress.step('Carve interior');
         const navResult = simplifyForCapsule(
             accumulator, gridBounds, voxelResolution,
             navCapsule!.height, navCapsule!.radius,
@@ -481,20 +500,14 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             logger.progress.step('Simplifying collision mesh');
             await MeshoptSimplifier.ready;
 
-            const clampedSimplify = Number.isFinite(meshSimplify) ? Math.min(1, Math.max(0, meshSimplify)) : 0.25;
-            const targetIndexCount = Math.max(
-                3,
-                Math.min(
-                    rawMesh.indices.length,
-                    Math.floor(rawMesh.indices.length * clampedSimplify / 3) * 3
-                )
-            );
+            const errorFraction = Number.isFinite(meshSimplifyError) && meshSimplifyError >= 0 ? meshSimplifyError : 0.08;
+            const simplifyError = errorFraction * voxelResolution;
             const [simplifiedIndices] = MeshoptSimplifier.simplify(
                 rawMesh.indices,
                 rawMesh.positions,
                 3,
-                targetIndexCount,
-                voxelResolution,
+                0,
+                simplifyError,
                 ['ErrorAbsolute']
             );
 
@@ -530,6 +543,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         bounds,
         voxelResolution
     );
+    accumulator.clear();
 
     logger.log(`octree: depth=${octree.treeDepth}, interior=${octree.numInteriorNodes}, mixed=${octree.numMixedLeaves}`);
 
