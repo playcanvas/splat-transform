@@ -131,7 +131,7 @@ const parseArguments = async () => {
     };
 
     const parseVec = (value: string, count: number): number[] => {
-        const parts = value.split(',').map(parseNumber);
+        const parts = value.split(',').map(p => parseNumber(p));
         if (parts.length !== count) {
             throw new Error(`Expected ${count} comma-separated values, got ${parts.length}: ${value}`);
         }
