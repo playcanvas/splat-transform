@@ -44,7 +44,7 @@ type WriteVoxelOptions = {
     /** Optional function to create a GPU device for voxelization */
     createDevice?: DeviceCreator;
 
-    /** Exterior fill radius in world units. Set to 0 to disable exterior fill. Defaults to 1.6 when nav simplification is active. */
+    /** Exterior fill radius in world units. Set to 0 to disable exterior fill. Defaults to 1.6 when nav simplification is active. Requires navSeed to be set; ignored without it. */
     navExteriorRadius?: number;
 
     /** Capsule dimensions for navigation simplification. Height of 0 disables interior carve. When height > 0, only voxels contactable from the seed are kept. */

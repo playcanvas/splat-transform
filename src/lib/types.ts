@@ -29,7 +29,7 @@ type Options = {
     /** Enable navigation simplification with default capsule (height 1.6, radius 0.2) and seed (0,0,0). Default: true (set to false to disable). */
     navSimplify?: boolean;
 
-    /** Exterior fill radius in world units. Set to 0 to disable exterior fill. When omitted, defaults to 1.6 when nav is active. */
+    /** Exterior fill radius in world units. Set to 0 to disable exterior fill. When omitted, defaults to 1.6 when nav is active. Requires navSeed to be set; ignored without it. */
     navExteriorRadius?: number;
 
     /** Capsule dimensions for navigation simplification. Height of 0 disables interior carve. Default: { height: 1.6, radius: 0.2 } */
