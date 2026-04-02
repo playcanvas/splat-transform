@@ -113,7 +113,7 @@ const parseArguments = async () => {
 
     const parseNumber = (value: string): number => {
         const result = Number(value);
-        if (isNaN(result)) {
+        if (!Number.isFinite(result)) {
             throw new Error(`Invalid number value: ${value}`);
         }
         return result;
