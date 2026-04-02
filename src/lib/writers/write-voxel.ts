@@ -193,8 +193,8 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         throw new Error('writeVoxel requires a createDevice function for GPU voxelization');
     }
 
-    if ((navCapsule && !navSeed) || (!navCapsule && navSeed)) {
-        logger.warn('writeVoxel: both navCapsule and navSeed must be provided for nav simplification, skipping');
+    if (navCapsule && !navSeed) {
+        logger.warn('writeVoxel: navCapsule requires navSeed for interior nav carving, skipping nav carving');
     }
     const hasNavBase = !!(navCapsule && navSeed);
     const hasNav = hasNavBase && navCapsule!.height > 0;
