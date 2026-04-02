@@ -30,10 +30,6 @@ class MaskStore {
         return this._size;
     }
 
-    private _hash(key: number): number {
-        return (Math.imul(key, 0x9E3779B9) >>> 0) & this._mask;
-    }
-
     /**
      * Find the slot for a key. If the key exists, keys[slot] === key.
      * If the key doesn't exist, keys[slot] === -1 (empty slot for insertion).

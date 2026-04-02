@@ -850,11 +850,6 @@ const simplifyForCapsule = (
     const nby = ny >> 2;
     const nbz = nz >> 2;
 
-    const buildResult = (grid: SparseVoxelGrid): NavSimplifyResult => ({
-        accumulator: grid.toAccumulator(0, 0, 0, nbx, nby, nbz),
-        gridBounds
-    });
-
     logger.progress.begin(10);
     let progressComplete = false;
 
@@ -990,11 +985,6 @@ const fillExterior = (
     const nby = ny >> 2;
     const nbz = nz >> 2;
 
-    const buildResult = (grid: SparseVoxelGrid): NavSimplifyResult => ({
-        accumulator: grid.toAccumulator(0, 0, 0, nbx, nby, nbz),
-        gridBounds
-    });
-
     logger.progress.begin(10);
     let progressComplete = false;
 
@@ -1093,6 +1083,7 @@ const fillExterior = (
         if (seedIx >= 0 && seedIx < nx && seedIy >= 0 && seedIy < ny && seedIz >= 0 && seedIz < nz) {
             if (visited.getVoxel(seedIx, seedIy, seedIz)) {
                 logger.log('fillExterior: seed reachable from outside, skipping');
+                logger.progress.cancel();
                 progressComplete = true;
                 return { accumulator, gridBounds };
             }

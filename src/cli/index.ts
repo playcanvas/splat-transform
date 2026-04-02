@@ -87,7 +87,7 @@ const parseArguments = async () => {
             unbundled: { type: 'boolean', short: 'U', default: false },
             'voxel-resolution': { type: 'string', short: 'R', default: '0.05' },
             'opacity-cutoff': { type: 'string', short: 'A', default: '0.1' },
-            'nav-simplify': { type: 'boolean', short: 'n', default: true },
+            'nav-simplify': { type: 'boolean', default: true },
             'nav-exterior-radius': { type: 'string', default: '' },
             'nav-capsule': { type: 'string', default: '' },
             'nav-seed': { type: 'string', default: '' },
@@ -449,9 +449,9 @@ GLOBAL OPTIONS
     -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
     -R, --voxel-resolution <n>              Voxel size in world units for .voxel.json. Default: 0.05
     -A, --opacity-cutoff   <n>              Opacity threshold for solid voxels. Default: 0.1
-    -n, --nav-simplify                      Enable nav simplification for voxel output. Default: true
-        --nav-exterior-radius <n>           Exterior fill radius in world units (default: 1.6 when nav active)
-        --nav-capsule      <height,radius>  Capsule dimensions for nav simplification. Default: 1.6,0.2
+        --nav-simplify                      Enable nav simplification for voxel output. Default: true
+        --nav-exterior-radius <n>           Exterior fill radius in world units (0 to disable). Default: 1.6 when nav active
+        --nav-capsule      <height,radius>  Capsule dimensions for nav simplification (height=0 disables interior carve). Default: 1.6,0.2
         --nav-seed         <x,y,z>          Seed position for nav simplification. Default: 0,0,0
     -K, --collision-mesh                    Generate collision mesh (.collision.glb) with voxel output
         --mesh-simplify-error <n>           Max geometric error for collision mesh simplification as a fraction of voxelResolution. Default: 0.08

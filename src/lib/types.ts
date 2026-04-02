@@ -29,10 +29,10 @@ type Options = {
     /** Enable navigation simplification with default capsule (height 1.6, radius 0.2) and seed (0,0,0). Default: true (set to false to disable). */
     navSimplify?: boolean;
 
-    /** Exterior fill radius in world units. When set, fills empty space outside enclosed levels. */
+    /** Exterior fill radius in world units. Set to 0 to disable exterior fill. When omitted, defaults to 1.6 when nav is active. */
     navExteriorRadius?: number;
 
-    /** Capsule dimensions (height, radius) for navigation simplification. Default: { height: 1.6, radius: 0.2 } */
+    /** Capsule dimensions for navigation simplification. Height of 0 disables interior carve. Default: { height: 1.6, radius: 0.2 } */
     navCapsule?: { height: number; radius: number };
 
     /** Seed position in world space for navigation flood fill. Default: { x: 0, y: 0, z: 0 } */
