@@ -4,9 +4,9 @@ import { Column, DataTable } from './data-table/data-table';
 import { simplifyGaussians } from './data-table/decimate';
 import { sortMortonOrder } from './data-table/morton-order';
 import { computeSummary, type SummaryData } from './data-table/summary';
-import { transformAABB } from './data-table/transform';
-import { Transform } from './utils/math';
+import { convertToSpace, transformAABB } from './data-table/transform';
 import { logger } from './utils/logger';
+import { Transform } from './utils/math';
 
 /**
  * Translate splats by a 3D vector offset.
@@ -53,8 +53,12 @@ type FilterNaN = {
  * (transformed) space: linear opacity (0-1), linear scale, and linear color (0-1).
  * The value is automatically converted to raw PLY space before comparison.
  *
- * To compare against raw PLY values directly, use the `_raw` suffix
- * (e.g. `opacity_raw`, `scale_0_raw`, `f_dc_0_raw`).
+ * To compare against raw PLY values directly (without the user-friendly conversion),
+ * use the `_raw` suffix (e.g. `opacity_raw`, `scale_0_raw`, `f_dc_0_raw`).
+ *
+ * If the DataTable has a pending spatial transform and the column is affected by it
+ * (position, rotation, scale, or SH columns), the transform is applied (baked in)
+ * before comparison. This applies to both regular and `_raw` columns.
  */
 type FilterByValue = {
     /** Action type identifier. */
@@ -212,6 +216,14 @@ const rawColumnMap: Record<string, string> = {
     'f_dc_2_raw': 'f_dc_2'
 };
 
+const transformColumnNames = new Set([
+    'x', 'y', 'z',
+    'rot_0', 'rot_1', 'rot_2', 'rot_3',
+    'scale_0', 'scale_1', 'scale_2'
+]);
+
+const isTransformColumn = (name: string): boolean => transformColumnNames.has(name) || /^f_rest_\d+$/.test(name);
+
 const formatMarkdown = (summary: SummaryData): string => {
     const lines: string[] = [];
 
@@ -348,15 +360,19 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
                     value = inverseTransforms[columnName](value);
                 }
 
+                if (!result.transform.isIdentity() && isTransformColumn(columnName)) {
+                    result = convertToSpace(result, Transform.IDENTITY);
+                }
+
                 const Predicates = {
-                    'lt': (row: any, rowIndex: number) => row[columnName] < value,
-                    'lte': (row: any, rowIndex: number) => row[columnName] <= value,
-                    'gt': (row: any, rowIndex: number) => row[columnName] > value,
-                    'gte': (row: any, rowIndex: number) => row[columnName] >= value,
-                    'eq': (row: any, rowIndex: number) => row[columnName] === value,
-                    'neq': (row: any, rowIndex: number) => row[columnName] !== value
+                    'lt': (row: any) => row[columnName] < value,
+                    'lte': (row: any) => row[columnName] <= value,
+                    'gt': (row: any) => row[columnName] > value,
+                    'gte': (row: any) => row[columnName] >= value,
+                    'eq': (row: any) => row[columnName] === value,
+                    'neq': (row: any) => row[columnName] !== value
                 };
-                const predicate = Predicates[comparator] ?? ((row: any, rowIndex: number) => true);
+                const predicate = Predicates[comparator] ?? ((row: any) => true);
                 result = filter(result, predicate);
                 break;
             }

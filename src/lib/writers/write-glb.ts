@@ -1,9 +1,8 @@
 import { version } from '../../../package.json';
 import { DataTable } from '../data-table/data-table';
 import { convertToSpace } from '../data-table/transform';
-import { Transform } from '../utils/math';
 import { type FileSystem } from '../io/write';
-import { sigmoid } from '../utils/math';
+import { Transform, sigmoid } from '../utils/math';
 
 const SH_C0 = 0.2820947917738781;
 

@@ -382,6 +382,42 @@ describe('Filter By Value', () => {
 
         assert.strictEqual(result.numRows, 0, 'Should have no rows');
     });
+
+    it('should apply transform before filtering transform-sensitive columns', () => {
+        const data = new DataTable([
+            new Column('x', new Float32Array([0, 1, 2])),
+            new Column('y', new Float32Array([0, 0, 0])),
+            new Column('z', new Float32Array([0, 0, 0]))
+        ]);
+
+        const result = processDataTable(data, [
+            { kind: 'translate', value: new Vec3(10, 0, 0) },
+            { kind: 'filterByValue', columnName: 'x', comparator: 'gt', value: 11 }
+        ]);
+
+        assert.strictEqual(result.numRows, 1, 'Should keep one row after transformed-space filtering');
+        assert.strictEqual(result.getColumnByName('x').data[0], 12, 'Transform should be baked into column data');
+        assert.ok(result.transform.isIdentity(), 'Transform should be identity after baking');
+    });
+
+    it('should apply spatial transform but skip inverse transform for _raw suffix', () => {
+        const logVal = Math.log(2);
+        const data = new DataTable([
+            new Column('x', new Float32Array([0, 0, 0])),
+            new Column('y', new Float32Array([0, 0, 0])),
+            new Column('z', new Float32Array([0, 0, 0])),
+            new Column('scale_0', new Float32Array([0, logVal, logVal * 2])),
+            new Column('scale_1', new Float32Array([0, 0, 0])),
+            new Column('scale_2', new Float32Array([0, 0, 0]))
+        ]);
+
+        const result = processDataTable(data, [
+            { kind: 'scale', value: 2 },
+            { kind: 'filterByValue', columnName: 'scale_0_raw', comparator: 'gt', value: logVal * 1.5 }
+        ]);
+
+        assert.strictEqual(result.numRows, 2, 'Spatial transform should be applied before raw comparison');
+    });
 });
 
 describe('Filter NaN', () => {

@@ -1,7 +1,7 @@
 import { Column, DataTable, TypedArray } from './data-table';
 import { convertToSpace } from './transform';
-import { Transform } from '../utils/math';
 import { logger } from '../utils/logger';
+import { Transform } from '../utils/math';
 
 /**
  * Combines multiple DataTables into a single DataTable.

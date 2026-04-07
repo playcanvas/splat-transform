@@ -5,10 +5,10 @@ import { writeSog, type DeviceCreator } from './write-sog.js';
 import { TypedArray, DataTable } from '../data-table/data-table';
 import { sortMortonOrder } from '../data-table/morton-order';
 import { convertToSpace } from '../data-table/transform';
-import { Transform } from '../utils/math';
 import { type FileSystem } from '../io/write';
 import { BTreeNode, BTree } from '../spatial/b-tree';
 import { logger } from '../utils/logger';
+import { Transform } from '../utils/math';
 
 
 type Aabb = {
