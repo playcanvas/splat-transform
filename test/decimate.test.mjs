@@ -570,10 +570,10 @@ describe('decimate Integration', () => {
 
         assert.strictEqual(result.numRows, 8, 'Should have 8 rows after filtering');
 
-        const xCol = result.getColumnByName('x').data;
-        for (let i = 0; i < result.numRows; i++) {
-            assert(xCol[i] > 10, `x[${i}] should be > 10 after transforms`);
-        }
+        // Raw data is unchanged by translate/scale (they compose into transform)
+        // scale(2) from origin after translate(10) doubles the translation too
+        assertClose(result.transform.translation.x, 20, 1e-5, 'tx');
+        assertClose(result.transform.scale, 2.0, 1e-5, 'scale');
     });
 
     it('should preserve all columns after merging', () => {

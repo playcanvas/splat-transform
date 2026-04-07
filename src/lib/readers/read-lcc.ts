@@ -3,6 +3,7 @@ import { Vec3 } from 'playcanvas';
 import { Column, DataTable } from '../data-table/data-table';
 import { dirname, join, ReadFileSystem, ReadSource, readFile } from '../io/read';
 import { Options } from '../types';
+import { Transform } from '../utils/math';
 
 const kSH_C0 = 0.28209479177387814;
 const SQRT_2 = 1.414213562373095;
@@ -470,13 +471,15 @@ const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Op
         new Column('lod', lodColumn)
     ];
 
-    const result: DataTable[] = [new DataTable(columns)];
+    const mainTable = new DataTable(columns, new Transform().fromEulers(90, 0, 180));
+    const result: DataTable[] = [mainTable];
 
     // load environment and tag as lod -1
     try {
         const envData = await readFile(fileSystem, relatedFilename('environment.bin'));
         const envDataTable = deserializeEnvironment(envData, compressInfo, hasSH);
         envDataTable.addColumn(new Column('lod', new Float32Array(envDataTable.numRows).fill(-1)));
+        envDataTable.transform = new Transform().fromEulers(90, 0, 180);
         result.push(envDataTable);
     } catch (err) {
         console.warn('Failed to load environment.bin', err);

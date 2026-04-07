@@ -1,5 +1,6 @@
 import { Column, DataTable } from '../data-table/data-table';
 import { ReadSource } from '../io/read';
+import { Transform } from '../utils/math';
 
 // Format configuration for different compression modes
 interface CompressionConfig {
@@ -370,7 +371,7 @@ const readKsplat = async (source: ReadSource): Promise<DataTable> => {
         throw new Error(`Splat count mismatch: expected ${numSplats}, processed ${splatIndex}`);
     }
 
-    return new DataTable(columns);
+    return new DataTable(columns, new Transform().fromEulers(0, 0, 180));
 };
 
 export { readKsplat };

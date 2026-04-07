@@ -2,8 +2,9 @@ import { dirname, resolve } from 'pathe';
 import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { writeSog, type DeviceCreator } from './write-sog.js';
-import { TypedArray, DataTable } from '../data-table/data-table';
+import { Column, TypedArray, DataTable } from '../data-table/data-table';
 import { sortMortonOrder } from '../data-table/morton-order';
+import { computeWriteTransform, Transform, transformColumns } from '../data-table/transform';
 import { type FileSystem } from '../io/write';
 import { BTreeNode, BTree } from '../spatial/b-tree';
 import { logger } from '../utils/logger';
@@ -156,7 +157,19 @@ type WriteLodOptions = {
  * @ignore
  */
 const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
-    const { filename, dataTable, envDataTable, iterations, createDevice, chunkCount, chunkExtent } = options;
+    const { filename, iterations, createDevice, chunkCount, chunkExtent } = options;
+
+    // Transform data into engine space for spatial operations and SOG output
+    const toEngine = (dt: DataTable): DataTable => {
+        const delta = computeWriteTransform(dt.transform, Transform.IDENTITY);
+        if (!delta) return dt;
+        const allNames = dt.columnNames;
+        const cols = transformColumns(dt, allNames, delta);
+        return new DataTable(allNames.map(name => new Column(name, cols.get(name)!)));
+    };
+
+    const dataTable = toEngine(options.dataTable);
+    const envDataTable = options.envDataTable ? toEngine(options.envDataTable) : null;
 
     const outputDir = dirname(filename);
 

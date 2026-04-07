@@ -344,7 +344,7 @@ const readVoxel = async (
         opacityArr[i] = 5.0;
     }
 
-    return new DataTable([
+    const result = new DataTable([
         new Column('x', xArr),
         new Column('y', yArr),
         new Column('z', zArr),
@@ -360,6 +360,7 @@ const readVoxel = async (
         new Column('f_dc_2', fdc2),
         new Column('opacity', opacityArr)
     ]);
+    return result;
 };
 
 export { readVoxel };

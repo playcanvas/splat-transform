@@ -4,7 +4,7 @@ import { Column, DataTable } from './data-table/data-table';
 import { simplifyGaussians } from './data-table/decimate';
 import { sortMortonOrder } from './data-table/morton-order';
 import { computeSummary, type SummaryData } from './data-table/summary';
-import { transform } from './data-table/transform';
+import { Transform, inverseTransformPoint, inverseTransformAABB } from './data-table/transform';
 import { logger } from './utils/logger';
 
 /**
@@ -306,17 +306,17 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
 
         switch (processAction.kind) {
             case 'translate':
-                transform(result, processAction.value, Quat.IDENTITY, 1);
+                result.transform = new Transform(processAction.value).mul(result.transform);
                 break;
             case 'rotate':
-                transform(result, Vec3.ZERO, new Quat().setFromEulerAngles(
+                result.transform = new Transform().fromEulers(
                     processAction.value.x,
                     processAction.value.y,
                     processAction.value.z
-                ), 1);
+                ).mul(result.transform);
                 break;
             case 'scale':
-                transform(result, Vec3.ZERO, Quat.IDENTITY, processAction.value);
+                result.transform = new Transform(undefined, undefined, processAction.value).mul(result.transform);
                 break;
             case 'filterNaN': {
                 const infOk = new Set(['opacity']);
@@ -375,6 +375,7 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
                         }
                     }
 
+                    const prevTransform = result.transform;
                     result = new DataTable(result.columns.map((column) => {
                         if (map.hasOwnProperty(column.name)) {
                             const name = map[column.name];
@@ -383,24 +384,34 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
                         return column;
 
                     }).filter(c => c !== null));
+                    result.transform = prevTransform;
                 }
                 break;
             }
             case 'filterBox': {
-                const { min, max } = processAction;
+                const rawMin = processAction.min.clone();
+                const rawMax = processAction.max.clone();
+                if (!result.transform.isIdentity()) {
+                    inverseTransformAABB(result.transform, rawMin, rawMax);
+                }
                 const predicate = (row: any, rowIndex: number) => {
                     const { x, y, z } = row;
-                    return x >= min.x && x <= max.x && y >= min.y && y <= max.y && z >= min.z && z <= max.z;
+                    return x >= rawMin.x && x <= rawMax.x && y >= rawMin.y && y <= rawMax.y && z >= rawMin.z && z <= rawMax.z;
                 };
                 result = filter(result, predicate);
                 break;
             }
             case 'filterSphere': {
-                const { center, radius } = processAction;
-                const radiusSq = radius * radius;
+                const rawCenter = processAction.center.clone();
+                let rawRadius = processAction.radius;
+                if (!result.transform.isIdentity()) {
+                    inverseTransformPoint(result.transform, rawCenter);
+                    rawRadius /= result.transform.scale;
+                }
+                const radiusSq = rawRadius * rawRadius;
                 const predicate = (row: any, rowIndex: number) => {
                     const { x, y, z } = row;
-                    return (x - center.x) ** 2 + (y - center.y) ** 2 + (z - center.z) ** 2 < radiusSq;
+                    return (x - rawCenter.x) ** 2 + (y - rawCenter.y) ** 2 + (z - rawCenter.z) ** 2 < radiusSq;
                 };
                 result = filter(result, predicate);
                 break;
@@ -440,7 +451,9 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
                 }
                 keepCount = Math.max(0, keepCount);
 
+                const prevTransform = result.transform;
                 result = simplifyGaussians(result, keepCount);
+                result.transform = prevTransform;
                 break;
             }
         }
