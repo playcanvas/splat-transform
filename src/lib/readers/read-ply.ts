@@ -300,7 +300,7 @@ const readPly = async (source: ReadSource): Promise<DataTable> => {
         result = vertexElement.dataTable;
     }
 
-    result.transform = new Transform().fromEulers(0, 0, 180);
+    result.transform = Transform.PLY.clone();
     return result;
 };
 

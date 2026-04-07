@@ -154,7 +154,7 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
             }, fs);
             break;
         case 'compressed-ply':
-            await writeCompressedPly({ filename, dataTable: applyWriteTransform(dataTable, new Transform().fromEulers(0, 0, 180)) }, fs);
+            await writeCompressedPly({ filename, dataTable: applyWriteTransform(dataTable, Transform.PLY) }, fs);
             break;
         case 'ply':
             await writePly({
@@ -163,7 +163,7 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
                     comments: [],
                     elements: [{
                         name: 'vertex',
-                        dataTable: applyWriteTransform(dataTable, new Transform().fromEulers(0, 0, 180))
+                        dataTable: applyWriteTransform(dataTable, Transform.PLY)
                     }]
                 }
             }, fs);

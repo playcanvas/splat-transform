@@ -147,14 +147,12 @@ describe('Transform class', () => {
 
 describe('computeWriteTransform', () => {
     it('same-to-same returns null (identity delta)', () => {
-        const plyTransform = new Transform().fromEulers(0, 0, 180);
-        const result = computeWriteTransform(plyTransform, new Transform().fromEulers(0, 0, 180));
+        const result = computeWriteTransform(Transform.PLY, Transform.PLY);
         assert.strictEqual(result, null, 'same-to-same delta should be null');
     });
 
     it('PLY-to-engine returns non-null (needs transform)', () => {
-        const plyTransform = new Transform().fromEulers(0, 0, 180);
-        const result = computeWriteTransform(plyTransform, Transform.IDENTITY);
+        const result = computeWriteTransform(Transform.PLY, Transform.IDENTITY);
         assert.notStrictEqual(result, null, 'PLY-to-engine delta should not be null');
     });
 
@@ -184,9 +182,8 @@ describe('transformColumns', () => {
         assert.strictEqual(cols.get('x'), testData.getColumnByName('x').data, 'should be same reference');
     });
 
-    it('transforms positions with euler(0,0,180)', () => {
-        const delta = new Transform().fromEulers(0, 0, 180);
-        const cols = transformColumns(testData, ['x', 'y', 'z'], delta);
+    it('transforms positions with PLY transform', () => {
+        const cols = transformColumns(testData, ['x', 'y', 'z'], Transform.PLY);
         const rawX = testData.getColumnByName('x').data;
         const rawY = testData.getColumnByName('y').data;
         const rawZ = testData.getColumnByName('z').data;
@@ -200,15 +197,13 @@ describe('transformColumns', () => {
     });
 
     it('returns original arrays for unaffected columns', () => {
-        const delta = new Transform().fromEulers(0, 0, 180);
-        const cols = transformColumns(testData, ['opacity', 'f_dc_0'], delta);
+        const cols = transformColumns(testData, ['opacity', 'f_dc_0'], Transform.PLY);
         assert.strictEqual(cols.get('opacity'), testData.getColumnByName('opacity').data, 'opacity should be same reference');
         assert.strictEqual(cols.get('f_dc_0'), testData.getColumnByName('f_dc_0').data, 'f_dc_0 should be same reference');
     });
 
     it('transforms rotation columns', () => {
-        const delta = new Transform().fromEulers(0, 0, 180);
-        const cols = transformColumns(testData, ['rot_0', 'rot_1', 'rot_2', 'rot_3'], delta);
+        const cols = transformColumns(testData, ['rot_0', 'rot_1', 'rot_2', 'rot_3'], Transform.PLY);
 
         // Should return new arrays (not same reference)
         assert.notStrictEqual(cols.get('rot_0'), testData.getColumnByName('rot_0').data, 'rot_0 should be new array');
@@ -226,8 +221,7 @@ describe('transformColumns', () => {
     });
 
     it('does not transform scale columns when scale == 1', () => {
-        const delta = new Transform().fromEulers(0, 0, 180);
-        const cols = transformColumns(testData, ['scale_0'], delta);
+        const cols = transformColumns(testData, ['scale_0'], Transform.PLY);
         assert.strictEqual(cols.get('scale_0'), testData.getColumnByName('scale_0').data, 'scale_0 should be same reference when scale=1');
     });
 });
@@ -243,10 +237,9 @@ describe('inverseTransformPoint', () => {
         assertClose(point.z, 3, 1e-10, 'z');
     });
 
-    it('with euler(0,0,180) negates x and y', () => {
-        const t = new Transform().fromEulers(0, 0, 180);
+    it('with PLY transform negates x and y', () => {
         const point = new Vec3(1, 2, 3);
-        inverseTransformPoint(t, point);
+        inverseTransformPoint(Transform.PLY, point);
         assertClose(point.x, -1, 1e-5, 'x');
         assertClose(point.y, -2, 1e-5, 'y');
         assertClose(point.z, 3, 1e-5, 'z');
@@ -262,11 +255,10 @@ describe('inverseTransformAABB', () => {
         assertClose(max.x, 1, 1e-10, 'max.x');
     });
 
-    it('with euler(0,0,180) swaps min/max for x and y', () => {
-        const t = new Transform().fromEulers(0, 0, 180);
+    it('with PLY transform swaps min/max for x and y', () => {
         const min = new Vec3(-1, -2, -3);
         const max = new Vec3(3, 4, 5);
-        inverseTransformAABB(t, min, max);
+        inverseTransformAABB(Transform.PLY, min, max);
 
         // After negating x and y, then computing AABB:
         // x: [-3, 1] -> negated -> [-1, 3] -> AABB min=-3, max=1
@@ -289,7 +281,7 @@ describe('DataTable transform', () => {
 
     it('clone preserves transform', () => {
         const dt = createMinimalTestData();
-        dt.transform = new Transform().fromEulers(0, 0, 180);
+        dt.transform = Transform.PLY.clone();
 
         const cloned = dt.clone();
         assert.ok(!cloned.transform.isIdentity(), 'cloned should have non-identity transform');
@@ -315,8 +307,8 @@ describe('combine with transforms', () => {
     it('preserves transform when all tables match', () => {
         const dt1 = createMinimalTestData();
         const dt2 = createMinimalTestData();
-        dt1.transform = new Transform().fromEulers(0, 0, 180);
-        dt2.transform = new Transform().fromEulers(0, 0, 180);
+        dt1.transform = Transform.PLY;
+        dt2.transform = Transform.PLY;
 
         const result = combine([dt1, dt2]);
         assert.ok(!result.transform.isIdentity(), 'combined should keep shared transform');
@@ -326,7 +318,7 @@ describe('combine with transforms', () => {
     it('converts to engine space when transforms differ', () => {
         const dt1 = createMinimalTestData();
         const dt2 = createMinimalTestData();
-        dt1.transform = new Transform().fromEulers(0, 0, 180);
+        dt1.transform = Transform.PLY;
         dt2.transform = Transform.IDENTITY;
 
         const result = combine([dt1, dt2]);
@@ -340,7 +332,7 @@ describe('combine with transforms', () => {
 describe('processDataTable spatial filters with transform', () => {
     it('filterBox works correctly with non-identity transform', () => {
         const dt = createMinimalTestData();
-        dt.transform = new Transform().fromEulers(0, 0, 180);
+        dt.transform = Transform.PLY;
 
         // In engine space, euler(0,0,180) negates x and y.
         // Raw x values are centered around 0 (range approx -1.5 to 1.5).
@@ -363,7 +355,7 @@ describe('processDataTable spatial filters with transform', () => {
 
     it('filterSphere works correctly with non-identity transform', () => {
         const dt = createMinimalTestData();
-        dt.transform = new Transform().fromEulers(0, 0, 180);
+        dt.transform = Transform.PLY;
 
         // Engine (0,0,0) maps to raw (0,0,0) for euler(0,0,180)
         const result = processDataTable(dt, [{
@@ -386,7 +378,7 @@ describe('processDataTable spatial filters with transform', () => {
 
     it('filterBands preserves transform', () => {
         const dt = createMinimalTestData({ includeSH: true, shBands: 2 });
-        dt.transform = new Transform().fromEulers(0, 0, 180);
+        dt.transform = Transform.PLY;
 
         const result = processDataTable(dt, [{
             kind: 'filterBands',
@@ -401,14 +393,13 @@ describe('processDataTable spatial filters with transform', () => {
 
 describe('Round-trip transform scenarios', () => {
     it('PLY round-trip: computeWriteTransform returns null', () => {
-        const plyTransform = new Transform().fromEulers(0, 0, 180);
-        const delta = computeWriteTransform(plyTransform, new Transform().fromEulers(0, 0, 180));
+        const delta = computeWriteTransform(Transform.PLY, Transform.PLY);
         assert.strictEqual(delta, null, 'PLY->PLY write should need no transform');
     });
 
     it('PLY->engine: data is correctly transformed to engine space', () => {
         const dt = createMinimalTestData();
-        dt.transform = new Transform().fromEulers(0, 0, 180);
+        dt.transform = Transform.PLY;
 
         const delta = computeWriteTransform(dt.transform, Transform.IDENTITY);
         assert.notStrictEqual(delta, null, 'should need a transform');
@@ -428,7 +419,7 @@ describe('Round-trip transform scenarios', () => {
         const dt = createMinimalTestData();
         dt.transform = Transform.IDENTITY;
 
-        const delta = computeWriteTransform(dt.transform, new Transform().fromEulers(0, 0, 180));
+        const delta = computeWriteTransform(dt.transform, Transform.PLY);
         assert.notStrictEqual(delta, null, 'should need a transform');
 
         const cols = transformColumns(dt, ['x', 'y', 'z'], delta);

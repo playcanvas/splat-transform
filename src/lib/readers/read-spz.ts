@@ -227,7 +227,7 @@ const readSpz = async (source: ReadSource): Promise<DataTable> => {
         }
     }
 
-    return new DataTable(columns, new Transform().fromEulers(0, 0, 180));
+    return new DataTable(columns, Transform.PLY);
 };
 
 export { readSpz };

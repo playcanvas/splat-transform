@@ -777,7 +777,7 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
             const c = cols[ci];
             newColumns.push(new Column(c.name, new (c.data.constructor as any)(outCount)));
         }
-        const newTable = new DataTable(newColumns);
+        const newTable = new DataTable(newColumns, dataTable.transform);
 
         // Copy unmerged splats
         let dst = 0;

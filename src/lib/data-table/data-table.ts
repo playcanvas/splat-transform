@@ -101,7 +101,7 @@ class DataTable {
         }
 
         this.columns = columns;
-        this.transform = transform ? transform.clone() : Transform.IDENTITY;
+        this.transform = transform ? transform.clone() : new Transform();
     }
 
     // rows

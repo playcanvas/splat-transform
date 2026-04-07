@@ -371,7 +371,7 @@ const readKsplat = async (source: ReadSource): Promise<DataTable> => {
         throw new Error(`Splat count mismatch: expected ${numSplats}, processed ${splatIndex}`);
     }
 
-    return new DataTable(columns, new Transform().fromEulers(0, 0, 180));
+    return new DataTable(columns, Transform.PLY);
 };
 
 export { readKsplat };

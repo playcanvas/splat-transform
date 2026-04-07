@@ -375,7 +375,6 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
                         }
                     }
 
-                    const prevTransform = result.transform;
                     result = new DataTable(result.columns.map((column) => {
                         if (map.hasOwnProperty(column.name)) {
                             const name = map[column.name];
@@ -383,8 +382,7 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
                         }
                         return column;
 
-                    }).filter(c => c !== null));
-                    result.transform = prevTransform;
+                    }).filter(c => c !== null), result.transform);
                 }
                 break;
             }
@@ -451,9 +449,7 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
                 }
                 keepCount = Math.max(0, keepCount);
 
-                const prevTransform = result.transform;
                 result = simplifyGaussians(result, keepCount);
-                result.transform = prevTransform;
                 break;
             }
         }

@@ -128,10 +128,19 @@ class Transform {
         return this;
     }
 
+    static freeze(t: Transform): Readonly<Transform> {
+        Object.freeze(t.translation);
+        Object.freeze(t.rotation);
+        return Object.freeze(t);
+    }
+
+    static IDENTITY = Transform.freeze(new Transform());
+
     /**
-     * Shared identity instance. Do not mutate.
+     * PLY coordinate convention: 180-degree rotation around Z.
+     * Used by PLY, splat, KSplat, SPZ, and legacy SOG formats.
      */
-    static IDENTITY = new Transform();
+    static PLY = Transform.freeze(new Transform().fromEulers(0, 0, 180));
 }
 
 export { sigmoid, Transform };
