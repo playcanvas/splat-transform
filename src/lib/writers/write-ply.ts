@@ -1,4 +1,5 @@
-import { convertToSpace, Transform } from '../data-table/transform';
+import { convertToSpace } from '../data-table/transform';
+import { Transform } from '../utils/math';
 import { type FileSystem } from '../io/write';
 import { PlyData } from '../readers/read-ply';
 

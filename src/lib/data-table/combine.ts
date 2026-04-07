@@ -1,5 +1,6 @@
 import { Column, DataTable, TypedArray } from './data-table';
-import { convertToSpace, Transform } from './transform';
+import { convertToSpace } from './transform';
+import { Transform } from '../utils/math';
 import { logger } from '../utils/logger';
 
 /**

@@ -3,6 +3,7 @@ import { Mat4, Quat, Vec3 } from 'playcanvas';
 const sigmoid = (v: number) => 1 / (1 + Math.exp(-v));
 
 const _tv = new Vec3();
+const _sv = new Vec3();
 
 /**
  * A source-to-engine coordinate transform comprising translation, rotation
@@ -153,7 +154,8 @@ class Transform {
      * @returns The filled Mat4.
      */
     getMatrix(result: Mat4): Mat4 {
-        return result.setTRS(this.translation, this.rotation, new Vec3(this.scale, this.scale, this.scale));
+        _sv.set(this.scale, this.scale, this.scale);
+        return result.setTRS(this.translation, this.rotation, _sv);
     }
 
     static freeze(t: Transform): Readonly<Transform> {

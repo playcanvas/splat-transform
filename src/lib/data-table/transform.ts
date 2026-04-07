@@ -193,26 +193,22 @@ const transformColumns = (dataTable: DataTable, columnNames: string[], delta: Tr
  * @param min - The AABB minimum (modified in-place to output min).
  * @param max - The AABB maximum (modified in-place to output max).
  */
-const transformAABB = (t: Transform, min: Vec3, max: Vec3): void => {
-    const corners = [
-        new Vec3(min.x, min.y, min.z),
-        new Vec3(max.x, min.y, min.z),
-        new Vec3(min.x, max.y, min.z),
-        new Vec3(max.x, max.y, min.z),
-        new Vec3(min.x, min.y, max.z),
-        new Vec3(max.x, min.y, max.z),
-        new Vec3(min.x, max.y, max.z),
-        new Vec3(max.x, max.y, max.z)
-    ];
+const _aabbCorner = new Vec3();
+const _aabbResult = new Vec3();
 
-    t.transformPoint(corners[0], corners[0]);
-    min.copy(corners[0]);
-    max.copy(corners[0]);
+const transformAABB = (t: Transform, min: Vec3, max: Vec3): void => {
+    const extents = [min.x, max.x, min.y, max.y, min.z, max.z];
+
+    _aabbCorner.set(extents[0], extents[2], extents[4]);
+    t.transformPoint(_aabbCorner, _aabbResult);
+    min.copy(_aabbResult);
+    max.copy(_aabbResult);
 
     for (let i = 1; i < 8; ++i) {
-        t.transformPoint(corners[i], corners[i]);
-        min.min(corners[i]);
-        max.max(corners[i]);
+        _aabbCorner.set(extents[i & 1], extents[2 + ((i >> 1) & 1)], extents[4 + ((i >> 2) & 1)]);
+        t.transformPoint(_aabbCorner, _aabbResult);
+        min.min(_aabbResult);
+        max.max(_aabbResult);
     }
 };
 
@@ -232,85 +228,7 @@ const convertToSpace = (dataTable: DataTable, targetTransform: Transform): DataT
     return new DataTable(allNames.map(name => new Column(name, cols.get(name)!)), targetTransform);
 };
 
-// -- Legacy in-place transform function --
-
-/**
- * Applies a spatial transformation to splat data in-place.
- *
- * Transforms position, rotation, scale, and spherical harmonics data.
- * The transformation is applied as: scale first, then rotation, then translation.
- *
- * @param dataTable - The DataTable to transform (modified in-place).
- * @param t - Translation vector.
- * @param r - Rotation quaternion.
- * @param s - Uniform scale factor.
- *
- * @example
- * ```ts
- * import { Vec3, Quat } from 'playcanvas';
- *
- * // Scale by 2x, rotate 90° around Y, translate up
- * transform(dataTable, new Vec3(0, 5, 0), new Quat().setFromEulerAngles(0, 90, 0), 2.0);
- * ```
- */
-const transform = (dataTable: DataTable, t: Vec3, r: Quat, s: number): void => {
-    const xform = new Transform(t, r, s);
-    const mat3 = new Mat3().setFromQuat(r);
-    const rotateSH = new RotateSH(mat3);
-
-    const hasTranslation = ['x', 'y', 'z'].every(c => dataTable.hasColumn(c));
-    const hasRotation = ['rot_0', 'rot_1', 'rot_2', 'rot_3'].every(c => dataTable.hasColumn(c));
-    const hasScale = ['scale_0', 'scale_1', 'scale_2'].every(c => dataTable.hasColumn(c));
-    const shBands = detectSHBands(dataTable);
-    const shCoeffs = new Float32Array([0, 3, 8, 15][shBands]);
-
-    const row: any = {};
-    for (let i = 0; i < dataTable.numRows; ++i) {
-        dataTable.getRow(i, row);
-
-        if (hasTranslation) {
-            _v.set(row.x, row.y, row.z);
-            xform.transformPoint(_v, _v);
-            row.x = _v.x;
-            row.y = _v.y;
-            row.z = _v.z;
-        }
-
-        if (hasRotation) {
-            _q.set(row.rot_1, row.rot_2, row.rot_3, row.rot_0).mul2(r, _q);
-            row.rot_0 = _q.w;
-            row.rot_1 = _q.x;
-            row.rot_2 = _q.y;
-            row.rot_3 = _q.z;
-        }
-
-        if (hasScale && s !== 1) {
-            row.scale_0 = Math.log(Math.exp(row.scale_0) * s);
-            row.scale_1 = Math.log(Math.exp(row.scale_1) * s);
-            row.scale_2 = Math.log(Math.exp(row.scale_2) * s);
-        }
-
-        if (shBands > 0) {
-            for (let j = 0; j < 3; ++j) {
-                for (let k = 0; k < shCoeffs.length; ++k) {
-                    shCoeffs[k] = row[shNames[k + j * shCoeffs.length]];
-                }
-
-                rotateSH.apply(shCoeffs);
-
-                for (let k = 0; k < shCoeffs.length; ++k) {
-                    row[shNames[k + j * shCoeffs.length]] = shCoeffs[k];
-                }
-            }
-        }
-
-        dataTable.setRow(i, row);
-    }
-};
-
 export {
-    Transform,
-    transform,
     transformColumns,
     computeWriteTransform,
     convertToSpace,

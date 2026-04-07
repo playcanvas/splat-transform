@@ -3,7 +3,8 @@ import { Vec3 } from 'playcanvas';
 
 import type { DeviceCreator } from './write-sog';
 import { Column, DataTable } from '../data-table/data-table';
-import { computeWriteTransform, Transform, transformColumns } from '../data-table/transform';
+import { computeWriteTransform, transformColumns } from '../data-table/transform';
+import { Transform } from '../utils/math';
 import { type FileSystem, writeFile } from '../io/write';
 import { logger } from '../utils/logger';
 import { buildCollisionGlb } from '../voxel/collision-glb';

@@ -4,7 +4,8 @@ import { Column, DataTable } from './data-table/data-table';
 import { simplifyGaussians } from './data-table/decimate';
 import { sortMortonOrder } from './data-table/morton-order';
 import { computeSummary, type SummaryData } from './data-table/summary';
-import { Transform, transformAABB } from './data-table/transform';
+import { transformAABB } from './data-table/transform';
+import { Transform } from './utils/math';
 import { logger } from './utils/logger';
 
 /**
