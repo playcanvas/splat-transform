@@ -1,6 +1,6 @@
 import { Mat3, Mat4, Quat, Vec3 } from 'playcanvas';
 
-import { DataTable, TypedArray } from './data-table';
+import { Column, DataTable, TypedArray } from './data-table';
 import { Transform } from '../utils/math';
 import { RotateSH } from '../utils/rotate-sh';
 
@@ -140,39 +140,37 @@ const transformColumns = (dataTable: DataTable, columnNames: string[], delta: Tr
         const rotateSH = new RotateSH(mat3);
         const shCoeffs = new Float32Array(shCoeffsPerChannel);
 
-        const shData: Float32Array[][] = [];
+        const shSrc: Float32Array[][] = [];
+        const shDst: Float32Array[][] = [];
         for (let j = 0; j < 3; ++j) {
-            const channelSrc: Float32Array[] = [];
-            const channelDst: Float32Array[] = [];
+            const src: Float32Array[] = [];
+            const dst: Float32Array[] = [];
             for (let k = 0; k < shCoeffsPerChannel; ++k) {
                 const name = shNames[k + j * shCoeffsPerChannel];
-                channelSrc.push(dataTable.getColumnByName(name)!.data as Float32Array);
-                channelDst.push(new Float32Array(numRows));
+                src.push(dataTable.getColumnByName(name)!.data as Float32Array);
+                dst.push(new Float32Array(numRows));
             }
-            shData.push(channelSrc);
-            shData.push(channelDst);
+            shSrc.push(src);
+            shDst.push(dst);
         }
 
         for (let i = 0; i < numRows; ++i) {
             for (let j = 0; j < 3; ++j) {
-                const channelSrc = shData[j * 2];
-                const channelDst = shData[j * 2 + 1];
                 for (let k = 0; k < shCoeffsPerChannel; ++k) {
-                    shCoeffs[k] = channelSrc[k][i];
+                    shCoeffs[k] = shSrc[j][k][i];
                 }
                 rotateSH.apply(shCoeffs);
                 for (let k = 0; k < shCoeffsPerChannel; ++k) {
-                    channelDst[k][i] = shCoeffs[k];
+                    shDst[j][k][i] = shCoeffs[k];
                 }
             }
         }
 
         for (let j = 0; j < 3; ++j) {
-            const channelDst = shData[j * 2 + 1];
             for (let k = 0; k < shCoeffsPerChannel; ++k) {
                 const name = shNames[k + j * shCoeffsPerChannel];
                 if (columnNames.includes(name)) {
-                    result.set(name, channelDst[k]);
+                    result.set(name, shDst[j][k]);
                 }
             }
         }
@@ -238,6 +236,22 @@ const inverseTransformAABB = (t: Transform, min: Vec3, max: Vec3): void => {
         min.min(corners[i]);
         max.max(corners[i]);
     }
+};
+
+/**
+ * Returns a new DataTable with column data converted to the target coordinate
+ * space. If the DataTable is already in that space, returns it unchanged.
+ *
+ * @param dataTable - The source DataTable.
+ * @param targetTransform - The desired coordinate-space transform.
+ * @returns A DataTable whose raw data is in the target coordinate space.
+ */
+const convertToSpace = (dataTable: DataTable, targetTransform: Transform): DataTable => {
+    const delta = computeWriteTransform(dataTable.transform, targetTransform);
+    if (!delta) return dataTable;
+    const allNames = dataTable.columnNames;
+    const cols = transformColumns(dataTable, allNames, delta);
+    return new DataTable(allNames.map(name => new Column(name, cols.get(name)!)), targetTransform);
 };
 
 // -- Legacy in-place transform function --
@@ -321,6 +335,7 @@ export {
     transform,
     transformColumns,
     computeWriteTransform,
+    convertToSpace,
     inverseTransformPoint,
     inverseTransformAABB
 };

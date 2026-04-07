@@ -1,9 +1,7 @@
-import { Column, DataTable } from './data-table/data-table';
-import { computeWriteTransform, transformColumns } from './data-table/transform';
+import { DataTable } from './data-table/data-table';
 import { type FileSystem } from './io/write';
 import { Options } from './types';
 import { logger } from './utils/logger';
-import { Transform } from './utils/math';
 import { writeCompressedPly } from './writers/write-compressed-ply';
 import { writeCsv } from './writers/write-csv';
 import { writeGlb } from './writers/write-glb';
@@ -108,20 +106,6 @@ const getOutputFormat = (filename: string, options: Options): OutputFormat => {
  * }, fs);
  * ```
  */
-/**
- * @param dataTable - The source DataTable.
- * @param formatTransform - The target format's expected transform.
- * @returns A DataTable with column data in the target format's coordinate space.
- * @ignore
- */
-const applyWriteTransform = (dataTable: DataTable, formatTransform: Transform): DataTable => {
-    const delta = computeWriteTransform(dataTable.transform, formatTransform);
-    if (!delta) return dataTable;
-    const allNames = dataTable.columnNames;
-    const cols = transformColumns(dataTable, allNames, delta);
-    return new DataTable(allNames.map(name => new Column(name, cols.get(name)!)));
-};
-
 const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
     const { filename, outputFormat, dataTable, envDataTable, options, createDevice } = writeOptions;
 
@@ -154,7 +138,7 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
             }, fs);
             break;
         case 'compressed-ply':
-            await writeCompressedPly({ filename, dataTable: applyWriteTransform(dataTable, Transform.PLY) }, fs);
+            await writeCompressedPly({ filename, dataTable }, fs);
             break;
         case 'ply':
             await writePly({
@@ -163,13 +147,13 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
                     comments: [],
                     elements: [{
                         name: 'vertex',
-                        dataTable: applyWriteTransform(dataTable, Transform.PLY)
+                        dataTable
                     }]
                 }
             }, fs);
             break;
         case 'glb':
-            await writeGlb({ filename, dataTable: applyWriteTransform(dataTable, Transform.IDENTITY) }, fs);
+            await writeGlb({ filename, dataTable }, fs);
             break;
         case 'html':
         case 'html-bundle':

@@ -3,7 +3,7 @@ export { Column, DataTable } from './data-table/data-table';
 export type { TypedArray, ColumnType, Row } from './data-table/data-table';
 export { combine } from './data-table/combine';
 export { Transform } from './utils/math';
-export { transform, transformColumns, computeWriteTransform, inverseTransformPoint, inverseTransformAABB } from './data-table/transform';
+export { convertToSpace } from './data-table/transform';
 export { computeSummary } from './data-table/summary';
 export type { ColumnStats, SummaryData } from './data-table/summary';
 export { sortMortonOrder } from './data-table/morton-order';

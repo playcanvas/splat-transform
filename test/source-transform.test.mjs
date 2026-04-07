@@ -10,13 +10,16 @@ import {
     Column,
     DataTable,
     Transform,
-    transformColumns,
-    computeWriteTransform,
-    inverseTransformPoint,
-    inverseTransformAABB,
     combine,
     processDataTable
 } from '../src/lib/index.js';
+
+import {
+    transformColumns,
+    computeWriteTransform,
+    inverseTransformPoint,
+    inverseTransformAABB
+} from '../src/lib/data-table/transform.js';
 
 import { createMinimalTestData } from './helpers/test-utils.mjs';
 import { assertClose } from './helpers/summary-compare.mjs';

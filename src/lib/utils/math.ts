@@ -40,25 +40,40 @@ class Transform {
     }
 
     /**
+     * Tests whether this transform equals another within the given tolerance.
+     * Quaternion comparison accounts for double-cover (q and -q represent
+     * the same rotation).
+     *
+     * @param other - The transform to compare against.
+     * @param epsilon - Floating-point tolerance. Defaults to 1e-6.
+     * @returns True if the transforms are equal within the tolerance.
+     */
+    equals(other: Transform, epsilon = 1e-6): boolean {
+        const ta = this.translation;
+        const tb = other.translation;
+        if (Math.abs(ta.x - tb.x) > epsilon || Math.abs(ta.y - tb.y) > epsilon || Math.abs(ta.z - tb.z) > epsilon) {
+            return false;
+        }
+        const ra = this.rotation;
+        const rb = other.rotation;
+        const dot = ra.x * rb.x + ra.y * rb.y + ra.z * rb.z + ra.w * rb.w;
+        if (Math.abs(dot) < 1 - epsilon) {
+            return false;
+        }
+        if (Math.abs(this.scale - other.scale) > epsilon) {
+            return false;
+        }
+        return true;
+    }
+
+    /**
      * Tests whether this transform is effectively identity within the given tolerance.
      *
      * @param epsilon - Floating-point tolerance. Defaults to 1e-6.
      * @returns True if identity within the tolerance.
      */
     isIdentity(epsilon = 1e-6): boolean {
-        const t = this.translation;
-        const r = this.rotation;
-        if (Math.abs(t.x) > epsilon || Math.abs(t.y) > epsilon || Math.abs(t.z) > epsilon) {
-            return false;
-        }
-        // identity quaternion is (0, 0, 0, 1) or (0, 0, 0, -1)
-        if (Math.abs(r.x) > epsilon || Math.abs(r.y) > epsilon || Math.abs(r.z) > epsilon || Math.abs(Math.abs(r.w) - 1) > epsilon) {
-            return false;
-        }
-        if (Math.abs(this.scale - 1) > epsilon) {
-            return false;
-        }
-        return true;
+        return this.equals(Transform.IDENTITY, epsilon);
     }
 
     /**

@@ -1,3 +1,4 @@
+import { convertToSpace, Transform } from '../data-table/transform';
 import { type FileSystem } from '../io/write';
 import { PlyData } from '../readers/read-ply';
 
@@ -30,7 +31,14 @@ type WritePlyOptions = {
  * @ignore
  */
 const writePly = async (options: WritePlyOptions, fs: FileSystem) => {
-    const { filename, plyData } = options;
+    const { filename } = options;
+    const plyData: PlyData = {
+        ...options.plyData,
+        elements: options.plyData.elements.map(e => ({
+            ...e,
+            dataTable: convertToSpace(e.dataTable, Transform.PLY)
+        }))
+    };
 
     const header = [
         'ply',

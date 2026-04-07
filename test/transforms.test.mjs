@@ -11,10 +11,13 @@ import {
     processDataTable,
     Column,
     DataTable,
-    Transform,
+    Transform
+} from '../src/lib/index.js';
+
+import {
     transformColumns,
     computeWriteTransform
-} from '../src/lib/index.js';
+} from '../src/lib/data-table/transform.js';
 
 import { createMinimalTestData } from './helpers/test-utils.mjs';
 import { assertClose } from './helpers/summary-compare.mjs';

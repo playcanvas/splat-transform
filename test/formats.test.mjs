@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import {
     Column,
     DataTable,
+    Transform,
     computeSummary,
     getInputFormat,
     readFile,
@@ -172,6 +173,7 @@ describe('PLY Format', () => {
 
     before(() => {
         testData = createMinimalTestData();
+        testData.transform = Transform.PLY.clone();
         plyBytes = encodePlyBinary(testData);
         expectedSummary = computeSummary(testData);
     });
@@ -217,6 +219,7 @@ describe('Compressed PLY Format', () => {
 
     before(() => {
         testData = createMinimalTestData();
+        testData.transform = Transform.PLY.clone();
         expectedSummary = computeSummary(testData);
     });
 

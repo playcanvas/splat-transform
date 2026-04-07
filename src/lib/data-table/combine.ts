@@ -1,5 +1,5 @@
 import { Column, DataTable, TypedArray } from './data-table';
-import { computeWriteTransform, Transform, transformColumns } from './transform';
+import { convertToSpace, Transform } from './transform';
 import { logger } from '../utils/logger';
 
 /**
@@ -28,23 +28,14 @@ const combine = (dataTables: DataTable[]) : DataTable => {
 
     // Check if all transforms match the first table's transform
     const refTransform = dataTables[0].transform;
-    const allMatch = dataTables.every((dt) => {
-        const delta = computeWriteTransform(dt.transform, refTransform);
-        return !delta;
-    });
+    const allMatch = dataTables.every(dt => dt.transform.equals(refTransform));
 
     let tables = dataTables;
     let resultTransform = refTransform;
 
     if (!allMatch) {
         logger.warn('Combining DataTables with different source transforms; converting to engine space.');
-        tables = dataTables.map((dt) => {
-            const delta = computeWriteTransform(dt.transform, Transform.IDENTITY);
-            if (!delta) return dt;
-            const allNames = dt.columnNames;
-            const cols = transformColumns(dt, allNames, delta);
-            return new DataTable(allNames.map(name => new Column(name, cols.get(name)!)));
-        });
+        tables = dataTables.map(dt => convertToSpace(dt, Transform.IDENTITY));
         resultTransform = Transform.IDENTITY;
     }
 

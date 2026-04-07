@@ -4,7 +4,7 @@ import { GraphicsDevice } from 'playcanvas';
 import { version } from '../../../package.json';
 import { Column, DataTable } from '../data-table/data-table';
 import { sortMortonOrder } from '../data-table/morton-order';
-import { computeWriteTransform, transformColumns } from '../data-table/transform';
+import { convertToSpace } from '../data-table/transform';
 import { type FileSystem, writeFile, ZipFileSystem } from '../io/write';
 import { kmeans } from '../spatial/k-means';
 import { quantize1d } from '../spatial/quantize-1d';
@@ -84,15 +84,7 @@ type WriteSogOptions = {
  */
 const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     const { filename: outputFilename, bundle, iterations, createDevice } = options;
-    let { dataTable } = options;
-
-    // Transform data into engine coordinate space for SOG output
-    const delta = computeWriteTransform(dataTable.transform, Transform.IDENTITY);
-    if (delta) {
-        const allNames = dataTable.columnNames;
-        const cols = transformColumns(dataTable, allNames, delta);
-        dataTable = new DataTable(allNames.map(name => new Column(name, cols.get(name)!)));
-    }
+    const dataTable = convertToSpace(options.dataTable, Transform.IDENTITY);
 
     // initialize output stream - use ZipFileSystem for bundled output
     const zipFs = bundle ? new ZipFileSystem(await fs.createWriter(outputFilename)) : null;
