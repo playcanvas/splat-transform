@@ -14,7 +14,7 @@ const _tv = new Vec3();
  * const t = new Transform().fromEulers(0, 0, 180);
  * console.log(t.isIdentity()); // false
  *
- * const inv = new Transform().invert(t);
+ * const inv = t.clone().invert();
  * console.log(t.mul(inv).isIdentity()); // true
  * ```
  */
@@ -30,13 +30,27 @@ class Transform {
     }
 
     /**
-     * Fills the provided Mat4 with the TRS matrix for this transform.
+     * Sets this transform to a rotation-only transform from Euler angles in degrees.
      *
-     * @param result - The Mat4 to fill.
-     * @returns The filled Mat4.
+     * @param x - Rotation around X axis in degrees.
+     * @param y - Rotation around Y axis in degrees.
+     * @param z - Rotation around Z axis in degrees.
+     * @returns This transform (for chaining).
      */
-    getMatrix(result: Mat4): Mat4 {
-        return result.setTRS(this.translation, this.rotation, new Vec3(this.scale, this.scale, this.scale));
+    fromEulers(x: number, y: number, z: number): Transform {
+        this.translation.set(0, 0, 0);
+        this.rotation.setFromEulerAngles(x, y, z);
+        this.scale = 1;
+        return this;
+    }
+
+    /**
+     * Creates a deep copy of this transform.
+     *
+     * @returns A new Transform with the same values.
+     */
+    clone(): Transform {
+        return new Transform(this.translation, this.rotation, this.scale);
     }
 
     /**
@@ -77,24 +91,14 @@ class Transform {
     }
 
     /**
-     * Creates a deep copy of this transform.
+     * Inverts this transform in-place.
      *
-     * @returns A new Transform with the same values.
-     */
-    clone(): Transform {
-        return new Transform(this.translation, this.rotation, this.scale);
-    }
-
-    /**
-     * Sets this transform to the inverse of the given source transform.
-     *
-     * @param src - The transform to invert. Defaults to this (in-place).
      * @returns This transform (for chaining).
      */
-    invert(src: Transform = this): Transform {
-        this.scale = 1 / src.scale;
-        this.rotation.copy(src.rotation).invert();
-        this.translation.copy(src.translation).mulScalar(-this.scale);
+    invert(): Transform {
+        this.scale = 1 / this.scale;
+        this.rotation.invert();
+        this.translation.mulScalar(-this.scale);
         this.rotation.transformVector(this.translation, this.translation);
         return this;
     }
@@ -129,18 +133,27 @@ class Transform {
     }
 
     /**
-     * Sets this transform to a rotation-only transform from Euler angles in degrees.
+     * Transforms a point by this TRS transform: result = translation + rotation * (scale * point).
      *
-     * @param x - Rotation around X axis in degrees.
-     * @param y - Rotation around Y axis in degrees.
-     * @param z - Rotation around Z axis in degrees.
-     * @returns This transform (for chaining).
+     * @param point - The input point.
+     * @param result - The Vec3 to write the result into (may alias point).
+     * @returns The transformed point.
      */
-    fromEulers(x: number, y: number, z: number): Transform {
-        this.translation.set(0, 0, 0);
-        this.rotation.setFromEulerAngles(x, y, z);
-        this.scale = 1;
-        return this;
+    transformPoint(point: Vec3, result: Vec3): Vec3 {
+        result.copy(point).mulScalar(this.scale);
+        this.rotation.transformVector(result, result);
+        result.add(this.translation);
+        return result;
+    }
+
+    /**
+     * Fills the provided Mat4 with the TRS matrix for this transform.
+     *
+     * @param result - The Mat4 to fill.
+     * @returns The filled Mat4.
+     */
+    getMatrix(result: Mat4): Mat4 {
+        return result.setTRS(this.translation, this.rotation, new Vec3(this.scale, this.scale, this.scale));
     }
 
     static freeze(t: Transform): Readonly<Transform> {

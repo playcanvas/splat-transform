@@ -17,8 +17,7 @@ import {
 import {
     transformColumns,
     computeWriteTransform,
-    inverseTransformPoint,
-    inverseTransformAABB
+    transformAABB
 } from '../src/lib/data-table/transform.js';
 
 import { createMinimalTestData } from './helpers/test-utils.mjs';
@@ -86,13 +85,13 @@ describe('Transform class', () => {
 
     it('invert produces correct inverse', () => {
         const t = new Transform(new Vec3(1, 2, 3), new Quat().setFromEulerAngles(30, 45, 60), 2);
-        const inv = new Transform().invert(t);
+        const inv = t.clone().invert();
         const composed = t.mul(inv);
         assert.ok(composed.isIdentity(1e-5), 'T * T^-1 should be identity');
     });
 
     it('invert of identity is identity', () => {
-        const inv = new Transform().invert(Transform.IDENTITY);
+        const inv = Transform.IDENTITY.clone().invert();
         assert.ok(inv.isIdentity(), 'inverse of identity should be identity');
     });
 
@@ -136,7 +135,7 @@ describe('Transform class', () => {
 
     it('euler(0,0,180) is self-inverse', () => {
         const t = new Transform().fromEulers(0, 0, 180);
-        const inv = new Transform().invert(t);
+        const inv = t.clone().invert();
         const composed = t.clone().mul(inv);
         assert.ok(composed.isIdentity(1e-5), 'euler(0,0,180) * inverse should be identity');
 
@@ -229,42 +228,40 @@ describe('transformColumns', () => {
     });
 });
 
-// -- inverseTransformPoint & inverseTransformAABB --
+// -- Transform.transformPoint & transformAABB --
 
-describe('inverseTransformPoint', () => {
+describe('Transform.transformPoint', () => {
     it('with identity transform is no-op', () => {
         const point = new Vec3(1, 2, 3);
-        inverseTransformPoint(Transform.IDENTITY, point);
+        Transform.IDENTITY.transformPoint(point, point);
         assertClose(point.x, 1, 1e-10, 'x');
         assertClose(point.y, 2, 1e-10, 'y');
         assertClose(point.z, 3, 1e-10, 'z');
     });
 
-    it('with PLY transform negates x and y', () => {
+    it('inverse of PLY transform negates x and y', () => {
         const point = new Vec3(1, 2, 3);
-        inverseTransformPoint(Transform.PLY, point);
+        Transform.PLY.clone().invert().transformPoint(point, point);
         assertClose(point.x, -1, 1e-5, 'x');
         assertClose(point.y, -2, 1e-5, 'y');
         assertClose(point.z, 3, 1e-5, 'z');
     });
 });
 
-describe('inverseTransformAABB', () => {
+describe('transformAABB', () => {
     it('with identity transform is no-op', () => {
         const min = new Vec3(-1, -2, -3);
         const max = new Vec3(1, 2, 3);
-        inverseTransformAABB(Transform.IDENTITY, min, max);
+        transformAABB(Transform.IDENTITY, min, max);
         assertClose(min.x, -1, 1e-10, 'min.x');
         assertClose(max.x, 1, 1e-10, 'max.x');
     });
 
-    it('with PLY transform swaps min/max for x and y', () => {
+    it('with inverse PLY transform swaps min/max for x and y', () => {
         const min = new Vec3(-1, -2, -3);
         const max = new Vec3(3, 4, 5);
-        inverseTransformAABB(Transform.PLY, min, max);
+        transformAABB(Transform.PLY.clone().invert(), min, max);
 
-        // After negating x and y, then computing AABB:
-        // x: [-3, 1] -> negated -> [-1, 3] -> AABB min=-3, max=1
         assertClose(min.x, -3, 1e-5, 'min.x');
         assertClose(max.x, 1, 1e-5, 'max.x');
         assertClose(min.y, -4, 1e-5, 'min.y');

@@ -4,7 +4,7 @@ import { Column, DataTable } from './data-table/data-table';
 import { simplifyGaussians } from './data-table/decimate';
 import { sortMortonOrder } from './data-table/morton-order';
 import { computeSummary, type SummaryData } from './data-table/summary';
-import { Transform, inverseTransformPoint, inverseTransformAABB } from './data-table/transform';
+import { Transform, transformAABB } from './data-table/transform';
 import { logger } from './utils/logger';
 
 /**
@@ -390,7 +390,7 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
                 const rawMin = processAction.min.clone();
                 const rawMax = processAction.max.clone();
                 if (!result.transform.isIdentity()) {
-                    inverseTransformAABB(result.transform, rawMin, rawMax);
+                    transformAABB(result.transform.clone().invert(), rawMin, rawMax);
                 }
                 const predicate = (row: any, rowIndex: number) => {
                     const { x, y, z } = row;
@@ -403,7 +403,7 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
                 const rawCenter = processAction.center.clone();
                 let rawRadius = processAction.radius;
                 if (!result.transform.isIdentity()) {
-                    inverseTransformPoint(result.transform, rawCenter);
+                    result.transform.clone().invert().transformPoint(rawCenter, rawCenter);
                     rawRadius /= result.transform.scale;
                 }
                 const radiusSq = rawRadius * rawRadius;

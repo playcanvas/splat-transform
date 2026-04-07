@@ -1,4 +1,4 @@
-import { Mat3, Mat4, Quat, Vec3 } from 'playcanvas';
+import { Mat3, Quat, Vec3 } from 'playcanvas';
 
 import { Column, DataTable, TypedArray } from './data-table';
 import { Transform } from '../utils/math';
@@ -20,7 +20,7 @@ const _q = new Quat();
  * @returns The delta transform to apply to raw data, or null if it is identity.
  */
 const computeWriteTransform = (transform: Transform, outputFormatTransform: Transform): Transform | null => {
-    const delta = new Transform().invert(outputFormatTransform).mul(transform);
+    const delta = outputFormatTransform.clone().invert().mul(transform);
     return delta.isIdentity() ? null : delta;
 };
 
@@ -54,9 +54,6 @@ const transformColumns = (dataTable: DataTable, columnNames: string[], delta: Tr
     }
 
     const numRows = dataTable.numRows;
-    const mat = new Mat4();
-    delta.getMatrix(mat);
-
     const r = delta.rotation;
     const s = delta.scale;
 
@@ -84,7 +81,7 @@ const transformColumns = (dataTable: DataTable, columnNames: string[], delta: Tr
 
         for (let i = 0; i < numRows; ++i) {
             _v.set(srcX[i], srcY[i], srcZ[i]);
-            mat.transformPoint(_v, _v);
+            delta.transformPoint(_v, _v);
             dstX[i] = _v.x;
             dstY[i] = _v.y;
             dstZ[i] = _v.z;
@@ -188,34 +185,15 @@ const transformColumns = (dataTable: DataTable, columnNames: string[], delta: Tr
 };
 
 /**
- * Transforms a point from engine space to raw data space using the inverse
- * of the given source transform.
+ * Transforms an AABB by the given transform. The result is a
+ * (possibly conservative) axis-aligned bounding box that contains
+ * the transformed box.
  *
- * @param t - The source transform (source -> engine).
- * @param point - The point in engine space (modified in-place).
- * @returns The point in raw data space.
+ * @param t - The transform to apply.
+ * @param min - The AABB minimum (modified in-place to output min).
+ * @param max - The AABB maximum (modified in-place to output max).
  */
-const inverseTransformPoint = (t: Transform, point: Vec3): Vec3 => {
-    const inv = new Transform().invert(t);
-    const mat = new Mat4();
-    inv.getMatrix(mat);
-    mat.transformPoint(point, point);
-    return point;
-};
-
-/**
- * Transforms an AABB from engine space to raw data space. The result is
- * a (possibly conservative) AABB that contains the transformed box.
- *
- * @param t - The source transform (source -> engine).
- * @param min - The AABB minimum in engine space (modified in-place to output min).
- * @param max - The AABB maximum in engine space (modified in-place to output max).
- */
-const inverseTransformAABB = (t: Transform, min: Vec3, max: Vec3): void => {
-    const inv = new Transform().invert(t);
-    const mat = new Mat4();
-    inv.getMatrix(mat);
-
+const transformAABB = (t: Transform, min: Vec3, max: Vec3): void => {
     const corners = [
         new Vec3(min.x, min.y, min.z),
         new Vec3(max.x, min.y, min.z),
@@ -227,12 +205,12 @@ const inverseTransformAABB = (t: Transform, min: Vec3, max: Vec3): void => {
         new Vec3(max.x, max.y, max.z)
     ];
 
-    mat.transformPoint(corners[0], corners[0]);
+    t.transformPoint(corners[0], corners[0]);
     min.copy(corners[0]);
     max.copy(corners[0]);
 
     for (let i = 1; i < 8; ++i) {
-        mat.transformPoint(corners[i], corners[i]);
+        t.transformPoint(corners[i], corners[i]);
         min.min(corners[i]);
         max.max(corners[i]);
     }
@@ -276,7 +254,7 @@ const convertToSpace = (dataTable: DataTable, targetTransform: Transform): DataT
  * ```
  */
 const transform = (dataTable: DataTable, t: Vec3, r: Quat, s: number): void => {
-    const mat = new Mat4().setTRS(t, r, new Vec3(s, s, s));
+    const xform = new Transform(t, r, s);
     const mat3 = new Mat3().setFromQuat(r);
     const rotateSH = new RotateSH(mat3);
 
@@ -292,7 +270,7 @@ const transform = (dataTable: DataTable, t: Vec3, r: Quat, s: number): void => {
 
         if (hasTranslation) {
             _v.set(row.x, row.y, row.z);
-            mat.transformPoint(_v, _v);
+            xform.transformPoint(_v, _v);
             row.x = _v.x;
             row.y = _v.y;
             row.z = _v.z;
@@ -336,6 +314,5 @@ export {
     transformColumns,
     computeWriteTransform,
     convertToSpace,
-    inverseTransformPoint,
-    inverseTransformAABB
+    transformAABB
 };
