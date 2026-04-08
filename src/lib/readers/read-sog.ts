@@ -216,7 +216,7 @@ const readSog = async (fileSystem: ReadFileSystem, filename: string): Promise<Da
         }
     }
 
-    return new DataTable(columns, meta.version >= 3 ? undefined : Transform.PLY);
+    return new DataTable(columns, Transform.PLY);
 };
 
 export { readSog };

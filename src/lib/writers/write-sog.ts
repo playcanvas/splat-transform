@@ -84,7 +84,7 @@ type WriteSogOptions = {
  */
 const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     const { filename: outputFilename, bundle, iterations, createDevice } = options;
-    const dataTable = convertToSpace(options.dataTable, Transform.IDENTITY);
+    const dataTable = convertToSpace(options.dataTable, Transform.PLY);
 
     // initialize output stream - use ZipFileSystem for bundled output
     const zipFs = bundle ? new ZipFileSystem(await fs.createWriter(outputFilename)) : null;
@@ -343,7 +343,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
 
     // construct meta.json
     const meta: any = {
-        version: 3,
+        version: 2,
         asset: {
             generator: `splat-transform v${version}`
         },

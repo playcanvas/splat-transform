@@ -253,6 +253,7 @@ describe('SOG Format (Bundled)', () => {
 
     before(() => {
         testData = createMinimalTestData();
+        testData.transform = Transform.PLY.clone();
         expectedSummary = computeSummary(testData);
     });
 
@@ -300,6 +301,7 @@ describe('SOG Format (Unbundled)', () => {
 
     before(() => {
         testData = createMinimalTestData();
+        testData.transform = Transform.PLY.clone();
         expectedSummary = computeSummary(testData);
     });
 
