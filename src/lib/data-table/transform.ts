@@ -62,13 +62,15 @@ const transformColumns = (dataTable: DataTable, columnNames: string[], delta: Tr
     const rotNames = ['rot_0', 'rot_1', 'rot_2', 'rot_3'];
     const scaleNames = ['scale_0', 'scale_1', 'scale_2'];
 
-    const needPos = posNames.every(n => columnNames.includes(n) && dataTable.hasColumn(n));
+    const hasPos = posNames.every(n => dataTable.hasColumn(n));
+    const needPos = hasPos && posNames.some(n => columnNames.includes(n));
     const needRot = rotNames.every(n => columnNames.includes(n) && dataTable.hasColumn(n));
     const needScale = scaleNames.some(n => columnNames.includes(n) && dataTable.hasColumn(n)) && s !== 1;
 
     const shBands = detectSHBands(dataTable);
     const shCoeffsPerChannel = [0, 3, 8, 15][shBands];
-    const requestedSH = shBands > 0 && shNames.slice(0, shCoeffsPerChannel * 3).some(n => columnNames.includes(n));
+    const rotIsIdentity = Math.abs(Math.abs(r.w) - 1) < 1e-6;
+    const requestedSH = shBands > 0 && !rotIsIdentity && shNames.slice(0, shCoeffsPerChannel * 3).some(n => columnNames.includes(n));
 
     // Position columns
     if (needPos) {
@@ -87,9 +89,9 @@ const transformColumns = (dataTable: DataTable, columnNames: string[], delta: Tr
             dstZ[i] = _v.z;
         }
 
-        result.set('x', dstX);
-        result.set('y', dstY);
-        result.set('z', dstZ);
+        if (columnNames.includes('x')) result.set('x', dstX);
+        if (columnNames.includes('y')) result.set('y', dstY);
+        if (columnNames.includes('z')) result.set('z', dstZ);
     }
 
     // Rotation columns

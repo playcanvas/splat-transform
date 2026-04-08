@@ -97,6 +97,9 @@ class Transform {
      * @returns This transform (for chaining).
      */
     invert(): Transform {
+        if (this.scale === 0) {
+            throw new Error('Cannot invert a Transform with scale 0');
+        }
         this.scale = 1 / this.scale;
         this.rotation.invert();
         this.translation.mulScalar(-this.scale);
