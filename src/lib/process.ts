@@ -1,4 +1,4 @@
-import { Quat, Vec3 } from 'playcanvas';
+import { Vec3 } from 'playcanvas';
 
 import { Column, DataTable } from './data-table/data-table';
 import { simplifyGaussians } from './data-table/decimate';
