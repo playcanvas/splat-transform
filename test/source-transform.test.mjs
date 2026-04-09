@@ -16,8 +16,7 @@ import {
 
 import {
     transformColumns,
-    computeWriteTransform,
-    transformAABB
+    computeWriteTransform
 } from '../src/lib/data-table/transform.js';
 
 import { createMinimalTestData } from './helpers/test-utils.mjs';
@@ -228,7 +227,7 @@ describe('transformColumns', () => {
     });
 });
 
-// -- Transform.transformPoint & transformAABB --
+// -- Transform.transformPoint --
 
 describe('Transform.transformPoint', () => {
     it('with identity transform is no-op', () => {
@@ -245,29 +244,6 @@ describe('Transform.transformPoint', () => {
         assertClose(point.x, -1, 1e-5, 'x');
         assertClose(point.y, -2, 1e-5, 'y');
         assertClose(point.z, 3, 1e-5, 'z');
-    });
-});
-
-describe('transformAABB', () => {
-    it('with identity transform is no-op', () => {
-        const min = new Vec3(-1, -2, -3);
-        const max = new Vec3(1, 2, 3);
-        transformAABB(Transform.IDENTITY, min, max);
-        assertClose(min.x, -1, 1e-10, 'min.x');
-        assertClose(max.x, 1, 1e-10, 'max.x');
-    });
-
-    it('with inverse PLY transform swaps min/max for x and y', () => {
-        const min = new Vec3(-1, -2, -3);
-        const max = new Vec3(3, 4, 5);
-        transformAABB(Transform.PLY.clone().invert(), min, max);
-
-        assertClose(min.x, -3, 1e-5, 'min.x');
-        assertClose(max.x, 1, 1e-5, 'max.x');
-        assertClose(min.y, -4, 1e-5, 'min.y');
-        assertClose(max.y, 2, 1e-5, 'max.y');
-        assertClose(min.z, -3, 1e-5, 'min.z');
-        assertClose(max.z, 5, 1e-5, 'max.z');
     });
 });
 

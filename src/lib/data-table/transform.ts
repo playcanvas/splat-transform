@@ -187,34 +187,6 @@ const transformColumns = (dataTable: DataTable, columnNames: string[], delta: Tr
 };
 
 /**
- * Transforms an AABB by the given transform. The result is a
- * (possibly conservative) axis-aligned bounding box that contains
- * the transformed box.
- *
- * @param t - The transform to apply.
- * @param min - The AABB minimum (modified in-place to output min).
- * @param max - The AABB maximum (modified in-place to output max).
- */
-const _aabbCorner = new Vec3();
-const _aabbResult = new Vec3();
-
-const transformAABB = (t: Transform, min: Vec3, max: Vec3): void => {
-    const extents = [min.x, max.x, min.y, max.y, min.z, max.z];
-
-    _aabbCorner.set(extents[0], extents[2], extents[4]);
-    t.transformPoint(_aabbCorner, _aabbResult);
-    min.copy(_aabbResult);
-    max.copy(_aabbResult);
-
-    for (let i = 1; i < 8; ++i) {
-        _aabbCorner.set(extents[i & 1], extents[2 + ((i >> 1) & 1)], extents[4 + ((i >> 2) & 1)]);
-        t.transformPoint(_aabbCorner, _aabbResult);
-        min.min(_aabbResult);
-        max.max(_aabbResult);
-    }
-};
-
-/**
  * Returns a new DataTable with column data converted to the target coordinate
  * space. If the DataTable is already in that space, returns it unchanged.
  *
@@ -233,6 +205,5 @@ const convertToSpace = (dataTable: DataTable, targetTransform: Transform): DataT
 export {
     transformColumns,
     computeWriteTransform,
-    convertToSpace,
-    transformAABB
+    convertToSpace
 };

@@ -260,6 +260,27 @@ describe('Filter Box', () => {
 
         assert.strictEqual(result.numRows, 0, 'Should have no rows');
     });
+
+    it('should use exact oriented box test with non-axis-aligned rotation', () => {
+        const dt = new DataTable([
+            new Column('x', new Float32Array([0, 1, 0, 0.9, -0.9])),
+            new Column('y', new Float32Array([0, 0, 0, 0, 0])),
+            new Column('z', new Float32Array([0, 0, 1, 0.9, 0.9]))
+        ]);
+
+        dt.transform = new Transform().fromEulers(0, 45, 0);
+
+        // Engine-space box [-0.8, 0.8] on x and z.
+        // Points 0,1,2 map inside; points 3,4 map outside (engine x=1.27 and z=1.27).
+        // A conservative AABB approach would incorrectly include points 3 and 4.
+        const result = processDataTable(dt, [{
+            kind: 'filterBox',
+            min: new Vec3(-0.8, -Infinity, -0.8),
+            max: new Vec3(0.8, Infinity, 0.8)
+        }]);
+
+        assert.strictEqual(result.numRows, 3, 'Should keep exactly 3 points (exact OBB, not conservative AABB)');
+    });
 });
 
 describe('Filter Sphere', () => {

@@ -4,7 +4,7 @@ import { Column, DataTable } from './data-table/data-table';
 import { simplifyGaussians } from './data-table/decimate';
 import { sortMortonOrder } from './data-table/morton-order';
 import { computeSummary, type SummaryData } from './data-table/summary';
-import { convertToSpace, transformAABB } from './data-table/transform';
+import { convertToSpace } from './data-table/transform';
 import { logger } from './utils/logger';
 import { Transform } from './utils/math';
 
@@ -404,16 +404,47 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
                 break;
             }
             case 'filterBox': {
-                const rawMin = processAction.min.clone();
-                const rawMax = processAction.max.clone();
-                if (!result.transform.isIdentity()) {
-                    transformAABB(result.transform.clone().invert(), rawMin, rawMax);
+                const { min, max } = processAction;
+
+                if (result.transform.isIdentity()) {
+                    const predicate = (row: any) => {
+                        const { x, y, z } = row;
+                        return x >= min.x && x <= max.x &&
+                               y >= min.y && y <= max.y &&
+                               z >= min.z && z <= max.z;
+                    };
+                    result = filter(result, predicate);
+                } else {
+                    const { translation, scale } = result.transform;
+                    const invRot = result.transform.rotation.clone().invert();
+
+                    const axes = [new Vec3(1, 0, 0), new Vec3(0, 1, 0), new Vec3(0, 0, 1)];
+                    const rawAxes = axes.map((a) => {
+                        const r = new Vec3();
+                        invRot.transformVector(a, r);
+                        return r;
+                    });
+
+                    const minArr = [min.x, min.y, min.z];
+                    const maxArr = [max.x, max.y, max.z];
+                    const rawMin = new Array(3);
+                    const rawMax = new Array(3);
+                    for (let j = 0; j < 3; j++) {
+                        const dot = axes[j].dot(translation);
+                        rawMin[j] = (minArr[j] - dot) / scale;
+                        rawMax[j] = (maxArr[j] - dot) / scale;
+                    }
+
+                    const predicate = (row: any) => {
+                        const { x, y, z } = row;
+                        for (let j = 0; j < 3; j++) {
+                            const proj = rawAxes[j].x * x + rawAxes[j].y * y + rawAxes[j].z * z;
+                            if (proj < rawMin[j] || proj > rawMax[j]) return false;
+                        }
+                        return true;
+                    };
+                    result = filter(result, predicate);
                 }
-                const predicate = (row: any, rowIndex: number) => {
-                    const { x, y, z } = row;
-                    return x >= rawMin.x && x <= rawMax.x && y >= rawMin.y && y <= rawMax.y && z >= rawMin.z && z <= rawMax.z;
-                };
-                result = filter(result, predicate);
                 break;
             }
             case 'filterSphere': {
