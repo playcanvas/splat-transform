@@ -160,8 +160,8 @@ type WriteLodOptions = {
 const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
     const { filename, iterations, createDevice, chunkCount, chunkExtent } = options;
 
-    const dataTable = convertToSpace(options.dataTable, Transform.IDENTITY);
-    const envDataTable = options.envDataTable ? convertToSpace(options.envDataTable, Transform.IDENTITY) : null;
+    const dataTable = convertToSpace(options.dataTable, Transform.IDENTITY, true);
+    const envDataTable = options.envDataTable ? convertToSpace(options.envDataTable, Transform.IDENTITY, true) : null;
 
     const outputDir = dirname(filename);
 

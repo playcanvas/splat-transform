@@ -40,9 +40,10 @@ const detectSHBands = (dataTable: DataTable): number => {
  * @param dataTable - The source DataTable.
  * @param columnNames - Which columns to produce.
  * @param delta - The transform to apply. If identity or null, original arrays are returned.
+ * @param inPlace - If true, mutate the DataTable's existing column arrays instead of allocating new ones.
  * @returns A map of column name to typed array.
  */
-const transformColumns = (dataTable: DataTable, columnNames: string[], delta: Transform | null): Map<string, TypedArray> => {
+const transformColumns = (dataTable: DataTable, columnNames: string[], delta: Transform | null, inPlace = false): Map<string, TypedArray> => {
     const result = new Map<string, TypedArray>();
 
     if (!delta || delta.isIdentity()) {
@@ -77,9 +78,9 @@ const transformColumns = (dataTable: DataTable, columnNames: string[], delta: Tr
         const srcX = dataTable.getColumnByName('x')!.data;
         const srcY = dataTable.getColumnByName('y')!.data;
         const srcZ = dataTable.getColumnByName('z')!.data;
-        const dstX = new Float32Array(numRows);
-        const dstY = new Float32Array(numRows);
-        const dstZ = new Float32Array(numRows);
+        const dstX = inPlace ? srcX : new Float32Array(numRows);
+        const dstY = inPlace ? srcY : new Float32Array(numRows);
+        const dstZ = inPlace ? srcZ : new Float32Array(numRows);
 
         for (let i = 0; i < numRows; ++i) {
             _v.set(srcX[i], srcY[i], srcZ[i]);
@@ -100,10 +101,10 @@ const transformColumns = (dataTable: DataTable, columnNames: string[], delta: Tr
         const src1 = dataTable.getColumnByName('rot_1')!.data;
         const src2 = dataTable.getColumnByName('rot_2')!.data;
         const src3 = dataTable.getColumnByName('rot_3')!.data;
-        const dst0 = new Float32Array(numRows);
-        const dst1 = new Float32Array(numRows);
-        const dst2 = new Float32Array(numRows);
-        const dst3 = new Float32Array(numRows);
+        const dst0 = inPlace ? src0 : new Float32Array(numRows);
+        const dst1 = inPlace ? src1 : new Float32Array(numRows);
+        const dst2 = inPlace ? src2 : new Float32Array(numRows);
+        const dst3 = inPlace ? src3 : new Float32Array(numRows);
 
         for (let i = 0; i < numRows; ++i) {
             _q.set(src1[i], src2[i], src3[i], src0[i]).mul2(r, _q);
@@ -125,7 +126,7 @@ const transformColumns = (dataTable: DataTable, columnNames: string[], delta: Tr
         for (const name of scaleNames) {
             if (!columnNames.includes(name) || !dataTable.hasColumn(name)) continue;
             const src = dataTable.getColumnByName(name)!.data;
-            const dst = new Float32Array(numRows);
+            const dst = inPlace ? src : new Float32Array(numRows);
             for (let i = 0; i < numRows; ++i) {
                 dst[i] = src[i] + logS;
             }
@@ -146,8 +147,9 @@ const transformColumns = (dataTable: DataTable, columnNames: string[], delta: Tr
             const dst: Float32Array[] = [];
             for (let k = 0; k < shCoeffsPerChannel; ++k) {
                 const name = shNames[k + j * shCoeffsPerChannel];
-                src.push(dataTable.getColumnByName(name)!.data as Float32Array);
-                dst.push(new Float32Array(numRows));
+                const colData = dataTable.getColumnByName(name)!.data as Float32Array;
+                src.push(colData);
+                dst.push(inPlace ? colData : new Float32Array(numRows));
             }
             shSrc.push(src);
             shDst.push(dst);
@@ -187,16 +189,27 @@ const transformColumns = (dataTable: DataTable, columnNames: string[], delta: Tr
 };
 
 /**
- * Returns a new DataTable with column data converted to the target coordinate
+ * Returns a DataTable with column data converted to the target coordinate
  * space. If the DataTable is already in that space, returns it unchanged.
  *
  * @param dataTable - The source DataTable.
  * @param targetTransform - The desired coordinate-space transform.
+ * @param inPlace - If true, mutate the DataTable's column arrays and transform
+ * in place instead of allocating a new DataTable. The caller must ensure no
+ * other code depends on the original column data.
  * @returns A DataTable whose raw data is in the target coordinate space.
  */
-const convertToSpace = (dataTable: DataTable, targetTransform: Transform): DataTable => {
+const convertToSpace = (dataTable: DataTable, targetTransform: Transform, inPlace = false): DataTable => {
     const delta = computeWriteTransform(dataTable.transform, targetTransform);
     if (!delta) return dataTable;
+
+    if (inPlace) {
+        const allNames = dataTable.columnNames;
+        transformColumns(dataTable, allNames, delta, true);
+        dataTable.transform = targetTransform.clone();
+        return dataTable;
+    }
+
     const allNames = dataTable.columnNames;
     const cols = transformColumns(dataTable, allNames, delta);
     return new DataTable(allNames.map(name => new Column(name, cols.get(name)!)), targetTransform);
