@@ -39,6 +39,45 @@ const dp = (n: number, start: number, a: number[] | Float32Array, b: number[] | 
 
 const coeffsIn = new Float32Array(15);
 
+// Build a sparse representation of the SH rotation matrices. For axis-aligned
+// rotations the matrices are highly sparse, so iterating only over non-zero
+// entries is significantly faster than the full dot-product approach.
+const buildSparse = (sh1: number[][], sh2: number[][], sh3: number[][]) => {
+    const counts: number[] = [];
+    const indices: number[] = [];
+    const values: number[] = [];
+
+    const addBand = (matrix: number[][], size: number, base: number) => {
+        for (let i = 0; i < size; i++) {
+            let count = 0;
+            for (let j = 0; j < size; j++) {
+                if (Math.abs(matrix[i][j]) > 1e-10) {
+                    indices.push(base + j);
+                    values.push(matrix[i][j]);
+                    count++;
+                }
+            }
+            counts.push(count);
+        }
+    };
+
+    addBand(sh1, 3, 0);
+    addBand(sh2, 5, 3);
+    addBand(sh3, 7, 8);
+
+    return { counts, indices, values };
+};
+
+// Returns true if the rotation matrix is a signed permutation (every entry is 0 or ±1),
+// i.e. the rotation maps each axis to ±another axis (multiples of 90°).
+const isAxisAligned = (rot: Float32Array) => {
+    for (let i = 0; i < 9; i++) {
+        const a = Math.abs(rot[i]);
+        if (a > 0.01 && Math.abs(a - 1) > 0.01) return false;
+    }
+    return true;
+};
+
 // Rotate spherical harmonics up to band 3 based on https://github.com/andrewwillmott/sh-lib
 //
 // This implementation calculates the rotation factors during construction which can then
@@ -148,43 +187,85 @@ class RotateSH {
             kSqrt01_04 * ((sh1[2][2] * sh2[4][4] - sh1[2][0] * sh2[4][0]) - (sh1[0][2] * sh2[0][4] - sh1[0][0] * sh2[0][0]))
         ]];
 
-        // rotate spherical harmonic coefficients, up to band 3
-        this.apply = (result: Float32Array | number[], src?: Float32Array | number[]) => {
-            if (!src || src === result) {
-                coeffsIn.set(result);
-                src = coeffsIn;
-            }
+        if (isAxisAligned(rot)) {
+            const { counts, indices, values } = buildSparse(sh1, sh2, sh3);
 
-            // band 1
-            if (result.length < 3) {
-                return;
-            }
-            result[0] = dp(3, 0, src, sh1[0]);
-            result[1] = dp(3, 0, src, sh1[1]);
-            result[2] = dp(3, 0, src, sh1[2]);
+            this.apply = (result: Float32Array | number[], src?: Float32Array | number[]) => {
+                if (!src || src === result) {
+                    coeffsIn.set(result);
+                    src = coeffsIn;
+                }
 
-            // band 2
-            if (result.length < 8) {
-                return;
-            }
-            result[3] = dp(5, 3, src, sh2[0]);
-            result[4] = dp(5, 3, src, sh2[1]);
-            result[5] = dp(5, 3, src, sh2[2]);
-            result[6] = dp(5, 3, src, sh2[3]);
-            result[7] = dp(5, 3, src, sh2[4]);
+                let vp = 0;
 
-            // band 3
-            if (result.length < 15) {
-                return;
-            }
-            result[8]  = dp(7, 8, src, sh3[0]);
-            result[9]  = dp(7, 8, src, sh3[1]);
-            result[10] = dp(7, 8, src, sh3[2]);
-            result[11] = dp(7, 8, src, sh3[3]);
-            result[12] = dp(7, 8, src, sh3[4]);
-            result[13] = dp(7, 8, src, sh3[5]);
-            result[14] = dp(7, 8, src, sh3[6]);
-        };
+                if (result.length < 3) return;
+                for (let i = 0; i < 3; i++) {
+                    let sum = 0;
+                    for (let k = 0; k < counts[i]; k++) {
+                        sum += values[vp] * src[indices[vp]];
+                        vp++;
+                    }
+                    result[i] = sum;
+                }
+
+                if (result.length < 8) return;
+                for (let i = 0; i < 5; i++) {
+                    let sum = 0;
+                    for (let k = 0; k < counts[3 + i]; k++) {
+                        sum += values[vp] * src[indices[vp]];
+                        vp++;
+                    }
+                    result[3 + i] = sum;
+                }
+
+                if (result.length < 15) return;
+                for (let i = 0; i < 7; i++) {
+                    let sum = 0;
+                    for (let k = 0; k < counts[8 + i]; k++) {
+                        sum += values[vp] * src[indices[vp]];
+                        vp++;
+                    }
+                    result[8 + i] = sum;
+                }
+            };
+        } else {
+            this.apply = (result: Float32Array | number[], src?: Float32Array | number[]) => {
+                if (!src || src === result) {
+                    coeffsIn.set(result);
+                    src = coeffsIn;
+                }
+
+                // band 1
+                if (result.length < 3) {
+                    return;
+                }
+                result[0] = dp(3, 0, src, sh1[0]);
+                result[1] = dp(3, 0, src, sh1[1]);
+                result[2] = dp(3, 0, src, sh1[2]);
+
+                // band 2
+                if (result.length < 8) {
+                    return;
+                }
+                result[3] = dp(5, 3, src, sh2[0]);
+                result[4] = dp(5, 3, src, sh2[1]);
+                result[5] = dp(5, 3, src, sh2[2]);
+                result[6] = dp(5, 3, src, sh2[3]);
+                result[7] = dp(5, 3, src, sh2[4]);
+
+                // band 3
+                if (result.length < 15) {
+                    return;
+                }
+                result[8]  = dp(7, 8, src, sh3[0]);
+                result[9]  = dp(7, 8, src, sh3[1]);
+                result[10] = dp(7, 8, src, sh3[2]);
+                result[11] = dp(7, 8, src, sh3[3]);
+                result[12] = dp(7, 8, src, sh3[4]);
+                result[13] = dp(7, 8, src, sh3[5]);
+                result[14] = dp(7, 8, src, sh3[6]);
+            };
+        }
     }
 }
 
