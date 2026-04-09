@@ -10,14 +10,19 @@ import {
     computeSummary,
     processDataTable,
     Column,
-    DataTable
+    DataTable,
+    Transform
 } from '../src/lib/index.js';
+
+import {
+    transformColumns,
+    computeWriteTransform
+} from '../src/lib/data-table/transform.js';
 
 import { createMinimalTestData } from './helpers/test-utils.mjs';
 import { assertClose } from './helpers/summary-compare.mjs';
 
-// Import Vec3 from playcanvas (used in actions)
-import { Vec3 } from 'playcanvas';
+import { Mat4, Quat, Vec3 } from 'playcanvas';
 
 describe('Translate Transform', () => {
     let testData;
@@ -26,7 +31,7 @@ describe('Translate Transform', () => {
         testData = createMinimalTestData();
     });
 
-    it('should translate positions by specified offset', () => {
+    it('should compose translation into transform without modifying raw data', () => {
         const originalSummary = computeSummary(testData);
         const clonedData = testData.clone();
 
@@ -37,14 +42,29 @@ describe('Translate Transform', () => {
 
         const newSummary = computeSummary(result);
 
-        // Positions should be shifted
-        assertClose(newSummary.columns.x.mean, originalSummary.columns.x.mean + 10, 1e-5, 'x mean');
-        assertClose(newSummary.columns.y.mean, originalSummary.columns.y.mean + 20, 1e-5, 'y mean');
-        assertClose(newSummary.columns.z.mean, originalSummary.columns.z.mean + 30, 1e-5, 'z mean');
-
-        // Other properties should be unchanged
+        // Raw data should be unchanged
+        assertClose(newSummary.columns.x.mean, originalSummary.columns.x.mean, 1e-5, 'raw x mean');
+        assertClose(newSummary.columns.y.mean, originalSummary.columns.y.mean, 1e-5, 'raw y mean');
+        assertClose(newSummary.columns.z.mean, originalSummary.columns.z.mean, 1e-5, 'raw z mean');
         assertClose(newSummary.columns.scale_0.mean, originalSummary.columns.scale_0.mean, 1e-5, 'scale_0');
         assertClose(newSummary.columns.opacity.mean, originalSummary.columns.opacity.mean, 1e-5, 'opacity');
+
+        // transform should have the translation composed in
+        const t = result.transform;
+        assertClose(t.translation.x, 10, 1e-5, 'transform tx');
+        assertClose(t.translation.y, 20, 1e-5, 'transform ty');
+        assertClose(t.translation.z, 30, 1e-5, 'transform tz');
+
+        // transformColumns should produce shifted engine-space positions
+        const cols = transformColumns(result, ['x', 'y', 'z'], result.transform);
+        const engineX = cols.get('x');
+        const engineY = cols.get('y');
+        const rawX = result.getColumnByName('x').data;
+        const rawY = result.getColumnByName('y').data;
+        for (let i = 0; i < result.numRows; i++) {
+            assertClose(engineX[i], rawX[i] + 10, 1e-4, `engine x[${i}]`);
+            assertClose(engineY[i], rawY[i] + 20, 1e-4, `engine y[${i}]`);
+        }
     });
 
     it('should handle zero translation', () => {
@@ -72,7 +92,7 @@ describe('Scale Transform', () => {
         testData = createMinimalTestData();
     });
 
-    it('should scale positions and scales by factor', () => {
+    it('should compose scale into transform without modifying raw data', () => {
         const originalSummary = computeSummary(testData);
         const clonedData = testData.clone();
 
@@ -84,15 +104,27 @@ describe('Scale Transform', () => {
 
         const newSummary = computeSummary(result);
 
-        // Positions should be scaled
-        assertClose(newSummary.columns.x.min, originalSummary.columns.x.min * scaleFactor, 1e-5, 'x.min');
-        assertClose(newSummary.columns.x.max, originalSummary.columns.x.max * scaleFactor, 1e-5, 'x.max');
-        assertClose(newSummary.columns.z.min, originalSummary.columns.z.min * scaleFactor, 1e-5, 'z.min');
-        assertClose(newSummary.columns.z.max, originalSummary.columns.z.max * scaleFactor, 1e-5, 'z.max');
+        // Raw data should be unchanged
+        assertClose(newSummary.columns.x.min, originalSummary.columns.x.min, 1e-5, 'raw x.min');
+        assertClose(newSummary.columns.x.max, originalSummary.columns.x.max, 1e-5, 'raw x.max');
+        assertClose(newSummary.columns.scale_0.mean, originalSummary.columns.scale_0.mean, 1e-5, 'raw scale_0');
 
-        // Log-encoded scales should shift by log(factor)
+        // transform should have scale = 2
+        assertClose(result.transform.scale, 2.0, 1e-5, 'transform scale');
+
+        // transformColumns should produce scaled engine-space positions
+        const cols = transformColumns(result, ['x', 'y', 'z', 'scale_0'], result.transform);
+        const rawX = result.getColumnByName('x').data;
+        for (let i = 0; i < result.numRows; i++) {
+            assertClose(cols.get('x')[i], rawX[i] * scaleFactor, 1e-4, `engine x[${i}]`);
+        }
+
+        // Scale columns should be shifted by log(factor)
         const logFactor = Math.log(scaleFactor);
-        assertClose(newSummary.columns.scale_0.mean, originalSummary.columns.scale_0.mean + logFactor, 1e-5, 'scale_0');
+        const rawScale = result.getColumnByName('scale_0').data;
+        for (let i = 0; i < result.numRows; i++) {
+            assertClose(cols.get('scale_0')[i], rawScale[i] + logFactor, 1e-4, `engine scale_0[${i}]`);
+        }
     });
 
     it('should handle scale factor of 1 (no change)', () => {
@@ -111,7 +143,6 @@ describe('Scale Transform', () => {
     });
 
     it('should handle fractional scale factor', () => {
-        const originalSummary = computeSummary(testData);
         const clonedData = testData.clone();
 
         const scaleFactor = 0.5;
@@ -120,10 +151,7 @@ describe('Scale Transform', () => {
             value: scaleFactor
         }]);
 
-        const newSummary = computeSummary(result);
-
-        // Positions should be scaled down
-        assertClose(newSummary.columns.x.max, originalSummary.columns.x.max * scaleFactor, 1e-5, 'x.max');
+        assertClose(result.transform.scale, 0.5, 1e-5, 'transform scale');
     });
 });
 
@@ -134,7 +162,7 @@ describe('Rotate Transform', () => {
         testData = createMinimalTestData();
     });
 
-    it('should rotate positions around Y axis', () => {
+    it('should compose rotation into transform without modifying raw data', () => {
         const originalSummary = computeSummary(testData);
         const clonedData = testData.clone();
 
@@ -146,15 +174,23 @@ describe('Rotate Transform', () => {
 
         const newSummary = computeSummary(result);
 
-        // After 90 degree Y rotation (counter-clockwise when looking down Y):
-        // x' = z
-        // z' = -x
-        // So new z range = -old_x_range (reversed)
-        assertClose(newSummary.columns.z.min, -originalSummary.columns.x.max, 1e-4, 'z.min after rotation');
-        assertClose(newSummary.columns.z.max, -originalSummary.columns.x.min, 1e-4, 'z.max after rotation');
-
-        // Row count should be unchanged
+        // Raw data should be unchanged
+        assertClose(newSummary.columns.x.min, originalSummary.columns.x.min, 1e-5, 'raw x.min');
+        assertClose(newSummary.columns.x.max, originalSummary.columns.x.max, 1e-5, 'raw x.max');
         assert.strictEqual(newSummary.rowCount, originalSummary.rowCount);
+
+        // transform should have a rotation
+        assert.ok(!result.transform.isIdentity(), 'transform should not be identity');
+
+        // transformColumns should produce rotated engine-space positions
+        // After 90° Y rotation: x' = z, z' = -x
+        const cols = transformColumns(result, ['x', 'y', 'z'], result.transform);
+        const rawX = result.getColumnByName('x').data;
+        const rawZ = result.getColumnByName('z').data;
+        for (let i = 0; i < result.numRows; i++) {
+            assertClose(cols.get('x')[i], rawZ[i], 1e-4, `engine x[${i}]`);
+            assertClose(cols.get('z')[i], -rawX[i], 1e-4, `engine z[${i}]`);
+        }
     });
 
     it('should handle zero rotation', () => {
@@ -223,6 +259,27 @@ describe('Filter Box', () => {
         }]);
 
         assert.strictEqual(result.numRows, 0, 'Should have no rows');
+    });
+
+    it('should use exact oriented box test with non-axis-aligned rotation', () => {
+        const dt = new DataTable([
+            new Column('x', new Float32Array([0, 1, 0, 0.9, -0.9])),
+            new Column('y', new Float32Array([0, 0, 0, 0, 0])),
+            new Column('z', new Float32Array([0, 0, 1, 0.9, 0.9]))
+        ]);
+
+        dt.transform = new Transform().fromEulers(0, 45, 0);
+
+        // Engine-space box [-0.8, 0.8] on x and z.
+        // Points 0,1,2 map inside; points 3,4 map outside (engine x=1.27 and z=1.27).
+        // A conservative AABB approach would incorrectly include points 3 and 4.
+        const result = processDataTable(dt, [{
+            kind: 'filterBox',
+            min: new Vec3(-0.8, -Infinity, -0.8),
+            max: new Vec3(0.8, Infinity, 0.8)
+        }]);
+
+        assert.strictEqual(result.numRows, 3, 'Should keep exactly 3 points (exact OBB, not conservative AABB)');
     });
 });
 
@@ -346,6 +403,42 @@ describe('Filter By Value', () => {
 
         assert.strictEqual(result.numRows, 0, 'Should have no rows');
     });
+
+    it('should apply transform before filtering transform-sensitive columns', () => {
+        const data = new DataTable([
+            new Column('x', new Float32Array([0, 1, 2])),
+            new Column('y', new Float32Array([0, 0, 0])),
+            new Column('z', new Float32Array([0, 0, 0]))
+        ]);
+
+        const result = processDataTable(data, [
+            { kind: 'translate', value: new Vec3(10, 0, 0) },
+            { kind: 'filterByValue', columnName: 'x', comparator: 'gt', value: 11 }
+        ]);
+
+        assert.strictEqual(result.numRows, 1, 'Should keep one row after transformed-space filtering');
+        assert.strictEqual(result.getColumnByName('x').data[0], 12, 'Transform should be baked into column data');
+        assert.ok(result.transform.isIdentity(), 'Transform should be identity after baking');
+    });
+
+    it('should apply spatial transform but skip inverse transform for _raw suffix', () => {
+        const logVal = Math.log(2);
+        const data = new DataTable([
+            new Column('x', new Float32Array([0, 0, 0])),
+            new Column('y', new Float32Array([0, 0, 0])),
+            new Column('z', new Float32Array([0, 0, 0])),
+            new Column('scale_0', new Float32Array([0, logVal, logVal * 2])),
+            new Column('scale_1', new Float32Array([0, 0, 0])),
+            new Column('scale_2', new Float32Array([0, 0, 0]))
+        ]);
+
+        const result = processDataTable(data, [
+            { kind: 'scale', value: 2 },
+            { kind: 'filterByValue', columnName: 'scale_0_raw', comparator: 'gt', value: logVal * 1.5 }
+        ]);
+
+        assert.strictEqual(result.numRows, 2, 'Spatial transform should be applied before raw comparison');
+    });
 });
 
 describe('Filter NaN', () => {
@@ -418,21 +511,21 @@ describe('Filter SH Bands', () => {
 });
 
 describe('Chained Transforms', () => {
-    it('should apply multiple transforms in order', () => {
+    it('should compose multiple transforms into transform', () => {
         const testData = createMinimalTestData();
-        const originalSummary = computeSummary(testData);
 
         const result = processDataTable(testData, [
             { kind: 'scale', value: 2.0 },
             { kind: 'translate', value: new Vec3(100, 0, 0) }
         ]);
 
-        const newSummary = computeSummary(result);
-
         // After scale(2) + translate(100,0,0):
-        // x_new = x_old * 2 + 100
-        const expectedXMean = originalSummary.columns.x.mean * 2 + 100;
-        assertClose(newSummary.columns.x.mean, expectedXMean, 1e-4, 'x mean after transforms');
+        // engine_x = raw_x * 2 + 100
+        const cols = transformColumns(result, ['x', 'y', 'z'], result.transform);
+        const rawX = result.getColumnByName('x').data;
+        for (let i = 0; i < result.numRows; i++) {
+            assertClose(cols.get('x')[i], rawX[i] * 2 + 100, 1e-4, `engine x[${i}]`);
+        }
     });
 
     it('should handle filter followed by transform', () => {

@@ -4,9 +4,11 @@ import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 import { writeSog, type DeviceCreator } from './write-sog.js';
 import { TypedArray, DataTable } from '../data-table/data-table';
 import { sortMortonOrder } from '../data-table/morton-order';
+import { convertToSpace } from '../data-table/transform';
 import { type FileSystem } from '../io/write';
 import { BTreeNode, BTree } from '../spatial/b-tree';
 import { logger } from '../utils/logger';
+import { Transform } from '../utils/math';
 
 
 type Aabb = {
@@ -156,7 +158,10 @@ type WriteLodOptions = {
  * @ignore
  */
 const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
-    const { filename, dataTable, envDataTable, iterations, createDevice, chunkCount, chunkExtent } = options;
+    const { filename, iterations, createDevice, chunkCount, chunkExtent } = options;
+
+    const dataTable = convertToSpace(options.dataTable, Transform.IDENTITY, true);
+    const envDataTable = options.envDataTable ? convertToSpace(options.envDataTable, Transform.IDENTITY, true) : null;
 
     const outputDir = dirname(filename);
 

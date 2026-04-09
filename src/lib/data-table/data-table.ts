@@ -1,3 +1,5 @@
+import { Transform } from '../utils/math';
+
 /**
  * Union of all typed array types supported for column data.
  */
@@ -84,8 +86,9 @@ type Row = {
  */
 class DataTable {
     columns: Column[];
+    transform: Transform;
 
-    constructor(columns: Column[]) {
+    constructor(columns: Column[], transform?: Transform) {
         if (columns.length === 0) {
             throw new Error('DataTable must have at least one column');
         }
@@ -98,6 +101,7 @@ class DataTable {
         }
 
         this.columns = columns;
+        this.transform = transform ? transform.clone() : new Transform();
     }
 
     // rows
@@ -215,13 +219,13 @@ class DataTable {
         }
 
         if (!rows) {
-            return new DataTable(srcColumns.map(c => c.clone()));
+            return new DataTable(srcColumns.map(c => c.clone()), this.transform);
         }
 
         const result = new DataTable(srcColumns.map((c) => {
             const constructor = c.data.constructor as new (length: number) => TypedArray;
             return new Column(c.name, new constructor(rows.length));
-        }));
+        }), this.transform);
 
         for (let i = 0; i < result.numColumns; ++i) {
             const src = srcColumns[i].data;

@@ -1,85 +1,223 @@
-import { Mat3, Mat4, Quat, Vec3 } from 'playcanvas';
+import { Mat3, Quat, Vec3 } from 'playcanvas';
 
-import { DataTable } from './data-table';
+import { Column, DataTable, TypedArray } from './data-table';
+import { Transform } from '../utils/math';
 import { RotateSH } from '../utils/rotate-sh';
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
-const v = new Vec3();
-const q = new Quat();
+const _v = new Vec3();
+const _q = new Quat();
+
+// -- Helpers for on-demand column generation --
 
 /**
- * Applies a spatial transformation to splat data in-place.
+ * Computes the delta transform needed to convert raw data from its current
+ * coordinate system into the output format's coordinate system.
  *
- * Transforms position, rotation, scale, and spherical harmonics data.
- * The transformation is applied as: scale first, then rotation, then translation.
- *
- * @param dataTable - The DataTable to transform (modified in-place).
- * @param t - Translation vector.
- * @param r - Rotation quaternion.
- * @param s - Uniform scale factor.
- *
- * @example
- * ```ts
- * import { Vec3, Quat } from 'playcanvas';
- *
- * // Scale by 2x, rotate 90° around Y, translate up
- * transform(dataTable, new Vec3(0, 5, 0), new Quat().setFromEulerAngles(0, 90, 0), 2.0);
- * ```
+ * @param transform - The DataTable's current source transform.
+ * @param outputFormatTransform - The output format's expected transform.
+ * @returns The delta transform to apply to raw data, or null if it is identity.
  */
-const transform = (dataTable: DataTable, t: Vec3, r: Quat, s: number): void => {
-    const mat = new Mat4().setTRS(t, r, new Vec3(s, s, s));
-    const mat3 = new Mat3().setFromQuat(r);
-    const rotateSH = new RotateSH(mat3);
+const computeWriteTransform = (transform: Transform, outputFormatTransform: Transform): Transform | null => {
+    const delta = outputFormatTransform.clone().invert().mul(transform);
+    return delta.isIdentity() ? null : delta;
+};
 
-    const hasTranslation = ['x', 'y', 'z'].every(c => dataTable.hasColumn(c));
-    const hasRotation = ['rot_0', 'rot_1', 'rot_2', 'rot_3'].every(c => dataTable.hasColumn(c));
-    const hasScale = ['scale_0', 'scale_1', 'scale_2'].every(c => dataTable.hasColumn(c));
-    const shBands = { '9': 1, '24': 2, '-1': 3 }[shNames.findIndex(v => !dataTable.hasColumn(v))] ?? 0;
-    const shCoeffs = new Float32Array([0, 3, 8, 15][shBands]);
+/**
+ * Detects how many SH bands (0-3) the DataTable has.
+ * @ignore
+ */
+const detectSHBands = (dataTable: DataTable): number => {
+    return ({ '9': 1, '24': 2, '-1': 3 } as Record<string, number>)[String(shNames.findIndex(n => !dataTable.hasColumn(n)))] ?? 0;
+};
 
-    const row: any = {};
-    for (let i = 0; i < dataTable.numRows; ++i) {
-        dataTable.getRow(i, row);
+/**
+ * Generates transformed typed arrays for requested columns, applying the given
+ * transform. Columns unaffected by the transform return references to the
+ * original arrays (zero copy).
+ *
+ * @param dataTable - The source DataTable.
+ * @param columnNames - Which columns to produce.
+ * @param delta - The transform to apply. If identity or null, original arrays are returned.
+ * @param inPlace - If true, mutate the DataTable's existing column arrays instead of allocating new ones.
+ * @returns A map of column name to typed array.
+ */
+const transformColumns = (dataTable: DataTable, columnNames: string[], delta: Transform | null, inPlace = false): Map<string, TypedArray> => {
+    const result = new Map<string, TypedArray>();
 
-        if (hasTranslation) {
-            v.set(row.x, row.y, row.z);
-            mat.transformPoint(v, v);
-            row.x = v.x;
-            row.y = v.y;
-            row.z = v.z;
+    if (!delta || delta.isIdentity()) {
+        for (const name of columnNames) {
+            const col = dataTable.getColumnByName(name);
+            if (col) result.set(name, col.data);
+        }
+        return result;
+    }
+
+    const numRows = dataTable.numRows;
+    const r = delta.rotation;
+    const s = delta.scale;
+
+    // Categorize requested columns
+    const posNames = ['x', 'y', 'z'];
+    const rotNames = ['rot_0', 'rot_1', 'rot_2', 'rot_3'];
+    const scaleNames = ['scale_0', 'scale_1', 'scale_2'];
+
+    const hasPos = posNames.every(n => dataTable.hasColumn(n));
+    const needPos = hasPos && posNames.some(n => columnNames.includes(n));
+    const hasRot = rotNames.every(n => dataTable.hasColumn(n));
+    const needRot = hasRot && rotNames.some(n => columnNames.includes(n));
+    const needScale = scaleNames.some(n => columnNames.includes(n) && dataTable.hasColumn(n)) && s !== 1;
+
+    const shBands = detectSHBands(dataTable);
+    const shCoeffsPerChannel = [0, 3, 8, 15][shBands];
+    const rotIsIdentity = Math.abs(Math.abs(r.w) - 1) < 1e-6;
+    const requestedSH = shBands > 0 && !rotIsIdentity && shNames.slice(0, shCoeffsPerChannel * 3).some(n => columnNames.includes(n));
+
+    // Position columns
+    if (needPos) {
+        const srcX = dataTable.getColumnByName('x')!.data;
+        const srcY = dataTable.getColumnByName('y')!.data;
+        const srcZ = dataTable.getColumnByName('z')!.data;
+        const dstX = inPlace ? srcX : new Float32Array(numRows);
+        const dstY = inPlace ? srcY : new Float32Array(numRows);
+        const dstZ = inPlace ? srcZ : new Float32Array(numRows);
+
+        for (let i = 0; i < numRows; ++i) {
+            _v.set(srcX[i], srcY[i], srcZ[i]);
+            delta.transformPoint(_v, _v);
+            dstX[i] = _v.x;
+            dstY[i] = _v.y;
+            dstZ[i] = _v.z;
         }
 
-        if (hasRotation) {
-            q.set(row.rot_1, row.rot_2, row.rot_3, row.rot_0).mul2(r, q);
-            row.rot_0 = q.w;
-            row.rot_1 = q.x;
-            row.rot_2 = q.y;
-            row.rot_3 = q.z;
+        if (columnNames.includes('x')) result.set('x', dstX);
+        if (columnNames.includes('y')) result.set('y', dstY);
+        if (columnNames.includes('z')) result.set('z', dstZ);
+    }
+
+    // Rotation columns
+    if (needRot) {
+        const src0 = dataTable.getColumnByName('rot_0')!.data;
+        const src1 = dataTable.getColumnByName('rot_1')!.data;
+        const src2 = dataTable.getColumnByName('rot_2')!.data;
+        const src3 = dataTable.getColumnByName('rot_3')!.data;
+        const dst0 = inPlace ? src0 : new Float32Array(numRows);
+        const dst1 = inPlace ? src1 : new Float32Array(numRows);
+        const dst2 = inPlace ? src2 : new Float32Array(numRows);
+        const dst3 = inPlace ? src3 : new Float32Array(numRows);
+
+        for (let i = 0; i < numRows; ++i) {
+            _q.set(src1[i], src2[i], src3[i], src0[i]).mul2(r, _q);
+            dst0[i] = _q.w;
+            dst1[i] = _q.x;
+            dst2[i] = _q.y;
+            dst3[i] = _q.z;
         }
 
-        if (hasScale && s !== 1) {
-            row.scale_0 = Math.log(Math.exp(row.scale_0) * s);
-            row.scale_1 = Math.log(Math.exp(row.scale_1) * s);
-            row.scale_2 = Math.log(Math.exp(row.scale_2) * s);
+        if (columnNames.includes('rot_0')) result.set('rot_0', dst0);
+        if (columnNames.includes('rot_1')) result.set('rot_1', dst1);
+        if (columnNames.includes('rot_2')) result.set('rot_2', dst2);
+        if (columnNames.includes('rot_3')) result.set('rot_3', dst3);
+    }
+
+    // Scale columns (only affected when uniform scale != 1)
+    if (needScale) {
+        const logS = Math.log(s);
+        for (const name of scaleNames) {
+            if (!columnNames.includes(name) || !dataTable.hasColumn(name)) continue;
+            const src = dataTable.getColumnByName(name)!.data;
+            const dst = inPlace ? src : new Float32Array(numRows);
+            for (let i = 0; i < numRows; ++i) {
+                dst[i] = src[i] + logS;
+            }
+            result.set(name, dst);
+        }
+    }
+
+    // SH columns
+    if (requestedSH) {
+        const mat3 = new Mat3().setFromQuat(r);
+        const rotateSH = new RotateSH(mat3);
+        const shCoeffs = new Float32Array(shCoeffsPerChannel);
+
+        const shSrc: Float32Array[][] = [];
+        const shDst: Float32Array[][] = [];
+        for (let j = 0; j < 3; ++j) {
+            const src: Float32Array[] = [];
+            const dst: Float32Array[] = [];
+            for (let k = 0; k < shCoeffsPerChannel; ++k) {
+                const name = shNames[k + j * shCoeffsPerChannel];
+                const colData = dataTable.getColumnByName(name)!.data as Float32Array;
+                src.push(colData);
+                dst.push(inPlace ? colData : new Float32Array(numRows));
+            }
+            shSrc.push(src);
+            shDst.push(dst);
         }
 
-        if (shBands > 0) {
+        for (let i = 0; i < numRows; ++i) {
             for (let j = 0; j < 3; ++j) {
-                for (let k = 0; k < shCoeffs.length; ++k) {
-                    shCoeffs[k] = row[shNames[k + j * shCoeffs.length]];
+                for (let k = 0; k < shCoeffsPerChannel; ++k) {
+                    shCoeffs[k] = shSrc[j][k][i];
                 }
-
                 rotateSH.apply(shCoeffs);
-
-                for (let k = 0; k < shCoeffs.length; ++k) {
-                    row[shNames[k + j * shCoeffs.length]] = shCoeffs[k];
+                for (let k = 0; k < shCoeffsPerChannel; ++k) {
+                    shDst[j][k][i] = shCoeffs[k];
                 }
             }
         }
 
-        dataTable.setRow(i, row);
+        for (let j = 0; j < 3; ++j) {
+            for (let k = 0; k < shCoeffsPerChannel; ++k) {
+                const name = shNames[k + j * shCoeffsPerChannel];
+                if (columnNames.includes(name)) {
+                    result.set(name, shDst[j][k]);
+                }
+            }
+        }
     }
+
+    // All remaining requested columns: return original array references
+    for (const name of columnNames) {
+        if (!result.has(name)) {
+            const col = dataTable.getColumnByName(name);
+            if (col) result.set(name, col.data);
+        }
+    }
+
+    return result;
 };
 
-export { transform };
+/**
+ * Returns a DataTable with column data converted to the target coordinate
+ * space. If the DataTable is already in that space, returns it unchanged.
+ *
+ * @param dataTable - The source DataTable.
+ * @param targetTransform - The desired coordinate-space transform.
+ * @param inPlace - If true, mutate the DataTable's column arrays and transform
+ * in place instead of allocating a new DataTable. The caller must ensure no
+ * other code depends on the original column data.
+ * @returns A DataTable whose raw data is in the target coordinate space.
+ */
+const convertToSpace = (dataTable: DataTable, targetTransform: Transform, inPlace = false): DataTable => {
+    const delta = computeWriteTransform(dataTable.transform, targetTransform);
+    if (!delta) return dataTable;
+
+    if (inPlace) {
+        const allNames = dataTable.columnNames;
+        transformColumns(dataTable, allNames, delta, true);
+        dataTable.transform = targetTransform.clone();
+        return dataTable;
+    }
+
+    const allNames = dataTable.columnNames;
+    const cols = transformColumns(dataTable, allNames, delta);
+    return new DataTable(allNames.map(name => new Column(name, cols.get(name)!)), targetTransform);
+};
+
+export {
+    transformColumns,
+    computeWriteTransform,
+    convertToSpace
+};

@@ -4,11 +4,12 @@ import { GraphicsDevice } from 'playcanvas';
 import { version } from '../../../package.json';
 import { Column, DataTable } from '../data-table/data-table';
 import { sortMortonOrder } from '../data-table/morton-order';
+import { convertToSpace } from '../data-table/transform';
 import { type FileSystem, writeFile, ZipFileSystem } from '../io/write';
 import { kmeans } from '../spatial/k-means';
 import { quantize1d } from '../spatial/quantize-1d';
 import { logger } from '../utils/logger';
-import { sigmoid } from '../utils/math';
+import { sigmoid, Transform } from '../utils/math';
 import { WebPCodec } from '../utils/webp-codec';
 
 /**
@@ -82,7 +83,8 @@ type WriteSogOptions = {
  * @ignore
  */
 const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
-    const { filename: outputFilename, bundle, dataTable, iterations, createDevice } = options;
+    const { filename: outputFilename, bundle, iterations, createDevice } = options;
+    const dataTable = convertToSpace(options.dataTable, Transform.PLY);
 
     // initialize output stream - use ZipFileSystem for bundled output
     const zipFs = bundle ? new ZipFileSystem(await fs.createWriter(outputFilename)) : null;

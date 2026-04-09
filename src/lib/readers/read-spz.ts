@@ -1,5 +1,6 @@
 import { Column, DataTable } from '../data-table/data-table';
 import { ReadSource } from '../io/read';
+import { Transform } from '../utils/math';
 
 // See https://github.com/nianticlabs/spz for reference implementation
 
@@ -226,7 +227,7 @@ const readSpz = async (source: ReadSource): Promise<DataTable> => {
         }
     }
 
-    return new DataTable(columns);
+    return new DataTable(columns, Transform.PLY);
 };
 
 export { readSpz };

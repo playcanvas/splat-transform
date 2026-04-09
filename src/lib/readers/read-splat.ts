@@ -1,5 +1,6 @@
 import { Column, DataTable } from '../data-table/data-table';
 import { ReadSource } from '../io/read';
+import { Transform } from '../utils/math';
 
 /**
  * Reads an Antimatter15 .splat file containing Gaussian splat data.
@@ -125,7 +126,7 @@ const readSplat = async (source: ReadSource): Promise<DataTable> => {
         }
     }
 
-    return new DataTable(columns);
+    return new DataTable(columns, Transform.PLY);
 };
 
 export { readSplat };

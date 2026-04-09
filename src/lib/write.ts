@@ -147,7 +147,7 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
                     comments: [],
                     elements: [{
                         name: 'vertex',
-                        dataTable: dataTable
+                        dataTable
                     }]
                 }
             }, fs);

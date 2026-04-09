@@ -1,7 +1,8 @@
 import { version } from '../../../package.json';
 import { DataTable } from '../data-table/data-table';
+import { convertToSpace } from '../data-table/transform';
 import { type FileSystem } from '../io/write';
-import { sigmoid } from '../utils/math';
+import { Transform, sigmoid } from '../utils/math';
 
 const SH_C0 = 0.2820947917738781;
 
@@ -278,7 +279,8 @@ const buildBinaryBuffer = (dataTable: DataTable, numSplats: number, shBands: num
  * @ignore
  */
 const writeGlb = async (options: WriteGlbOptions, fs: FileSystem) => {
-    const { filename, dataTable } = options;
+    const { filename } = options;
+    const dataTable = convertToSpace(options.dataTable, Transform.IDENTITY);
     const numSplats = dataTable.numRows;
     const shBands = getSHBands(dataTable);
 

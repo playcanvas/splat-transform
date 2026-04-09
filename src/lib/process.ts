@@ -1,11 +1,12 @@
-import { Quat, Vec3 } from 'playcanvas';
+import { Vec3 } from 'playcanvas';
 
 import { Column, DataTable } from './data-table/data-table';
 import { simplifyGaussians } from './data-table/decimate';
 import { sortMortonOrder } from './data-table/morton-order';
 import { computeSummary, type SummaryData } from './data-table/summary';
-import { transform } from './data-table/transform';
+import { convertToSpace } from './data-table/transform';
 import { logger } from './utils/logger';
+import { Transform } from './utils/math';
 
 /**
  * Translate splats by a 3D vector offset.
@@ -52,8 +53,12 @@ type FilterNaN = {
  * (transformed) space: linear opacity (0-1), linear scale, and linear color (0-1).
  * The value is automatically converted to raw PLY space before comparison.
  *
- * To compare against raw PLY values directly, use the `_raw` suffix
- * (e.g. `opacity_raw`, `scale_0_raw`, `f_dc_0_raw`).
+ * To compare against raw PLY values directly (without the user-friendly conversion),
+ * use the `_raw` suffix (e.g. `opacity_raw`, `scale_0_raw`, `f_dc_0_raw`).
+ *
+ * If the DataTable has a pending spatial transform and the column is affected by it
+ * (position, rotation, scale, or SH columns), the transform is applied (baked in)
+ * before comparison. This applies to both regular and `_raw` columns.
  */
 type FilterByValue = {
     /** Action type identifier. */
@@ -211,6 +216,14 @@ const rawColumnMap: Record<string, string> = {
     'f_dc_2_raw': 'f_dc_2'
 };
 
+const transformColumnNames = new Set([
+    'x', 'y', 'z',
+    'rot_0', 'rot_1', 'rot_2', 'rot_3',
+    'scale_0', 'scale_1', 'scale_2'
+]);
+
+const isTransformColumn = (name: string): boolean => transformColumnNames.has(name) || /^f_rest_\d+$/.test(name);
+
 const formatMarkdown = (summary: SummaryData): string => {
     const lines: string[] = [];
 
@@ -306,17 +319,17 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
 
         switch (processAction.kind) {
             case 'translate':
-                transform(result, processAction.value, Quat.IDENTITY, 1);
+                result.transform = new Transform(processAction.value).mul(result.transform);
                 break;
             case 'rotate':
-                transform(result, Vec3.ZERO, new Quat().setFromEulerAngles(
+                result.transform = new Transform().fromEulers(
                     processAction.value.x,
                     processAction.value.y,
                     processAction.value.z
-                ), 1);
+                ).mul(result.transform);
                 break;
             case 'scale':
-                transform(result, Vec3.ZERO, Quat.IDENTITY, processAction.value);
+                result.transform = new Transform(undefined, undefined, processAction.value).mul(result.transform);
                 break;
             case 'filterNaN': {
                 const infOk = new Set(['opacity']);
@@ -347,15 +360,19 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
                     value = inverseTransforms[columnName](value);
                 }
 
+                if (!result.transform.isIdentity() && isTransformColumn(columnName)) {
+                    result = convertToSpace(result, Transform.IDENTITY);
+                }
+
                 const Predicates = {
-                    'lt': (row: any, rowIndex: number) => row[columnName] < value,
-                    'lte': (row: any, rowIndex: number) => row[columnName] <= value,
-                    'gt': (row: any, rowIndex: number) => row[columnName] > value,
-                    'gte': (row: any, rowIndex: number) => row[columnName] >= value,
-                    'eq': (row: any, rowIndex: number) => row[columnName] === value,
-                    'neq': (row: any, rowIndex: number) => row[columnName] !== value
+                    'lt': (row: any) => row[columnName] < value,
+                    'lte': (row: any) => row[columnName] <= value,
+                    'gt': (row: any) => row[columnName] > value,
+                    'gte': (row: any) => row[columnName] >= value,
+                    'eq': (row: any) => row[columnName] === value,
+                    'neq': (row: any) => row[columnName] !== value
                 };
-                const predicate = Predicates[comparator] ?? ((row: any, rowIndex: number) => true);
+                const predicate = Predicates[comparator] ?? ((row: any) => true);
                 result = filter(result, predicate);
                 break;
             }
@@ -382,25 +399,68 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
                         }
                         return column;
 
-                    }).filter(c => c !== null));
+                    }).filter(c => c !== null), result.transform);
                 }
                 break;
             }
             case 'filterBox': {
                 const { min, max } = processAction;
-                const predicate = (row: any, rowIndex: number) => {
-                    const { x, y, z } = row;
-                    return x >= min.x && x <= max.x && y >= min.y && y <= max.y && z >= min.z && z <= max.z;
-                };
-                result = filter(result, predicate);
+
+                if (result.transform.isIdentity()) {
+                    const predicate = (row: any) => {
+                        const { x, y, z } = row;
+                        return x >= min.x && x <= max.x &&
+                               y >= min.y && y <= max.y &&
+                               z >= min.z && z <= max.z;
+                    };
+                    result = filter(result, predicate);
+                } else {
+                    const { translation, scale } = result.transform;
+                    if (scale === 0) {
+                        throw new Error('Cannot apply filterBox with scale 0');
+                    }
+                    const invRot = result.transform.rotation.clone().invert();
+
+                    const axes = [new Vec3(1, 0, 0), new Vec3(0, 1, 0), new Vec3(0, 0, 1)];
+                    const rawAxes = axes.map((a) => {
+                        const r = new Vec3();
+                        invRot.transformVector(a, r);
+                        return r;
+                    });
+
+                    const minArr = [min.x, min.y, min.z];
+                    const maxArr = [max.x, max.y, max.z];
+                    const rawMin = new Array(3);
+                    const rawMax = new Array(3);
+                    for (let j = 0; j < 3; j++) {
+                        const dot = axes[j].dot(translation);
+                        rawMin[j] = (minArr[j] - dot) / scale;
+                        rawMax[j] = (maxArr[j] - dot) / scale;
+                    }
+
+                    const predicate = (row: any) => {
+                        const { x, y, z } = row;
+                        for (let j = 0; j < 3; j++) {
+                            const proj = rawAxes[j].x * x + rawAxes[j].y * y + rawAxes[j].z * z;
+                            if (proj < rawMin[j] || proj > rawMax[j]) return false;
+                        }
+                        return true;
+                    };
+                    result = filter(result, predicate);
+                }
                 break;
             }
             case 'filterSphere': {
-                const { center, radius } = processAction;
-                const radiusSq = radius * radius;
+                const rawCenter = processAction.center.clone();
+                let rawRadius = processAction.radius;
+                if (!result.transform.isIdentity()) {
+                    result.transform.clone().invert().transformPoint(rawCenter, rawCenter);
+                    rawRadius /= result.transform.scale;
+                }
+                const radiusSq = rawRadius * rawRadius;
                 const predicate = (row: any, rowIndex: number) => {
                     const { x, y, z } = row;
-                    return (x - center.x) ** 2 + (y - center.y) ** 2 + (z - center.z) ** 2 < radiusSq;
+                    return (x - rawCenter.x) ** 2 + (y - rawCenter.y) ** 2 + (z - rawCenter.z) ** 2 < radiusSq;
                 };
                 result = filter(result, predicate);
                 break;

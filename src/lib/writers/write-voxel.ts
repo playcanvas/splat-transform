@@ -1,11 +1,12 @@
 import { MeshoptSimplifier } from 'meshoptimizer/simplifier';
-import { Quat, Vec3 } from 'playcanvas';
+import { Vec3 } from 'playcanvas';
 
 import type { DeviceCreator } from './write-sog';
-import { DataTable } from '../data-table/data-table';
-import { transform } from '../data-table/transform';
+import { Column, DataTable } from '../data-table/data-table';
+import { computeWriteTransform, transformColumns } from '../data-table/transform';
 import { type FileSystem, writeFile } from '../io/write';
 import { logger } from '../utils/logger';
+import { Transform } from '../utils/math';
 import { buildCollisionGlb } from '../voxel/collision-glb';
 import {
     computeGaussianExtents,
@@ -206,19 +207,21 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     if (hasNav) stepCount += 1;
     logger.progress.begin(stepCount);
 
-    // Build a copy containing only the columns needed for voxelization and
-    // transform it by (0, 0, 180) to orient data into PlayCanvas space.
-    // Using a copy avoids mutating the caller's DataTable and keeps SH out
-    // of the transform since those columns aren't present.
-    const pcDataTable = dataTable.clone({
-        columns: [
-            'x', 'y', 'z',
-            'rot_0', 'rot_1', 'rot_2', 'rot_3',
-            'scale_0', 'scale_1', 'scale_2',
-            'opacity'
-        ]
-    });
-    transform(pcDataTable, Vec3.ZERO, new Quat().setFromEulerAngles(0, 0, 180), 1);
+    // Build a DataTable in engine space containing only the columns needed
+    // for voxelization (no SH, so SH rotation cost is never paid).
+    const voxelColumns = [
+        'x', 'y', 'z',
+        'rot_0', 'rot_1', 'rot_2', 'rot_3',
+        'scale_0', 'scale_1', 'scale_2',
+        'opacity'
+    ];
+    const missingColumns = voxelColumns.filter(name => !dataTable.hasColumn(name));
+    if (missingColumns.length > 0) {
+        throw new Error(`writeVoxel: missing required column(s): ${missingColumns.join(', ')}`);
+    }
+    const delta = computeWriteTransform(dataTable.transform, Transform.IDENTITY);
+    const cols = transformColumns(dataTable, voxelColumns, delta);
+    const pcDataTable = new DataTable(voxelColumns.map(name => new Column(name, cols.get(name)!)));
 
     const extentsResult = computeGaussianExtents(pcDataTable);
     const bounds = extentsResult.sceneBounds;

@@ -1,5 +1,6 @@
 import { Column, DataTable } from '../data-table/data-table';
 import { dirname, join, ReadFileSystem, readFile } from '../io/read';
+import { Transform } from '../utils/math';
 import { WebPCodec } from '../utils/webp-codec';
 
 type Meta = {
@@ -215,7 +216,7 @@ const readSog = async (fileSystem: ReadFileSystem, filename: string): Promise<Da
         }
     }
 
-    return new DataTable(columns);
+    return new DataTable(columns, Transform.PLY);
 };
 
 export { readSog };

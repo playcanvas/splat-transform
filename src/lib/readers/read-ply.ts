@@ -1,6 +1,7 @@
 import { isCompressedPly, decompressPly } from './decompress-ply';
 import { Column, DataTable } from '../data-table/data-table';
 import { ReadSource, ReadStream } from '../io/read';
+import { Transform } from '../utils/math';
 
 type PlyProperty = {
     name: string;               // 'x', f_dc_0', etc
@@ -287,16 +288,20 @@ const readPly = async (source: ReadSource): Promise<DataTable> => {
         elements
     };
 
+    let result: DataTable;
+
     if (isCompressedPly(plyData)) {
-        return decompressPly(plyData);
+        result = decompressPly(plyData);
+    } else {
+        const vertexElement = plyData.elements.find(e => e.name === 'vertex');
+        if (!vertexElement) {
+            throw new Error('PLY file does not contain vertex element');
+        }
+        result = vertexElement.dataTable;
     }
 
-    const vertexElement = plyData.elements.find(e => e.name === 'vertex');
-    if (!vertexElement) {
-        throw new Error('PLY file does not contain vertex element');
-    }
-
-    return vertexElement.dataTable;
+    result.transform = Transform.PLY.clone();
+    return result;
 };
 
 export { PlyData, readPly };
