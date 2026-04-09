@@ -215,6 +215,10 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         'scale_0', 'scale_1', 'scale_2',
         'opacity'
     ];
+    const missingColumns = voxelColumns.filter(name => !dataTable.hasColumn(name));
+    if (missingColumns.length > 0) {
+        throw new Error(`writeVoxel: missing required column(s): ${missingColumns.join(', ')}`);
+    }
     const delta = computeWriteTransform(dataTable.transform, Transform.IDENTITY);
     const cols = transformColumns(dataTable, voxelColumns, delta);
     const pcDataTable = new DataTable(voxelColumns.map(name => new Column(name, cols.get(name)!)));

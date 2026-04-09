@@ -416,6 +416,9 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
                     result = filter(result, predicate);
                 } else {
                     const { translation, scale } = result.transform;
+                    if (scale === 0) {
+                        throw new Error('Cannot apply filterBox with scale 0');
+                    }
                     const invRot = result.transform.rotation.clone().invert();
 
                     const axes = [new Vec3(1, 0, 0), new Vec3(0, 1, 0), new Vec3(0, 0, 1)];

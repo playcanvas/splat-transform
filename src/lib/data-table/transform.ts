@@ -65,7 +65,8 @@ const transformColumns = (dataTable: DataTable, columnNames: string[], delta: Tr
 
     const hasPos = posNames.every(n => dataTable.hasColumn(n));
     const needPos = hasPos && posNames.some(n => columnNames.includes(n));
-    const needRot = rotNames.every(n => columnNames.includes(n) && dataTable.hasColumn(n));
+    const hasRot = rotNames.every(n => dataTable.hasColumn(n));
+    const needRot = hasRot && rotNames.some(n => columnNames.includes(n));
     const needScale = scaleNames.some(n => columnNames.includes(n) && dataTable.hasColumn(n)) && s !== 1;
 
     const shBands = detectSHBands(dataTable);
@@ -114,10 +115,10 @@ const transformColumns = (dataTable: DataTable, columnNames: string[], delta: Tr
             dst3[i] = _q.z;
         }
 
-        result.set('rot_0', dst0);
-        result.set('rot_1', dst1);
-        result.set('rot_2', dst2);
-        result.set('rot_3', dst3);
+        if (columnNames.includes('rot_0')) result.set('rot_0', dst0);
+        if (columnNames.includes('rot_1')) result.set('rot_1', dst1);
+        if (columnNames.includes('rot_2')) result.set('rot_2', dst2);
+        if (columnNames.includes('rot_3')) result.set('rot_3', dst3);
     }
 
     // Scale columns (only affected when uniform scale != 1)
