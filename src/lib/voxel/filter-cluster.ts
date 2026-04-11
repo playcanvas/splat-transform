@@ -5,7 +5,7 @@ import { GaussianBVH } from './gaussian-bvh';
 import { GpuVoxelization } from './gpu-voxelization';
 import {
     BlockAccumulator,
-    xyzToMorton,
+    mortonToXYZ,
     alignGridBounds
 } from './sparse-octree';
 import { filterAndFillBlocks } from './voxel-filter';
@@ -17,59 +17,114 @@ import { logger } from '../utils/logger';
 import { Transform } from '../utils/math';
 
 /**
- * Find the connected component of occupied blocks reachable from a seed block
- * via 6-connected DFS.
+ * Build a Set of linear block indices from the accumulator's Morton codes.
  *
  * @param accumulator - Block accumulator containing voxelized blocks.
- * @param seedBx - Seed block X coordinate.
- * @param seedBy - Seed block Y coordinate.
- * @param seedBz - Seed block Z coordinate.
- * @returns Set of Morton codes for blocks in the connected component.
+ * @param strideY - numBlocksX (stride for Y dimension).
+ * @param strideZ - numBlocksX * numBlocksY (stride for Z dimension).
+ * @returns Set of linear indices for all occupied blocks.
  */
-const findClusterFromSeed = (
+const buildOccupiedSet = (
     accumulator: BlockAccumulator,
-    seedBx: number,
-    seedBy: number,
-    seedBz: number
+    strideY: number,
+    strideZ: number
 ): Set<number> => {
     const occupied = new Set<number>();
     const solidMortons = accumulator.getSolidBlocks();
     for (let i = 0; i < solidMortons.length; i++) {
-        occupied.add(solidMortons[i]);
+        const [bx, by, bz] = mortonToXYZ(solidMortons[i]);
+        occupied.add(bx + by * strideY + bz * strideZ);
     }
     const mixed = accumulator.getMixedBlocks();
     for (let i = 0; i < mixed.morton.length; i++) {
-        occupied.add(mixed.morton[i]);
+        const [bx, by, bz] = mortonToXYZ(mixed.morton[i]);
+        occupied.add(bx + by * strideY + bz * strideZ);
     }
+    return occupied;
+};
 
-    const seedMorton = xyzToMorton(seedBx, seedBy, seedBz);
-    if (!occupied.has(seedMorton)) {
+/**
+ * Find the connected component of occupied blocks reachable from a seed block
+ * via 6-connected DFS.
+ *
+ * @param occupied - Set of linear indices for occupied blocks.
+ * @param seedBx - Seed block X coordinate.
+ * @param seedBy - Seed block Y coordinate.
+ * @param seedBz - Seed block Z coordinate.
+ * @param numBlocksX - Grid dimension X.
+ * @param numBlocksY - Grid dimension Y.
+ * @param numBlocksZ - Grid dimension Z.
+ * @returns Set of linear indices for blocks in the connected component.
+ */
+const findClusterFromSeed = (
+    occupied: Set<number>,
+    seedBx: number,
+    seedBy: number,
+    seedBz: number,
+    numBlocksX: number,
+    numBlocksY: number,
+    numBlocksZ: number
+): Set<number> => {
+    const strideY = numBlocksX;
+    const strideZ = numBlocksX * numBlocksY;
+
+    const seedIdx = seedBx + seedBy * strideY + seedBz * strideZ;
+    if (!occupied.has(seedIdx)) {
         return new Set<number>();
     }
 
     const ccSet = new Set<number>();
     const visited = new Set<number>();
     const stack: [number, number, number][] = [[seedBx, seedBy, seedBz]];
-    visited.add(seedMorton);
+    visited.add(seedIdx);
 
     while (stack.length > 0) {
         const [bx, by, bz] = stack.pop()!;
-        const morton = xyzToMorton(bx, by, bz);
-        if (occupied.has(morton)) {
-            ccSet.add(morton);
+        const idx = bx + by * strideY + bz * strideZ;
+        if (occupied.has(idx)) {
+            ccSet.add(idx);
         }
 
-        const neighbors: [number, number, number][] = [
-            [bx - 1, by, bz], [bx + 1, by, bz],
-            [bx, by - 1, bz], [bx, by + 1, bz],
-            [bx, by, bz - 1], [bx, by, bz + 1]
-        ];
-
-        for (const [nx, ny, nz] of neighbors) {
-            const nm = xyzToMorton(nx, ny, nz);
-            if (!visited.has(nm) && occupied.has(nm)) {
-                visited.add(nm);
-                stack.push([nx, ny, nz]);
+        if (bx > 0) {
+            const ni = idx - 1;
+            if (!visited.has(ni) && occupied.has(ni)) {
+                visited.add(ni);
+                stack.push([bx - 1, by, bz]);
+            }
+        }
+        if (bx < numBlocksX - 1) {
+            const ni = idx + 1;
+            if (!visited.has(ni) && occupied.has(ni)) {
+                visited.add(ni);
+                stack.push([bx + 1, by, bz]);
+            }
+        }
+        if (by > 0) {
+            const ni = idx - strideY;
+            if (!visited.has(ni) && occupied.has(ni)) {
+                visited.add(ni);
+                stack.push([bx, by - 1, bz]);
+            }
+        }
+        if (by < numBlocksY - 1) {
+            const ni = idx + strideY;
+            if (!visited.has(ni) && occupied.has(ni)) {
+                visited.add(ni);
+                stack.push([bx, by + 1, bz]);
+            }
+        }
+        if (bz > 0) {
+            const ni = idx - strideZ;
+            if (!visited.has(ni) && occupied.has(ni)) {
+                visited.add(ni);
+                stack.push([bx, by, bz - 1]);
+            }
+        }
+        if (bz < numBlocksZ - 1) {
+            const ni = idx + strideZ;
+            if (!visited.has(ni) && occupied.has(ni)) {
+                visited.add(ni);
+                stack.push([bx, by, bz + 1]);
             }
         }
     }
@@ -80,43 +135,45 @@ const findClusterFromSeed = (
 /**
  * Find the nearest occupied block to a given position using expanding cube shells.
  *
- * @param accumulator - Block accumulator.
+ * @param occupied - Set of linear indices for occupied blocks.
  * @param seedBx - Starting block X.
  * @param seedBy - Starting block Y.
  * @param seedBz - Starting block Z.
  * @param maxRadius - Maximum search radius in blocks.
+ * @param numBlocksX - Grid dimension X.
+ * @param numBlocksY - Grid dimension Y.
+ * @param numBlocksZ - Grid dimension Z.
  * @returns Coordinates of nearest occupied block, or null.
  */
 const findNearestOccupiedBlock = (
-    accumulator: BlockAccumulator,
+    occupied: Set<number>,
     seedBx: number,
     seedBy: number,
     seedBz: number,
-    maxRadius: number
+    maxRadius: number,
+    numBlocksX: number,
+    numBlocksY: number,
+    numBlocksZ: number
 ): { bx: number; by: number; bz: number } | null => {
-    const occupied = new Set<number>();
-    const solidMortons = accumulator.getSolidBlocks();
-    for (let i = 0; i < solidMortons.length; i++) {
-        occupied.add(solidMortons[i]);
-    }
-    const mixed = accumulator.getMixedBlocks();
-    for (let i = 0; i < mixed.morton.length; i++) {
-        occupied.add(mixed.morton[i]);
-    }
+    const strideY = numBlocksX;
+    const strideZ = numBlocksX * numBlocksY;
 
-    if (occupied.has(xyzToMorton(seedBx, seedBy, seedBz))) {
+    if (occupied.has(seedBx + seedBy * strideY + seedBz * strideZ)) {
         return { bx: seedBx, by: seedBy, bz: seedBz };
     }
 
     for (let r = 1; r <= maxRadius; r++) {
         for (let dz = -r; dz <= r; dz++) {
+            const nz = seedBz + dz;
+            if (nz < 0 || nz >= numBlocksZ) continue;
             for (let dy = -r; dy <= r; dy++) {
+                const ny = seedBy + dy;
+                if (ny < 0 || ny >= numBlocksY) continue;
                 for (let dx = -r; dx <= r; dx++) {
                     if (Math.abs(dx) !== r && Math.abs(dy) !== r && Math.abs(dz) !== r) continue;
                     const nx = seedBx + dx;
-                    const ny = seedBy + dy;
-                    const nz = seedBz + dz;
-                    if (occupied.has(xyzToMorton(nx, ny, nz))) {
+                    if (nx < 0 || nx >= numBlocksX) continue;
+                    if (occupied.has(nx + ny * strideY + nz * strideZ)) {
                         return { bx: nx, by: ny, bz: nz };
                     }
                 }
@@ -215,13 +272,17 @@ const filterCluster = async (
     const numBlocksX = Math.round((gridBounds.max.x - gridBounds.min.x) / blockSize);
     const numBlocksY = Math.round((gridBounds.max.y - gridBounds.min.y) / blockSize);
     const numBlocksZ = Math.round((gridBounds.max.z - gridBounds.min.z) / blockSize);
+    const strideY = numBlocksX;
+    const strideZ = numBlocksX * numBlocksY;
 
     seedBx = Math.max(0, Math.min(seedBx, numBlocksX - 1));
     seedBy = Math.max(0, Math.min(seedBy, numBlocksY - 1));
     seedBz = Math.max(0, Math.min(seedBz, numBlocksZ - 1));
 
+    const occupied = buildOccupiedSet(accumulator, strideY, strideZ);
+
     const maxSearchRadius = Math.max(numBlocksX, numBlocksY, numBlocksZ);
-    const nearest = findNearestOccupiedBlock(accumulator, seedBx, seedBy, seedBz, maxSearchRadius);
+    const nearest = findNearestOccupiedBlock(occupied, seedBx, seedBy, seedBz, maxSearchRadius, numBlocksX, numBlocksY, numBlocksZ);
 
     if (!nearest) {
         logger.warn('filterCluster: no occupied blocks found, returning empty result');
@@ -235,7 +296,7 @@ const filterCluster = async (
         logger.log(`filterCluster: seed block unoccupied, using nearest at (${worldX.toFixed(2)}, ${worldY.toFixed(2)}, ${worldZ.toFixed(2)})`);
     }
 
-    const ccSet = findClusterFromSeed(accumulator, nearest.bx, nearest.by, nearest.bz);
+    const ccSet = findClusterFromSeed(occupied, nearest.bx, nearest.by, nearest.bz, numBlocksX, numBlocksY, numBlocksZ);
     logger.log(`filterCluster: cluster has ${ccSet.size} blocks out of ${accumulator.count} total`);
 
     if (ccSet.size === accumulator.count) {
@@ -265,9 +326,11 @@ const filterCluster = async (
 
         let found = false;
         for (let bz = aabbMinBz; bz <= aabbMaxBz && !found; bz++) {
+            const zOff = bz * strideZ;
             for (let by = aabbMinBy; by <= aabbMaxBy && !found; by++) {
+                const yzOff = by * strideY + zOff;
                 for (let bx = aabbMinBx; bx <= aabbMaxBx && !found; bx++) {
-                    if (ccSet.has(xyzToMorton(bx, by, bz))) {
+                    if (ccSet.has(bx + yzOff)) {
                         found = true;
                     }
                 }
