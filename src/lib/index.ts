@@ -28,6 +28,7 @@ export type {
     FilterBands,
     FilterBox,
     FilterSphere,
+    FilterFloaters,
     FilterCluster,
     Param as ProcessParam,
     Lod,
@@ -68,6 +69,7 @@ export type { NavSeed, NavSimplifyResult } from './voxel/nav-simplify';
 export { marchingCubes } from './voxel/marching-cubes';
 export type { MarchingCubesMesh } from './voxel/marching-cubes';
 export { filterCluster } from './voxel/filter-cluster';
+export { filterFloaters } from './voxel/filter-floaters';
 export { voxelizeToAccumulator } from './voxel/voxelize';
 
 // Types

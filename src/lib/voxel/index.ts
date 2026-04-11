@@ -22,3 +22,5 @@ export type { MarchingCubesMesh } from './marching-cubes.js';
 export { voxelizeToAccumulator } from './voxelize.js';
 
 export { filterCluster } from './filter-cluster.js';
+
+export { filterFloaters } from './filter-floaters.js';

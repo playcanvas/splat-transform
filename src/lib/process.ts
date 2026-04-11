@@ -161,6 +161,24 @@ type Decimate = {
 };
 
 /**
+ * Remove Gaussians that don't meaningfully contribute to any solid voxel.
+ *
+ * GPU-voxelizes the scene at a given resolution, then evaluates each Gaussian's
+ * opacity contribution at occupied voxel centers. Discards Gaussians whose
+ * contribution is below a minimum threshold at every solid voxel.
+ */
+type FilterFloaters = {
+    /** Action type identifier. */
+    kind: 'filterFloaters';
+    /** Voxel size in world units. Default: 0.05 */
+    voxelSize?: number;
+    /** Opacity threshold for solid voxels. Default: 0.1 */
+    opacityCutoff?: number;
+    /** Minimum Gaussian contribution at a voxel center to be kept. Default: 1/255 */
+    minContribution?: number;
+};
+
+/**
  * Filter Gaussians to keep only those in the connected cluster at a seed position.
  *
  * GPU-voxelizes the scene at a coarse resolution, finds the connected component
@@ -182,7 +200,7 @@ type FilterCluster = {
  * Options for processing actions that require external resources.
  */
 type ProcessOptions = {
-    /** Function to create a GPU device (required for filterCluster). */
+    /** Function to create a GPU device (required for filterFloaters, filterCluster). */
     createDevice?: DeviceCreator;
 };
 
@@ -198,13 +216,14 @@ type ProcessOptions = {
  * - `filterBands` - Remove spherical harmonic bands above a threshold
  * - `filterBox` - Keep splats within a bounding box
  * - `filterSphere` - Keep splats within a sphere
+ * - `filterFloaters` - Remove splats not contributing to any occupied voxel (GPU)
  * - `filterCluster` - Keep splats in the connected cluster at a seed position (GPU)
  * - `lod` - Assign LOD level to all splats
  * - `summary` - Print statistical summary to logger
  * - `mortonOrder` - Reorder splats by Morton code for spatial locality
  * - `decimate` - Simplify to target count via progressive pairwise merging
  */
-type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | FilterCluster | Param | Lod | Summary | MortonOrder | Decimate;
+type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | FilterFloaters | FilterCluster | Param | Lod | Summary | MortonOrder | Decimate;
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
@@ -532,6 +551,20 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 result = simplifyGaussians(result, keepCount);
                 break;
             }
+            case 'filterFloaters': {
+                if (!options?.createDevice) {
+                    throw new Error('filterFloaters requires a createDevice function (GPU voxelization)');
+                }
+                const { filterFloaters } = await import('./voxel/filter-floaters');
+                result = await filterFloaters(
+                    result,
+                    options.createDevice,
+                    processAction.voxelSize,
+                    processAction.opacityCutoff,
+                    processAction.minContribution
+                );
+                break;
+            }
             case 'filterCluster': {
                 if (!options?.createDevice) {
                     throw new Error('filterCluster requires a createDevice function (GPU voxelization)');
@@ -564,6 +597,7 @@ export {
     type FilterBands,
     type FilterBox,
     type FilterSphere,
+    type FilterFloaters,
     type FilterCluster,
     type Param,
     type Lod,

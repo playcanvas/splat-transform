@@ -17,6 +17,7 @@ import {
     writeFile,
     processDataTable,
     type ProcessAction,
+    type FilterFloaters,
     type FilterCluster,
     type Options as LibOptions,
     logger
@@ -78,7 +79,7 @@ const normalizeArgv = (args: string[]): string[] => {
     const result: string[] = [];
     for (let i = 0; i < args.length; i++) {
         const arg = args[i];
-        if (arg === '--filter-cluster' || arg === '-D') {
+        if (arg === '--filter-cluster' || arg === '-D' || arg === '--filter-floaters' || arg === '-G') {
             const next = args[i + 1];
             if (next === undefined || (next.startsWith('-') && !next.match(/^-\d/)) || (!next.includes(',') && !next.match(/^\d/))) {
                 result.push(`${arg}=`);
@@ -134,6 +135,7 @@ const parseArguments = async () => {
             'filter-sphere': { type: 'string', short: 'S', multiple: true },
             'decimate': { type: 'string', short: 'F', multiple: true },
             'filter-cluster': { type: 'string', short: 'D', multiple: true },
+            'filter-floaters': { type: 'string', short: 'G', multiple: true },
             params: { type: 'string', short: 'p', multiple: true },
             lod: { type: 'string', short: 'l', multiple: true },
             summary: { type: 'boolean', short: 'm', multiple: true },
@@ -435,6 +437,23 @@ const parseArguments = async () => {
                     current.processActions.push(fcAction);
                     break;
                 }
+                case 'filter-floaters': {
+                    const ffAction: FilterFloaters = { kind: 'filterFloaters' };
+                    if (t.value) {
+                        const parts = t.value.split(',').map((p: string) => p.trim());
+                        if (parts.length >= 1 && parts[0] !== '') {
+                            ffAction.voxelSize = parseNumber(parts[0]);
+                        }
+                        if (parts.length >= 2) {
+                            ffAction.opacityCutoff = parseNumber(parts[1]);
+                        }
+                        if (parts.length >= 3) {
+                            ffAction.minContribution = parseNumber(parts[2]);
+                        }
+                    }
+                    current.processActions.push(ffAction);
+                    break;
+                }
             }
         }
     }
@@ -474,6 +493,9 @@ ACTIONS (can be repeated, in any order)
                                               Append _raw for raw PLY values (e.g. opacity_raw).
     -F, --decimate         <n|n%>           Simplify to n Gaussians via progressive pairwise merging
                                               Use n% to keep a percentage of Gaussians
+    -G, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel.
+                                              Evaluates each Gaussian at occupied voxel centers.
+                                              Default: size=0.05, opacity=0.1, min=0.004 (1/255)
     -D, --filter-cluster   [dim,x,y,z,op]  Keep only the connected cluster at seed (x,y,z).
                                               GPU-voxelizes at coarse resolution (max dim voxels/axis).
                                               Default: dim=1024, seed=(0,0,0), opacity=0.1
