@@ -5,6 +5,7 @@ import { simplifyGaussians } from './data-table/decimate';
 import { sortMortonOrder } from './data-table/morton-order';
 import { computeSummary, type SummaryData } from './data-table/summary';
 import { convertToSpace } from './data-table/transform';
+import type { DeviceCreator } from './types';
 import { logger } from './utils/logger';
 import { Transform } from './utils/math';
 
@@ -160,6 +161,32 @@ type Decimate = {
 };
 
 /**
+ * Filter Gaussians to keep only those in the connected cluster at a seed position.
+ *
+ * GPU-voxelizes the scene at a coarse resolution, finds the connected component
+ * of occupied blocks containing the seed, and keeps only Gaussians whose AABB
+ * overlaps that cluster.
+ */
+type FilterCluster = {
+    /** Action type identifier. */
+    kind: 'filterCluster';
+    /** Max voxels per axis for coarse voxelization. Default: 1024 */
+    maxDimension?: number;
+    /** Seed position for finding the connected component. Default: Vec3(0,0,0) */
+    seed?: Vec3;
+    /** Opacity threshold for solid voxels. Default: 0.1 */
+    opacityCutoff?: number;
+};
+
+/**
+ * Options for processing actions that require external resources.
+ */
+type ProcessOptions = {
+    /** Function to create a GPU device (required for filterCluster). */
+    createDevice?: DeviceCreator;
+};
+
+/**
  * A processing action to apply to splat data.
  *
  * Actions can transform, filter, or analyze the data:
@@ -171,12 +198,13 @@ type Decimate = {
  * - `filterBands` - Remove spherical harmonic bands above a threshold
  * - `filterBox` - Keep splats within a bounding box
  * - `filterSphere` - Keep splats within a sphere
+ * - `filterCluster` - Keep splats in the connected cluster at a seed position (GPU)
  * - `lod` - Assign LOD level to all splats
  * - `summary` - Print statistical summary to logger
  * - `mortonOrder` - Reorder splats by Morton code for spatial locality
  * - `decimate` - Simplify to target count via progressive pairwise merging
  */
-type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | Param | Lod | Summary | MortonOrder | Decimate;
+type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | FilterCluster | Param | Lod | Summary | MortonOrder | Decimate;
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
@@ -296,13 +324,14 @@ const filter = (dataTable: DataTable, predicate: (row: any, rowIndex: number) =>
  *
  * @param dataTable - The input splat data.
  * @param processActions - Array of actions to apply in sequence.
+ * @param options - Optional resources for GPU-dependent actions (e.g. filterCluster).
  * @returns The processed DataTable (may be a new instance if filtered).
  *
  * @example
  * ```ts
  * import { Vec3 } from 'playcanvas';
  *
- * const processed = processDataTable(dataTable, [
+ * const processed = await processDataTable(dataTable, [
  *     { kind: 'scale', value: 0.5 },
  *     { kind: 'translate', value: new Vec3(0, 1, 0) },
  *     { kind: 'filterNaN' },
@@ -311,7 +340,7 @@ const filter = (dataTable: DataTable, predicate: (row: any, rowIndex: number) =>
  * ]);
  * ```
  */
-const processDataTable = (dataTable: DataTable, processActions: ProcessAction[]) => {
+const processDataTable = async (dataTable: DataTable, processActions: ProcessAction[], options?: ProcessOptions): Promise<DataTable> => {
     let result = dataTable;
 
     for (let i = 0; i < processActions.length; i++) {
@@ -503,6 +532,20 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
                 result = simplifyGaussians(result, keepCount);
                 break;
             }
+            case 'filterCluster': {
+                if (!options?.createDevice) {
+                    throw new Error('filterCluster requires a createDevice function (GPU voxelization)');
+                }
+                const { filterCluster } = await import('./voxel/filter-cluster');
+                result = await filterCluster(
+                    result,
+                    options.createDevice,
+                    processAction.maxDimension,
+                    processAction.seed,
+                    processAction.opacityCutoff
+                );
+                break;
+            }
         }
     }
 
@@ -512,6 +555,7 @@ const processDataTable = (dataTable: DataTable, processActions: ProcessAction[])
 export {
     processDataTable,
     type ProcessAction,
+    type ProcessOptions,
     type Translate,
     type Rotate,
     type Scale,
@@ -520,6 +564,7 @@ export {
     type FilterBands,
     type FilterBox,
     type FilterSphere,
+    type FilterCluster,
     type Param,
     type Lod,
     type Summary,

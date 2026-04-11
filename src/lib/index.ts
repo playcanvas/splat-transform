@@ -19,6 +19,7 @@ export type { OutputFormat, WriteOptions } from './write';
 export { processDataTable } from './process';
 export type {
     ProcessAction,
+    ProcessOptions,
     Translate,
     Rotate,
     Scale,
@@ -27,6 +28,7 @@ export type {
     FilterBands,
     FilterBox,
     FilterSphere,
+    FilterCluster,
     Param as ProcessParam,
     Lod,
     Summary,
@@ -52,7 +54,7 @@ export { readVoxel } from './readers/read-voxel';
 
 // Individual writers (for advanced use)
 export { writeSog } from './writers/write-sog';
-export type { DeviceCreator } from './writers/write-sog';
+export type { DeviceCreator } from './types';
 export { writePly } from './writers/write-ply';
 export { writeCompressedPly } from './writers/write-compressed-ply';
 export { writeCsv } from './writers/write-csv';
@@ -65,6 +67,8 @@ export { fillExterior, simplifyForCapsule } from './voxel/nav-simplify';
 export type { NavSeed, NavSimplifyResult } from './voxel/nav-simplify';
 export { marchingCubes } from './voxel/marching-cubes';
 export type { MarchingCubesMesh } from './voxel/marching-cubes';
+export { filterCluster } from './voxel/filter-cluster';
+export { voxelizeToAccumulator } from './voxel/voxelize';
 
 // Types
 export type { Options, Param } from './types';

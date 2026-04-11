@@ -1,5 +1,4 @@
 import { dirname, resolve } from 'pathe';
-import { GraphicsDevice } from 'playcanvas';
 
 import { version } from '../../../package.json';
 import { Column, DataTable } from '../data-table/data-table';
@@ -8,19 +7,10 @@ import { convertToSpace } from '../data-table/transform';
 import { type FileSystem, writeFile, ZipFileSystem } from '../io/write';
 import { kmeans } from '../spatial/k-means';
 import { quantize1d } from '../spatial/quantize-1d';
+import type { DeviceCreator } from '../types';
 import { logger } from '../utils/logger';
 import { sigmoid, Transform } from '../utils/math';
 import { WebPCodec } from '../utils/webp-codec';
-
-/**
- * A function that creates a PlayCanvas GraphicsDevice on demand.
- *
- * Used for GPU-accelerated k-means clustering during SOG compression.
- * The application is responsible for caching if needed.
- *
- * @returns Promise resolving to a GraphicsDevice instance.
- */
-type DeviceCreator = () => Promise<GraphicsDevice>;
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
@@ -381,4 +371,4 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     }
 };
 
-export { writeSog, type DeviceCreator };
+export { writeSog };

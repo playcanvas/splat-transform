@@ -54,4 +54,14 @@ type Param = {
     value: string;
 };
 
-export type { Options, Param };
+/**
+ * A function that creates a PlayCanvas GraphicsDevice on demand.
+ *
+ * Used for GPU-accelerated operations such as SOG compression and voxelization.
+ * The application is responsible for caching if needed.
+ *
+ * @returns Promise resolving to a GraphicsDevice instance.
+ */
+type DeviceCreator = () => Promise<import('playcanvas').GraphicsDevice>;
+
+export type { Options, Param, DeviceCreator };

@@ -1,6 +1,6 @@
 import { DataTable } from './data-table/data-table';
 import { type FileSystem } from './io/write';
-import { Options } from './types';
+import { type DeviceCreator, type Options } from './types';
 import { logger } from './utils/logger';
 import { writeCompressedPly } from './writers/write-compressed-ply';
 import { writeCsv } from './writers/write-csv';
@@ -8,7 +8,7 @@ import { writeGlb } from './writers/write-glb';
 import { writeHtml } from './writers/write-html';
 import { writeLod } from './writers/write-lod';
 import { writePly } from './writers/write-ply';
-import { writeSog, type DeviceCreator } from './writers/write-sog';
+import { writeSog } from './writers/write-sog';
 import { writeVoxel } from './writers/write-voxel';
 
 /**

@@ -1,6 +1,6 @@
 import { lstat, mkdir, readFile as pathReadFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
-import { exit, hrtime } from 'node:process';
+import process, { exit, hrtime } from 'node:process';
 import { parseArgs } from 'node:util';
 
 import { GraphicsDevice, Vec3 } from 'playcanvas';
@@ -17,6 +17,7 @@ import {
     writeFile,
     processDataTable,
     type ProcessAction,
+    type FilterCluster,
     type Options as LibOptions,
     logger
 } from '../lib/index';
@@ -64,8 +65,36 @@ type File = {
     processActions: ProcessAction[];
 };
 
+/**
+ * Normalize argv so that `--filter-cluster` / `-D` without an explicit value
+ * gets converted to `--filter-cluster=` (empty string value).
+ * This prevents parseArgs from consuming the next positional (e.g. the output
+ * filename) as the option value.
+ *
+ * @param args - Raw command-line arguments (process.argv.slice(2)).
+ * @returns Normalized argument array.
+ */
+const normalizeArgv = (args: string[]): string[] => {
+    const result: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        if (arg === '--filter-cluster' || arg === '-D') {
+            const next = args[i + 1];
+            if (next === undefined || (next.startsWith('-') && !next.match(/^-\d/)) || (!next.includes(',') && !next.match(/^\d/))) {
+                result.push(`${arg}=`);
+            } else {
+                result.push(arg);
+            }
+        } else {
+            result.push(arg);
+        }
+    }
+    return result;
+};
+
 const parseArguments = async () => {
     const { values: v, tokens } = parseArgs({
+        args: normalizeArgv(process.argv.slice(2)),
         tokens: true,
         strict: true,
         allowPositionals: true,
@@ -104,6 +133,7 @@ const parseArguments = async () => {
             'filter-box': { type: 'string', short: 'B', multiple: true },
             'filter-sphere': { type: 'string', short: 'S', multiple: true },
             'decimate': { type: 'string', short: 'F', multiple: true },
+            'filter-cluster': { type: 'string', short: 'D', multiple: true },
             params: { type: 'string', short: 'p', multiple: true },
             lod: { type: 'string', short: 'l', multiple: true },
             summary: { type: 'boolean', short: 'm', multiple: true },
@@ -384,6 +414,27 @@ const parseArguments = async () => {
                     });
                     break;
                 }
+                case 'filter-cluster': {
+                    const fcAction: FilterCluster = { kind: 'filterCluster' };
+                    if (t.value) {
+                        const parts = t.value.split(',').map((p: string) => p.trim());
+                        if (parts.length >= 1 && parts[0] !== '') {
+                            fcAction.maxDimension = parseInteger(parts[0]);
+                        }
+                        if (parts.length >= 4) {
+                            fcAction.seed = new Vec3(
+                                parseNumber(parts[1]),
+                                parseNumber(parts[2]),
+                                parseNumber(parts[3])
+                            );
+                        }
+                        if (parts.length >= 5) {
+                            fcAction.opacityCutoff = parseNumber(parts[4]);
+                        }
+                    }
+                    current.processActions.push(fcAction);
+                    break;
+                }
             }
         }
     }
@@ -423,6 +474,9 @@ ACTIONS (can be repeated, in any order)
                                               Append _raw for raw PLY values (e.g. opacity_raw).
     -F, --decimate         <n|n%>           Simplify to n Gaussians via progressive pairwise merging
                                               Use n% to keep a percentage of Gaussians
+    -D, --filter-cluster   [dim,x,y,z,op]  Keep only the connected cluster at seed (x,y,z).
+                                              GPU-voxelizes at coarse resolution (max dim voxels/axis).
+                                              Default: dim=1024, seed=(0,0,0), opacity=0.1
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
     -l, --lod              <n>              Specify the level of detail, n >= 0
     -m, --summary                           Print per-column statistics to stdout
@@ -619,6 +673,31 @@ const main = async () => {
     }
 
     try {
+        // Create device creator function with caching (needed for processDataTable + writeFile)
+        // deviceIdx: -1 = auto, -2 = CPU, 0+ = specific GPU index
+        let cachedDevice: GraphicsDevice | undefined;
+        const deviceCreator = options.deviceIdx === -2 ? undefined : async () => {
+            if (cachedDevice) {
+                return cachedDevice;
+            }
+
+            let adapterName: string | undefined;
+            if (options.deviceIdx >= 0) {
+                const adapters = await enumerateAdapters();
+                const adapter = adapters[options.deviceIdx];
+                if (adapter) {
+                    adapterName = adapter.name;
+                } else {
+                    logger.warn(`GPU adapter index ${options.deviceIdx} not found, using default`);
+                }
+            }
+
+            cachedDevice = await createDevice(adapterName);
+            return cachedDevice;
+        };
+
+        const processOptions = deviceCreator ? { createDevice: deviceCreator } : undefined;
+
         // Create file system for reading (reused across all input files)
         const nodeFs = new NodeReadFileSystem();
 
@@ -651,7 +730,10 @@ const main = async () => {
                     throw new Error(`Unsupported data in file '${inputArg.filename}'`);
                 }
 
-                dataTables[i] = processDataTable(dataTable, inputArg.processActions);
+                const isEnv = dataTable.hasColumn('lod') && dataTable.getColumnByName('lod').data.every(v => v === -1);
+                if (!isEnv) {
+                    dataTables[i] = await processDataTable(dataTable, inputArg.processActions, processOptions);
+                }
             }
 
             return dataTables;
@@ -662,47 +744,26 @@ const main = async () => {
         const nonEnvDataTables = inputDataTables.filter(dt => !dt.hasColumn('lod') || dt.getColumnByName('lod').data.some(v => v !== -1));
 
         // combine inputs into a single output dataTable
-        const dataTable = nonEnvDataTables.length > 0 && processDataTable(
+        const dataTable = nonEnvDataTables.length > 0 && await processDataTable(
             combine(nonEnvDataTables),
-            outputArg.processActions
+            outputArg.processActions,
+            processOptions
         );
 
         if (!dataTable || dataTable.numRows === 0) {
             throw new Error('No Gaussians to write');
         }
 
-        const envDataTable = envDataTables.length > 0 && processDataTable(
+        const envDataTable = envDataTables.length > 0 && await processDataTable(
             combine(envDataTables),
-            outputArg.processActions
+            outputArg.processActions,
+            processOptions
         );
 
         logger.log(`Total gaussians loaded: ${dataTable.numRows}`);
 
         // Skip file writing for null output
         if (!isNullOutput) {
-            // Create device creator function with caching
-            // deviceIdx: -1 = auto, -2 = CPU, 0+ = specific GPU index
-            let cachedDevice: GraphicsDevice | undefined;
-            const deviceCreator = options.deviceIdx === -2 ? undefined : async () => {
-                if (cachedDevice) {
-                    return cachedDevice;
-                }
-
-                let adapterName: string | undefined;
-                if (options.deviceIdx >= 0) {
-                    const adapters = await enumerateAdapters();
-                    const adapter = adapters[options.deviceIdx];
-                    if (adapter) {
-                        adapterName = adapter.name;
-                    } else {
-                        logger.warn(`GPU adapter index ${options.deviceIdx} not found, using default`);
-                    }
-                }
-
-                cachedDevice = await createDevice(adapterName);
-                return cachedDevice;
-            };
-
             // write file
             await writeFile({
                 filename: outputFilename,

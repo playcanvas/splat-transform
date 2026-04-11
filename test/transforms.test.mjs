@@ -31,11 +31,11 @@ describe('Translate Transform', () => {
         testData = createMinimalTestData();
     });
 
-    it('should compose translation into transform without modifying raw data', () => {
+    it('should compose translation into transform without modifying raw data', async () => {
         const originalSummary = computeSummary(testData);
         const clonedData = testData.clone();
 
-        const result = processDataTable(clonedData, [{
+        const result = await processDataTable(clonedData, [{
             kind: 'translate',
             value: new Vec3(10, 20, 30)
         }]);
@@ -67,11 +67,11 @@ describe('Translate Transform', () => {
         }
     });
 
-    it('should handle zero translation', () => {
+    it('should handle zero translation', async () => {
         const originalSummary = computeSummary(testData);
         const clonedData = testData.clone();
 
-        const result = processDataTable(clonedData, [{
+        const result = await processDataTable(clonedData, [{
             kind: 'translate',
             value: new Vec3(0, 0, 0)
         }]);
@@ -92,12 +92,12 @@ describe('Scale Transform', () => {
         testData = createMinimalTestData();
     });
 
-    it('should compose scale into transform without modifying raw data', () => {
+    it('should compose scale into transform without modifying raw data', async () => {
         const originalSummary = computeSummary(testData);
         const clonedData = testData.clone();
 
         const scaleFactor = 2.0;
-        const result = processDataTable(clonedData, [{
+        const result = await processDataTable(clonedData, [{
             kind: 'scale',
             value: scaleFactor
         }]);
@@ -127,11 +127,11 @@ describe('Scale Transform', () => {
         }
     });
 
-    it('should handle scale factor of 1 (no change)', () => {
+    it('should handle scale factor of 1 (no change)', async () => {
         const originalSummary = computeSummary(testData);
         const clonedData = testData.clone();
 
-        const result = processDataTable(clonedData, [{
+        const result = await processDataTable(clonedData, [{
             kind: 'scale',
             value: 1.0
         }]);
@@ -142,11 +142,11 @@ describe('Scale Transform', () => {
         assertClose(newSummary.columns.scale_0.mean, originalSummary.columns.scale_0.mean, 1e-5, 'scale_0');
     });
 
-    it('should handle fractional scale factor', () => {
+    it('should handle fractional scale factor', async () => {
         const clonedData = testData.clone();
 
         const scaleFactor = 0.5;
-        const result = processDataTable(clonedData, [{
+        const result = await processDataTable(clonedData, [{
             kind: 'scale',
             value: scaleFactor
         }]);
@@ -162,12 +162,12 @@ describe('Rotate Transform', () => {
         testData = createMinimalTestData();
     });
 
-    it('should compose rotation into transform without modifying raw data', () => {
+    it('should compose rotation into transform without modifying raw data', async () => {
         const originalSummary = computeSummary(testData);
         const clonedData = testData.clone();
 
         // 90 degree rotation around Y
-        const result = processDataTable(clonedData, [{
+        const result = await processDataTable(clonedData, [{
             kind: 'rotate',
             value: new Vec3(0, 90, 0)
         }]);
@@ -193,11 +193,11 @@ describe('Rotate Transform', () => {
         }
     });
 
-    it('should handle zero rotation', () => {
+    it('should handle zero rotation', async () => {
         const originalSummary = computeSummary(testData);
         const clonedData = testData.clone();
 
-        const result = processDataTable(clonedData, [{
+        const result = await processDataTable(clonedData, [{
             kind: 'rotate',
             value: new Vec3(0, 0, 0)
         }]);
@@ -218,11 +218,11 @@ describe('Filter Box', () => {
         testData = createMinimalTestData();
     });
 
-    it('should filter out splats outside bounding box', () => {
+    it('should filter out splats outside bounding box', async () => {
         const clonedData = testData.clone();
 
         // Filter to only include splats with x >= 0
-        const result = processDataTable(clonedData, [{
+        const result = await processDataTable(clonedData, [{
             kind: 'filterBox',
             min: new Vec3(0, -Infinity, -Infinity),
             max: new Vec3(Infinity, Infinity, Infinity)
@@ -237,10 +237,10 @@ describe('Filter Box', () => {
         assert(summary.columns.x.min >= 0, 'All x values should be >= 0');
     });
 
-    it('should keep all splats when box contains everything', () => {
+    it('should keep all splats when box contains everything', async () => {
         const clonedData = testData.clone();
 
-        const result = processDataTable(clonedData, [{
+        const result = await processDataTable(clonedData, [{
             kind: 'filterBox',
             min: new Vec3(-Infinity, -Infinity, -Infinity),
             max: new Vec3(Infinity, Infinity, Infinity)
@@ -249,10 +249,10 @@ describe('Filter Box', () => {
         assert.strictEqual(result.numRows, testData.numRows, 'Should keep all rows');
     });
 
-    it('should return empty when box excludes everything', () => {
+    it('should return empty when box excludes everything', async () => {
         const clonedData = testData.clone();
 
-        const result = processDataTable(clonedData, [{
+        const result = await processDataTable(clonedData, [{
             kind: 'filterBox',
             min: new Vec3(1000, 1000, 1000),
             max: new Vec3(1001, 1001, 1001)
@@ -261,7 +261,7 @@ describe('Filter Box', () => {
         assert.strictEqual(result.numRows, 0, 'Should have no rows');
     });
 
-    it('should use exact oriented box test with non-axis-aligned rotation', () => {
+    it('should use exact oriented box test with non-axis-aligned rotation', async () => {
         const dt = new DataTable([
             new Column('x', new Float32Array([0, 1, 0, 0.9, -0.9])),
             new Column('y', new Float32Array([0, 0, 0, 0, 0])),
@@ -273,7 +273,7 @@ describe('Filter Box', () => {
         // Engine-space box [-0.8, 0.8] on x and z.
         // Points 0,1,2 map inside; points 3,4 map outside (engine x=1.27 and z=1.27).
         // A conservative AABB approach would incorrectly include points 3 and 4.
-        const result = processDataTable(dt, [{
+        const result = await processDataTable(dt, [{
             kind: 'filterBox',
             min: new Vec3(-0.8, -Infinity, -0.8),
             max: new Vec3(0.8, Infinity, 0.8)
@@ -290,11 +290,11 @@ describe('Filter Sphere', () => {
         testData = createMinimalTestData();
     });
 
-    it('should filter out splats outside sphere', () => {
+    it('should filter out splats outside sphere', async () => {
         const clonedData = testData.clone();
 
         // Filter to splats within radius 1 of origin
-        const result = processDataTable(clonedData, [{
+        const result = await processDataTable(clonedData, [{
             kind: 'filterSphere',
             center: new Vec3(0, 0, 0),
             radius: 1.0
@@ -314,10 +314,10 @@ describe('Filter Sphere', () => {
         }
     });
 
-    it('should keep all splats when sphere contains everything', () => {
+    it('should keep all splats when sphere contains everything', async () => {
         const clonedData = testData.clone();
 
-        const result = processDataTable(clonedData, [{
+        const result = await processDataTable(clonedData, [{
             kind: 'filterSphere',
             center: new Vec3(0, 0, 0),
             radius: 1000
@@ -334,12 +334,12 @@ describe('Filter By Value', () => {
         testData = createMinimalTestData();
     });
 
-    it('should filter by greater than comparison', () => {
+    it('should filter by greater than comparison', async () => {
         const clonedData = testData.clone();
         const originalSummary = computeSummary(testData);
         const threshold = originalSummary.columns.x.median;
 
-        const result = processDataTable(clonedData, [{
+        const result = await processDataTable(clonedData, [{
             kind: 'filterByValue',
             columnName: 'x',
             comparator: 'gt',
@@ -356,12 +356,12 @@ describe('Filter By Value', () => {
         }
     });
 
-    it('should filter by less than or equal comparison', () => {
+    it('should filter by less than or equal comparison', async () => {
         const clonedData = testData.clone();
         const originalSummary = computeSummary(testData);
         const threshold = originalSummary.columns.x.median;
 
-        const result = processDataTable(clonedData, [{
+        const result = await processDataTable(clonedData, [{
             kind: 'filterByValue',
             columnName: 'x',
             comparator: 'lte',
@@ -375,11 +375,11 @@ describe('Filter By Value', () => {
         }
     });
 
-    it('should filter by equality', () => {
+    it('should filter by equality', async () => {
         const clonedData = testData.clone();
 
         // All y values are 0 in our test data
-        const result = processDataTable(clonedData, [{
+        const result = await processDataTable(clonedData, [{
             kind: 'filterByValue',
             columnName: 'y',
             comparator: 'eq',
@@ -390,11 +390,11 @@ describe('Filter By Value', () => {
         assert.strictEqual(result.numRows, testData.numRows, 'Should keep all rows');
     });
 
-    it('should filter by not equal', () => {
+    it('should filter by not equal', async () => {
         const clonedData = testData.clone();
 
         // All y values are 0, so filtering neq 0 should give empty
-        const result = processDataTable(clonedData, [{
+        const result = await processDataTable(clonedData, [{
             kind: 'filterByValue',
             columnName: 'y',
             comparator: 'neq',
@@ -404,14 +404,14 @@ describe('Filter By Value', () => {
         assert.strictEqual(result.numRows, 0, 'Should have no rows');
     });
 
-    it('should apply transform before filtering transform-sensitive columns', () => {
+    it('should apply transform before filtering transform-sensitive columns', async () => {
         const data = new DataTable([
             new Column('x', new Float32Array([0, 1, 2])),
             new Column('y', new Float32Array([0, 0, 0])),
             new Column('z', new Float32Array([0, 0, 0]))
         ]);
 
-        const result = processDataTable(data, [
+        const result = await processDataTable(data, [
             { kind: 'translate', value: new Vec3(10, 0, 0) },
             { kind: 'filterByValue', columnName: 'x', comparator: 'gt', value: 11 }
         ]);
@@ -421,7 +421,7 @@ describe('Filter By Value', () => {
         assert.ok(result.transform.isIdentity(), 'Transform should be identity after baking');
     });
 
-    it('should apply spatial transform but skip inverse transform for _raw suffix', () => {
+    it('should apply spatial transform but skip inverse transform for _raw suffix', async () => {
         const logVal = Math.log(2);
         const data = new DataTable([
             new Column('x', new Float32Array([0, 0, 0])),
@@ -432,7 +432,7 @@ describe('Filter By Value', () => {
             new Column('scale_2', new Float32Array([0, 0, 0]))
         ]);
 
-        const result = processDataTable(data, [
+        const result = await processDataTable(data, [
             { kind: 'scale', value: 2 },
             { kind: 'filterByValue', columnName: 'scale_0_raw', comparator: 'gt', value: logVal * 1.5 }
         ]);
@@ -442,14 +442,14 @@ describe('Filter By Value', () => {
 });
 
 describe('Filter NaN', () => {
-    it('should remove rows with NaN values', () => {
+    it('should remove rows with NaN values', async () => {
         const testData = createMinimalTestData();
 
         // Inject some NaN values
         testData.getColumnByName('x').data[0] = NaN;
         testData.getColumnByName('y').data[5] = NaN;
 
-        const result = processDataTable(testData, [{
+        const result = await processDataTable(testData, [{
             kind: 'filterNaN'
         }]);
 
@@ -463,10 +463,10 @@ describe('Filter NaN', () => {
         }
     });
 
-    it('should keep all rows when no NaN values exist', () => {
+    it('should keep all rows when no NaN values exist', async () => {
         const testData = createMinimalTestData();
 
-        const result = processDataTable(testData, [{
+        const result = await processDataTable(testData, [{
             kind: 'filterNaN'
         }]);
 
@@ -475,7 +475,7 @@ describe('Filter NaN', () => {
 });
 
 describe('Filter SH Bands', () => {
-    it('should remove higher SH bands', () => {
+    it('should remove higher SH bands', async () => {
         // Create data with SH coefficients (band 1 = 9 coeffs per channel = 27 total)
         const testData = createMinimalTestData({ includeSH: true, shBands: 2 });
 
@@ -483,7 +483,7 @@ describe('Filter SH Bands', () => {
         assert(testData.hasColumn('f_rest_0'), 'Should have f_rest_0');
         assert(testData.hasColumn('f_rest_23'), 'Should have f_rest_23 for band 2');
 
-        const result = processDataTable(testData, [{
+        const result = await processDataTable(testData, [{
             kind: 'filterBands',
             value: 1 // Keep only band 0 and 1 (9 coeffs per channel)
         }]);
@@ -497,10 +497,10 @@ describe('Filter SH Bands', () => {
         assert(!result.hasColumn('f_rest_23'), 'Should not have f_rest_23');
     });
 
-    it('should remove all SH bands when filtering to 0', () => {
+    it('should remove all SH bands when filtering to 0', async () => {
         const testData = createMinimalTestData({ includeSH: true, shBands: 1 });
 
-        const result = processDataTable(testData, [{
+        const result = await processDataTable(testData, [{
             kind: 'filterBands',
             value: 0
         }]);
@@ -511,10 +511,10 @@ describe('Filter SH Bands', () => {
 });
 
 describe('Chained Transforms', () => {
-    it('should compose multiple transforms into transform', () => {
+    it('should compose multiple transforms into transform', async () => {
         const testData = createMinimalTestData();
 
-        const result = processDataTable(testData, [
+        const result = await processDataTable(testData, [
             { kind: 'scale', value: 2.0 },
             { kind: 'translate', value: new Vec3(100, 0, 0) }
         ]);
@@ -528,10 +528,10 @@ describe('Chained Transforms', () => {
         }
     });
 
-    it('should handle filter followed by transform', () => {
+    it('should handle filter followed by transform', async () => {
         const testData = createMinimalTestData();
 
-        const result = processDataTable(testData, [
+        const result = await processDataTable(testData, [
             {
                 kind: 'filterBox',
                 min: new Vec3(0, -Infinity, -Infinity),
@@ -550,12 +550,12 @@ describe('Chained Transforms', () => {
 });
 
 describe('Summary Action', () => {
-    it('should not modify data when computing summary', () => {
+    it('should not modify data when computing summary', async () => {
         const testData = createMinimalTestData();
         const originalRows = testData.numRows;
 
         // Summary action should just log, not modify data
-        const result = processDataTable(testData, [{
+        const result = await processDataTable(testData, [{
             kind: 'summary'
         }]);
 
@@ -564,11 +564,11 @@ describe('Summary Action', () => {
 });
 
 describe('LOD Action', () => {
-    it('should add LOD column with specified value', () => {
+    it('should add LOD column with specified value', async () => {
         const testData = createMinimalTestData();
         assert(!testData.hasColumn('lod'), 'Should not have lod column initially');
 
-        const result = processDataTable(testData, [{
+        const result = await processDataTable(testData, [{
             kind: 'lod',
             value: 2
         }]);
@@ -589,11 +589,11 @@ describe('Morton Order', () => {
         testData = createMinimalTestData();
     });
 
-    it('should preserve row count and summary statistics', () => {
+    it('should preserve row count and summary statistics', async () => {
         const originalSummary = computeSummary(testData);
         const clonedData = testData.clone();
 
-        const result = processDataTable(clonedData, [{ kind: 'mortonOrder' }]);
+        const result = await processDataTable(clonedData, [{ kind: 'mortonOrder' }]);
 
         const newSummary = computeSummary(result);
 
@@ -611,18 +611,18 @@ describe('Morton Order', () => {
         }
     });
 
-    it('should be idempotent (applying twice gives same result)', () => {
+    it('should be idempotent (applying twice gives same result)', async () => {
         const clonedData = testData.clone();
 
         // Apply mortonOrder once
-        const result1 = processDataTable(clonedData, [{ kind: 'mortonOrder' }]);
+        const result1 = await processDataTable(clonedData, [{ kind: 'mortonOrder' }]);
 
         // Capture the order after first application
         const xAfterFirst = Array.from(result1.getColumnByName('x').data);
         const zAfterFirst = Array.from(result1.getColumnByName('z').data);
 
         // Apply mortonOrder again
-        const result2 = processDataTable(result1, [{ kind: 'mortonOrder' }]);
+        const result2 = await processDataTable(result1, [{ kind: 'mortonOrder' }]);
 
         // Order should be unchanged
         const xAfterSecond = result2.getColumnByName('x').data;
@@ -634,7 +634,7 @@ describe('Morton Order', () => {
         }
     });
 
-    it('should preserve all data values (permutation correctness)', () => {
+    it('should preserve all data values (permutation correctness)', async () => {
         const clonedData = testData.clone();
 
         // Collect all values before (as sorted arrays for comparison)
@@ -643,7 +643,7 @@ describe('Morton Order', () => {
             originalValues[col.name] = Array.from(col.data).sort((a, b) => a - b);
         }
 
-        const result = processDataTable(clonedData, [{ kind: 'mortonOrder' }]);
+        const result = await processDataTable(clonedData, [{ kind: 'mortonOrder' }]);
 
         // After mortonOrder, all values should still be present (just reordered)
         for (const col of result.columns) {
@@ -655,10 +655,10 @@ describe('Morton Order', () => {
         }
     });
 
-    it('should order by Morton code (spatial locality)', () => {
+    it('should order by Morton code (spatial locality)', async () => {
         const clonedData = testData.clone();
 
-        const result = processDataTable(clonedData, [{ kind: 'mortonOrder' }]);
+        const result = await processDataTable(clonedData, [{ kind: 'mortonOrder' }]);
 
         // Compute Morton codes for the resulting order
         const xCol = result.getColumnByName('x').data;
@@ -713,26 +713,26 @@ describe('Morton Order', () => {
         }
     });
 
-    it('should handle empty table', () => {
+    it('should handle empty table', async () => {
         const emptyData = new DataTable([
             new Column('x', new Float32Array(0)),
             new Column('y', new Float32Array(0)),
             new Column('z', new Float32Array(0))
         ]);
 
-        const result = processDataTable(emptyData, [{ kind: 'mortonOrder' }]);
+        const result = await processDataTable(emptyData, [{ kind: 'mortonOrder' }]);
 
         assert.strictEqual(result.numRows, 0, 'Should still have 0 rows');
     });
 
-    it('should handle single row', () => {
+    it('should handle single row', async () => {
         const singleRowData = new DataTable([
             new Column('x', new Float32Array([1.0])),
             new Column('y', new Float32Array([2.0])),
             new Column('z', new Float32Array([3.0]))
         ]);
 
-        const result = processDataTable(singleRowData, [{ kind: 'mortonOrder' }]);
+        const result = await processDataTable(singleRowData, [{ kind: 'mortonOrder' }]);
 
         assert.strictEqual(result.numRows, 1, 'Should have 1 row');
         assertClose(result.getColumnByName('x').data[0], 1.0, 1e-10, 'x value');
@@ -740,7 +740,7 @@ describe('Morton Order', () => {
         assertClose(result.getColumnByName('z').data[0], 3.0, 1e-10, 'z value');
     });
 
-    it('should handle identical points', () => {
+    it('should handle identical points', async () => {
         // All points at the same location
         const identicalData = new DataTable([
             new Column('x', new Float32Array([5.0, 5.0, 5.0, 5.0])),
@@ -749,7 +749,7 @@ describe('Morton Order', () => {
             new Column('id', new Float32Array([0, 1, 2, 3])) // Unique identifier
         ]);
 
-        const result = processDataTable(identicalData, [{ kind: 'mortonOrder' }]);
+        const result = await processDataTable(identicalData, [{ kind: 'mortonOrder' }]);
 
         assert.strictEqual(result.numRows, 4, 'Should have 4 rows');
 
@@ -763,7 +763,7 @@ describe('Morton Order', () => {
         assert.deepStrictEqual(ids, [0, 1, 2, 3], 'All ids should be preserved');
     });
 
-    it('should handle zero-extent on one axis', () => {
+    it('should handle zero-extent on one axis', async () => {
         // All points on a plane (y = 0)
         const planarData = new DataTable([
             new Column('x', new Float32Array([0, 1, 2, 3])),
@@ -771,7 +771,7 @@ describe('Morton Order', () => {
             new Column('z', new Float32Array([0, 1, 2, 3]))
         ]);
 
-        const result = processDataTable(planarData, [{ kind: 'mortonOrder' }]);
+        const result = await processDataTable(planarData, [{ kind: 'mortonOrder' }]);
 
         assert.strictEqual(result.numRows, 4, 'Should have 4 rows');
 
@@ -787,7 +787,7 @@ describe('Morton Order', () => {
 });
 
 describe('permuteRowsInPlace', () => {
-    it('should handle identity permutation', () => {
+    it('should handle identity permutation', async () => {
         const data = new DataTable([
             new Column('a', new Float32Array([1, 2, 3, 4])),
             new Column('b', new Float32Array([10, 20, 30, 40]))
@@ -801,7 +801,7 @@ describe('permuteRowsInPlace', () => {
         assert.deepStrictEqual(Array.from(data.getColumnByName('b').data), [10, 20, 30, 40]);
     });
 
-    it('should handle reverse permutation', () => {
+    it('should handle reverse permutation', async () => {
         const data = new DataTable([
             new Column('a', new Float32Array([1, 2, 3, 4])),
             new Column('b', new Float32Array([10, 20, 30, 40]))
@@ -815,7 +815,7 @@ describe('permuteRowsInPlace', () => {
         assert.deepStrictEqual(Array.from(data.getColumnByName('b').data), [40, 30, 20, 10]);
     });
 
-    it('should handle simple swap', () => {
+    it('should handle simple swap', async () => {
         const data = new DataTable([
             new Column('a', new Float32Array([1, 2, 3, 4])),
             new Column('b', new Float32Array([10, 20, 30, 40]))
@@ -829,7 +829,7 @@ describe('permuteRowsInPlace', () => {
         assert.deepStrictEqual(Array.from(data.getColumnByName('b').data), [20, 10, 30, 40]);
     });
 
-    it('should handle multi-element cycle', () => {
+    it('should handle multi-element cycle', async () => {
         const data = new DataTable([
             new Column('a', new Float32Array([1, 2, 3, 4, 5])),
             new Column('b', new Float32Array([10, 20, 30, 40, 50]))
@@ -849,7 +849,7 @@ describe('permuteRowsInPlace', () => {
         assert.deepStrictEqual(Array.from(data.getColumnByName('b').data), [20, 30, 10, 40, 50]);
     });
 
-    it('should handle multiple independent cycles', () => {
+    it('should handle multiple independent cycles', async () => {
         const data = new DataTable([
             new Column('a', new Float32Array([1, 2, 3, 4, 5, 6]))
         ]);
@@ -861,7 +861,7 @@ describe('permuteRowsInPlace', () => {
         assert.deepStrictEqual(Array.from(data.getColumnByName('a').data), [2, 3, 1, 5, 6, 4]);
     });
 
-    it('should handle empty data', () => {
+    it('should handle empty data', async () => {
         const data = new DataTable([
             new Column('a', new Float32Array(0))
         ]);

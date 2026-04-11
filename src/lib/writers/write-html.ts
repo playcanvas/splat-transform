@@ -1,9 +1,10 @@
 import { html, css, js } from '@playcanvas/supersplat-viewer';
 import { basename, dirname, join } from 'pathe';
 
-import { writeSog, type DeviceCreator } from './write-sog';
+import { writeSog } from './write-sog';
 import { DataTable } from '../data-table/data-table';
 import { type FileSystem, MemoryFileSystem, writeFile } from '../io/write';
+import type { DeviceCreator } from '../types';
 import { toBase64 } from '../utils/base64';
 
 const defaultSettings = {
