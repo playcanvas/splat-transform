@@ -8,14 +8,11 @@ import {
 } from './filter-pipeline';
 import { mortonToXYZ } from './morton';
 import {
-    alignGridBounds
-} from './sparse-octree';
-import {
     buildBlockLookup,
     isCenterInOccupiedVoxel,
     gaussianContributesToVoxels
 } from './voxel-query';
-import { voxelizeToBuffer } from './voxelize';
+import { alignGridBounds, voxelizeToBuffer } from './voxelize';
 import { DataTable } from '../data-table';
 import type { DeviceCreator } from '../types';
 import { logger } from '../utils';

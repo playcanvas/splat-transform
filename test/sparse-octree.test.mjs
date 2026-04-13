@@ -18,9 +18,9 @@ import {
 } from '../src/lib/voxel/morton.js';
 import {
     buildSparseOctree,
-    alignGridBounds,
     SOLID_LEAF_MARKER
 } from '../src/lib/voxel/sparse-octree.js';
+import { alignGridBounds } from '../src/lib/voxel/voxelize.js';
 
 // ============================================================================
 // Morton Code Tests

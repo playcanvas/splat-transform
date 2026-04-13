@@ -10,7 +10,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { BlockMaskBuffer } from '../src/lib/voxel/block-mask-buffer.js';
 import { xyzToMorton, popcount } from '../src/lib/voxel/morton.js';
-import { alignGridBounds } from '../src/lib/voxel/sparse-octree.js';
+import { alignGridBounds } from '../src/lib/voxel/voxelize.js';
 import { carveInterior } from '../src/lib/voxel/carve-interior.js';
 
 const SOLID_LO = 0xFFFFFFFF >>> 0;

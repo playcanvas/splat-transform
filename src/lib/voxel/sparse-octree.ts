@@ -461,45 +461,8 @@ function flattenTreeFromLevels(
     };
 }
 
-/**
- * Align bounds to 4x4x4 block boundaries.
- *
- * @param minX - Scene minimum X
- * @param minY - Scene minimum Y
- * @param minZ - Scene minimum Z
- * @param maxX - Scene maximum X
- * @param maxY - Scene maximum Y
- * @param maxZ - Scene maximum Z
- * @param voxelResolution - Size of each voxel
- * @returns Aligned bounds
- */
-function alignGridBounds(
-    minX: number, minY: number, minZ: number,
-    maxX: number, maxY: number, maxZ: number,
-    voxelResolution: number
-): Bounds {
-    const blockSize = 4 * voxelResolution;
-    return {
-        min: new Vec3(
-            Math.floor(minX / blockSize) * blockSize,
-            Math.floor(minY / blockSize) * blockSize,
-            Math.floor(minZ / blockSize) * blockSize
-        ),
-        max: new Vec3(
-            Math.ceil(maxX / blockSize) * blockSize,
-            Math.ceil(maxY / blockSize) * blockSize,
-            Math.ceil(maxZ / blockSize) * blockSize
-        )
-    };
-}
-
-// ============================================================================
-// Exports
-// ============================================================================
-
 export {
     buildSparseOctree,
-    alignGridBounds,
     SOLID_LEAF_MARKER
 };
 
