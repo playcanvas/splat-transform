@@ -6,7 +6,6 @@ import {
     buildGaussianColumns,
     buildBlockGridParams
 } from './filter-pipeline';
-import { mortonToXYZ } from './morton';
 import {
     buildBlockLookup,
     isCenterInOccupiedVoxel,

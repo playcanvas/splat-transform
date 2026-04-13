@@ -28,7 +28,7 @@ type WriteVoxelOptions = {
     /** Size of each voxel in world units. Default: 0.05 */
     voxelResolution?: number;
 
-    /** Opacity threshold for solid voxels - voxels below this are considered empty. Default: 0.5 */
+    /** Opacity threshold for solid voxels - voxels below this are considered empty. Default: 0.1 */
     opacityCutoff?: number;
 
     /** Optional function to create a GPU device for voxelization */
@@ -159,7 +159,7 @@ const writeOctreeFiles = async (
  *     filename: 'scene.voxel.json',
  *     dataTable: myDataTable,
  *     voxelResolution: 0.05,
- *     opacityCutoff: 0.5,
+ *     opacityCutoff: 0.1,
  *     collisionMesh: true,
  *     createDevice: async () => myGraphicsDevice
  * }, fs);
@@ -170,7 +170,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         filename,
         dataTable,
         voxelResolution = 0.05,
-        opacityCutoff = 0.5,
+        opacityCutoff = 0.1,
         createDevice,
         navExteriorRadius,
         navCapsule,

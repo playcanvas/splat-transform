@@ -23,7 +23,7 @@ type Options = {
     /** Size of each voxel in world units for voxel output. Default: 0.05 */
     voxelResolution?: number;
 
-    /** Opacity threshold for solid voxels - voxels below this are considered empty. Default: 0.5 */
+    /** Opacity threshold for solid voxels - voxels below this are considered empty. Default: 0.1 */
     opacityCutoff?: number;
 
     /** Enable navigation simplification with default capsule (height 1.6, radius 0.2) and seed (0,0,0). Default: true (set to false to disable). */

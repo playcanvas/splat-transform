@@ -553,7 +553,7 @@ EXAMPLES
     splat-transform -R 0.1 -A 0.3 input.ply output.voxel.json
 
     # Generate voxel data with nav simplification disabled
-    splat-transform -n input.ply output.voxel.json
+    splat-transform --no-nav-simplify input.ply output.voxel.json
 
     # Print statistical summary, then write output
     splat-transform bunny.ply --summary output.ply
