@@ -1,3 +1,10 @@
+import { MeshoptSimplifier } from 'meshoptimizer/simplifier';
+
+import type { Bounds } from '../data-table';
+import { logger } from '../utils';
+import { marchingCubes } from './marching-cubes';
+import { BlockMaskBuffer } from '../voxel/block-mask-buffer';
+
 /**
  * Build a minimal GLB (glTF 2.0 binary) file containing a single triangle mesh.
  *
@@ -8,7 +15,7 @@
  * @param indices - Triangle indices (3 per triangle, unsigned 32-bit)
  * @returns GLB file as a Uint8Array
  */
-function buildCollisionGlb(positions: Float32Array, indices: Uint32Array): Uint8Array {
+function encodeGlb(positions: Float32Array, indices: Uint32Array): Uint8Array {
     const vertexCount = positions.length / 3;
     const indexCount = indices.length;
 
@@ -118,4 +125,68 @@ function buildCollisionGlb(positions: Float32Array, indices: Uint32Array): Uint8
     return byteArray;
 }
 
-export { buildCollisionGlb };
+/**
+ * Extract a collision mesh from voxel data via marching cubes, simplify it,
+ * and encode it as a GLB file.
+ *
+ * @param blockBuffer - Voxel block data after filtering
+ * @param gridBounds - Grid bounds aligned to block boundaries
+ * @param voxelResolution - Size of each voxel in world units
+ * @param meshSimplifyError - Maximum geometric error as a fraction of voxelResolution (default 0.08)
+ * @returns GLB bytes, or null if no triangles were generated
+ */
+const buildCollisionMesh = async (
+    blockBuffer: BlockMaskBuffer,
+    gridBounds: Bounds,
+    voxelResolution: number,
+    meshSimplifyError?: number
+): Promise<Uint8Array | null> => {
+    logger.progress.step('Extracting collision mesh');
+    const rawMesh = marchingCubes(blockBuffer, gridBounds, voxelResolution);
+    logger.log(`collision mesh (raw): ${rawMesh.positions.length / 3} vertices, ${rawMesh.indices.length / 3} triangles`);
+
+    if (rawMesh.indices.length < 3) {
+        logger.progress.step('Simplifying collision mesh');
+        logger.log('collision mesh: no triangles generated, skipping GLB output');
+        return null;
+    }
+
+    logger.progress.step('Simplifying collision mesh');
+    await MeshoptSimplifier.ready;
+
+    const errorFraction = Number.isFinite(meshSimplifyError) && meshSimplifyError! >= 0 ? meshSimplifyError! : 0.08;
+    const simplifyError = errorFraction * voxelResolution;
+    const [simplifiedIndices] = MeshoptSimplifier.simplify(
+        rawMesh.indices,
+        rawMesh.positions,
+        3,
+        0,
+        simplifyError,
+        ['ErrorAbsolute']
+    );
+
+    const vertexRemap = new Map<number, number>();
+    let newVertexCount = 0;
+    for (let i = 0; i < simplifiedIndices.length; i++) {
+        if (!vertexRemap.has(simplifiedIndices[i])) {
+            vertexRemap.set(simplifiedIndices[i], newVertexCount++);
+        }
+    }
+    const compactPositions = new Float32Array(newVertexCount * 3);
+    for (const [oldIdx, newIdx] of vertexRemap) {
+        compactPositions[newIdx * 3] = rawMesh.positions[oldIdx * 3];
+        compactPositions[newIdx * 3 + 1] = rawMesh.positions[oldIdx * 3 + 1];
+        compactPositions[newIdx * 3 + 2] = rawMesh.positions[oldIdx * 3 + 2];
+    }
+    const compactIndices = new Uint32Array(simplifiedIndices.length);
+    for (let i = 0; i < simplifiedIndices.length; i++) {
+        compactIndices[i] = vertexRemap.get(simplifiedIndices[i])!;
+    }
+
+    const reduction = (1 - simplifiedIndices.length / rawMesh.indices.length) * 100;
+    logger.log(`collision mesh (simplified): ${newVertexCount} vertices, ${simplifiedIndices.length / 3} triangles (${reduction.toFixed(0)}% reduction)`);
+
+    return encodeGlb(compactPositions, compactIndices);
+};
+
+export { buildCollisionMesh };

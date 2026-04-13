@@ -1,14 +1,10 @@
-import { MeshoptSimplifier } from 'meshoptimizer/simplifier';
-import { Vec3 } from 'playcanvas';
-
-import { buildCollisionGlb } from './collision-glb';
+import { buildCollisionMesh } from './collision-glb';
 import { Column, DataTable, computeGaussianExtents, computeWriteTransform, transformColumns } from '../data-table';
 import { GpuVoxelization } from '../gpu';
 import { type FileSystem, writeFile } from '../io/write';
 import { GaussianBVH } from '../spatial';
 import type { DeviceCreator } from '../types';
 import { logger, Transform } from '../utils';
-import { marchingCubes } from './marching-cubes';
 import { buildSparseOctree, type SparseOctree } from './sparse-octree';
 import {
     filterAndFillBlocks,
@@ -230,7 +226,6 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
 
     // Align grid bounds to block boundaries BEFORE voxelization so the
     // block coordinates used during voxelization match what the reader expects.
-    const blockSize = 4 * voxelResolution;  // Each block is 4x4x4 voxels
     let gridBounds = alignGridBounds(
         bounds.min.x, bounds.min.y, bounds.min.z,
         bounds.max.x, bounds.max.y, bounds.max.z,
@@ -269,55 +264,9 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         gridBounds = navResult.gridBounds;
     }
 
-    let glbBytes: Uint8Array | null = null;
-
-    if (collisionMesh) {
-        logger.progress.step('Extracting collision mesh');
-        const rawMesh = marchingCubes(buffer, gridBounds, voxelResolution);
-        logger.log(`collision mesh (raw): ${rawMesh.positions.length / 3} vertices, ${rawMesh.indices.length / 3} triangles`);
-
-        if (rawMesh.indices.length < 3) {
-            logger.progress.step('Simplifying collision mesh');
-            logger.log('collision mesh: no triangles generated, skipping GLB output');
-        } else {
-            logger.progress.step('Simplifying collision mesh');
-            await MeshoptSimplifier.ready;
-
-            const errorFraction = Number.isFinite(meshSimplifyError) && meshSimplifyError >= 0 ? meshSimplifyError : 0.08;
-            const simplifyError = errorFraction * voxelResolution;
-            const [simplifiedIndices] = MeshoptSimplifier.simplify(
-                rawMesh.indices,
-                rawMesh.positions,
-                3,
-                0,
-                simplifyError,
-                ['ErrorAbsolute']
-            );
-
-            const vertexRemap = new Map<number, number>();
-            let newVertexCount = 0;
-            for (let i = 0; i < simplifiedIndices.length; i++) {
-                if (!vertexRemap.has(simplifiedIndices[i])) {
-                    vertexRemap.set(simplifiedIndices[i], newVertexCount++);
-                }
-            }
-            const compactPositions = new Float32Array(newVertexCount * 3);
-            for (const [oldIdx, newIdx] of vertexRemap) {
-                compactPositions[newIdx * 3] = rawMesh.positions[oldIdx * 3];
-                compactPositions[newIdx * 3 + 1] = rawMesh.positions[oldIdx * 3 + 1];
-                compactPositions[newIdx * 3 + 2] = rawMesh.positions[oldIdx * 3 + 2];
-            }
-            const compactIndices = new Uint32Array(simplifiedIndices.length);
-            for (let i = 0; i < simplifiedIndices.length; i++) {
-                compactIndices[i] = vertexRemap.get(simplifiedIndices[i])!;
-            }
-
-            const reduction = (1 - simplifiedIndices.length / rawMesh.indices.length) * 100;
-            logger.log(`collision mesh (simplified): ${newVertexCount} vertices, ${simplifiedIndices.length / 3} triangles (${reduction.toFixed(0)}% reduction)`);
-
-            glbBytes = buildCollisionGlb(compactPositions, compactIndices);
-        }
-    }
+    const glbBytes = collisionMesh ?
+        await buildCollisionMesh(buffer, gridBounds, voxelResolution, meshSimplifyError) :
+        null;
 
     logger.progress.step('Building octree');
     const octree = buildSparseOctree(
