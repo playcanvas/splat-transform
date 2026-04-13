@@ -8,6 +8,7 @@ import { type FileSystem, writeFile } from '../io/write';
 import { GaussianBVH } from '../spatial';
 import type { DeviceCreator } from '../types';
 import { logger, Transform } from '../utils';
+import { marchingCubes } from './marching-cubes';
 import { buildSparseOctree, type SparseOctree } from './sparse-octree';
 import {
     filterAndFillBlocks,
@@ -15,7 +16,6 @@ import {
     carveInterior,
     fillExterior,
     type NavSeed,
-    marchingCubes,
     voxelizeToBuffer
 } from '../voxel';
 

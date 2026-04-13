@@ -1,6 +1,4 @@
 export { filterAndFillBlocks } from './block-cleanup';
-export { marchingCubes } from './marching-cubes';
-export type { MarchingCubesMesh } from './marching-cubes';
 export { voxelizeToBuffer, alignGridBounds } from './voxelize';
 export { filterCluster } from './filter-cluster';
 export { filterFloaters } from './filter-floaters';

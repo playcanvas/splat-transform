@@ -1,6 +1,6 @@
-import { BlockMaskBuffer } from './block-mask-buffer';
-import { mortonToXYZ, xyzToMorton } from './morton';
 import type { Bounds } from '../data-table';
+import { BlockMaskBuffer } from '../voxel/block-mask-buffer';
+import { mortonToXYZ, xyzToMorton } from '../voxel/morton';
 
 /**
  * Result of marching cubes surface extraction.
