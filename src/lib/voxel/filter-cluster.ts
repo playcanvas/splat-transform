@@ -1,11 +1,17 @@
 import { Vec3 } from 'playcanvas';
 
+import {
+    buildBlockLookup,
+    isCenterInOccupiedVoxel,
+    gaussianContributesToVoxels,
+    type BlockGridParams,
+    type GaussianColumns
+} from './block-lookup';
 import { computeGaussianExtents } from './gaussian-aabb';
 import { GaussianBVH } from './gaussian-bvh';
 import { GpuVoxelization } from './gpu-voxelization';
 import {
     BlockAccumulator,
-    mortonToXYZ,
     alignGridBounds
 } from './sparse-octree';
 import { filterAndFillBlocks } from './voxel-filter';
@@ -14,35 +20,7 @@ import { Column, DataTable } from '../data-table/data-table';
 import { computeWriteTransform, transformColumns } from '../data-table/transform';
 import type { DeviceCreator } from '../types';
 import { logger } from '../utils/logger';
-import { sigmoid, Transform } from '../utils/math';
-
-/**
- * Build block lookup structures from the accumulator's Morton codes.
- *
- * @param accumulator - Block accumulator containing voxelized blocks.
- * @param strideY - numBlocksX (stride for Y dimension).
- * @param strideZ - numBlocksX * numBlocksY (stride for Z dimension).
- * @returns Solid block set, mixed block map (linear index to masks array index), and masks.
- */
-const buildBlockLookup = (
-    accumulator: BlockAccumulator,
-    strideY: number,
-    strideZ: number
-): { solidSet: Set<number>; mixedMap: Map<number, number>; masks: number[] } => {
-    const solidSet = new Set<number>();
-    const solidMortons = accumulator.getSolidBlocks();
-    for (let i = 0; i < solidMortons.length; i++) {
-        const [bx, by, bz] = mortonToXYZ(solidMortons[i]);
-        solidSet.add(bx + by * strideY + bz * strideZ);
-    }
-    const mixed = accumulator.getMixedBlocks();
-    const mixedMap = new Map<number, number>();
-    for (let i = 0; i < mixed.morton.length; i++) {
-        const [bx, by, bz] = mortonToXYZ(mixed.morton[i]);
-        mixedMap.set(bx + by * strideY + bz * strideZ, i);
-    }
-    return { solidSet, mixedMap, masks: mixed.masks };
-};
+import { Transform } from '../utils/math';
 
 /**
  * Find the connected component of occupied blocks reachable from a seed block
@@ -223,21 +201,6 @@ const filterCluster = async (
     const extentsResult = computeGaussianExtents(pcDataTable);
     const sceneBounds = extentsResult.sceneBounds;
 
-    const extentX = extentsResult.extents.getColumnByName('extent_x').data;
-    const extentY = extentsResult.extents.getColumnByName('extent_y').data;
-    const extentZ = extentsResult.extents.getColumnByName('extent_z').data;
-    const posX = pcDataTable.getColumnByName('x').data;
-    const posY = pcDataTable.getColumnByName('y').data;
-    const posZ = pcDataTable.getColumnByName('z').data;
-    const rotW = pcDataTable.getColumnByName('rot_0').data;
-    const rotX = pcDataTable.getColumnByName('rot_1').data;
-    const rotY = pcDataTable.getColumnByName('rot_2').data;
-    const rotZ = pcDataTable.getColumnByName('rot_3').data;
-    const scaleX = pcDataTable.getColumnByName('scale_0').data;
-    const scaleY = pcDataTable.getColumnByName('scale_1').data;
-    const scaleZ = pcDataTable.getColumnByName('scale_2').data;
-    const opacityData = pcDataTable.getColumnByName('opacity').data;
-
     const coarseVoxelSize = Math.max(0.01, resolution);
     const blockSize = 4 * coarseVoxelSize;
     const maxGridExtent = 8192 * coarseVoxelSize;
@@ -305,8 +268,8 @@ const filterCluster = async (
     seedBy = Math.max(0, Math.min(seedBy, numBlocksY - 1));
     seedBz = Math.max(0, Math.min(seedBz, numBlocksZ - 1));
 
-    const { solidSet, mixedMap, masks } = buildBlockLookup(accumulator, strideY, strideZ);
-    const occupied = new Set<number>([...solidSet, ...mixedMap.keys()]);
+    const lookup = buildBlockLookup(accumulator, strideY, strideZ);
+    const occupied = new Set<number>([...lookup.solidSet, ...lookup.mixedMap.keys()]);
 
     const maxSearchRadius = Math.max(numBlocksX, numBlocksY, numBlocksZ);
     const nearest = findNearestOccupiedBlock(occupied, seedBx, seedBy, seedBz, maxSearchRadius, numBlocksX, numBlocksY, numBlocksZ);
@@ -334,134 +297,50 @@ const filterCluster = async (
 
     logger.progress.step('Filtering Gaussians');
 
-    const gridMinX = gridBounds.min.x;
-    const gridMinY = gridBounds.min.y;
-    const gridMinZ = gridBounds.min.z;
-    const minContribution = 1 / 255;
+    const gaussianCols: GaussianColumns = {
+        posX: pcDataTable.getColumnByName('x').data,
+        posY: pcDataTable.getColumnByName('y').data,
+        posZ: pcDataTable.getColumnByName('z').data,
+        rotW: pcDataTable.getColumnByName('rot_0').data,
+        rotX: pcDataTable.getColumnByName('rot_1').data,
+        rotY: pcDataTable.getColumnByName('rot_2').data,
+        rotZ: pcDataTable.getColumnByName('rot_3').data,
+        scaleX: pcDataTable.getColumnByName('scale_0').data,
+        scaleY: pcDataTable.getColumnByName('scale_1').data,
+        scaleZ: pcDataTable.getColumnByName('scale_2').data,
+        opacity: pcDataTable.getColumnByName('opacity').data,
+        extentX: extentsResult.extents.getColumnByName('extent_x').data,
+        extentY: extentsResult.extents.getColumnByName('extent_y').data,
+        extentZ: extentsResult.extents.getColumnByName('extent_z').data
+    };
 
+    const grid: BlockGridParams = {
+        gridMinX: gridBounds.min.x,
+        gridMinY: gridBounds.min.y,
+        gridMinZ: gridBounds.min.z,
+        blockSize,
+        voxelSize: coarseVoxelSize,
+        numBlocksX,
+        numBlocksY,
+        numBlocksZ,
+        strideY,
+        strideZ
+    };
+
+    const minContribution = 1 / 255;
     const keepIndices: number[] = [];
 
     for (let i = 0; i < numRows; i++) {
-        const px = posX[i];
-        const py = posY[i];
-        const pz = posZ[i];
-        const ex = extentX[i];
-        const ey = extentY[i];
-        const ez = extentZ[i];
+        const px = gaussianCols.posX[i];
+        const py = gaussianCols.posY[i];
+        const pz = gaussianCols.posZ[i];
 
-        // Fast path: if center is in a cluster voxel, keep immediately
-        const centerBx = Math.floor((px - gridMinX) / blockSize);
-        const centerBy = Math.floor((py - gridMinY) / blockSize);
-        const centerBz = Math.floor((pz - gridMinZ) / blockSize);
-
-        if (centerBx >= 0 && centerBx < numBlocksX &&
-            centerBy >= 0 && centerBy < numBlocksY &&
-            centerBz >= 0 && centerBz < numBlocksZ) {
-            const centerBlockIdx = centerBx + centerBy * strideY + centerBz * strideZ;
-            if (ccSet.has(centerBlockIdx)) {
-                if (solidSet.has(centerBlockIdx)) {
-                    keepIndices.push(i);
-                    continue;
-                }
-                const centerMixedIdx = mixedMap.get(centerBlockIdx);
-                if (centerMixedIdx !== undefined) {
-                    const lx = Math.floor((px - gridMinX - centerBx * blockSize) / coarseVoxelSize);
-                    const ly = Math.floor((py - gridMinY - centerBy * blockSize) / coarseVoxelSize);
-                    const lz = Math.floor((pz - gridMinZ - centerBz * blockSize) / coarseVoxelSize);
-                    const bitIdx = (lx & 3) + (ly & 3) * 4 + (lz & 3) * 16;
-                    const word = bitIdx < 32 ? masks[centerMixedIdx * 2] : masks[centerMixedIdx * 2 + 1];
-                    if ((word >>> (bitIdx & 31)) & 1) {
-                        keepIndices.push(i);
-                        continue;
-                    }
-                }
-            }
+        if (isCenterInOccupiedVoxel(px, py, pz, grid, lookup, ccSet)) {
+            keepIndices.push(i);
+            continue;
         }
 
-        // Slow path: evaluate Gaussian contribution at cluster voxel centers
-        const aabbMinBx = Math.max(0, Math.floor((px - ex - gridMinX) / blockSize));
-        const aabbMaxBx = Math.min(numBlocksX - 1, Math.floor((px + ex - gridMinX) / blockSize));
-        const aabbMinBy = Math.max(0, Math.floor((py - ey - gridMinY) / blockSize));
-        const aabbMaxBy = Math.min(numBlocksY - 1, Math.floor((py + ey - gridMinY) / blockSize));
-        const aabbMinBz = Math.max(0, Math.floor((pz - ez - gridMinZ) / blockSize));
-        const aabbMaxBz = Math.min(numBlocksZ - 1, Math.floor((pz + ez - gridMinZ) / blockSize));
-
-        const rw = rotW[i], rx = rotX[i], ry = rotY[i], rz = rotZ[i];
-        const qlen = Math.sqrt(rw * rw + rx * rx + ry * ry + rz * rz);
-        const invLen = qlen > 0 ? 1 / qlen : 0;
-
-        const qw = rw * invLen;
-        const qx = -rx * invLen;
-        const qy = -ry * invLen;
-        const qz = -rz * invLen;
-
-        const isx = Math.exp(-scaleX[i]);
-        const isy = Math.exp(-scaleY[i]);
-        const isz = Math.exp(-scaleZ[i]);
-
-        const alpha = sigmoid(opacityData[i]);
-
-        let found = false;
-        for (let bbz = aabbMinBz; bbz <= aabbMaxBz && !found; bbz++) {
-            const zOff = bbz * strideZ;
-            for (let bby = aabbMinBy; bby <= aabbMaxBy && !found; bby++) {
-                const yzOff = bby * strideY + zOff;
-                for (let bbx = aabbMinBx; bbx <= aabbMaxBx && !found; bbx++) {
-                    const blockIdx = bbx + yzOff;
-                    if (!ccSet.has(blockIdx)) continue;
-                    const isSolid = solidSet.has(blockIdx);
-                    const mixedIdx = isSolid ? -1 : mixedMap.get(blockIdx);
-                    if (!isSolid && mixedIdx === undefined) continue;
-
-                    const blockOriginX = gridMinX + bbx * blockSize;
-                    const blockOriginY = gridMinY + bby * blockSize;
-                    const blockOriginZ = gridMinZ + bbz * blockSize;
-
-                    const lo = isSolid ? 0xFFFFFFFF : masks[mixedIdx * 2];
-                    const hi = isSolid ? 0xFFFFFFFF : masks[mixedIdx * 2 + 1];
-
-                    for (let lz = 0; lz < 4 && !found; lz++) {
-                        const vz = blockOriginZ + (lz + 0.5) * coarseVoxelSize;
-                        const word = lz < 2 ? lo : hi;
-                        const zBitBase = (lz & 1) * 16;
-
-                        for (let ly = 0; ly < 4 && !found; ly++) {
-                            const bitBase = zBitBase + ly * 4;
-                            const vy = blockOriginY + (ly + 0.5) * coarseVoxelSize;
-
-                            for (let lx = 0; lx < 4 && !found; lx++) {
-                                if (!((word >>> (bitBase + lx)) & 1)) continue;
-
-                                const vx = blockOriginX + (lx + 0.5) * coarseVoxelSize;
-
-                                const dx = vx - px;
-                                const dy = vy - py;
-                                const dz = vz - pz;
-
-                                const tx = 2 * (qy * dz - qz * dy);
-                                const ty = 2 * (qz * dx - qx * dz);
-                                const tz = 2 * (qx * dy - qy * dx);
-
-                                const ldx = dx + qw * tx + (qy * tz - qz * ty);
-                                const ldy = dy + qw * ty + (qz * tx - qx * tz);
-                                const ldz = dz + qw * tz + (qx * ty - qy * tx);
-
-                                const sdx = ldx * isx;
-                                const sdy = ldy * isy;
-                                const sdz = ldz * isz;
-                                const d2 = sdx * sdx + sdy * sdy + sdz * sdz;
-
-                                if (alpha * Math.exp(-0.5 * d2) >= minContribution) {
-                                    found = true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if (found) {
+        if (gaussianContributesToVoxels(i, gaussianCols, grid, lookup, minContribution, ccSet)) {
             keepIndices.push(i);
         }
     }

@@ -1,0 +1,318 @@
+import { BlockAccumulator, mortonToXYZ } from './sparse-octree';
+import { TypedArray } from '../data-table/data-table';
+import { sigmoid } from '../utils/math';
+
+/**
+ * Pre-computed lookup structures for efficient voxel block queries.
+ */
+interface BlockLookup {
+    solidSet: Set<number>;
+    mixedMap: Map<number, number>;
+    masks: number[];
+}
+
+/**
+ * Build block lookup structures from the accumulator's Morton codes.
+ *
+ * @param accumulator - Block accumulator containing voxelized blocks.
+ * @param strideY - numBlocksX (stride for Y dimension).
+ * @param strideZ - numBlocksX * numBlocksY (stride for Z dimension).
+ * @returns Solid block set, mixed block map (linear index to masks array index), and masks.
+ */
+const buildBlockLookup = (
+    accumulator: BlockAccumulator,
+    strideY: number,
+    strideZ: number
+): BlockLookup => {
+    const solidSet = new Set<number>();
+    const solidMortons = accumulator.getSolidBlocks();
+    for (let i = 0; i < solidMortons.length; i++) {
+        const [bx, by, bz] = mortonToXYZ(solidMortons[i]);
+        solidSet.add(bx + by * strideY + bz * strideZ);
+    }
+    const mixed = accumulator.getMixedBlocks();
+    const mixedMap = new Map<number, number>();
+    for (let i = 0; i < mixed.morton.length; i++) {
+        const [bx, by, bz] = mortonToXYZ(mixed.morton[i]);
+        mixedMap.set(bx + by * strideY + bz * strideZ, i);
+    }
+    return { solidSet, mixedMap, masks: mixed.masks };
+};
+
+/**
+ * Pre-computed per-Gaussian inverse transform data for evaluating
+ * Gaussian contribution at arbitrary 3D points.
+ */
+interface GaussianInverseTransform {
+    /** Inverse rotation quaternion (w, x, y, z) with xyz negated */
+    qw: number;
+    qx: number;
+    qy: number;
+    qz: number;
+    /** Inverse scale: exp(-log_scale) per axis */
+    isx: number;
+    isy: number;
+    isz: number;
+    /** Linear opacity (sigmoid of raw logit) */
+    alpha: number;
+}
+
+/**
+ * Compute the inverse transform for a single Gaussian.
+ *
+ * @param rotW - Quaternion w component.
+ * @param rotX - Quaternion x component.
+ * @param rotY - Quaternion y component.
+ * @param rotZ - Quaternion z component.
+ * @param logScaleX - Log scale x.
+ * @param logScaleY - Log scale y.
+ * @param logScaleZ - Log scale z.
+ * @param opacityLogit - Raw opacity logit value.
+ * @returns Inverse transform parameters.
+ */
+const computeGaussianInverse = (
+    rotW: number, rotX: number, rotY: number, rotZ: number,
+    logScaleX: number, logScaleY: number, logScaleZ: number,
+    opacityLogit: number
+): GaussianInverseTransform => {
+    const qlen = Math.sqrt(rotW * rotW + rotX * rotX + rotY * rotY + rotZ * rotZ);
+    const invLen = qlen > 0 ? 1 / qlen : 0;
+    return {
+        qw: rotW * invLen,
+        qx: -rotX * invLen,
+        qy: -rotY * invLen,
+        qz: -rotZ * invLen,
+        isx: Math.exp(-logScaleX),
+        isy: Math.exp(-logScaleY),
+        isz: Math.exp(-logScaleZ),
+        alpha: sigmoid(opacityLogit)
+    };
+};
+
+/**
+ * Evaluate a Gaussian's opacity contribution at a 3D point.
+ *
+ * Uses the Rodrigues cross-product formula for inverse rotation,
+ * then computes the Mahalanobis distance in the Gaussian's local frame.
+ *
+ * @param g - Pre-computed inverse transform of the Gaussian.
+ * @param px - Gaussian center x.
+ * @param py - Gaussian center y.
+ * @param pz - Gaussian center z.
+ * @param vx - Evaluation point x.
+ * @param vy - Evaluation point y.
+ * @param vz - Evaluation point z.
+ * @returns Opacity contribution at the evaluation point.
+ */
+const evaluateGaussianAt = (
+    g: GaussianInverseTransform,
+    px: number, py: number, pz: number,
+    vx: number, vy: number, vz: number
+): number => {
+    const dx = vx - px;
+    const dy = vy - py;
+    const dz = vz - pz;
+
+    const tx = 2 * (g.qy * dz - g.qz * dy);
+    const ty = 2 * (g.qz * dx - g.qx * dz);
+    const tz = 2 * (g.qx * dy - g.qy * dx);
+
+    const ldx = dx + g.qw * tx + (g.qy * tz - g.qz * ty);
+    const ldy = dy + g.qw * ty + (g.qz * tx - g.qx * tz);
+    const ldz = dz + g.qw * tz + (g.qx * ty - g.qy * tx);
+
+    const sdx = ldx * g.isx;
+    const sdy = ldy * g.isy;
+    const sdz = ldz * g.isz;
+    const d2 = sdx * sdx + sdy * sdy + sdz * sdz;
+
+    return g.alpha * Math.exp(-0.5 * d2);
+};
+
+/**
+ * Column arrays needed for Gaussian contribution evaluation.
+ */
+interface GaussianColumns {
+    posX: TypedArray;
+    posY: TypedArray;
+    posZ: TypedArray;
+    rotW: TypedArray;
+    rotX: TypedArray;
+    rotY: TypedArray;
+    rotZ: TypedArray;
+    scaleX: TypedArray;
+    scaleY: TypedArray;
+    scaleZ: TypedArray;
+    opacity: TypedArray;
+    extentX: TypedArray;
+    extentY: TypedArray;
+    extentZ: TypedArray;
+}
+
+/**
+ * Grid parameters for block-based voxel queries.
+ */
+interface BlockGridParams {
+    gridMinX: number;
+    gridMinY: number;
+    gridMinZ: number;
+    blockSize: number;
+    voxelSize: number;
+    numBlocksX: number;
+    numBlocksY: number;
+    numBlocksZ: number;
+    strideY: number;
+    strideZ: number;
+}
+
+/**
+ * Test whether a Gaussian's center lies inside an occupied voxel.
+ *
+ * @param px - Gaussian center x.
+ * @param py - Gaussian center y.
+ * @param pz - Gaussian center z.
+ * @param grid - Block grid parameters.
+ * @param lookup - Block lookup structures.
+ * @param blockFilter - Optional set of block indices to restrict the test to.
+ * @returns True if the center is in an occupied (and optionally filtered) voxel.
+ */
+const isCenterInOccupiedVoxel = (
+    px: number, py: number, pz: number,
+    grid: BlockGridParams,
+    lookup: BlockLookup,
+    blockFilter?: Set<number>
+): boolean => {
+    const centerBx = Math.floor((px - grid.gridMinX) / grid.blockSize);
+    const centerBy = Math.floor((py - grid.gridMinY) / grid.blockSize);
+    const centerBz = Math.floor((pz - grid.gridMinZ) / grid.blockSize);
+
+    if (centerBx < 0 || centerBx >= grid.numBlocksX ||
+        centerBy < 0 || centerBy >= grid.numBlocksY ||
+        centerBz < 0 || centerBz >= grid.numBlocksZ) {
+        return false;
+    }
+
+    const centerBlockIdx = centerBx + centerBy * grid.strideY + centerBz * grid.strideZ;
+    if (blockFilter && !blockFilter.has(centerBlockIdx)) {
+        return false;
+    }
+
+    if (lookup.solidSet.has(centerBlockIdx)) {
+        return true;
+    }
+
+    const centerMixedIdx = lookup.mixedMap.get(centerBlockIdx);
+    if (centerMixedIdx !== undefined) {
+        const lx = Math.floor((px - grid.gridMinX - centerBx * grid.blockSize) / grid.voxelSize);
+        const ly = Math.floor((py - grid.gridMinY - centerBy * grid.blockSize) / grid.voxelSize);
+        const lz = Math.floor((pz - grid.gridMinZ - centerBz * grid.blockSize) / grid.voxelSize);
+        const bitIdx = (lx & 3) + (ly & 3) * 4 + (lz & 3) * 16;
+        const word = bitIdx < 32 ? lookup.masks[centerMixedIdx * 2] : lookup.masks[centerMixedIdx * 2 + 1];
+        if ((word >>> (bitIdx & 31)) & 1) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
+/**
+ * Test whether a Gaussian has meaningful contribution at any occupied voxel
+ * center within its AABB range.
+ *
+ * Iterates over blocks that overlap the Gaussian's AABB, then evaluates the
+ * Gaussian's opacity contribution at each occupied voxel center in those blocks.
+ *
+ * @param gaussianIdx - Index of the Gaussian.
+ * @param columns - Gaussian column data arrays.
+ * @param grid - Block grid parameters.
+ * @param lookup - Block lookup structures.
+ * @param minContribution - Minimum contribution threshold.
+ * @param blockFilter - Optional set of block indices to restrict the test to.
+ * @returns True if the Gaussian contributes above threshold at any qualifying voxel.
+ */
+const gaussianContributesToVoxels = (
+    gaussianIdx: number,
+    columns: GaussianColumns,
+    grid: BlockGridParams,
+    lookup: BlockLookup,
+    minContribution: number,
+    blockFilter?: Set<number>
+): boolean => {
+    const px = columns.posX[gaussianIdx];
+    const py = columns.posY[gaussianIdx];
+    const pz = columns.posZ[gaussianIdx];
+    const ex = columns.extentX[gaussianIdx];
+    const ey = columns.extentY[gaussianIdx];
+    const ez = columns.extentZ[gaussianIdx];
+
+    const aabbMinBx = Math.max(0, Math.floor((px - ex - grid.gridMinX) / grid.blockSize));
+    const aabbMaxBx = Math.min(grid.numBlocksX - 1, Math.floor((px + ex - grid.gridMinX) / grid.blockSize));
+    const aabbMinBy = Math.max(0, Math.floor((py - ey - grid.gridMinY) / grid.blockSize));
+    const aabbMaxBy = Math.min(grid.numBlocksY - 1, Math.floor((py + ey - grid.gridMinY) / grid.blockSize));
+    const aabbMinBz = Math.max(0, Math.floor((pz - ez - grid.gridMinZ) / grid.blockSize));
+    const aabbMaxBz = Math.min(grid.numBlocksZ - 1, Math.floor((pz + ez - grid.gridMinZ) / grid.blockSize));
+
+    const g = computeGaussianInverse(
+        columns.rotW[gaussianIdx], columns.rotX[gaussianIdx],
+        columns.rotY[gaussianIdx], columns.rotZ[gaussianIdx],
+        columns.scaleX[gaussianIdx], columns.scaleY[gaussianIdx],
+        columns.scaleZ[gaussianIdx], columns.opacity[gaussianIdx]
+    );
+
+    for (let bbz = aabbMinBz; bbz <= aabbMaxBz; bbz++) {
+        const zOff = bbz * grid.strideZ;
+        for (let bby = aabbMinBy; bby <= aabbMaxBy; bby++) {
+            const yzOff = bby * grid.strideY + zOff;
+            for (let bbx = aabbMinBx; bbx <= aabbMaxBx; bbx++) {
+                const blockIdx = bbx + yzOff;
+                if (blockFilter && !blockFilter.has(blockIdx)) continue;
+                const isSolid = lookup.solidSet.has(blockIdx);
+                const mixedIdx = isSolid ? -1 : lookup.mixedMap.get(blockIdx);
+                if (!isSolid && mixedIdx === undefined) continue;
+
+                const blockOriginX = grid.gridMinX + bbx * grid.blockSize;
+                const blockOriginY = grid.gridMinY + bby * grid.blockSize;
+                const blockOriginZ = grid.gridMinZ + bbz * grid.blockSize;
+
+                const lo = isSolid ? 0xFFFFFFFF : lookup.masks[mixedIdx * 2];
+                const hi = isSolid ? 0xFFFFFFFF : lookup.masks[mixedIdx * 2 + 1];
+
+                for (let lz = 0; lz < 4; lz++) {
+                    const vz = blockOriginZ + (lz + 0.5) * grid.voxelSize;
+                    const word = lz < 2 ? lo : hi;
+                    const zBitBase = (lz & 1) * 16;
+
+                    for (let ly = 0; ly < 4; ly++) {
+                        const bitBase = zBitBase + ly * 4;
+                        const vy = blockOriginY + (ly + 0.5) * grid.voxelSize;
+
+                        for (let lx = 0; lx < 4; lx++) {
+                            if (!((word >>> (bitBase + lx)) & 1)) continue;
+
+                            const vx = blockOriginX + (lx + 0.5) * grid.voxelSize;
+
+                            if (evaluateGaussianAt(g, px, py, pz, vx, vy, vz) >= minContribution) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return false;
+};
+
+export {
+    buildBlockLookup,
+    evaluateGaussianAt,
+    computeGaussianInverse,
+    isCenterInOccupiedVoxel,
+    gaussianContributesToVoxels,
+    type BlockLookup,
+    type BlockGridParams,
+    type GaussianColumns,
+    type GaussianInverseTransform
+};
