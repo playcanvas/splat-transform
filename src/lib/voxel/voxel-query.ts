@@ -3,7 +3,7 @@ import {
     computeGaussianInverse,
     evaluateGaussianAt,
     type GaussianColumns
-} from './gaussian-eval';
+} from '../data-table/gaussian-eval';
 import { mortonToXYZ } from './morton';
 
 /**

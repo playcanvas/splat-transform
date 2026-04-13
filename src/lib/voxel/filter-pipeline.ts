@@ -1,4 +1,4 @@
-import { type GaussianColumns } from './gaussian-eval';
+import { type GaussianColumns } from '../data-table/gaussian-eval';
 import { type BlockGridParams } from './voxel-query';
 import { Column, DataTable } from '../data-table/data-table';
 import { computeGaussianExtents, type Bounds, type GaussianExtentsResult } from '../data-table/gaussian-aabb';
