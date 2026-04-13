@@ -81,7 +81,6 @@ function isEmpty(lo: number, hi: number): boolean {
 }
 
 export {
-    SOLID_MASK,
     xyzToMorton,
     mortonToXYZ,
     popcount,

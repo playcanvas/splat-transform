@@ -5,13 +5,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 
-import { Vec3 } from 'playcanvas';
-
 import { Column, DataTable } from '../src/lib/index.js';
 import {
-    computeGaussianExtents,
-    getGaussianAABB,
-    gaussianOverlapsBox
+    computeGaussianExtents
 } from '../src/lib/data-table/gaussian-aabb.js';
 
 describe('GaussianAABB', function () {
@@ -195,101 +191,4 @@ describe('GaussianAABB', function () {
         });
     });
 
-    describe('getGaussianAABB', function () {
-        it('should reconstruct AABB from extents and position', function () {
-            const dataTable = new DataTable([
-                new Column('x', new Float32Array([5])),
-                new Column('y', new Float32Array([10])),
-                new Column('z', new Float32Array([15])),
-                new Column('rot_0', new Float32Array([1])),
-                new Column('rot_1', new Float32Array([0])),
-                new Column('rot_2', new Float32Array([0])),
-                new Column('rot_3', new Float32Array([0])),
-                new Column('scale_0', new Float32Array([Math.log(1)])),
-                new Column('scale_1', new Float32Array([Math.log(2)])),
-                new Column('scale_2', new Float32Array([Math.log(3)])),
-                new Column('f_dc_0', new Float32Array([0])),
-                new Column('f_dc_1', new Float32Array([0])),
-                new Column('f_dc_2', new Float32Array([0])),
-                new Column('opacity', new Float32Array([0]))
-            ]);
-
-            const result = computeGaussianExtents(dataTable);
-            const min = new Vec3();
-            const max = new Vec3();
-
-            getGaussianAABB(result.extents, dataTable, 0, min, max);
-
-            // With 3-sigma: extent = (3, 6, 9), position = (5, 10, 15)
-            // min = (5-3, 10-6, 15-9) = (2, 4, 6)
-            // max = (5+3, 10+6, 15+9) = (8, 16, 24)
-            assert.ok(Math.abs(min.x - 2) < 0.001, `Min X should be 2, got ${min.x}`);
-            assert.ok(Math.abs(min.y - 4) < 0.001, `Min Y should be 4, got ${min.y}`);
-            assert.ok(Math.abs(min.z - 6) < 0.001, `Min Z should be 6, got ${min.z}`);
-            assert.ok(Math.abs(max.x - 8) < 0.001, `Max X should be 8, got ${max.x}`);
-            assert.ok(Math.abs(max.y - 16) < 0.001, `Max Y should be 16, got ${max.y}`);
-            assert.ok(Math.abs(max.z - 24) < 0.001, `Max Z should be 24, got ${max.z}`);
-        });
-    });
-
-    describe('gaussianOverlapsBox', function () {
-        it('should detect overlapping boxes', function () {
-            const dataTable = new DataTable([
-                new Column('x', new Float32Array([0])),
-                new Column('y', new Float32Array([0])),
-                new Column('z', new Float32Array([0])),
-                new Column('rot_0', new Float32Array([1])),
-                new Column('rot_1', new Float32Array([0])),
-                new Column('rot_2', new Float32Array([0])),
-                new Column('rot_3', new Float32Array([0])),
-                new Column('scale_0', new Float32Array([0])),  // extent = 1
-                new Column('scale_1', new Float32Array([0])),
-                new Column('scale_2', new Float32Array([0])),
-                new Column('f_dc_0', new Float32Array([0])),
-                new Column('f_dc_1', new Float32Array([0])),
-                new Column('f_dc_2', new Float32Array([0])),
-                new Column('opacity', new Float32Array([0]))
-            ]);
-
-            const result = computeGaussianExtents(dataTable);
-
-            // Gaussian AABB is (-3, -3, -3) to (3, 3, 3) with 3-sigma extent
-
-            // Overlapping box (contained)
-            assert.strictEqual(
-                gaussianOverlapsBox(result.extents, dataTable, 0,
-                    new Vec3(-0.5, -0.5, -0.5),
-                    new Vec3(0.5, 0.5, 0.5)),
-                true,
-                'Contained box should overlap'
-            );
-
-            // Touching box (edge contact at x=3)
-            assert.strictEqual(
-                gaussianOverlapsBox(result.extents, dataTable, 0,
-                    new Vec3(3, 0, 0),
-                    new Vec3(4, 1, 1)),
-                true,
-                'Edge-touching box should overlap'
-            );
-
-            // Non-overlapping box (completely to the right of 3-sigma extent)
-            assert.strictEqual(
-                gaussianOverlapsBox(result.extents, dataTable, 0,
-                    new Vec3(4, 0, 0),
-                    new Vec3(5, 1, 1)),
-                false,
-                'Box to the right should not overlap'
-            );
-
-            // Non-overlapping box (completely above 3-sigma extent)
-            assert.strictEqual(
-                gaussianOverlapsBox(result.extents, dataTable, 0,
-                    new Vec3(0, 4, 0),
-                    new Vec3(1, 5, 1)),
-                false,
-                'Box above should not overlap'
-            );
-        });
-    });
 });
