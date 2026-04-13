@@ -32,25 +32,25 @@ interface BlockGridParams {
 }
 
 /**
- * Build block lookup structures from the accumulator's Morton codes.
+ * Build block lookup structures from the buffer's Morton codes.
  *
- * @param accumulator - Block accumulator containing voxelized blocks.
+ * @param buffer - Block mask buffer containing voxelized blocks.
  * @param strideY - numBlocksX (stride for Y dimension).
  * @param strideZ - numBlocksX * numBlocksY (stride for Z dimension).
  * @returns Solid block set, mixed block map (linear index to masks array index), and masks.
  */
 const buildBlockLookup = (
-    accumulator: BlockMaskBuffer,
+    buffer: BlockMaskBuffer,
     strideY: number,
     strideZ: number
 ): BlockLookup => {
     const solidSet = new Set<number>();
-    const solidMortons = accumulator.getSolidBlocks();
+    const solidMortons = buffer.getSolidBlocks();
     for (let i = 0; i < solidMortons.length; i++) {
         const [bx, by, bz] = mortonToXYZ(solidMortons[i]);
         solidSet.add(bx + by * strideY + bz * strideZ);
     }
-    const mixed = accumulator.getMixedBlocks();
+    const mixed = buffer.getMixedBlocks();
     const mixedMap = new Map<number, number>();
     for (let i = 0; i < mixed.morton.length; i++) {
         const [bx, by, bz] = mortonToXYZ(mixed.morton[i]);

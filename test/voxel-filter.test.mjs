@@ -332,7 +332,7 @@ describe('filterAndFillBlocks', function () {
     // ============================================================================
 
     describe('edge cases', function () {
-        it('should handle empty accumulator', function () {
+        it('should handle empty buffer', function () {
             const acc = new BlockMaskBuffer();
             const result = filterAndFillBlocks(acc);
             assert.strictEqual(result.count, 0);

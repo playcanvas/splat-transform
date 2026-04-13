@@ -13,7 +13,7 @@ import {
 import { logger } from '../utils/logger';
 
 const carveInterior = (
-    accumulator: BlockMaskBuffer,
+    buffer: BlockMaskBuffer,
     gridBounds: Bounds,
     voxelResolution: number,
     capsuleHeight: number,
@@ -38,8 +38,8 @@ const carveInterior = (
         throw new Error(`Grid dimensions must be multiples of 4, got ${nx}x${ny}x${nz}`);
     }
 
-    if (accumulator.count === 0) {
-        return { accumulator, gridBounds };
+    if (buffer.count === 0) {
+        return { buffer, gridBounds };
     }
 
     const kernelR = Math.ceil(capsuleRadius / voxelResolution);
@@ -52,7 +52,7 @@ const carveInterior = (
     let progressComplete = false;
 
     try {
-        const gridA = SparseVoxelGrid.fromAccumulator(accumulator, nx, ny, nz);
+        const gridA = SparseVoxelGrid.fromBuffer(buffer, nx, ny, nz);
         logger.progress.step();
 
         const blocked = sparseDilate3(gridA, kernelR, yHalfExtent);
@@ -63,7 +63,7 @@ const carveInterior = (
 
         if (seedIx < 0 || seedIx >= nx || seedIy < 0 || seedIy >= ny || seedIz < 0 || seedIz >= nz) {
             logger.warn(`carveInterior: seed (${seed.x}, ${seed.y}, ${seed.z}) outside grid, skipping`);
-            return { accumulator, gridBounds };
+            return { buffer, gridBounds };
         }
 
         if (blocked.getVoxel(seedIx, seedIy, seedIz)) {
@@ -71,7 +71,7 @@ const carveInterior = (
             const found = SparseVoxelGrid.findNearestFreeCell(blocked, seedIx, seedIy, seedIz, maxRadius);
             if (!found) {
                 logger.warn(`carveInterior: seed (${seed.x}, ${seed.y}, ${seed.z}) blocked after dilation, no free cell within ${maxRadius} voxels, skipping`);
-                return { accumulator, gridBounds };
+                return { buffer, gridBounds };
             }
             seedIx = found.ix;
             seedIy = found.iy;
@@ -97,7 +97,7 @@ const carveInterior = (
             logger.progress.step();
             progressComplete = true;
             return {
-                accumulator: new BlockMaskBuffer(),
+                buffer: new BlockMaskBuffer(),
                 gridBounds: { min: gridBounds.min.clone(), max: gridBounds.min.clone() }
             };
         }
@@ -129,7 +129,7 @@ const carveInterior = (
         progressComplete = true;
 
         return {
-            accumulator: navRegion.toAccumulatorInverted(
+            buffer: navRegion.toBufferInverted(
                 cropMinBx, cropMinBy, cropMinBz,
                 cropMaxBx, cropMaxBy, cropMaxBz
             ),

@@ -19,7 +19,7 @@ interface PendingBatch extends BatchSpec {
 }
 
 /**
- * GPU-accelerated voxelization of Gaussian splat data into a sparse block accumulator.
+ * GPU-accelerated voxelization of Gaussian splat data into a block mask buffer.
  *
  * Uses double-buffered pipelining: the CPU prepares the next mega-dispatch
  * (BVH queries + index copying) while the GPU executes the current one.
@@ -29,9 +29,9 @@ interface PendingBatch extends BatchSpec {
  * @param gridBounds - Block-aligned grid bounds to voxelize within.
  * @param voxelResolution - Size of each voxel in world units.
  * @param opacityCutoff - Opacity threshold for solid voxels.
- * @returns Block mask buffer with voxelization results.
+ * @returns Block mask buffer containing voxelization results.
  */
-const voxelizeToAccumulator = async (
+const voxelizeToBuffer = async (
     bvh: GaussianBVH,
     gpuVoxelization: GpuVoxelization,
     gridBounds: Bounds,
@@ -43,7 +43,7 @@ const voxelizeToAccumulator = async (
     const numBlocksY = Math.round((gridBounds.max.y - gridBounds.min.y) / blockSize);
     const numBlocksZ = Math.round((gridBounds.max.z - gridBounds.min.z) / blockSize);
 
-    const accumulator = new BlockMaskBuffer();
+    const buffer = new BlockMaskBuffer();
     const batchSize = 16;
 
     logger.debug(`blocks: ${numBlocksX} x ${numBlocksY} x ${numBlocksZ} (${(numBlocksX * numBlocksY * numBlocksZ / 1e6).toFixed(1)}M)`);
@@ -92,7 +92,7 @@ const voxelizeToAccumulator = async (
                 const absBlockZ = batch.bz + localZ;
 
                 const morton = xyzToMorton(absBlockX, absBlockY, absBlockZ);
-                accumulator.addBlock(morton, maskLo, maskHi);
+                buffer.addBlock(morton, maskLo, maskHi);
             }
         }
     };
@@ -203,7 +203,7 @@ const voxelizeToAccumulator = async (
         lastVoxelStep++;
     }
 
-    return accumulator;
+    return buffer;
 };
 
-export { voxelizeToAccumulator };
+export { voxelizeToBuffer };

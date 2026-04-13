@@ -19,7 +19,7 @@ export { marchingCubes } from './marching-cubes.js';
 
 export type { MarchingCubesMesh } from './marching-cubes.js';
 
-export { voxelizeToAccumulator } from './voxelize.js';
+export { voxelizeToBuffer } from './voxelize.js';
 
 export { filterCluster } from './filter-cluster.js';
 

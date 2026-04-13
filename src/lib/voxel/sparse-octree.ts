@@ -97,22 +97,22 @@ interface LevelData {
  * Uses Structure-of-Arrays (SoA) representation and linear scans on sorted
  * Morton codes instead of Maps and per-node objects for performance.
  *
- * @param accumulator - BlockMaskBuffer containing voxelized blocks
+ * @param buffer - BlockMaskBuffer containing voxelized blocks
  * @param gridBounds - Grid bounds aligned to block boundaries
  * @param sceneBounds - Original scene bounds
  * @param voxelResolution - Size of each voxel in world units
  * @returns Sparse octree structure
  */
 function buildSparseOctree(
-    accumulator: BlockMaskBuffer,
+    buffer: BlockMaskBuffer,
     gridBounds: Bounds,
     sceneBounds: Bounds,
     voxelResolution: number
 ): SparseOctree {
     const tProfile = performance.now();
 
-    const mixed = accumulator.getMixedBlocks();
-    const solid = accumulator.getSolidBlocks();
+    const mixed = buffer.getMixedBlocks();
+    const solid = buffer.getSolidBlocks();
     const totalBlocks = mixed.morton.length + solid.length;
 
     // --- Phase 1: Combine blocks into SoA arrays and sort by Morton code ---

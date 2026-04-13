@@ -22,7 +22,7 @@ import { marchingCubes } from '../voxel/marching-cubes';
 import {
     type SparseOctree
 } from '../voxel/sparse-octree';
-import { voxelizeToAccumulator } from '../voxel/voxelize';
+import { voxelizeToBuffer } from '../voxel/voxelize';
 
 /**
  * Options for writing a voxel octree file.
@@ -244,33 +244,33 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
 
     logger.progress.step('Voxelizing');
 
-    let accumulator = await voxelizeToAccumulator(
+    let buffer = await voxelizeToBuffer(
         bvh, gpuVoxelization, gridBounds, voxelResolution, opacityCutoff
     );
 
     gpuVoxelization.destroy();
 
     logger.progress.step('Filtering');
-    accumulator = filterAndFillBlocks(accumulator);
+    buffer = filterAndFillBlocks(buffer);
 
     if (hasFillExterior) {
         logger.progress.step('Fill exterior');
         const fillResult = fillExterior(
-            accumulator, gridBounds, voxelResolution,
+            buffer, gridBounds, voxelResolution,
             exteriorRadius!, navSeed!
         );
-        accumulator = fillResult.accumulator;
+        buffer = fillResult.buffer;
         gridBounds = fillResult.gridBounds;
     }
 
     if (hasNav) {
         logger.progress.step('Carve interior');
         const navResult = carveInterior(
-            accumulator, gridBounds, voxelResolution,
+            buffer, gridBounds, voxelResolution,
             navCapsule!.height, navCapsule!.radius,
             navSeed!
         );
-        accumulator = navResult.accumulator;
+        buffer = navResult.buffer;
         gridBounds = navResult.gridBounds;
     }
 
@@ -278,7 +278,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
 
     if (collisionMesh) {
         logger.progress.step('Extracting collision mesh');
-        const rawMesh = marchingCubes(accumulator, gridBounds, voxelResolution);
+        const rawMesh = marchingCubes(buffer, gridBounds, voxelResolution);
         logger.log(`collision mesh (raw): ${rawMesh.positions.length / 3} vertices, ${rawMesh.indices.length / 3} triangles`);
 
         if (rawMesh.indices.length < 3) {
@@ -326,12 +326,12 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
 
     logger.progress.step('Building octree');
     const octree = buildSparseOctree(
-        accumulator,
+        buffer,
         gridBounds,
         bounds,
         voxelResolution
     );
-    accumulator.clear();
+    buffer.clear();
 
     logger.log(`octree: depth=${octree.treeDepth}, interior=${octree.numInteriorNodes}, mixed=${octree.numMixedLeaves}`);
 

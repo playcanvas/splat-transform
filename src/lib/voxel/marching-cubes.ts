@@ -47,14 +47,14 @@ function isVoxelSet(lo: number, hi: number, lx: number, ly: number, lz: number):
  * Returns a function that queries whether a voxel at global coordinates
  * (vx, vy, vz) is occupied.
  *
- * @param accumulator - Block data
+ * @param buffer - Block data
  * @returns Lookup function (vx, vy, vz) => boolean
  */
-function buildOccupancyLookup(accumulator: BlockMaskBuffer): (vx: number, vy: number, vz: number) => boolean {
+function buildOccupancyLookup(buffer: BlockMaskBuffer): (vx: number, vy: number, vz: number) => boolean {
     // Map from "bx,by,bz" encoded as single number to {lo,hi} or solid flag
     // Block key = bx + by * stride + bz * stride^2 where stride is large enough
-    const mixed = accumulator.getMixedBlocks();
-    const solid = accumulator.getSolidBlocks();
+    const mixed = buffer.getMixedBlocks();
+    const solid = buffer.getSolidBlocks();
 
     // Use a Map<number, number> where value encodes index into mask arrays.
     // For solid blocks, store -1 as sentinel.
@@ -97,24 +97,24 @@ function buildOccupancyLookup(accumulator: BlockMaskBuffer): (vx: number, vy: nu
  * are binary (0 = empty, 1 = occupied) with a 0.5 threshold. Vertices are
  * placed at edge midpoints, producing a mesh that follows voxel boundaries.
  *
- * @param accumulator - Voxel block data after filtering
+ * @param buffer - Voxel block data after filtering
  * @param gridBounds - Grid bounds aligned to block boundaries
  * @param voxelResolution - Size of each voxel in world units
  * @returns Mesh with positions and indices
  */
 function marchingCubes(
-    accumulator: BlockMaskBuffer,
+    buffer: BlockMaskBuffer,
     gridBounds: Bounds,
     voxelResolution: number
 ): MarchingCubesMesh {
-    const isOccupied = buildOccupancyLookup(accumulator);
+    const isOccupied = buildOccupancyLookup(buffer);
 
     // Collect all voxel coordinates that need processing.
     // We need to check every cell where at least one corner differs from
     // the others, which means we need to check occupied voxels and their
     // immediate neighbors.
-    const mixed = accumulator.getMixedBlocks();
-    const solid = accumulator.getSolidBlocks();
+    const mixed = buffer.getMixedBlocks();
+    const solid = buffer.getSolidBlocks();
 
     // Collect set of all block coordinates that exist
     const blockSet = new Set<number>();

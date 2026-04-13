@@ -42,12 +42,12 @@ const SOLID_MASK = 0xFFFFFFFF >>> 0;
  *
  * Blocks that become empty or solid as a consequence are handled automatically.
  *
- * @param accumulator - BlockMaskBuffer with voxelization results
+ * @param buffer - BlockMaskBuffer with voxelization results
  * @returns New BlockMaskBuffer with filtered/filled data
  */
-function filterAndFillBlocks(accumulator: BlockMaskBuffer): BlockMaskBuffer {
-    const mixed = accumulator.getMixedBlocks();
-    const solid = accumulator.getSolidBlocks();
+function filterAndFillBlocks(buffer: BlockMaskBuffer): BlockMaskBuffer {
+    const mixed = buffer.getMixedBlocks();
+    const solid = buffer.getSolidBlocks();
     const masks = mixed.masks;
 
     // Build lookup structures from original (unmodified) data
@@ -162,7 +162,7 @@ function filterAndFillBlocks(accumulator: BlockMaskBuffer): BlockMaskBuffer {
         newMasks[i * 2 + 1] = hi;
     }
 
-    // Rebuild accumulator with state transitions (mixed->empty, mixed->solid)
+    // Rebuild buffer with state transitions (mixed->empty, mixed->solid)
     const result = new BlockMaskBuffer();
 
     for (let i = 0; i < mixed.morton.length; i++) {

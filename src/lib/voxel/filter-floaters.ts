@@ -11,7 +11,7 @@ import {
     isCenterInOccupiedVoxel,
     gaussianContributesToVoxels
 } from './voxel-query';
-import { voxelizeToAccumulator } from './voxelize';
+import { voxelizeToBuffer } from './voxelize';
 import { DataTable } from '../data-table/data-table';
 import type { DeviceCreator } from '../types';
 import { logger } from '../utils/logger';
@@ -61,14 +61,14 @@ const filterFloaters = async (
 
     logger.progress.step('Voxelizing');
 
-    const accumulator = await voxelizeToAccumulator(
+    const buffer = await voxelizeToBuffer(
         ctx.bvh, ctx.gpuVoxelization, gridBounds, voxelResolution, opacityCutoff
     );
 
     ctx.gpuVoxelization.destroy();
 
     const grid = buildBlockGridParams(gridBounds, voxelResolution);
-    const lookup = buildBlockLookup(accumulator, grid.strideY, grid.strideZ);
+    const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
 
     logger.log(`filterFloaters: ${lookup.solidSet.size + lookup.mixedMap.size} occupied blocks (${lookup.solidSet.size} solid, ${lookup.mixedMap.size} mixed)`);
 

@@ -15,7 +15,7 @@ import {
     isCenterInOccupiedVoxel,
     gaussianContributesToVoxels
 } from './voxel-query';
-import { voxelizeToAccumulator } from './voxelize';
+import { voxelizeToBuffer } from './voxelize';
 import { DataTable } from '../data-table/data-table';
 import type { DeviceCreator } from '../types';
 import { logger } from '../utils/logger';
@@ -225,13 +225,13 @@ const filterCluster = async (
 
     logger.progress.step('Voxelizing');
 
-    let accumulator = await voxelizeToAccumulator(
+    let buffer = await voxelizeToBuffer(
         ctx.bvh, ctx.gpuVoxelization, gridBounds, clampedResolution, opacityCutoff
     );
 
     ctx.gpuVoxelization.destroy();
 
-    accumulator = filterAndFillBlocks(accumulator);
+    buffer = filterAndFillBlocks(buffer);
 
     logger.progress.step('Finding cluster');
 
@@ -245,7 +245,7 @@ const filterCluster = async (
     seedBy = Math.max(0, Math.min(seedBy, grid.numBlocksY - 1));
     seedBz = Math.max(0, Math.min(seedBz, grid.numBlocksZ - 1));
 
-    const lookup = buildBlockLookup(accumulator, grid.strideY, grid.strideZ);
+    const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
     const occupied = new Set<number>([...lookup.solidSet, ...lookup.mixedMap.keys()]);
 
     const maxSearchRadius = Math.max(grid.numBlocksX, grid.numBlocksY, grid.numBlocksZ);
@@ -264,9 +264,9 @@ const filterCluster = async (
     }
 
     const ccSet = findClusterFromSeed(occupied, nearest.bx, nearest.by, nearest.bz, grid.numBlocksX, grid.numBlocksY, grid.numBlocksZ);
-    logger.log(`filterCluster: cluster has ${ccSet.size} blocks out of ${accumulator.count} total`);
+    logger.log(`filterCluster: cluster has ${ccSet.size} blocks out of ${buffer.count} total`);
 
-    if (ccSet.size === accumulator.count) {
+    if (ccSet.size === buffer.count) {
         logger.log('filterCluster: all blocks in one cluster, no filtering needed');
         logger.progress.step();
         return dataTable;

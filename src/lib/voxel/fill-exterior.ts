@@ -23,12 +23,12 @@ type NavSeed = {
 };
 
 type NavSimplifyResult = {
-    accumulator: BlockMaskBuffer;
+    buffer: BlockMaskBuffer;
     gridBounds: Bounds;
 };
 
 const fillExterior = (
-    accumulator: BlockMaskBuffer,
+    buffer: BlockMaskBuffer,
     gridBounds: Bounds,
     voxelResolution: number,
     dilation: number,
@@ -49,8 +49,8 @@ const fillExterior = (
         throw new Error(`Grid dimensions must be multiples of 4, got ${nx}x${ny}x${nz}`);
     }
 
-    if (accumulator.count === 0) {
-        return { accumulator, gridBounds };
+    if (buffer.count === 0) {
+        return { buffer, gridBounds };
     }
 
     const halfExtent = Math.ceil(dilation / voxelResolution);
@@ -62,7 +62,7 @@ const fillExterior = (
     let progressComplete = false;
 
     try {
-        const gridOriginal = SparseVoxelGrid.fromAccumulator(accumulator, nx, ny, nz);
+        const gridOriginal = SparseVoxelGrid.fromBuffer(buffer, nx, ny, nz);
         logger.progress.step();
 
         const dilated = sparseDilate3(gridOriginal, halfExtent, halfExtent);
@@ -147,13 +147,13 @@ const fillExterior = (
                 logger.log('fillExterior: seed reachable from outside, skipping');
                 logger.progress.cancel();
                 progressComplete = true;
-                return { accumulator, gridBounds };
+                return { buffer, gridBounds };
             }
         } else {
             logger.log('fillExterior: seed outside grid bounds, skipping exterior fill');
             logger.progress.cancel();
             progressComplete = true;
-            return { accumulator, gridBounds };
+            return { buffer, gridBounds };
         }
 
         logger.progress.step();
@@ -194,7 +194,7 @@ const fillExterior = (
             logger.progress.step();
             progressComplete = true;
             return {
-                accumulator: new BlockMaskBuffer(),
+                buffer: new BlockMaskBuffer(),
                 gridBounds: { min: gridBounds.min.clone(), max: gridBounds.min.clone() }
             };
         }
@@ -226,7 +226,7 @@ const fillExterior = (
         progressComplete = true;
 
         return {
-            accumulator: combined.toAccumulator(
+            buffer: combined.toBuffer(
                 cropMinBx, cropMinBy, cropMinBz,
                 cropMaxBx, cropMaxBy, cropMaxBz
             ),

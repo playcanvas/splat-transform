@@ -71,7 +71,7 @@ export { marchingCubes } from './voxel/marching-cubes';
 export type { MarchingCubesMesh } from './voxel/marching-cubes';
 export { filterCluster } from './voxel/filter-cluster';
 export { filterFloaters } from './voxel/filter-floaters';
-export { voxelizeToAccumulator } from './voxel/voxelize';
+export { voxelizeToBuffer } from './voxel/voxelize';
 
 // Types
 export type { Options, Param } from './types';

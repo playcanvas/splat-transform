@@ -141,7 +141,7 @@ class SparseVoxelGrid {
         return g;
     }
 
-    static fromAccumulator(acc: BlockMaskBuffer, nx: number, ny: number, nz: number): SparseVoxelGrid {
+    static fromBuffer(acc: BlockMaskBuffer, nx: number, ny: number, nz: number): SparseVoxelGrid {
         const g = new SparseVoxelGrid(nx, ny, nz);
         const solidMortons = acc.getSolidBlocks();
         for (let i = 0; i < solidMortons.length; i++) {
@@ -161,7 +161,7 @@ class SparseVoxelGrid {
         return g;
     }
 
-    toAccumulator(
+    toBuffer(
         cropMinBx: number, cropMinBy: number, cropMinBz: number,
         cropMaxBx: number, cropMaxBy: number, cropMaxBz: number,
         defaultSolid = false
@@ -198,7 +198,7 @@ class SparseVoxelGrid {
         return acc;
     }
 
-    toAccumulatorInverted(
+    toBufferInverted(
         cropMinBx: number, cropMinBy: number, cropMinBz: number,
         cropMaxBx: number, cropMaxBy: number, cropMaxBz: number
     ): BlockMaskBuffer {

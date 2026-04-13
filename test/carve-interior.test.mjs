@@ -32,7 +32,7 @@ function countSolidVoxels(acc) {
 
 /**
  * Build a hollow box of solid blocks. The box has solid walls of 1 block thick
- * and an empty interior. Returns the accumulator and grid bounds.
+ * and an empty interior. Returns the buffer and grid bounds.
  *
  * @param {number} sizeBlocks - Size of the box in blocks per axis (must be >= 3).
  * @param {number} voxelResolution - Voxel resolution.
@@ -70,7 +70,7 @@ describe('carveInterior', function () {
             const seed = { x: centerWorld, y: centerWorld, z: centerWorld };
 
             const result = carveInterior(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
-            const resultCount = countSolidVoxels(result.accumulator);
+            const resultCount = countSolidVoxels(result.buffer);
 
             assert.ok(resultCount > 0,
                 'Should produce solid voxels around the navigable space');
@@ -84,7 +84,7 @@ describe('carveInterior', function () {
 
             const result = carveInterior(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
 
-            const resultCount = countSolidVoxels(result.accumulator);
+            const resultCount = countSolidVoxels(result.buffer);
             const nx = Math.round((gridBounds.max.x - gridBounds.min.x) / voxelResolution);
             const totalCells = nx * nx * nx;
 
@@ -94,21 +94,21 @@ describe('carveInterior', function () {
     });
 
     describe('seed validation', function () {
-        it('should return original accumulator if seed is outside grid', function () {
+        it('should return original buffer if seed is outside grid', function () {
             const { acc, gridBounds } = buildHollowBox(4, voxelResolution);
 
             const seed = { x: -100, y: -100, z: -100 };
             const result = carveInterior(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
 
-            assert.strictEqual(countSolidVoxels(result.accumulator), countSolidVoxels(acc),
+            assert.strictEqual(countSolidVoxels(result.buffer), countSolidVoxels(acc),
                 'Should return original when seed is outside grid');
         });
 
-        it('should return original accumulator if seed is in solid region', function () {
+        it('should return original buffer if seed is in solid region', function () {
             // 3-block box: walls at blocks 0 and 2, interior is only block 1
             // (4 voxels per axis). After dilation by yHalfExtent=3 in Y the
             // interior is fully blocked, so no free cell exists within search
-            // radius and the function returns the original accumulator.
+            // radius and the function returns the original buffer.
             const { acc, gridBounds } = buildHollowBox(3, voxelResolution);
 
             const seed = {
@@ -118,19 +118,19 @@ describe('carveInterior', function () {
             };
             const result = carveInterior(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
 
-            assert.strictEqual(countSolidVoxels(result.accumulator), countSolidVoxels(acc),
+            assert.strictEqual(countSolidVoxels(result.buffer), countSolidVoxels(acc),
                 'Should return original when seed is in blocked region');
         });
     });
 
-    describe('empty accumulator', function () {
+    describe('empty buffer', function () {
         it('should carve out all reachable space (no obstacles)', function () {
             const acc = new BlockMaskBuffer();
             const gridBounds = alignGridBounds(0, 0, 0, 1, 1, 1, voxelResolution);
             const seed = { x: 0.5, y: 0.5, z: 0.5 };
 
             const result = carveInterior(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
-            const resultCount = countSolidVoxels(result.accumulator);
+            const resultCount = countSolidVoxels(result.buffer);
             const nx = Math.round((gridBounds.max.x - gridBounds.min.x) / voxelResolution);
             const ny = Math.round((gridBounds.max.y - gridBounds.min.y) / voxelResolution);
             const nz = Math.round((gridBounds.max.z - gridBounds.min.z) / voxelResolution);
@@ -152,7 +152,7 @@ describe('carveInterior', function () {
 
             const result = carveInterior(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
 
-            const resultCount = countSolidVoxels(result.accumulator);
+            const resultCount = countSolidVoxels(result.buffer);
             assert.ok(resultCount > 0,
                 'Should retain solid voxels near the reachable space');
         });
@@ -183,7 +183,7 @@ describe('carveInterior', function () {
             const seed = { x: centerWorld, y: centerWorld, z: centerWorld };
 
             const result = carveInterior(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
-            const resultCount = countSolidVoxels(result.accumulator);
+            const resultCount = countSolidVoxels(result.buffer);
 
             assert.ok(resultCount > 0,
                 'Should preserve solid walls around the navigable space');

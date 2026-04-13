@@ -375,7 +375,7 @@ describe('BlockMaskBuffer', function () {
 
 describe('buildSparseOctree', function () {
     describe('empty octree', function () {
-        it('should handle empty accumulator', function () {
+        it('should handle empty buffer', function () {
             const acc = new BlockMaskBuffer();
             const gridBounds = {
                 min: new Vec3(0, 0, 0),
