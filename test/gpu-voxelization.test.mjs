@@ -8,7 +8,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 
-import { GpuVoxelization } from '../src/lib/voxel/gpu-voxelization.js';
+import { GpuVoxelization } from '../src/lib/gpu/gpu-voxelization.js';
 
 describe('GpuVoxelization', function () {
     describe('module exports', function () {

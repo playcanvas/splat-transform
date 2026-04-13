@@ -179,9 +179,9 @@ async function createVoxelFixture() {
     // Lazy imports — only pulled in when this helper is actually called,
     // so tests that don't need voxel fixtures aren't affected.
     const { Vec3 } = await import('playcanvas');
+    const { BlockAccumulator } = await import('../../src/lib/voxel/block-accumulator.js');
+    const { xyzToMorton } = await import('../../src/lib/voxel/morton.js');
     const {
-        BlockAccumulator,
-        xyzToMorton,
         buildSparseOctree,
         alignGridBounds
     } = await import('../../src/lib/voxel/sparse-octree.js');

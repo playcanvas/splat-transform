@@ -7,14 +7,16 @@ import assert from 'node:assert';
 
 import { Vec3 } from 'playcanvas';
 
+import { BlockAccumulator } from '../src/lib/voxel/block-accumulator.js';
 import {
     xyzToMorton,
     mortonToXYZ,
     popcount,
     isSolid,
-    isEmpty,
+    isEmpty
+} from '../src/lib/voxel/morton.js';
+import {
     getChildOffset,
-    BlockAccumulator,
     buildSparseOctree,
     alignGridBounds,
     SOLID_LEAF_MARKER

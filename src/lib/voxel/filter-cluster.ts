@@ -1,26 +1,24 @@
 import { Vec3 } from 'playcanvas';
 
+import { filterAndFillBlocks } from './block-cleanup';
+import {
+    setupVoxelFilter,
+    buildGaussianColumns,
+    buildBlockGridParams
+} from './filter-pipeline';
+import { mortonToXYZ } from './morton';
+import {
+    alignGridBounds
+} from './sparse-octree';
 import {
     buildBlockLookup,
     isCenterInOccupiedVoxel,
-    gaussianContributesToVoxels,
-    type BlockGridParams,
-    type GaussianColumns
-} from './block-lookup';
-import { GpuVoxelization } from './gpu-voxelization';
-import {
-    BlockAccumulator,
-    alignGridBounds
-} from './sparse-octree';
-import { filterAndFillBlocks } from './voxel-filter';
+    gaussianContributesToVoxels
+} from './voxel-query';
 import { voxelizeToAccumulator } from './voxelize';
-import { Column, DataTable } from '../data-table/data-table';
-import { computeGaussianExtents } from '../data-table/gaussian-aabb';
-import { computeWriteTransform, transformColumns } from '../data-table/transform';
-import { GaussianBVH } from '../spatial/gaussian-bvh';
+import { DataTable } from '../data-table/data-table';
 import type { DeviceCreator } from '../types';
 import { logger } from '../utils/logger';
-import { Transform } from '../utils/math';
 
 /**
  * Find the connected component of occupied blocks reachable from a seed block
@@ -188,41 +186,24 @@ const filterCluster = async (
 
     logger.progress.step('Computing extents');
 
-    const voxelColumns = [
-        'x', 'y', 'z',
-        'rot_0', 'rot_1', 'rot_2', 'rot_3',
-        'scale_0', 'scale_1', 'scale_2',
-        'opacity'
-    ];
-    const delta = computeWriteTransform(dataTable.transform, Transform.IDENTITY);
-    const cols = transformColumns(dataTable, voxelColumns, delta);
-    const pcDataTable = new DataTable(voxelColumns.map(name => new Column(name, cols.get(name)!)));
-
-    const extentsResult = computeGaussianExtents(pcDataTable);
-    const sceneBounds = extentsResult.sceneBounds;
+    const ctx = await setupVoxelFilter(dataTable, createDevice);
 
     const coarseVoxelSize = Math.max(0.01, resolution);
     const blockSize = 4 * coarseVoxelSize;
     const maxGridExtent = 8192 * coarseVoxelSize;
 
-    const sceneExtentX = sceneBounds.max.x - sceneBounds.min.x;
-    const sceneExtentY = sceneBounds.max.y - sceneBounds.min.y;
-    const sceneExtentZ = sceneBounds.max.z - sceneBounds.min.z;
+    const sceneExtentX = ctx.sceneBounds.max.x - ctx.sceneBounds.min.x;
+    const sceneExtentY = ctx.sceneBounds.max.y - ctx.sceneBounds.min.y;
+    const sceneExtentZ = ctx.sceneBounds.max.z - ctx.sceneBounds.min.z;
     const maxSceneExtent = Math.max(sceneExtentX, sceneExtentY, sceneExtentZ);
 
     logger.log(`filterCluster: scene extent ${maxSceneExtent.toFixed(2)}m, voxel resolution ${coarseVoxelSize.toFixed(4)}m`);
 
     logger.progress.step('Building BVH');
 
-    const bvh = new GaussianBVH(pcDataTable, extentsResult.extents);
-    const device = await createDevice();
-
-    const gpuVoxelization = new GpuVoxelization(device);
-    gpuVoxelization.uploadAllGaussians(pcDataTable, extentsResult.extents);
-
     const gridBounds = alignGridBounds(
-        sceneBounds.min.x, sceneBounds.min.y, sceneBounds.min.z,
-        sceneBounds.max.x, sceneBounds.max.y, sceneBounds.max.z,
+        ctx.sceneBounds.min.x, ctx.sceneBounds.min.y, ctx.sceneBounds.min.z,
+        ctx.sceneBounds.max.x, ctx.sceneBounds.max.y, ctx.sceneBounds.max.z,
         coarseVoxelSize
     );
 
@@ -245,34 +226,30 @@ const filterCluster = async (
     logger.progress.step('Voxelizing');
 
     let accumulator = await voxelizeToAccumulator(
-        bvh, gpuVoxelization, gridBounds, coarseVoxelSize, opacityCutoff
+        ctx.bvh, ctx.gpuVoxelization, gridBounds, coarseVoxelSize, opacityCutoff
     );
 
-    gpuVoxelization.destroy();
+    ctx.gpuVoxelization.destroy();
 
     accumulator = filterAndFillBlocks(accumulator);
 
     logger.progress.step('Finding cluster');
 
+    const grid = buildBlockGridParams(gridBounds, coarseVoxelSize);
+
     let seedBx = Math.floor((seed.x - gridBounds.min.x) / blockSize);
     let seedBy = Math.floor((seed.y - gridBounds.min.y) / blockSize);
     let seedBz = Math.floor((seed.z - gridBounds.min.z) / blockSize);
 
-    const numBlocksX = Math.round((gridBounds.max.x - gridBounds.min.x) / blockSize);
-    const numBlocksY = Math.round((gridBounds.max.y - gridBounds.min.y) / blockSize);
-    const numBlocksZ = Math.round((gridBounds.max.z - gridBounds.min.z) / blockSize);
-    const strideY = numBlocksX;
-    const strideZ = numBlocksX * numBlocksY;
+    seedBx = Math.max(0, Math.min(seedBx, grid.numBlocksX - 1));
+    seedBy = Math.max(0, Math.min(seedBy, grid.numBlocksY - 1));
+    seedBz = Math.max(0, Math.min(seedBz, grid.numBlocksZ - 1));
 
-    seedBx = Math.max(0, Math.min(seedBx, numBlocksX - 1));
-    seedBy = Math.max(0, Math.min(seedBy, numBlocksY - 1));
-    seedBz = Math.max(0, Math.min(seedBz, numBlocksZ - 1));
-
-    const lookup = buildBlockLookup(accumulator, strideY, strideZ);
+    const lookup = buildBlockLookup(accumulator, grid.strideY, grid.strideZ);
     const occupied = new Set<number>([...lookup.solidSet, ...lookup.mixedMap.keys()]);
 
-    const maxSearchRadius = Math.max(numBlocksX, numBlocksY, numBlocksZ);
-    const nearest = findNearestOccupiedBlock(occupied, seedBx, seedBy, seedBz, maxSearchRadius, numBlocksX, numBlocksY, numBlocksZ);
+    const maxSearchRadius = Math.max(grid.numBlocksX, grid.numBlocksY, grid.numBlocksZ);
+    const nearest = findNearestOccupiedBlock(occupied, seedBx, seedBy, seedBz, maxSearchRadius, grid.numBlocksX, grid.numBlocksY, grid.numBlocksZ);
 
     if (!nearest) {
         logger.warn('filterCluster: no occupied blocks found, returning empty result');
@@ -286,7 +263,7 @@ const filterCluster = async (
         logger.log(`filterCluster: seed block unoccupied, using nearest at (${worldX.toFixed(2)}, ${worldY.toFixed(2)}, ${worldZ.toFixed(2)})`);
     }
 
-    const ccSet = findClusterFromSeed(occupied, nearest.bx, nearest.by, nearest.bz, numBlocksX, numBlocksY, numBlocksZ);
+    const ccSet = findClusterFromSeed(occupied, nearest.bx, nearest.by, nearest.bz, grid.numBlocksX, grid.numBlocksY, grid.numBlocksZ);
     logger.log(`filterCluster: cluster has ${ccSet.size} blocks out of ${accumulator.count} total`);
 
     if (ccSet.size === accumulator.count) {
@@ -297,36 +274,7 @@ const filterCluster = async (
 
     logger.progress.step('Filtering Gaussians');
 
-    const gaussianCols: GaussianColumns = {
-        posX: pcDataTable.getColumnByName('x').data,
-        posY: pcDataTable.getColumnByName('y').data,
-        posZ: pcDataTable.getColumnByName('z').data,
-        rotW: pcDataTable.getColumnByName('rot_0').data,
-        rotX: pcDataTable.getColumnByName('rot_1').data,
-        rotY: pcDataTable.getColumnByName('rot_2').data,
-        rotZ: pcDataTable.getColumnByName('rot_3').data,
-        scaleX: pcDataTable.getColumnByName('scale_0').data,
-        scaleY: pcDataTable.getColumnByName('scale_1').data,
-        scaleZ: pcDataTable.getColumnByName('scale_2').data,
-        opacity: pcDataTable.getColumnByName('opacity').data,
-        extentX: extentsResult.extents.getColumnByName('extent_x').data,
-        extentY: extentsResult.extents.getColumnByName('extent_y').data,
-        extentZ: extentsResult.extents.getColumnByName('extent_z').data
-    };
-
-    const grid: BlockGridParams = {
-        gridMinX: gridBounds.min.x,
-        gridMinY: gridBounds.min.y,
-        gridMinZ: gridBounds.min.z,
-        blockSize,
-        voxelSize: coarseVoxelSize,
-        numBlocksX,
-        numBlocksY,
-        numBlocksZ,
-        strideY,
-        strideZ
-    };
-
+    const gaussianCols = buildGaussianColumns(ctx);
     const minContribution = 1 / 255;
     const keepIndices: number[] = [];
 

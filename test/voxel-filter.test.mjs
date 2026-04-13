@@ -9,12 +9,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 
-import {
-    BlockAccumulator,
-    xyzToMorton,
-    popcount
-} from '../src/lib/voxel/sparse-octree.js';
-import { filterAndFillBlocks } from '../src/lib/voxel/voxel-filter.js';
+import { BlockAccumulator } from '../src/lib/voxel/block-accumulator.js';
+import { filterAndFillBlocks } from '../src/lib/voxel/block-cleanup.js';
+import { xyzToMorton, popcount } from '../src/lib/voxel/morton.js';
 
 const SOLID_LO = 0xFFFFFFFF >>> 0;
 const SOLID_HI = 0xFFFFFFFF >>> 0;

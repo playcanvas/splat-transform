@@ -8,6 +8,7 @@ import { type FileSystem, writeFile } from '../io/write';
 import type { DeviceCreator } from '../types';
 import { logger } from '../utils/logger';
 import { Transform } from '../utils/math';
+import { filterAndFillBlocks } from '../voxel/block-cleanup';
 import {
     computeGaussianExtents,
     GaussianBVH,
@@ -20,7 +21,6 @@ import { fillExterior, simplifyForCapsule, type NavSeed } from '../voxel/nav-sim
 import {
     type SparseOctree
 } from '../voxel/sparse-octree';
-import { filterAndFillBlocks } from '../voxel/voxel-filter';
 import { voxelizeToAccumulator } from '../voxel/voxelize';
 
 /**

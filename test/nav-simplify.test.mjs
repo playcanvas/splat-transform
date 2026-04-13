@@ -8,12 +8,9 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import {
-    BlockAccumulator,
-    xyzToMorton,
-    alignGridBounds,
-    popcount
-} from '../src/lib/voxel/sparse-octree.js';
+import { BlockAccumulator } from '../src/lib/voxel/block-accumulator.js';
+import { xyzToMorton, popcount } from '../src/lib/voxel/morton.js';
+import { alignGridBounds } from '../src/lib/voxel/sparse-octree.js';
 import { simplifyForCapsule } from '../src/lib/voxel/nav-simplify.js';
 
 const SOLID_LO = 0xFFFFFFFF >>> 0;

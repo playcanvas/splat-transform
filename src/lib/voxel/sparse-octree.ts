@@ -1,14 +1,9 @@
 import { Vec3 } from 'playcanvas';
 
+import { BlockAccumulator } from './block-accumulator';
+import { xyzToMorton, mortonToXYZ, popcount } from './morton';
 import type { Bounds } from '../data-table/gaussian-aabb';
 import { logger } from '../utils/logger';
-
-// ============================================================================
-// Constants
-// ============================================================================
-
-/** All 64 bits set (as unsigned 32-bit) */
-const SOLID_MASK = 0xFFFFFFFF >>> 0;
 
 /**
  * Solid leaf node marker: childMask = 0xFF, baseOffset = 0.
@@ -16,93 +11,6 @@ const SOLID_MASK = 0xFFFFFFFF >>> 0;
  * their parent, so baseOffset = 0 is never valid for an interior node.
  */
 const SOLID_LEAF_MARKER = 0xFF000000 >>> 0;
-
-// ============================================================================
-// Morton Code Functions
-// ============================================================================
-
-/**
- * Encode block coordinates to Morton code (17 bits per axis = 51 bits total).
- * Supports up to 131,072 blocks per axis.
- *
- * @param x - Block X coordinate
- * @param y - Block Y coordinate
- * @param z - Block Z coordinate
- * @returns Morton code with interleaved bits: ...z2y2x2 z1y1x1 z0y0x0
- */
-function xyzToMorton(x: number, y: number, z: number): number {
-    let result = 0;
-    let shift = 1; // Running power: 2^(i*3), starts at 2^0 = 1
-    for (let i = 0; i < 17; i++) {
-        if (x & 1) result += shift;
-        if (y & 1) result += shift * 2;
-        if (z & 1) result += shift * 4;
-        x >>>= 1;
-        y >>>= 1;
-        z >>>= 1;
-        shift *= 8;
-    }
-    return result;
-}
-
-/**
- * Decode Morton code to block coordinates.
- *
- * @param m - Morton code
- * @returns Tuple of [x, y, z] block coordinates
- */
-function mortonToXYZ(m: number): [number, number, number] {
-    let x = 0, y = 0, z = 0;
-    let bit = 1;
-    while (m > 0) {
-        const triplet = m % 8;
-        if (triplet & 1) x |= bit;
-        if (triplet & 2) y |= bit;
-        if (triplet & 4) z |= bit;
-        bit <<= 1;
-        m = Math.trunc(m / 8);
-    }
-    return [x, y, z];
-}
-
-// ============================================================================
-// Utility Functions
-// ============================================================================
-
-/**
- * Count the number of set bits in a 32-bit integer.
- *
- * @param n - 32-bit integer
- * @returns Number of bits set to 1
- */
-function popcount(n: number): number {
-    n >>>= 0; // Ensure unsigned
-    n -= ((n >>> 1) & 0x55555555);
-    n = (n & 0x33333333) + ((n >>> 2) & 0x33333333);
-    return (((n + (n >>> 4)) & 0x0F0F0F0F) * 0x01010101) >>> 24;
-}
-
-/**
- * Check if a voxel mask represents a solid block (all 64 bits set).
- *
- * @param lo - Lower 32 bits of mask
- * @param hi - Upper 32 bits of mask
- * @returns True if all 64 voxels are solid
- */
-function isSolid(lo: number, hi: number): boolean {
-    return (lo >>> 0) === SOLID_MASK && (hi >>> 0) === SOLID_MASK;
-}
-
-/**
- * Check if a voxel mask represents an empty block (no bits set).
- *
- * @param lo - Lower 32 bits of mask
- * @param hi - Upper 32 bits of mask
- * @returns True if all 64 voxels are empty
- */
-function isEmpty(lo: number, hi: number): boolean {
-    return lo === 0 && hi === 0;
-}
 
 /**
  * Get the offset to a child node given a parent's child mask and octant.
@@ -115,106 +23,6 @@ function isEmpty(lo: number, hi: number): boolean {
 function getChildOffset(mask: number, octant: number): number {
     const prefix = (1 << octant) - 1;
     return popcount(mask & prefix);
-}
-
-// ============================================================================
-// Block Accumulator
-// ============================================================================
-
-/**
- * Accumulator for streaming voxelization results.
- * Stores blocks using Morton codes for efficient octree construction.
- */
-class BlockAccumulator {
-    /** Morton codes for mixed blocks */
-    private _mixedMorton: number[] = [];
-
-    /** Interleaved voxel masks for mixed blocks: [lo0, hi0, lo1, hi1, ...] */
-    private _mixedMasks: number[] = [];
-
-    /** Morton codes for solid blocks (mask is implicitly all 1s) */
-    private _solidMorton: number[] = [];
-
-    /**
-     * Add a non-empty block to the accumulator.
-     * Automatically classifies as solid or mixed based on mask values.
-     *
-     * @param morton - Morton code encoding block position
-     * @param lo - Lower 32 bits of voxel mask
-     * @param hi - Upper 32 bits of voxel mask
-     */
-    addBlock(morton: number, lo: number, hi: number): void {
-        if (isEmpty(lo, hi)) {
-            // Empty blocks are discarded
-            return;
-        }
-
-        if (isSolid(lo, hi)) {
-            // Solid blocks only need Morton code
-            this._solidMorton.push(morton);
-        } else {
-            // Mixed blocks need Morton code + mask
-            this._mixedMorton.push(morton);
-            this._mixedMasks.push(lo, hi);
-        }
-    }
-
-    /**
-     * Get all mixed blocks.
-     *
-     * @returns Object with morton codes and interleaved masks
-     */
-    getMixedBlocks(): { morton: number[]; masks: number[] } {
-        return {
-            morton: this._mixedMorton,
-            masks: this._mixedMasks
-        };
-    }
-
-    /**
-     * Get all solid blocks.
-     *
-     * @returns Array of Morton codes
-     */
-    getSolidBlocks(): number[] {
-        return this._solidMorton;
-    }
-
-    /**
-     * Get total number of blocks stored.
-     *
-     * @returns Count of mixed + solid blocks
-     */
-    get count(): number {
-        return this._mixedMorton.length + this._solidMorton.length;
-    }
-
-    /**
-     * Get number of mixed blocks.
-     *
-     * @returns Count of mixed blocks
-     */
-    get mixedCount(): number {
-        return this._mixedMorton.length;
-    }
-
-    /**
-     * Get number of solid blocks.
-     *
-     * @returns Count of solid blocks
-     */
-    get solidCount(): number {
-        return this._solidMorton.length;
-    }
-
-    /**
-     * Clear all accumulated blocks.
-     */
-    clear(): void {
-        this._mixedMorton.length = 0;
-        this._mixedMasks.length = 0;
-        this._solidMorton.length = 0;
-    }
 }
 
 // ============================================================================
@@ -703,25 +511,13 @@ function alignGridBounds(
 // ============================================================================
 
 export {
-    // Morton code functions
-    xyzToMorton,
-    mortonToXYZ,
-
-    // Utility functions
-    popcount,
-    isSolid,
-    isEmpty,
-    getChildOffset,
-
-    // Accumulator
-    BlockAccumulator,
-
     // Octree construction
     buildSparseOctree,
     alignGridBounds,
 
     // Constants
-    SOLID_LEAF_MARKER
+    SOLID_LEAF_MARKER,
+    getChildOffset
 };
 
 export type { SparseOctree, Bounds };

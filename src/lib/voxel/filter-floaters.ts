@@ -1,22 +1,20 @@
 import {
-    buildBlockLookup,
-    isCenterInOccupiedVoxel,
-    gaussianContributesToVoxels,
-    type BlockGridParams,
-    type GaussianColumns
-} from './block-lookup';
-import { GpuVoxelization } from './gpu-voxelization';
+    setupVoxelFilter,
+    buildGaussianColumns,
+    buildBlockGridParams
+} from './filter-pipeline';
 import {
     alignGridBounds
 } from './sparse-octree';
+import {
+    buildBlockLookup,
+    isCenterInOccupiedVoxel,
+    gaussianContributesToVoxels
+} from './voxel-query';
 import { voxelizeToAccumulator } from './voxelize';
-import { Column, DataTable } from '../data-table/data-table';
-import { computeGaussianExtents } from '../data-table/gaussian-aabb';
-import { computeWriteTransform, transformColumns } from '../data-table/transform';
-import { GaussianBVH } from '../spatial/gaussian-bvh';
+import { DataTable } from '../data-table/data-table';
 import type { DeviceCreator } from '../types';
 import { logger } from '../utils/logger';
-import { Transform } from '../utils/math';
 
 /**
  * Remove Gaussians that don't meaningfully contribute to any solid voxel.
@@ -47,18 +45,7 @@ const filterFloaters = async (
 
     logger.progress.step('Computing extents');
 
-    const voxelColumns = [
-        'x', 'y', 'z',
-        'rot_0', 'rot_1', 'rot_2', 'rot_3',
-        'scale_0', 'scale_1', 'scale_2',
-        'opacity'
-    ];
-    const delta = computeWriteTransform(dataTable.transform, Transform.IDENTITY);
-    const cols = transformColumns(dataTable, voxelColumns, delta);
-    const pcDataTable = new DataTable(voxelColumns.map(name => new Column(name, cols.get(name)!)));
-
-    const extentsResult = computeGaussianExtents(pcDataTable);
-    const sceneBounds = extentsResult.sceneBounds;
+    const ctx = await setupVoxelFilter(dataTable, createDevice);
 
     const blockSize = 4 * voxelSize;
 
@@ -66,68 +53,28 @@ const filterFloaters = async (
 
     logger.progress.step('Building BVH');
 
-    const bvh = new GaussianBVH(pcDataTable, extentsResult.extents);
-    const device = await createDevice();
-
-    const gpuVoxelization = new GpuVoxelization(device);
-    gpuVoxelization.uploadAllGaussians(pcDataTable, extentsResult.extents);
-
     const gridBounds = alignGridBounds(
-        sceneBounds.min.x, sceneBounds.min.y, sceneBounds.min.z,
-        sceneBounds.max.x, sceneBounds.max.y, sceneBounds.max.z,
+        ctx.sceneBounds.min.x, ctx.sceneBounds.min.y, ctx.sceneBounds.min.z,
+        ctx.sceneBounds.max.x, ctx.sceneBounds.max.y, ctx.sceneBounds.max.z,
         voxelSize
     );
 
     logger.progress.step('Voxelizing');
 
     const accumulator = await voxelizeToAccumulator(
-        bvh, gpuVoxelization, gridBounds, voxelSize, opacityCutoff
+        ctx.bvh, ctx.gpuVoxelization, gridBounds, voxelSize, opacityCutoff
     );
 
-    gpuVoxelization.destroy();
+    ctx.gpuVoxelization.destroy();
 
-    const numBlocksX = Math.round((gridBounds.max.x - gridBounds.min.x) / blockSize);
-    const numBlocksY = Math.round((gridBounds.max.y - gridBounds.min.y) / blockSize);
-    const numBlocksZ = Math.round((gridBounds.max.z - gridBounds.min.z) / blockSize);
-    const strideY = numBlocksX;
-    const strideZ = numBlocksX * numBlocksY;
-
-    const lookup = buildBlockLookup(accumulator, strideY, strideZ);
+    const grid = buildBlockGridParams(gridBounds, voxelSize);
+    const lookup = buildBlockLookup(accumulator, grid.strideY, grid.strideZ);
 
     logger.log(`filterFloaters: ${lookup.solidSet.size + lookup.mixedMap.size} occupied blocks (${lookup.solidSet.size} solid, ${lookup.mixedMap.size} mixed)`);
 
     logger.progress.step('Filtering Gaussians');
 
-    const gaussianCols: GaussianColumns = {
-        posX: pcDataTable.getColumnByName('x').data,
-        posY: pcDataTable.getColumnByName('y').data,
-        posZ: pcDataTable.getColumnByName('z').data,
-        rotW: pcDataTable.getColumnByName('rot_0').data,
-        rotX: pcDataTable.getColumnByName('rot_1').data,
-        rotY: pcDataTable.getColumnByName('rot_2').data,
-        rotZ: pcDataTable.getColumnByName('rot_3').data,
-        scaleX: pcDataTable.getColumnByName('scale_0').data,
-        scaleY: pcDataTable.getColumnByName('scale_1').data,
-        scaleZ: pcDataTable.getColumnByName('scale_2').data,
-        opacity: pcDataTable.getColumnByName('opacity').data,
-        extentX: extentsResult.extents.getColumnByName('extent_x').data,
-        extentY: extentsResult.extents.getColumnByName('extent_y').data,
-        extentZ: extentsResult.extents.getColumnByName('extent_z').data
-    };
-
-    const grid: BlockGridParams = {
-        gridMinX: gridBounds.min.x,
-        gridMinY: gridBounds.min.y,
-        gridMinZ: gridBounds.min.z,
-        blockSize,
-        voxelSize,
-        numBlocksX,
-        numBlocksY,
-        numBlocksZ,
-        strideY,
-        strideZ
-    };
-
+    const gaussianCols = buildGaussianColumns(ctx);
     const keepIndices: number[] = [];
 
     for (let i = 0; i < numRows; i++) {

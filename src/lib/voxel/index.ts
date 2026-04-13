@@ -4,9 +4,9 @@ export { computeGaussianExtents } from '../data-table/gaussian-aabb.js';
 
 export { GaussianBVH } from '../spatial/gaussian-bvh.js';
 
-export { GpuVoxelization } from './gpu-voxelization.js';
+export { GpuVoxelization } from '../gpu/gpu-voxelization.js';
 
-export type { BatchSpec, MultiBatchResult } from './gpu-voxelization.js';
+export type { BatchSpec, MultiBatchResult } from '../gpu/gpu-voxelization.js';
 
 export {
     buildSparseOctree,

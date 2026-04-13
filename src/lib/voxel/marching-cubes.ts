@@ -1,4 +1,6 @@
-import { BlockAccumulator, mortonToXYZ, xyzToMorton, type Bounds } from './sparse-octree';
+import { BlockAccumulator } from './block-accumulator';
+import { mortonToXYZ, xyzToMorton } from './morton';
+import type { Bounds } from './sparse-octree';
 
 /**
  * Result of marching cubes surface extraction.

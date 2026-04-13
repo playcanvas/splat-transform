@@ -1,13 +1,11 @@
+import { BlockAccumulator } from './block-accumulator';
+import { xyzToMorton } from './morton';
+import type { Bounds } from './sparse-octree';
 import {
     GpuVoxelization,
     type BatchSpec,
     type MultiBatchResult
-} from './gpu-voxelization';
-import {
-    BlockAccumulator,
-    xyzToMorton,
-    type Bounds
-} from './sparse-octree';
+} from '../gpu/gpu-voxelization';
 import { type GaussianBVH } from '../spatial/gaussian-bvh';
 import { logger } from '../utils/logger';
 
