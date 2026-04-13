@@ -3,15 +3,20 @@ import { BlockMaskBuffer } from '../voxel/block-mask-buffer';
 import { mortonToXYZ, xyzToMorton } from '../voxel/morton';
 
 /**
- * Result of marching cubes surface extraction.
+ * A simple triangle mesh with positions and indices.
  */
-interface MarchingCubesMesh {
+interface Mesh {
     /** Vertex positions (3 floats per vertex) */
     positions: Float32Array;
 
     /** Triangle indices (3 indices per triangle) */
     indices: Uint32Array;
 }
+
+/**
+ * Result of marching cubes surface extraction.
+ */
+type MarchingCubesMesh = Mesh;
 
 // ============================================================================
 // Voxel bit helpers
@@ -570,4 +575,4 @@ const TRI_TABLE: number[][] = [
 ];
 
 export { marchingCubes };
-export type { MarchingCubesMesh };
+export type { Mesh, MarchingCubesMesh };

@@ -1,6 +1,6 @@
 import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
-import { Column, DataTable } from './data-table.js';
+import { Column, DataTable } from './data-table';
 import { logger } from '../utils';
 
 /**

@@ -1,8 +1,6 @@
-import { MeshoptSimplifier } from 'meshoptimizer/simplifier';
-
 import type { Bounds } from '../data-table';
+import { marchingCubes, simplifyMesh } from '../mesh';
 import { logger } from '../utils';
-import { marchingCubes } from './marching-cubes';
 import { BlockMaskBuffer } from '../voxel/block-mask-buffer';
 
 /**
@@ -152,41 +150,14 @@ const buildCollisionMesh = async (
     }
 
     logger.progress.step('Simplifying collision mesh');
-    await MeshoptSimplifier.ready;
 
     const errorFraction = Number.isFinite(meshSimplifyError) && meshSimplifyError! >= 0 ? meshSimplifyError! : 0.08;
-    const simplifyError = errorFraction * voxelResolution;
-    const [simplifiedIndices] = MeshoptSimplifier.simplify(
-        rawMesh.indices,
-        rawMesh.positions,
-        3,
-        0,
-        simplifyError,
-        ['ErrorAbsolute']
-    );
+    const simplified = await simplifyMesh(rawMesh, errorFraction * voxelResolution);
 
-    const vertexRemap = new Map<number, number>();
-    let newVertexCount = 0;
-    for (let i = 0; i < simplifiedIndices.length; i++) {
-        if (!vertexRemap.has(simplifiedIndices[i])) {
-            vertexRemap.set(simplifiedIndices[i], newVertexCount++);
-        }
-    }
-    const compactPositions = new Float32Array(newVertexCount * 3);
-    for (const [oldIdx, newIdx] of vertexRemap) {
-        compactPositions[newIdx * 3] = rawMesh.positions[oldIdx * 3];
-        compactPositions[newIdx * 3 + 1] = rawMesh.positions[oldIdx * 3 + 1];
-        compactPositions[newIdx * 3 + 2] = rawMesh.positions[oldIdx * 3 + 2];
-    }
-    const compactIndices = new Uint32Array(simplifiedIndices.length);
-    for (let i = 0; i < simplifiedIndices.length; i++) {
-        compactIndices[i] = vertexRemap.get(simplifiedIndices[i])!;
-    }
+    const reduction = (1 - simplified.indices.length / rawMesh.indices.length) * 100;
+    logger.log(`collision mesh (simplified): ${simplified.positions.length / 3} vertices, ${simplified.indices.length / 3} triangles (${reduction.toFixed(0)}% reduction)`);
 
-    const reduction = (1 - simplifiedIndices.length / rawMesh.indices.length) * 100;
-    logger.log(`collision mesh (simplified): ${newVertexCount} vertices, ${simplifiedIndices.length / 3} triangles (${reduction.toFixed(0)}% reduction)`);
-
-    return encodeGlb(compactPositions, compactIndices);
+    return encodeGlb(simplified.positions, simplified.indices);
 };
 
 export { buildCollisionMesh };
