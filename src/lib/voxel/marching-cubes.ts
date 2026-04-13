@@ -168,6 +168,12 @@ function marchingCubes(
         return idx;
     };
 
+    // Track processed orphan cells to avoid duplicate triangles.
+    // When a cell's owner block doesn't exist, multiple neighboring blocks
+    // can reach it via the -1 boundary extension. The Set ensures each
+    // orphan cell is only processed once.
+    const processedOrphans = new Set<number>();
+
     // Process all blocks and their boundary neighbors
     const allMortons: number[] = [];
     blockSet.forEach(m => allMortons.push(m));
@@ -197,6 +203,12 @@ function marchingCubes(
                         // Guard negative coords: xyzToMorton assumes non-negative inputs.
                         if (ownerBx >= 0 && ownerBy >= 0 && ownerBz >= 0 &&
                             blockSet.has(xyzToMorton(ownerBx, ownerBy, ownerBz))) continue;
+
+                        // Owner block doesn't exist — deduplicate so only the
+                        // first neighboring block to reach this cell emits triangles.
+                        const cellKey = (vx + 1) + (vy + 1) * strideX + (vz + 1) * strideXY;
+                        if (processedOrphans.has(cellKey)) continue;
+                        processedOrphans.add(cellKey);
                     }
 
                     // Get corner values for this cell (8 corners)
