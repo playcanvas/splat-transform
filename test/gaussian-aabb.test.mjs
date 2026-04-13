@@ -12,7 +12,7 @@ import {
     computeGaussianExtents,
     getGaussianAABB,
     gaussianOverlapsBox
-} from '../src/lib/spatial/gaussian-aabb.js';
+} from '../src/lib/data-table/gaussian-aabb.js';
 
 describe('GaussianAABB', function () {
     describe('computeGaussianExtents', function () {

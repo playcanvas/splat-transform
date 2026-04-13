@@ -8,7 +8,7 @@ import assert from 'node:assert';
 import { Vec3 } from 'playcanvas';
 
 import { Column, DataTable } from '../src/lib/index.js';
-import { computeGaussianExtents } from '../src/lib/spatial/gaussian-aabb.js';
+import { computeGaussianExtents } from '../src/lib/data-table/gaussian-aabb.js';
 import { GaussianBVH } from '../src/lib/spatial/gaussian-bvh.js';
 
 /**

@@ -1,6 +1,6 @@
 // Voxelization module for Gaussian splat scenes
 
-export { computeGaussianExtents } from '../spatial/gaussian-aabb.js';
+export { computeGaussianExtents } from '../data-table/gaussian-aabb.js';
 
 export { GaussianBVH } from '../spatial/gaussian-bvh.js';
 

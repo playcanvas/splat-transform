@@ -1,6 +1,6 @@
 import { Vec3 } from 'playcanvas';
 
-import type { Bounds } from '../spatial/gaussian-aabb';
+import type { Bounds } from '../data-table/gaussian-aabb';
 import { logger } from '../utils/logger';
 
 // ============================================================================

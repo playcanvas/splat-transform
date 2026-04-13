@@ -15,8 +15,8 @@ import {
 import { filterAndFillBlocks } from './voxel-filter';
 import { voxelizeToAccumulator } from './voxelize';
 import { Column, DataTable } from '../data-table/data-table';
+import { computeGaussianExtents } from '../data-table/gaussian-aabb';
 import { computeWriteTransform, transformColumns } from '../data-table/transform';
-import { computeGaussianExtents } from '../spatial/gaussian-aabb';
 import { GaussianBVH } from '../spatial/gaussian-bvh';
 import type { DeviceCreator } from '../types';
 import { logger } from '../utils/logger';
