@@ -9,7 +9,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 
-import { BlockAccumulator } from '../src/lib/voxel/block-accumulator.js';
+import { BlockMaskBuffer } from '../src/lib/voxel/block-mask-buffer.js';
 import { filterAndFillBlocks } from '../src/lib/voxel/block-cleanup.js';
 import { xyzToMorton, popcount } from '../src/lib/voxel/morton.js';
 
@@ -66,7 +66,7 @@ function isVoxelSet(lo, hi, lx, ly, lz) {
 describe('filterAndFillBlocks', function () {
     describe('isolated voxel removal', function () {
         it('should remove a single isolated voxel with no neighbors', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             // Single voxel at (1,1,1) in block (0,0,0) — no neighbors in any direction
             const [lo, hi] = voxelBit(1, 1, 1);
             acc.addBlock(xyzToMorton(0, 0, 0), lo, hi);
@@ -78,7 +78,7 @@ describe('filterAndFillBlocks', function () {
         });
 
         it('should preserve voxels with at least one neighbor', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             // Two adjacent voxels at (1,1,1) and (2,1,1) — neighbors in +X/-X
             const [lo, hi] = voxelMask([1, 1, 1], [2, 1, 1]);
             acc.addBlock(xyzToMorton(0, 0, 0), lo, hi);
@@ -92,7 +92,7 @@ describe('filterAndFillBlocks', function () {
         });
 
         it('should remove isolated voxels while preserving connected ones', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             // (1,1,1) and (2,1,1) are neighbors; (0,0,3) is isolated
             const [lo, hi] = voxelMask([1, 1, 1], [2, 1, 1], [0, 0, 3]);
             acc.addBlock(xyzToMorton(0, 0, 0), lo, hi);
@@ -110,7 +110,7 @@ describe('filterAndFillBlocks', function () {
         });
 
         it('should preserve voxels with diagonal neighbors if any axis-aligned neighbor exists', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             // Line of 3 voxels along X — middle has 2 neighbors, ends have 1 each
             const [lo, hi] = voxelMask([0, 0, 0], [1, 0, 0], [2, 0, 0]);
             acc.addBlock(xyzToMorton(0, 0, 0), lo, hi);
@@ -129,7 +129,7 @@ describe('filterAndFillBlocks', function () {
 
     describe('hole filling', function () {
         it('should fill a voxel surrounded by all 6 neighbors', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             // 6-connected neighbors of (2,2,2) without (2,2,2) itself
             const [lo, hi] = voxelMask(
                 [1, 2, 2], [3, 2, 2],  // -X, +X
@@ -150,7 +150,7 @@ describe('filterAndFillBlocks', function () {
         });
 
         it('should not fill a voxel missing one of 6 neighbors', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             // Only 5 of 6 neighbors of (2,2,2) — missing +Z
             const [lo, hi] = voxelMask(
                 [1, 2, 2], [3, 2, 2],  // -X, +X
@@ -179,7 +179,7 @@ describe('filterAndFillBlocks', function () {
 
     describe('solid blocks', function () {
         it('should pass through solid blocks unchanged', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             acc.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
 
             const result = filterAndFillBlocks(acc);
@@ -189,7 +189,7 @@ describe('filterAndFillBlocks', function () {
         });
 
         it('should pass through multiple solid blocks', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             acc.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
             acc.addBlock(xyzToMorton(1, 0, 0), SOLID_LO, SOLID_HI);
             acc.addBlock(xyzToMorton(0, 1, 0), SOLID_LO, SOLID_HI);
@@ -206,7 +206,7 @@ describe('filterAndFillBlocks', function () {
 
     describe('cross-block adjacency', function () {
         it('should preserve voxels at block boundaries with neighbors in adjacent block', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             // Block (0,0,0): voxel at lx=3 (right face)
             const [lo0, hi0] = voxelBit(3, 1, 1);
             acc.addBlock(xyzToMorton(0, 0, 0), lo0, hi0);
@@ -225,7 +225,7 @@ describe('filterAndFillBlocks', function () {
         });
 
         it('should remove boundary voxels without cross-block neighbors', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             // Block (0,0,0): single voxel at lx=3 (right face)
             const [lo0, hi0] = voxelBit(3, 1, 1);
             acc.addBlock(xyzToMorton(0, 0, 0), lo0, hi0);
@@ -242,7 +242,7 @@ describe('filterAndFillBlocks', function () {
         });
 
         it('should handle cross-block adjacency in Y direction', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             // Block (0,0,0): voxel at ly=3 (top face)
             const [lo0, hi0] = voxelBit(1, 3, 1);
             acc.addBlock(xyzToMorton(0, 0, 0), lo0, hi0);
@@ -258,7 +258,7 @@ describe('filterAndFillBlocks', function () {
         });
 
         it('should handle cross-block adjacency in Z direction', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             // Block (0,0,0): voxel at lz=3 (far face, in hi word bits 16-31)
             const [lo0, hi0] = voxelBit(1, 1, 3);
             acc.addBlock(xyzToMorton(0, 0, 0), lo0, hi0);
@@ -274,7 +274,7 @@ describe('filterAndFillBlocks', function () {
         });
 
         it('should use solid adjacent blocks as neighbor sources', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             // Block (0,0,0): solid — provides neighbors for block (1,0,0)
             acc.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
 
@@ -297,7 +297,7 @@ describe('filterAndFillBlocks', function () {
 
     describe('state transitions', function () {
         it('should transition mixed block to empty when all voxels removed', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             // Single isolated voxel
             const [lo, hi] = voxelBit(2, 2, 2);
             acc.addBlock(xyzToMorton(0, 0, 0), lo, hi);
@@ -310,7 +310,7 @@ describe('filterAndFillBlocks', function () {
         });
 
         it('should transition mixed block to solid when all voxels filled', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             // Start with all voxels set except one at (2,2,2)
             let lo = SOLID_LO;
             let hi = SOLID_HI;
@@ -333,13 +333,13 @@ describe('filterAndFillBlocks', function () {
 
     describe('edge cases', function () {
         it('should handle empty accumulator', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             const result = filterAndFillBlocks(acc);
             assert.strictEqual(result.count, 0);
         });
 
         it('should handle all-solid input', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             for (let x = 0; x < 4; x++) {
                 for (let y = 0; y < 4; y++) {
                     acc.addBlock(xyzToMorton(x, y, 0), SOLID_LO, SOLID_HI);
@@ -353,7 +353,7 @@ describe('filterAndFillBlocks', function () {
         });
 
         it('should handle voxels at block corners', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             // Voxel at corner (0,0,0) of block (0,0,0) with neighbor at (3,3,3) of adjacent blocks
             // These are in different blocks and NOT adjacent, so both should be removed
             const [lo0, hi0] = voxelBit(0, 0, 0);
@@ -366,7 +366,7 @@ describe('filterAndFillBlocks', function () {
         });
 
         it('should preserve a 2x2x2 solid cube within a block', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             // 2x2x2 cube at positions (1,1,1) through (2,2,2)
             const [lo, hi] = voxelMask(
                 [1, 1, 1], [2, 1, 1], [1, 2, 1], [2, 2, 1],

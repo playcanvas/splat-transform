@@ -7,7 +7,7 @@ import assert from 'node:assert';
 
 import { Vec3 } from 'playcanvas';
 
-import { BlockAccumulator } from '../src/lib/voxel/block-accumulator.js';
+import { BlockMaskBuffer } from '../src/lib/voxel/block-mask-buffer.js';
 import {
     xyzToMorton,
     mortonToXYZ,
@@ -270,13 +270,13 @@ describe('Utility functions', function () {
 });
 
 // ============================================================================
-// BlockAccumulator Tests
+// BlockMaskBuffer Tests
 // ============================================================================
 
-describe('BlockAccumulator', function () {
+describe('BlockMaskBuffer', function () {
     describe('addBlock', function () {
         it('should classify solid blocks', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             acc.addBlock(xyzToMorton(0, 0, 0), 0xFFFFFFFF, 0xFFFFFFFF);
 
             assert.strictEqual(acc.solidCount, 1);
@@ -285,7 +285,7 @@ describe('BlockAccumulator', function () {
         });
 
         it('should classify mixed blocks', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             acc.addBlock(xyzToMorton(0, 0, 0), 0x12345678, 0x9ABCDEF0);
 
             assert.strictEqual(acc.solidCount, 0);
@@ -294,14 +294,14 @@ describe('BlockAccumulator', function () {
         });
 
         it('should discard empty blocks', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             acc.addBlock(xyzToMorton(0, 0, 0), 0, 0);
 
             assert.strictEqual(acc.count, 0);
         });
 
         it('should handle multiple blocks', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
 
             // Add 3 solid, 2 mixed, 1 empty
             acc.addBlock(xyzToMorton(0, 0, 0), 0xFFFFFFFF, 0xFFFFFFFF); // solid
@@ -319,7 +319,7 @@ describe('BlockAccumulator', function () {
 
     describe('getMixedBlocks', function () {
         it('should return morton codes and interleaved masks', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             acc.addBlock(xyzToMorton(0, 0, 0), 0x11111111, 0x22222222);
             acc.addBlock(xyzToMorton(1, 0, 0), 0x33333333, 0x44444444);
 
@@ -340,7 +340,7 @@ describe('BlockAccumulator', function () {
 
     describe('getSolidBlocks', function () {
         it('should return morton codes only', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             acc.addBlock(xyzToMorton(0, 0, 0), 0xFFFFFFFF, 0xFFFFFFFF);
             acc.addBlock(xyzToMorton(5, 5, 5), 0xFFFFFFFF, 0xFFFFFFFF);
 
@@ -354,7 +354,7 @@ describe('BlockAccumulator', function () {
 
     describe('clear', function () {
         it('should remove all blocks', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             acc.addBlock(xyzToMorton(0, 0, 0), 0xFFFFFFFF, 0xFFFFFFFF);
             acc.addBlock(xyzToMorton(1, 0, 0), 0x12345678, 0x9ABCDEF0);
 
@@ -376,7 +376,7 @@ describe('BlockAccumulator', function () {
 describe('buildSparseOctree', function () {
     describe('empty octree', function () {
         it('should handle empty accumulator', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             const gridBounds = {
                 min: new Vec3(0, 0, 0),
                 max: new Vec3(1, 1, 1)
@@ -395,7 +395,7 @@ describe('buildSparseOctree', function () {
 
     describe('single block', function () {
         it('should create octree with single solid block', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             acc.addBlock(xyzToMorton(0, 0, 0), 0xFFFFFFFF, 0xFFFFFFFF);
 
             const gridBounds = {
@@ -411,7 +411,7 @@ describe('buildSparseOctree', function () {
         });
 
         it('should create octree with single mixed block', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             acc.addBlock(xyzToMorton(0, 0, 0), 0x12345678, 0x9ABCDEF0);
 
             const gridBounds = {
@@ -432,7 +432,7 @@ describe('buildSparseOctree', function () {
 
     describe('solid region merging', function () {
         it('should collapse 8 solid siblings into solid parent', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
 
             // Add all 8 children of the root (octants 0-7)
             for (let z = 0; z < 2; z++) {
@@ -459,7 +459,7 @@ describe('buildSparseOctree', function () {
         });
 
         it('should not collapse mixed siblings', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
 
             // Add 7 solid + 1 mixed
             for (let i = 0; i < 7; i++) {
@@ -486,7 +486,7 @@ describe('buildSparseOctree', function () {
 
     describe('node encoding', function () {
         it('should encode solid leaves correctly', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             acc.addBlock(xyzToMorton(0, 0, 0), 0xFFFFFFFF, 0xFFFFFFFF);
 
             const gridBounds = {
@@ -508,7 +508,7 @@ describe('buildSparseOctree', function () {
         });
 
         it('should encode mixed leaves with leafData index', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             acc.addBlock(xyzToMorton(0, 0, 0), 0xAAAAAAAA, 0x55555555);
 
             const gridBounds = {
@@ -539,7 +539,7 @@ describe('buildSparseOctree', function () {
 
     describe('metadata', function () {
         it('should preserve bounds and resolution', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             acc.addBlock(xyzToMorton(0, 0, 0), 0xFFFFFFFF, 0xFFFFFFFF);
 
             const gridBounds = {

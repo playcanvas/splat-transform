@@ -1,6 +1,6 @@
 import { Vec3 } from 'playcanvas';
 
-import { BlockAccumulator } from './block-accumulator';
+import { BlockMaskBuffer } from './block-mask-buffer';
 import { sparseDilate3 } from './dilation';
 import type { NavSeed, NavSimplifyResult } from './fill-exterior';
 import { twoLevelBFS } from './flood-fill';
@@ -13,7 +13,7 @@ import {
 import { logger } from '../utils/logger';
 
 const carveInterior = (
-    accumulator: BlockAccumulator,
+    accumulator: BlockMaskBuffer,
     gridBounds: Bounds,
     voxelResolution: number,
     capsuleHeight: number,
@@ -97,7 +97,7 @@ const carveInterior = (
             logger.progress.step();
             progressComplete = true;
             return {
-                accumulator: new BlockAccumulator(),
+                accumulator: new BlockMaskBuffer(),
                 gridBounds: { min: gridBounds.min.clone(), max: gridBounds.min.clone() }
             };
         }

@@ -1,6 +1,6 @@
 import { Vec3 } from 'playcanvas';
 
-import { BlockAccumulator } from './block-accumulator';
+import { BlockMaskBuffer } from './block-mask-buffer';
 import { xyzToMorton, mortonToXYZ, popcount } from './morton';
 import type { Bounds } from '../data-table/gaussian-aabb';
 import { logger } from '../utils/logger';
@@ -97,14 +97,14 @@ interface LevelData {
  * Uses Structure-of-Arrays (SoA) representation and linear scans on sorted
  * Morton codes instead of Maps and per-node objects for performance.
  *
- * @param accumulator - BlockAccumulator containing voxelized blocks
+ * @param accumulator - BlockMaskBuffer containing voxelized blocks
  * @param gridBounds - Grid bounds aligned to block boundaries
  * @param sceneBounds - Original scene bounds
  * @param voxelResolution - Size of each voxel in world units
  * @returns Sparse octree structure
  */
 function buildSparseOctree(
-    accumulator: BlockAccumulator,
+    accumulator: BlockMaskBuffer,
     gridBounds: Bounds,
     sceneBounds: Bounds,
     voxelResolution: number

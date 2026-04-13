@@ -179,14 +179,14 @@ async function createVoxelFixture() {
     // Lazy imports — only pulled in when this helper is actually called,
     // so tests that don't need voxel fixtures aren't affected.
     const { Vec3 } = await import('playcanvas');
-    const { BlockAccumulator } = await import('../../src/lib/voxel/block-accumulator.js');
+    const { BlockMaskBuffer } = await import('../../src/lib/voxel/block-mask-buffer.js');
     const { xyzToMorton } = await import('../../src/lib/voxel/morton.js');
     const {
         buildSparseOctree,
         alignGridBounds
     } = await import('../../src/lib/voxel/sparse-octree.js');
 
-    const acc = new BlockAccumulator();
+    const acc = new BlockMaskBuffer();
 
     // 4 solid blocks forming a 2x2x1 slab
     acc.addBlock(xyzToMorton(0, 0, 0), 0xFFFFFFFF, 0xFFFFFFFF);

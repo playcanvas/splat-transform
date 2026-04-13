@@ -9,6 +9,8 @@ import type { DeviceCreator } from '../types';
 import { logger } from '../utils/logger';
 import { Transform } from '../utils/math';
 import { filterAndFillBlocks } from '../voxel/block-cleanup';
+import { carveInterior } from '../voxel/carve-interior';
+import { fillExterior, type NavSeed } from '../voxel/fill-exterior';
 import {
     computeGaussianExtents,
     GaussianBVH,
@@ -17,8 +19,6 @@ import {
     alignGridBounds
 } from '../voxel/index';
 import { marchingCubes } from '../voxel/marching-cubes';
-import { carveInterior } from '../voxel/carve-interior';
-import { fillExterior, type NavSeed } from '../voxel/fill-exterior';
 import {
     type SparseOctree
 } from '../voxel/sparse-octree';

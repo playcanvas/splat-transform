@@ -1,10 +1,10 @@
 import { isSolid, isEmpty } from './morton';
 
 /**
- * Accumulator for streaming voxelization results.
- * Stores blocks using Morton codes for efficient octree construction.
+ * Append-only buffer for streaming voxelization results.
+ * Stores block masks using Morton codes for efficient octree construction.
  */
-class BlockAccumulator {
+class BlockMaskBuffer {
     /** Morton codes for mixed blocks */
     private _mixedMorton: number[] = [];
 
@@ -15,7 +15,7 @@ class BlockAccumulator {
     private _solidMorton: number[] = [];
 
     /**
-     * Add a non-empty block to the accumulator.
+     * Add a non-empty block to the buffer.
      * Automatically classifies as solid or mixed based on mask values.
      *
      * @param morton - Morton code encoding block position
@@ -84,7 +84,7 @@ class BlockAccumulator {
     }
 
     /**
-     * Clear all accumulated blocks.
+     * Clear all buffered blocks.
      */
     clear(): void {
         this._mixedMorton.length = 0;
@@ -93,4 +93,4 @@ class BlockAccumulator {
     }
 }
 
-export { BlockAccumulator };
+export { BlockMaskBuffer };

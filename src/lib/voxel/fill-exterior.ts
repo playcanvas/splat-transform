@@ -1,6 +1,6 @@
 import { Vec3 } from 'playcanvas';
 
-import { BlockAccumulator } from './block-accumulator';
+import { BlockMaskBuffer } from './block-mask-buffer';
 import { sparseDilate3 } from './dilation';
 import { twoLevelBFS } from './flood-fill';
 import { sparseOrGrids } from './grid-ops';
@@ -23,12 +23,12 @@ type NavSeed = {
 };
 
 type NavSimplifyResult = {
-    accumulator: BlockAccumulator;
+    accumulator: BlockMaskBuffer;
     gridBounds: Bounds;
 };
 
 const fillExterior = (
-    accumulator: BlockAccumulator,
+    accumulator: BlockMaskBuffer,
     gridBounds: Bounds,
     voxelResolution: number,
     dilation: number,
@@ -194,7 +194,7 @@ const fillExterior = (
             logger.progress.step();
             progressComplete = true;
             return {
-                accumulator: new BlockAccumulator(),
+                accumulator: new BlockMaskBuffer(),
                 gridBounds: { min: gridBounds.min.clone(), max: gridBounds.min.clone() }
             };
         }

@@ -1,10 +1,10 @@
-import { BlockAccumulator } from './block-accumulator';
+import { BlockMaskBuffer } from './block-mask-buffer';
+import { mortonToXYZ } from './morton';
 import {
     computeGaussianInverse,
     evaluateGaussianAt,
     type GaussianColumns
 } from '../data-table/gaussian-eval';
-import { mortonToXYZ } from './morton';
 
 /**
  * Pre-computed lookup structures for efficient voxel block queries.
@@ -40,7 +40,7 @@ interface BlockGridParams {
  * @returns Solid block set, mixed block map (linear index to masks array index), and masks.
  */
 const buildBlockLookup = (
-    accumulator: BlockAccumulator,
+    accumulator: BlockMaskBuffer,
     strideY: number,
     strideZ: number
 ): BlockLookup => {

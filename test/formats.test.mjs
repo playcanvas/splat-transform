@@ -551,7 +551,7 @@ describe('Voxel Format (Input Only)', () => {
 
     before(async () => {
         // Generate valid voxel fixture data using the library's own octree
-        // building functions (BlockAccumulator + buildSparseOctree).
+        // building functions (BlockMaskBuffer + buildSparseOctree).
         // The fixture contains 4 solid + 2 mixed leaf blocks.
         const { jsonBytes, binBytes, metadata } = await createVoxelFixture();
         fixtureMetadata = metadata;

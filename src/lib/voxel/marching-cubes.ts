@@ -1,4 +1,4 @@
-import { BlockAccumulator } from './block-accumulator';
+import { BlockMaskBuffer } from './block-mask-buffer';
 import { mortonToXYZ, xyzToMorton } from './morton';
 import type { Bounds } from './sparse-octree';
 
@@ -39,18 +39,18 @@ function isVoxelSet(lo: number, hi: number, lx: number, ly: number, lz: number):
 }
 
 // ============================================================================
-// Occupancy grid from BlockAccumulator
+// Occupancy grid from BlockMaskBuffer
 // ============================================================================
 
 /**
- * Build a fast-lookup occupancy structure from a BlockAccumulator.
+ * Build a fast-lookup occupancy structure from a BlockMaskBuffer.
  * Returns a function that queries whether a voxel at global coordinates
  * (vx, vy, vz) is occupied.
  *
  * @param accumulator - Block data
  * @returns Lookup function (vx, vy, vz) => boolean
  */
-function buildOccupancyLookup(accumulator: BlockAccumulator): (vx: number, vy: number, vz: number) => boolean {
+function buildOccupancyLookup(accumulator: BlockMaskBuffer): (vx: number, vy: number, vz: number) => boolean {
     // Map from "bx,by,bz" encoded as single number to {lo,hi} or solid flag
     // Block key = bx + by * stride + bz * stride^2 where stride is large enough
     const mixed = accumulator.getMixedBlocks();
@@ -91,7 +91,7 @@ function buildOccupancyLookup(accumulator: BlockAccumulator): (vx: number, vy: n
 // ============================================================================
 
 /**
- * Extract a triangle mesh from a BlockAccumulator using marching cubes.
+ * Extract a triangle mesh from a BlockMaskBuffer using marching cubes.
  *
  * Each voxel is treated as a cell in the marching cubes grid. Corner values
  * are binary (0 = empty, 1 = occupied) with a 0.5 threshold. Vertices are
@@ -103,7 +103,7 @@ function buildOccupancyLookup(accumulator: BlockAccumulator): (vx: number, vy: n
  * @returns Mesh with positions and indices
  */
 function marchingCubes(
-    accumulator: BlockAccumulator,
+    accumulator: BlockMaskBuffer,
     gridBounds: Bounds,
     voxelResolution: number
 ): MarchingCubesMesh {

@@ -1,14 +1,14 @@
 /**
  * Tests for capsule-traced navigation voxel simplification.
  *
- * Constructs small voxel scenes (hollow boxes, corridors) using BlockAccumulator,
+ * Constructs small voxel scenes (hollow boxes, corridors) using BlockMaskBuffer,
  * runs simplifyForCapsule, and verifies the output uses negative space carving
  * with erosion to restore correct surface positions.
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { BlockAccumulator } from '../src/lib/voxel/block-accumulator.js';
+import { BlockMaskBuffer } from '../src/lib/voxel/block-mask-buffer.js';
 import { xyzToMorton, popcount } from '../src/lib/voxel/morton.js';
 import { alignGridBounds } from '../src/lib/voxel/sparse-octree.js';
 import { simplifyForCapsule } from '../src/lib/voxel/nav-simplify.js';
@@ -17,7 +17,7 @@ const SOLID_LO = 0xFFFFFFFF >>> 0;
 const SOLID_HI = 0xFFFFFFFF >>> 0;
 
 /**
- * Count total solid voxels in a BlockAccumulator.
+ * Count total solid voxels in a BlockMaskBuffer.
  */
 function countSolidVoxels(acc) {
     let count = 0;
@@ -38,7 +38,7 @@ function countSolidVoxels(acc) {
  * @param {number} voxelResolution - Voxel resolution.
  */
 function buildHollowBox(sizeBlocks, voxelResolution) {
-    const acc = new BlockAccumulator();
+    const acc = new BlockMaskBuffer();
     for (let bz = 0; bz < sizeBlocks; bz++) {
         for (let by = 0; by < sizeBlocks; by++) {
             for (let bx = 0; bx < sizeBlocks; bx++) {
@@ -125,7 +125,7 @@ describe('simplifyForCapsule', function () {
 
     describe('empty accumulator', function () {
         it('should carve out all reachable space (no obstacles)', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             const gridBounds = alignGridBounds(0, 0, 0, 1, 1, 1, voxelResolution);
             const seed = { x: 0.5, y: 0.5, z: 0.5 };
 
@@ -143,7 +143,7 @@ describe('simplifyForCapsule', function () {
 
     describe('single solid block', function () {
         it('should retain solid voxels around the block', function () {
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
             acc.addBlock(xyzToMorton(2, 2, 2), SOLID_LO, SOLID_HI);
 
             const gridBounds = alignGridBounds(0, 0, 0, 5, 5, 5, voxelResolution);
@@ -161,7 +161,7 @@ describe('simplifyForCapsule', function () {
     describe('unreachable regions', function () {
         it('should crop exterior and preserve walls around navigable space', function () {
             const sizeBlocks = 6;
-            const acc = new BlockAccumulator();
+            const acc = new BlockMaskBuffer();
 
             for (let bz = 0; bz < sizeBlocks; bz++) {
                 for (let by = 0; by < sizeBlocks; by++) {

@@ -1,7 +1,7 @@
-import { type GaussianColumns } from '../data-table/gaussian-eval';
 import { type BlockGridParams } from './voxel-query';
 import { Column, DataTable } from '../data-table/data-table';
 import { computeGaussianExtents, type Bounds, type GaussianExtentsResult } from '../data-table/gaussian-aabb';
+import { type GaussianColumns } from '../data-table/gaussian-eval';
 import { computeWriteTransform, transformColumns } from '../data-table/transform';
 import { GpuVoxelization } from '../gpu/gpu-voxelization';
 import { GaussianBVH } from '../spatial/gaussian-bvh';

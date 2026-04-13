@@ -1,5 +1,5 @@
-import { BlockAccumulator } from './block-accumulator';
-import { MaskStore } from './mask-store';
+import { BlockMaskBuffer } from './block-mask-buffer';
+import { BlockMaskMap } from './block-mask-map';
 import { mortonToXYZ, xyzToMorton } from './morton';
 
 const SOLID_LO = 0xFFFFFFFF >>> 0;
@@ -38,7 +38,7 @@ const FACE_MASKS_HI = [
 // Each block has a type stored in blockType[blockIdx]:
 //   0 (EMPTY):  no voxels set
 //   1 (SOLID):  all 64 voxels set, no mask entry
-//   2 (MIXED):  partial voxels, lo/hi mask in MaskStore
+//   2 (MIXED):  partial voxels, lo/hi mask in BlockMaskMap
 //
 // An occupancy bitfield is maintained in parallel for fast scanning
 // of occupied blocks (used by active-pair computation in dilation).
@@ -55,7 +55,7 @@ class SparseVoxelGrid {
 
     blockType: Uint8Array;
     occupancy: Uint32Array;
-    masks: MaskStore;
+    masks: BlockMaskMap;
 
     constructor(nx: number, ny: number, nz: number) {
         this.nx = nx;
@@ -68,7 +68,7 @@ class SparseVoxelGrid {
         const totalBlocks = this.nbx * this.nby * this.nbz;
         this.blockType = new Uint8Array(totalBlocks);
         this.occupancy = new Uint32Array(((totalBlocks) + 31) >>> 5);
-        this.masks = new MaskStore();
+        this.masks = new BlockMaskMap();
     }
 
     getVoxel(ix: number, iy: number, iz: number): number {
@@ -141,7 +141,7 @@ class SparseVoxelGrid {
         return g;
     }
 
-    static fromAccumulator(acc: BlockAccumulator, nx: number, ny: number, nz: number): SparseVoxelGrid {
+    static fromAccumulator(acc: BlockMaskBuffer, nx: number, ny: number, nz: number): SparseVoxelGrid {
         const g = new SparseVoxelGrid(nx, ny, nz);
         const solidMortons = acc.getSolidBlocks();
         for (let i = 0; i < solidMortons.length; i++) {
@@ -165,8 +165,8 @@ class SparseVoxelGrid {
         cropMinBx: number, cropMinBy: number, cropMinBz: number,
         cropMaxBx: number, cropMaxBy: number, cropMaxBz: number,
         defaultSolid = false
-    ): BlockAccumulator {
-        const acc = new BlockAccumulator();
+    ): BlockMaskBuffer {
+        const acc = new BlockMaskBuffer();
         for (let bz = cropMinBz; bz < cropMaxBz; bz++) {
             for (let by = cropMinBy; by < cropMaxBy; by++) {
                 for (let bx = cropMinBx; bx < cropMaxBx; bx++) {
@@ -201,8 +201,8 @@ class SparseVoxelGrid {
     toAccumulatorInverted(
         cropMinBx: number, cropMinBy: number, cropMinBz: number,
         cropMaxBx: number, cropMaxBy: number, cropMaxBz: number
-    ): BlockAccumulator {
-        const acc = new BlockAccumulator();
+    ): BlockMaskBuffer {
+        const acc = new BlockMaskBuffer();
         for (let bz = cropMinBz; bz < cropMaxBz; bz++) {
             for (let by = cropMinBy; by < cropMaxBy; by++) {
                 for (let bx = cropMinBx; bx < cropMaxBx; bx++) {

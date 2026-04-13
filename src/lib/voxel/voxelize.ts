@@ -1,4 +1,4 @@
-import { BlockAccumulator } from './block-accumulator';
+import { BlockMaskBuffer } from './block-mask-buffer';
 import { xyzToMorton } from './morton';
 import type { Bounds } from './sparse-octree';
 import {
@@ -29,7 +29,7 @@ interface PendingBatch extends BatchSpec {
  * @param gridBounds - Block-aligned grid bounds to voxelize within.
  * @param voxelResolution - Size of each voxel in world units.
  * @param opacityCutoff - Opacity threshold for solid voxels.
- * @returns Accumulated voxelization results.
+ * @returns Block mask buffer with voxelization results.
  */
 const voxelizeToAccumulator = async (
     bvh: GaussianBVH,
@@ -37,13 +37,13 @@ const voxelizeToAccumulator = async (
     gridBounds: Bounds,
     voxelResolution: number,
     opacityCutoff: number
-): Promise<BlockAccumulator> => {
+): Promise<BlockMaskBuffer> => {
     const blockSize = 4 * voxelResolution;
     const numBlocksX = Math.round((gridBounds.max.x - gridBounds.min.x) / blockSize);
     const numBlocksY = Math.round((gridBounds.max.y - gridBounds.min.y) / blockSize);
     const numBlocksZ = Math.round((gridBounds.max.z - gridBounds.min.z) / blockSize);
 
-    const accumulator = new BlockAccumulator();
+    const accumulator = new BlockMaskBuffer();
     const batchSize = 16;
 
     logger.debug(`blocks: ${numBlocksX} x ${numBlocksY} x ${numBlocksZ} (${(numBlocksX * numBlocksY * numBlocksZ / 1e6).toFixed(1)}M)`);
