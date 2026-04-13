@@ -420,15 +420,15 @@ const parseArguments = async () => {
                     const fcAction: FilterCluster = { kind: 'filterCluster' };
                     if (t.value) {
                         const parts = t.value.split(',').map((p: string) => p.trim());
-                        if (parts.length >= 1 && parts[0] !== '') {
-                            fcAction.maxDimension = parseInteger(parts[0]);
-                        }
-                        if (parts.length >= 4) {
+                        if (parts.length >= 3) {
                             fcAction.seed = new Vec3(
+                                parseNumber(parts[0]),
                                 parseNumber(parts[1]),
-                                parseNumber(parts[2]),
-                                parseNumber(parts[3])
+                                parseNumber(parts[2])
                             );
+                        }
+                        if (parts.length >= 4 && parts[3] !== '') {
+                            fcAction.resolution = parseNumber(parts[3]);
                         }
                         if (parts.length >= 5) {
                             fcAction.opacityCutoff = parseNumber(parts[4]);
@@ -496,9 +496,9 @@ ACTIONS (can be repeated, in any order)
     -G, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel.
                                               Evaluates each Gaussian at occupied voxel centers.
                                               Default: size=0.05, opacity=0.1, min=0.004 (1/255)
-    -D, --filter-cluster   [dim,x,y,z,op]  Keep only the connected cluster at seed (x,y,z).
-                                              GPU-voxelizes at coarse resolution (max dim voxels/axis).
-                                              Default: dim=1024, seed=(0,0,0), opacity=0.1
+    -D, --filter-cluster   [x,y,z,res,op]  Keep only the connected cluster at seed (x,y,z).
+                                              GPU-voxelizes at coarse resolution (res world units/voxel).
+                                              Default: seed=(0,0,0), res=1.0, opacity=0.99
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
     -l, --lod              <n>              Specify the level of detail, n >= 0
     -m, --summary                           Print per-column statistics to stdout

@@ -191,17 +191,17 @@ const findNearestOccupiedBlock = (
  *
  * @param dataTable - Input Gaussian splat data.
  * @param createDevice - Function to create a GPU device for voxelization.
- * @param maxDimension - Max voxels per axis for coarse voxelization. Default: 1024.
+ * @param resolution - Voxel size in world units for coarse voxelization. Default: 1.0.
  * @param seed - Seed position in world space. Default: (0,0,0).
- * @param opacityCutoff - Opacity threshold for solid voxels. Default: 0.1.
+ * @param opacityCutoff - Opacity threshold for solid voxels. Default: 0.99.
  * @returns Filtered DataTable containing only Gaussians in the seed's cluster.
  */
 const filterCluster = async (
     dataTable: DataTable,
     createDevice: DeviceCreator,
-    maxDimension: number = 1024,
+    resolution: number = 1.0,
     seed: Vec3 = Vec3.ZERO,
-    opacityCutoff: number = 0.1
+    opacityCutoff: number = 0.99
 ): Promise<DataTable> => {
     const numRows = dataTable.numRows;
     if (numRows === 0) return dataTable;
@@ -238,15 +238,16 @@ const filterCluster = async (
     const scaleZ = pcDataTable.getColumnByName('scale_2').data;
     const opacityData = pcDataTable.getColumnByName('opacity').data;
 
+    const coarseVoxelSize = Math.max(0.01, resolution);
+    const blockSize = 4 * coarseVoxelSize;
+    const maxGridExtent = 8192 * coarseVoxelSize;
+
     const sceneExtentX = sceneBounds.max.x - sceneBounds.min.x;
     const sceneExtentY = sceneBounds.max.y - sceneBounds.min.y;
     const sceneExtentZ = sceneBounds.max.z - sceneBounds.min.z;
     const maxSceneExtent = Math.max(sceneExtentX, sceneExtentY, sceneExtentZ);
 
-    const coarseVoxelSize = Math.max(0.01, maxSceneExtent / maxDimension);
-    const blockSize = 4 * coarseVoxelSize;
-
-    logger.log(`filterCluster: scene extent ${maxSceneExtent.toFixed(2)}m, coarse voxel size ${coarseVoxelSize.toFixed(4)}m`);
+    logger.log(`filterCluster: scene extent ${maxSceneExtent.toFixed(2)}m, voxel resolution ${coarseVoxelSize.toFixed(4)}m`);
 
     logger.progress.step('Building BVH');
 
@@ -261,6 +262,22 @@ const filterCluster = async (
         sceneBounds.max.x, sceneBounds.max.y, sceneBounds.max.z,
         coarseVoxelSize
     );
+
+    const clampAxis = (min: number, max: number) => {
+        const extent = max - min;
+        if (extent > maxGridExtent) {
+            const center = (min + max) * 0.5;
+            const half = maxGridExtent * 0.5;
+            return { min: center - half, max: center + half };
+        }
+        return { min, max };
+    };
+
+    const cx = clampAxis(gridBounds.min.x, gridBounds.max.x);
+    const cy = clampAxis(gridBounds.min.y, gridBounds.max.y);
+    const cz = clampAxis(gridBounds.min.z, gridBounds.max.z);
+    gridBounds.min.set(cx.min, cy.min, cz.min);
+    gridBounds.max.set(cx.max, cy.max, cz.max);
 
     logger.progress.step('Voxelizing');
 
