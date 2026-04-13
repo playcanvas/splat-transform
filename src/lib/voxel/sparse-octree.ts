@@ -1,7 +1,7 @@
 import { Vec3 } from 'playcanvas';
 
 import { BlockMaskBuffer } from './block-mask-buffer';
-import { xyzToMorton, mortonToXYZ, popcount } from './morton';
+import { xyzToMorton, mortonToXYZ, popcount, getChildOffset } from './morton';
 import type { Bounds } from '../data-table';
 import { logger } from '../utils';
 
@@ -11,19 +11,6 @@ import { logger } from '../utils';
  * their parent, so baseOffset = 0 is never valid for an interior node.
  */
 const SOLID_LEAF_MARKER = 0xFF000000 >>> 0;
-
-/**
- * Get the offset to a child node given a parent's child mask and octant.
- * Uses popcount to count how many children come before this octant.
- *
- * @param mask - 8-bit child mask from parent node
- * @param octant - Octant index (0-7)
- * @returns Offset from base child pointer
- */
-function getChildOffset(mask: number, octant: number): number {
-    const prefix = (1 << octant) - 1;
-    return popcount(mask & prefix);
-}
 
 // ============================================================================
 // Sparse Octree Types
@@ -511,13 +498,9 @@ function alignGridBounds(
 // ============================================================================
 
 export {
-    // Octree construction
     buildSparseOctree,
     alignGridBounds,
-
-    // Constants
-    SOLID_LEAF_MARKER,
-    getChildOffset
+    SOLID_LEAF_MARKER
 };
 
 export type { SparseOctree, Bounds };

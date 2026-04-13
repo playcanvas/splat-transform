@@ -80,10 +80,24 @@ function isEmpty(lo: number, hi: number): boolean {
     return lo === 0 && hi === 0;
 }
 
+/**
+ * Get the offset to a child node given a parent's child mask and octant.
+ * Uses popcount to count how many children come before this octant.
+ *
+ * @param mask - 8-bit child mask from parent node
+ * @param octant - Octant index (0-7)
+ * @returns Offset from base child pointer
+ */
+function getChildOffset(mask: number, octant: number): number {
+    const prefix = (1 << octant) - 1;
+    return popcount(mask & prefix);
+}
+
 export {
     xyzToMorton,
     mortonToXYZ,
     popcount,
     isSolid,
-    isEmpty
+    isEmpty,
+    getChildOffset
 };

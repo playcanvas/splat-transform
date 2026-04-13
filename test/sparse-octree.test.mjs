@@ -13,10 +13,10 @@ import {
     mortonToXYZ,
     popcount,
     isSolid,
-    isEmpty
+    isEmpty,
+    getChildOffset
 } from '../src/lib/voxel/morton.js';
 import {
-    getChildOffset,
     buildSparseOctree,
     alignGridBounds,
     SOLID_LEAF_MARKER
