@@ -1,5 +1,6 @@
 import { Vec3 } from 'playcanvas';
 
+import type { Bounds } from '../spatial/gaussian-aabb';
 import { logger } from '../utils/logger';
 
 // ============================================================================
@@ -219,14 +220,6 @@ class BlockAccumulator {
 // ============================================================================
 // Sparse Octree Types
 // ============================================================================
-
-/**
- * Bounds specification with min/max Vec3.
- */
-interface Bounds {
-    min: Vec3;
-    max: Vec3;
-}
 
 /**
  * Sparse voxel octree using Laine-Karras node format.

@@ -7,8 +7,6 @@ import {
     type BlockGridParams,
     type GaussianColumns
 } from './block-lookup';
-import { computeGaussianExtents } from './gaussian-aabb';
-import { GaussianBVH } from './gaussian-bvh';
 import { GpuVoxelization } from './gpu-voxelization';
 import {
     BlockAccumulator,
@@ -18,6 +16,8 @@ import { filterAndFillBlocks } from './voxel-filter';
 import { voxelizeToAccumulator } from './voxelize';
 import { Column, DataTable } from '../data-table/data-table';
 import { computeWriteTransform, transformColumns } from '../data-table/transform';
+import { computeGaussianExtents } from '../spatial/gaussian-aabb';
+import { GaussianBVH } from '../spatial/gaussian-bvh';
 import type { DeviceCreator } from '../types';
 import { logger } from '../utils/logger';
 import { Transform } from '../utils/math';

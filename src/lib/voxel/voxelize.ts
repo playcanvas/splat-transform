@@ -1,4 +1,3 @@
-import { type GaussianBVH } from './gaussian-bvh';
 import {
     GpuVoxelization,
     type BatchSpec,
@@ -9,6 +8,7 @@ import {
     xyzToMorton,
     type Bounds
 } from './sparse-octree';
+import { type GaussianBVH } from '../spatial/gaussian-bvh';
 import { logger } from '../utils/logger';
 
 interface PendingBatch extends BatchSpec {

@@ -1,13 +1,13 @@
 import { MeshoptSimplifier } from 'meshoptimizer/simplifier';
 import { Vec3 } from 'playcanvas';
 
+import { buildCollisionGlb } from './collision-glb';
 import { Column, DataTable } from '../data-table/data-table';
 import { computeWriteTransform, transformColumns } from '../data-table/transform';
 import { type FileSystem, writeFile } from '../io/write';
 import type { DeviceCreator } from '../types';
 import { logger } from '../utils/logger';
 import { Transform } from '../utils/math';
-import { buildCollisionGlb } from '../voxel/collision-glb';
 import {
     computeGaussianExtents,
     GaussianBVH,
