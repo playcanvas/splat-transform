@@ -1,6 +1,6 @@
-import { Column, DataTable } from '../data-table/data-table';
+import { Column, DataTable } from '../data-table';
 import { ReadSource } from '../io/read';
-import { Transform } from '../utils/math';
+import { Transform } from '../utils';
 
 // See https://github.com/nianticlabs/spz for reference implementation
 

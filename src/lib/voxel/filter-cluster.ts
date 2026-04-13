@@ -16,9 +16,9 @@ import {
     gaussianContributesToVoxels
 } from './voxel-query';
 import { voxelizeToBuffer } from './voxelize';
-import { DataTable } from '../data-table/data-table';
+import { DataTable } from '../data-table';
 import type { DeviceCreator } from '../types';
-import { logger } from '../utils/logger';
+import { logger } from '../utils';
 
 /**
  * Find the connected component of occupied blocks reachable from a seed block

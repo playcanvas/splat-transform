@@ -1,9 +1,9 @@
 import { Vec3 } from 'playcanvas';
 
-import { Column, DataTable } from '../data-table/data-table';
+import { Column, DataTable } from '../data-table';
 import { dirname, join, ReadFileSystem, ReadSource, readFile } from '../io/read';
 import { Options } from '../types';
-import { Transform } from '../utils/math';
+import { Transform } from '../utils';
 
 const kSH_C0 = 0.28209479177387814;
 const SQRT_2 = 1.414213562373095;

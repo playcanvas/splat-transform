@@ -2,8 +2,8 @@ import { Vec3 } from 'playcanvas';
 
 import { BlockMaskBuffer } from './block-mask-buffer';
 import { xyzToMorton, mortonToXYZ, popcount } from './morton';
-import type { Bounds } from '../data-table/gaussian-aabb';
-import { logger } from '../utils/logger';
+import type { Bounds } from '../data-table';
+import { logger } from '../utils';
 
 /**
  * Solid leaf node marker: childMask = 0xFF, baseOffset = 0.

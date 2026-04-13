@@ -4,7 +4,7 @@ import {
     computeGaussianInverse,
     evaluateGaussianAt,
     type GaussianColumns
-} from '../data-table/gaussian-eval';
+} from '../data-table';
 
 /**
  * Pre-computed lookup structures for efficient voxel block queries.

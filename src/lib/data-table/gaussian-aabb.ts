@@ -1,7 +1,7 @@
 import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { Column, DataTable } from './data-table.js';
-import { logger } from '../utils/logger.js';
+import { logger } from '../utils';
 
 /**
  * Bounds specification with min/max Vec3.

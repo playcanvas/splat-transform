@@ -2,10 +2,10 @@ import { html, css, js } from '@playcanvas/supersplat-viewer';
 import { basename, dirname, join } from 'pathe';
 
 import { writeSog } from './write-sog';
-import { DataTable } from '../data-table/data-table';
+import { DataTable } from '../data-table';
 import { type FileSystem, MemoryFileSystem, writeFile } from '../io/write';
 import type { DeviceCreator } from '../types';
-import { toBase64 } from '../utils/base64';
+import { toBase64 } from '../utils';
 
 const defaultSettings = {
     version: 2,

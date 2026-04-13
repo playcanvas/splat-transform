@@ -10,7 +10,7 @@ import {
     BLOCK_EMPTY,
     SparseVoxelGrid
 } from './sparse-voxel-grid';
-import { logger } from '../utils/logger';
+import { logger } from '../utils';
 
 const carveInterior = (
     buffer: BlockMaskBuffer,

@@ -1,26 +1,11 @@
-// Voxelization module for Gaussian splat scenes
-
-export { computeGaussianExtents } from '../data-table/gaussian-aabb.js';
-
-export { GaussianBVH } from '../spatial/gaussian-bvh.js';
-
-export { GpuVoxelization } from '../gpu/gpu-voxelization.js';
-
-export type { BatchSpec, MultiBatchResult } from '../gpu/gpu-voxelization.js';
-
-export {
-    buildSparseOctree,
-    alignGridBounds
-} from './sparse-octree.js';
-
-export type { SparseOctree, Bounds } from './sparse-octree.js';
-
-export { marchingCubes } from './marching-cubes.js';
-
-export type { MarchingCubesMesh } from './marching-cubes.js';
-
-export { voxelizeToBuffer } from './voxelize.js';
-
-export { filterCluster } from './filter-cluster.js';
-
-export { filterFloaters } from './filter-floaters.js';
+export { filterAndFillBlocks } from './block-cleanup';
+export { buildSparseOctree, alignGridBounds, getChildOffset, SOLID_LEAF_MARKER } from './sparse-octree';
+export type { SparseOctree, Bounds } from './sparse-octree';
+export { marchingCubes } from './marching-cubes';
+export type { MarchingCubesMesh } from './marching-cubes';
+export { voxelizeToBuffer } from './voxelize';
+export { filterCluster } from './filter-cluster';
+export { filterFloaters } from './filter-floaters';
+export { carveInterior } from './carve-interior';
+export { fillExterior } from './fill-exterior';
+export type { NavSeed, NavSimplifyResult } from './fill-exterior';

@@ -1,13 +1,8 @@
 import { Vec3 } from 'playcanvas';
 
-import { Column, DataTable } from './data-table/data-table';
-import { simplifyGaussians } from './data-table/decimate';
-import { sortMortonOrder } from './data-table/morton-order';
-import { computeSummary, type SummaryData } from './data-table/summary';
-import { convertToSpace } from './data-table/transform';
+import { Column, DataTable, simplifyGaussians, sortMortonOrder, computeSummary, type SummaryData, convertToSpace } from './data-table';
 import type { DeviceCreator } from './types';
-import { logger } from './utils/logger';
-import { Transform } from './utils/math';
+import { logger, Transform } from './utils';
 
 /**
  * Translate splats by a 3D vector offset.

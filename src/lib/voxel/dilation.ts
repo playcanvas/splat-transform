@@ -6,7 +6,7 @@ import {
     SOLID_LO,
     SparseVoxelGrid
 } from './sparse-voxel-grid';
-import { logger } from '../utils/logger';
+import { logger } from '../utils';
 
 // ============================================================================
 // Active Pair Computation

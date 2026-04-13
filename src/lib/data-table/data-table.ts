@@ -1,4 +1,4 @@
-import { Transform } from '../utils/math';
+import { Transform } from '../utils';
 
 /**
  * Union of all typed array types supported for column data.

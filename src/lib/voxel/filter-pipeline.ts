@@ -1,12 +1,9 @@
 import { type BlockGridParams } from './voxel-query';
-import { Column, DataTable } from '../data-table/data-table';
-import { computeGaussianExtents, type Bounds, type GaussianExtentsResult } from '../data-table/gaussian-aabb';
-import { type GaussianColumns } from '../data-table/gaussian-eval';
-import { computeWriteTransform, transformColumns } from '../data-table/transform';
-import { GpuVoxelization } from '../gpu/gpu-voxelization';
-import { GaussianBVH } from '../spatial/gaussian-bvh';
+import { Column, DataTable, computeGaussianExtents, type Bounds, type GaussianExtentsResult, type GaussianColumns, computeWriteTransform, transformColumns } from '../data-table';
+import { GpuVoxelization } from '../gpu';
+import { GaussianBVH } from '../spatial';
 import type { DeviceCreator } from '../types';
-import { Transform } from '../utils/math';
+import { Transform } from '../utils';
 
 /**
  * Context produced by the shared voxel filter setup pipeline.

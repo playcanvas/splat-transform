@@ -1,5 +1,5 @@
-import { DataTable } from '../data-table/data-table';
-import { quickselect } from '../utils/quickselect';
+import { DataTable } from '../data-table';
+import { quickselect } from '../utils';
 
 class Aabb {
     min: number[];

@@ -1,6 +1,6 @@
-import { Column, DataTable } from '../data-table/data-table';
+import { Column, DataTable } from '../data-table';
 import { ReadSource } from '../io/read';
-import { Transform } from '../utils/math';
+import { Transform } from '../utils';
 
 /**
  * Reads an Antimatter15 .splat file containing Gaussian splat data.

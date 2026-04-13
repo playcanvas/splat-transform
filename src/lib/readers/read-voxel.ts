@@ -1,8 +1,8 @@
 import { basename, dirname, join } from 'pathe';
 
-import { Column, DataTable } from '../data-table/data-table';
+import { Column, DataTable } from '../data-table';
 import { ReadFileSystem, readFile } from '../io/read';
-import { getChildOffset, SOLID_LEAF_MARKER } from '../voxel/sparse-octree';
+import { getChildOffset, SOLID_LEAF_MARKER } from '../voxel';
 
 /** SH coefficient for color conversion */
 const C0 = 0.28209479177387814;

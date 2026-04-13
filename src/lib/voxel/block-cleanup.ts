@@ -4,7 +4,7 @@ import {
     mortonToXYZ,
     popcount
 } from './morton';
-import { logger } from '../utils/logger';
+import { logger } from '../utils';
 
 // ============================================================================
 // Edge mask constants for 4x4x4 voxel blocks

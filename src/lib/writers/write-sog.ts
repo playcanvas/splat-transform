@@ -1,16 +1,11 @@
 import { dirname, resolve } from 'pathe';
 
 import { version } from '../../../package.json';
-import { Column, DataTable } from '../data-table/data-table';
-import { sortMortonOrder } from '../data-table/morton-order';
-import { convertToSpace } from '../data-table/transform';
+import { Column, DataTable, sortMortonOrder, convertToSpace } from '../data-table';
 import { type FileSystem, writeFile, ZipFileSystem } from '../io/write';
-import { kmeans } from '../spatial/k-means';
-import { quantize1d } from '../spatial/quantize-1d';
+import { kmeans, quantize1d } from '../spatial';
 import type { DeviceCreator } from '../types';
-import { logger } from '../utils/logger';
-import { sigmoid, Transform } from '../utils/math';
-import { WebPCodec } from '../utils/webp-codec';
+import { logger, sigmoid, Transform, WebPCodec } from '../utils';
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 

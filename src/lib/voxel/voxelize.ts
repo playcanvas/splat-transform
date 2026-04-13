@@ -5,9 +5,9 @@ import {
     GpuVoxelization,
     type BatchSpec,
     type MultiBatchResult
-} from '../gpu/gpu-voxelization';
-import { type GaussianBVH } from '../spatial/gaussian-bvh';
-import { logger } from '../utils/logger';
+} from '../gpu';
+import { type GaussianBVH } from '../spatial';
+import { logger } from '../utils';
 
 interface PendingBatch extends BatchSpec {
     bx: number;

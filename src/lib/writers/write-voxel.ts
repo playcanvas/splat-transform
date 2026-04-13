@@ -2,27 +2,23 @@ import { MeshoptSimplifier } from 'meshoptimizer/simplifier';
 import { Vec3 } from 'playcanvas';
 
 import { buildCollisionGlb } from './collision-glb';
-import { Column, DataTable } from '../data-table/data-table';
-import { computeWriteTransform, transformColumns } from '../data-table/transform';
+import { Column, DataTable, computeGaussianExtents, computeWriteTransform, transformColumns } from '../data-table';
+import { GpuVoxelization } from '../gpu';
 import { type FileSystem, writeFile } from '../io/write';
+import { GaussianBVH } from '../spatial';
 import type { DeviceCreator } from '../types';
-import { logger } from '../utils/logger';
-import { Transform } from '../utils/math';
-import { filterAndFillBlocks } from '../voxel/block-cleanup';
-import { carveInterior } from '../voxel/carve-interior';
-import { fillExterior, type NavSeed } from '../voxel/fill-exterior';
+import { logger, Transform } from '../utils';
 import {
-    computeGaussianExtents,
-    GaussianBVH,
-    GpuVoxelization,
+    filterAndFillBlocks,
     buildSparseOctree,
-    alignGridBounds
-} from '../voxel/index';
-import { marchingCubes } from '../voxel/marching-cubes';
-import {
-    type SparseOctree
-} from '../voxel/sparse-octree';
-import { voxelizeToBuffer } from '../voxel/voxelize';
+    alignGridBounds,
+    carveInterior,
+    fillExterior,
+    type NavSeed,
+    marchingCubes,
+    type SparseOctree,
+    voxelizeToBuffer
+} from '../voxel';
 
 /**
  * Options for writing a voxel octree file.

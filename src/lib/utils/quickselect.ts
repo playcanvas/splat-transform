@@ -1,4 +1,4 @@
-import { TypedArray } from '../data-table/data-table';
+import { TypedArray } from '../data-table';
 
 /**
  * Partition indices around the k-th largest element using quickselect

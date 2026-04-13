@@ -1,8 +1,7 @@
 import { Mat3, Quat, Vec3 } from 'playcanvas';
 
 import { Column, DataTable, TypedArray } from './data-table';
-import { Transform } from '../utils/math';
-import { RotateSH } from '../utils/rotate-sh';
+import { Transform, RotateSH } from '../utils';
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 

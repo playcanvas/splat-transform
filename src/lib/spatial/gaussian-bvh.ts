@@ -1,7 +1,7 @@
 import { Vec3 } from 'playcanvas';
 
-import { DataTable, TypedArray } from '../data-table/data-table.js';
-import { quickselect } from '../utils/quickselect';
+import { DataTable, type TypedArray } from '../data-table';
+import { quickselect } from '../utils';
 
 /**
  * Axis-aligned bounding box for BVH nodes.

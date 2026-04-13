@@ -1,5 +1,5 @@
-import { TypedArray } from '../data-table/data-table';
-import { sigmoid } from '../utils/math';
+import { TypedArray } from './data-table';
+import { sigmoid } from '../utils';
 
 /**
  * Pre-computed per-Gaussian inverse transform data for evaluating
