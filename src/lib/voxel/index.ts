@@ -1,6 +1,5 @@
 export { filterAndFillBlocks } from './block-cleanup';
-export { getChildOffset } from './morton';
-export { buildSparseOctree, alignGridBounds, SOLID_LEAF_MARKER } from './sparse-octree';
+export { buildSparseOctree, alignGridBounds } from './sparse-octree';
 export type { SparseOctree, Bounds } from './sparse-octree';
 export { marchingCubes } from './marching-cubes';
 export type { MarchingCubesMesh } from './marching-cubes';
