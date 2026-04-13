@@ -17,7 +17,8 @@ import {
     alignGridBounds
 } from '../voxel/index';
 import { marchingCubes } from '../voxel/marching-cubes';
-import { fillExterior, simplifyForCapsule, type NavSeed } from '../voxel/nav-simplify';
+import { carveInterior } from '../voxel/carve-interior';
+import { fillExterior, type NavSeed } from '../voxel/fill-exterior';
 import {
     type SparseOctree
 } from '../voxel/sparse-octree';
@@ -264,7 +265,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
 
     if (hasNav) {
         logger.progress.step('Carve interior');
-        const navResult = simplifyForCapsule(
+        const navResult = carveInterior(
             accumulator, gridBounds, voxelResolution,
             navCapsule!.height, navCapsule!.radius,
             navSeed!
