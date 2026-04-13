@@ -5,7 +5,7 @@ import { sparseDilate3 } from './dilation';
 import type { NavSeed, NavSimplifyResult } from './fill-exterior';
 import { twoLevelBFS } from './flood-fill';
 import { computeEmptyGrid } from './grid-ops';
-import type { Bounds } from './sparse-octree';
+import type { Bounds } from '../data-table';
 import {
     BLOCK_EMPTY,
     SparseVoxelGrid

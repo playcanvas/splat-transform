@@ -19,7 +19,7 @@ import {
 import {
     buildSparseOctree,
     SOLID_LEAF_MARKER
-} from '../src/lib/voxel/sparse-octree.js';
+} from '../src/lib/writers/sparse-octree.js';
 import { alignGridBounds } from '../src/lib/voxel/voxelize.js';
 
 // ============================================================================

@@ -1,6 +1,6 @@
 import { BlockMaskBuffer } from './block-mask-buffer';
 import { mortonToXYZ, xyzToMorton } from './morton';
-import type { Bounds } from './sparse-octree';
+import type { Bounds } from '../data-table';
 
 /**
  * Result of marching cubes surface extraction.

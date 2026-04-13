@@ -1,6 +1,4 @@
 export { filterAndFillBlocks } from './block-cleanup';
-export { buildSparseOctree } from './sparse-octree';
-export type { SparseOctree, Bounds } from './sparse-octree';
 export { marchingCubes } from './marching-cubes';
 export type { MarchingCubesMesh } from './marching-cubes';
 export { voxelizeToBuffer, alignGridBounds } from './voxelize';

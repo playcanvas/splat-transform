@@ -4,7 +4,7 @@ import { BlockMaskBuffer } from './block-mask-buffer';
 import { sparseDilate3 } from './dilation';
 import { twoLevelBFS } from './flood-fill';
 import { sparseOrGrids } from './grid-ops';
-import type { Bounds } from './sparse-octree';
+import type { Bounds } from '../data-table';
 import {
     BLOCK_MIXED,
     BLOCK_SOLID,

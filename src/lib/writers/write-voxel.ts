@@ -8,15 +8,14 @@ import { type FileSystem, writeFile } from '../io/write';
 import { GaussianBVH } from '../spatial';
 import type { DeviceCreator } from '../types';
 import { logger, Transform } from '../utils';
+import { buildSparseOctree, type SparseOctree } from './sparse-octree';
 import {
     filterAndFillBlocks,
-    buildSparseOctree,
     alignGridBounds,
     carveInterior,
     fillExterior,
     type NavSeed,
     marchingCubes,
-    type SparseOctree,
     voxelizeToBuffer
 } from '../voxel';
 

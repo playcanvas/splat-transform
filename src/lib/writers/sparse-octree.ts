@@ -1,9 +1,9 @@
 import { Vec3 } from 'playcanvas';
 
-import { BlockMaskBuffer } from './block-mask-buffer';
-import { xyzToMorton, mortonToXYZ, popcount, getChildOffset } from './morton';
 import type { Bounds } from '../data-table';
 import { logger } from '../utils';
+import { BlockMaskBuffer } from '../voxel/block-mask-buffer';
+import { xyzToMorton, mortonToXYZ, popcount, getChildOffset } from '../voxel/morton';
 
 /**
  * Solid leaf node marker: childMask = 0xFF, baseOffset = 0.
@@ -466,4 +466,4 @@ export {
     SOLID_LEAF_MARKER
 };
 
-export type { SparseOctree, Bounds };
+export type { SparseOctree };
