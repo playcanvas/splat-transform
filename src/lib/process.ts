@@ -171,7 +171,7 @@ type FilterFloaters = {
     /** Action type identifier. */
     kind: 'filterFloaters';
     /** Voxel size in world units. Default: 0.05 */
-    voxelSize?: number;
+    voxelResolution?: number;
     /** Opacity threshold for solid voxels. Default: 0.1 */
     opacityCutoff?: number;
     /** Minimum Gaussian contribution at a voxel center to be kept. Default: 1/255 */
@@ -189,7 +189,7 @@ type FilterCluster = {
     /** Action type identifier. */
     kind: 'filterCluster';
     /** Voxel size in world units for coarse voxelization. Default: 1.0 */
-    resolution?: number;
+    voxelResolution?: number;
     /** Seed position for finding the connected component. Default: Vec3(0,0,0) */
     seed?: Vec3;
     /** Opacity threshold for solid voxels. Default: 0.99 */
@@ -559,7 +559,7 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 result = await filterFloaters(
                     result,
                     options.createDevice,
-                    processAction.voxelSize,
+                    processAction.voxelResolution,
                     processAction.opacityCutoff,
                     processAction.minContribution
                 );
@@ -573,7 +573,7 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 result = await filterCluster(
                     result,
                     options.createDevice,
-                    processAction.resolution,
+                    processAction.voxelResolution,
                     processAction.seed,
                     processAction.opacityCutoff
                 );

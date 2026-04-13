@@ -26,7 +26,7 @@ import { logger } from '../utils/logger';
  *
  * @param dataTable - Input Gaussian splat data.
  * @param createDevice - Function to create a GPU device for voxelization.
- * @param voxelSize - Voxel size in world units. Default: 0.05.
+ * @param voxelResolution - Voxel size in world units. Default: 0.05.
  * @param opacityCutoff - Opacity threshold for solid voxels. Default: 0.1.
  * @param minContribution - Minimum Gaussian contribution at a voxel center to be kept. Default: 1/255.
  * @returns Filtered DataTable with floaters removed.
@@ -34,7 +34,7 @@ import { logger } from '../utils/logger';
 const filterFloaters = async (
     dataTable: DataTable,
     createDevice: DeviceCreator,
-    voxelSize: number = 0.05,
+    voxelResolution: number = 0.05,
     opacityCutoff: number = 0.1,
     minContribution: number = 1 / 255
 ): Promise<DataTable> => {
@@ -47,27 +47,27 @@ const filterFloaters = async (
 
     const ctx = await setupVoxelFilter(dataTable, createDevice);
 
-    const blockSize = 4 * voxelSize;
+    const blockSize = 4 * voxelResolution;
 
-    logger.log(`filterFloaters: voxel size ${voxelSize}m, block size ${blockSize}m, minContribution ${minContribution.toFixed(6)}`);
+    logger.log(`filterFloaters: voxel size ${voxelResolution}m, block size ${blockSize}m, minContribution ${minContribution.toFixed(6)}`);
 
     logger.progress.step('Building BVH');
 
     const gridBounds = alignGridBounds(
         ctx.sceneBounds.min.x, ctx.sceneBounds.min.y, ctx.sceneBounds.min.z,
         ctx.sceneBounds.max.x, ctx.sceneBounds.max.y, ctx.sceneBounds.max.z,
-        voxelSize
+        voxelResolution
     );
 
     logger.progress.step('Voxelizing');
 
     const accumulator = await voxelizeToAccumulator(
-        ctx.bvh, ctx.gpuVoxelization, gridBounds, voxelSize, opacityCutoff
+        ctx.bvh, ctx.gpuVoxelization, gridBounds, voxelResolution, opacityCutoff
     );
 
     ctx.gpuVoxelization.destroy();
 
-    const grid = buildBlockGridParams(gridBounds, voxelSize);
+    const grid = buildBlockGridParams(gridBounds, voxelResolution);
     const lookup = buildBlockLookup(accumulator, grid.strideY, grid.strideZ);
 
     logger.log(`filterFloaters: ${lookup.solidSet.size + lookup.mixedMap.size} occupied blocks (${lookup.solidSet.size} solid, ${lookup.mixedMap.size} mixed)`);

@@ -23,7 +23,7 @@ interface BlockGridParams {
     gridMinY: number;
     gridMinZ: number;
     blockSize: number;
-    voxelSize: number;
+    voxelResolution: number;
     numBlocksX: number;
     numBlocksY: number;
     numBlocksZ: number;
@@ -97,9 +97,9 @@ const isCenterInOccupiedVoxel = (
 
     const centerMixedIdx = lookup.mixedMap.get(centerBlockIdx);
     if (centerMixedIdx !== undefined) {
-        const lx = Math.floor((px - grid.gridMinX - centerBx * grid.blockSize) / grid.voxelSize);
-        const ly = Math.floor((py - grid.gridMinY - centerBy * grid.blockSize) / grid.voxelSize);
-        const lz = Math.floor((pz - grid.gridMinZ - centerBz * grid.blockSize) / grid.voxelSize);
+        const lx = Math.floor((px - grid.gridMinX - centerBx * grid.blockSize) / grid.voxelResolution);
+        const ly = Math.floor((py - grid.gridMinY - centerBy * grid.blockSize) / grid.voxelResolution);
+        const lz = Math.floor((pz - grid.gridMinZ - centerBz * grid.blockSize) / grid.voxelResolution);
         const bitIdx = (lx & 3) + (ly & 3) * 4 + (lz & 3) * 16;
         const word = bitIdx < 32 ? lookup.masks[centerMixedIdx * 2] : lookup.masks[centerMixedIdx * 2 + 1];
         if ((word >>> (bitIdx & 31)) & 1) {
@@ -173,18 +173,18 @@ const gaussianContributesToVoxels = (
                 const hi = isSolid ? 0xFFFFFFFF : lookup.masks[mixedIdx * 2 + 1];
 
                 for (let lz = 0; lz < 4; lz++) {
-                    const vz = blockOriginZ + (lz + 0.5) * grid.voxelSize;
+                    const vz = blockOriginZ + (lz + 0.5) * grid.voxelResolution;
                     const word = lz < 2 ? lo : hi;
                     const zBitBase = (lz & 1) * 16;
 
                     for (let ly = 0; ly < 4; ly++) {
                         const bitBase = zBitBase + ly * 4;
-                        const vy = blockOriginY + (ly + 0.5) * grid.voxelSize;
+                        const vy = blockOriginY + (ly + 0.5) * grid.voxelResolution;
 
                         for (let lx = 0; lx < 4; lx++) {
                             if (!((word >>> (bitBase + lx)) & 1)) continue;
 
-                            const vx = blockOriginX + (lx + 0.5) * grid.voxelSize;
+                            const vx = blockOriginX + (lx + 0.5) * grid.voxelResolution;
 
                             if (evaluateGaussianAt(g, px, py, pz, vx, vy, vz) >= minContribution) {
                                 return true;

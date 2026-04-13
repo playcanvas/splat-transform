@@ -167,7 +167,7 @@ const findNearestOccupiedBlock = (
  *
  * @param dataTable - Input Gaussian splat data.
  * @param createDevice - Function to create a GPU device for voxelization.
- * @param resolution - Voxel size in world units for coarse voxelization. Default: 1.0.
+ * @param voxelResolution - Voxel size in world units for coarse voxelization. Default: 1.0.
  * @param seed - Seed position in world space. Default: (0,0,0).
  * @param opacityCutoff - Opacity threshold for solid voxels. Default: 0.99.
  * @returns Filtered DataTable containing only Gaussians in the seed's cluster.
@@ -175,7 +175,7 @@ const findNearestOccupiedBlock = (
 const filterCluster = async (
     dataTable: DataTable,
     createDevice: DeviceCreator,
-    resolution: number = 1.0,
+    voxelResolution: number = 1.0,
     seed: Vec3 = Vec3.ZERO,
     opacityCutoff: number = 0.99
 ): Promise<DataTable> => {
@@ -188,23 +188,23 @@ const filterCluster = async (
 
     const ctx = await setupVoxelFilter(dataTable, createDevice);
 
-    const coarseVoxelSize = Math.max(0.01, resolution);
-    const blockSize = 4 * coarseVoxelSize;
-    const maxGridExtent = 8192 * coarseVoxelSize;
+    const clampedResolution = Math.max(0.01, voxelResolution);
+    const blockSize = 4 * clampedResolution;
+    const maxGridExtent = 8192 * clampedResolution;
 
     const sceneExtentX = ctx.sceneBounds.max.x - ctx.sceneBounds.min.x;
     const sceneExtentY = ctx.sceneBounds.max.y - ctx.sceneBounds.min.y;
     const sceneExtentZ = ctx.sceneBounds.max.z - ctx.sceneBounds.min.z;
     const maxSceneExtent = Math.max(sceneExtentX, sceneExtentY, sceneExtentZ);
 
-    logger.log(`filterCluster: scene extent ${maxSceneExtent.toFixed(2)}m, voxel resolution ${coarseVoxelSize.toFixed(4)}m`);
+    logger.log(`filterCluster: scene extent ${maxSceneExtent.toFixed(2)}m, voxel resolution ${clampedResolution.toFixed(4)}m`);
 
     logger.progress.step('Building BVH');
 
     const gridBounds = alignGridBounds(
         ctx.sceneBounds.min.x, ctx.sceneBounds.min.y, ctx.sceneBounds.min.z,
         ctx.sceneBounds.max.x, ctx.sceneBounds.max.y, ctx.sceneBounds.max.z,
-        coarseVoxelSize
+        clampedResolution
     );
 
     const clampAxis = (min: number, max: number) => {
@@ -226,7 +226,7 @@ const filterCluster = async (
     logger.progress.step('Voxelizing');
 
     let accumulator = await voxelizeToAccumulator(
-        ctx.bvh, ctx.gpuVoxelization, gridBounds, coarseVoxelSize, opacityCutoff
+        ctx.bvh, ctx.gpuVoxelization, gridBounds, clampedResolution, opacityCutoff
     );
 
     ctx.gpuVoxelization.destroy();
@@ -235,7 +235,7 @@ const filterCluster = async (
 
     logger.progress.step('Finding cluster');
 
-    const grid = buildBlockGridParams(gridBounds, coarseVoxelSize);
+    const grid = buildBlockGridParams(gridBounds, clampedResolution);
 
     let seedBx = Math.floor((seed.x - gridBounds.min.x) / blockSize);
     let seedBy = Math.floor((seed.y - gridBounds.min.y) / blockSize);

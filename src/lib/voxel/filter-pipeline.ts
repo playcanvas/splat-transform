@@ -82,11 +82,11 @@ const buildGaussianColumns = (ctx: VoxelFilterContext): GaussianColumns => ({
  * Build BlockGridParams from grid bounds and voxel size.
  *
  * @param gridBounds - Block-aligned grid bounds.
- * @param voxelSize - Size of each voxel in world units.
+ * @param voxelResolution - Size of each voxel in world units.
  * @returns Block grid parameters.
  */
-const buildBlockGridParams = (gridBounds: Bounds, voxelSize: number): BlockGridParams => {
-    const blockSize = 4 * voxelSize;
+const buildBlockGridParams = (gridBounds: Bounds, voxelResolution: number): BlockGridParams => {
+    const blockSize = 4 * voxelResolution;
     const numBlocksX = Math.round((gridBounds.max.x - gridBounds.min.x) / blockSize);
     const numBlocksY = Math.round((gridBounds.max.y - gridBounds.min.y) / blockSize);
     const numBlocksZ = Math.round((gridBounds.max.z - gridBounds.min.z) / blockSize);
@@ -95,7 +95,7 @@ const buildBlockGridParams = (gridBounds: Bounds, voxelSize: number): BlockGridP
         gridMinY: gridBounds.min.y,
         gridMinZ: gridBounds.min.z,
         blockSize,
-        voxelSize,
+        voxelResolution,
         numBlocksX,
         numBlocksY,
         numBlocksZ,

@@ -428,7 +428,7 @@ const parseArguments = async () => {
                             );
                         }
                         if (parts.length >= 4 && parts[3] !== '') {
-                            fcAction.resolution = parseNumber(parts[3]);
+                            fcAction.voxelResolution = parseNumber(parts[3]);
                         }
                         if (parts.length >= 5) {
                             fcAction.opacityCutoff = parseNumber(parts[4]);
@@ -442,7 +442,7 @@ const parseArguments = async () => {
                     if (t.value) {
                         const parts = t.value.split(',').map((p: string) => p.trim());
                         if (parts.length >= 1 && parts[0] !== '') {
-                            ffAction.voxelSize = parseNumber(parts[0]);
+                            ffAction.voxelResolution = parseNumber(parts[0]);
                         }
                         if (parts.length >= 2) {
                             ffAction.opacityCutoff = parseNumber(parts[1]);
