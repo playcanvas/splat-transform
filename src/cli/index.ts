@@ -66,11 +66,64 @@ type File = {
     processActions: ProcessAction[];
 };
 
+const cliOptionsConfig = {
+    // global options
+    overwrite: { type: 'boolean', short: 'w', default: false },
+    help: { type: 'boolean', short: 'h', default: false },
+    version: { type: 'boolean', short: 'v', default: false },
+    quiet: { type: 'boolean', short: 'q', default: false },
+    mem: { type: 'boolean', default: false },
+    iterations: { type: 'string', short: 'i', default: '10' },
+    'list-gpus': { type: 'boolean', short: 'L', default: false },
+    gpu: { type: 'string', short: 'g', default: '-1' },
+    'lod-select': { type: 'string', short: 'O', default: '' },
+    'viewer-settings': { type: 'string', short: 'E', default: '' },
+    'lod-chunk-count': { type: 'string', short: 'C', default: '512' },
+    'lod-chunk-extent': { type: 'string', short: 'X', default: '16' },
+    unbundled: { type: 'boolean', short: 'U', default: false },
+    'voxel-resolution': { type: 'string', short: 'R', default: '0.05' },
+    'opacity-cutoff': { type: 'string', short: 'A', default: '0.1' },
+    'nav-simplify': { type: 'boolean', default: true },
+    'nav-exterior-radius': { type: 'string', default: '' },
+    'nav-capsule': { type: 'string', default: '' },
+    'nav-seed': { type: 'string', default: '' },
+    'collision-mesh': { type: 'boolean', short: 'K', default: false },
+    'mesh-simplify-error': { type: 'string', default: '' },
+
+    // per-file options
+    translate: { type: 'string', short: 't', multiple: true },
+    rotate: { type: 'string', short: 'r', multiple: true },
+    scale: { type: 'string', short: 's', multiple: true },
+    'filter-nan': { type: 'boolean', short: 'N', multiple: true },
+    'filter-value': { type: 'string', short: 'V', multiple: true },
+    'filter-harmonics': { type: 'string', short: 'H', multiple: true },
+    'filter-box': { type: 'string', short: 'B', multiple: true },
+    'filter-sphere': { type: 'string', short: 'S', multiple: true },
+    'decimate': { type: 'string', short: 'F', multiple: true },
+    'filter-cluster': { type: 'string', short: 'D', multiple: true },
+    'filter-floaters': { type: 'string', short: 'G', multiple: true },
+    params: { type: 'string', short: 'p', multiple: true },
+    lod: { type: 'string', short: 'l', multiple: true },
+    summary: { type: 'boolean', short: 'm', multiple: true },
+    'morton-order': { type: 'boolean', short: 'M', multiple: true }
+} as const;
+
+const stringOptionNames = new Set(Object.entries(cliOptionsConfig)
+.filter(([, v]) => v.type === 'string')
+.flatMap(([name, v]) => [`--${name}`, ...('short' in v ? [`-${v.short}`] : [])])
+);
+
+const optionalValueOptions = new Set([
+    '--filter-cluster', '-D', '--filter-floaters', '-G'
+]);
+
+const isNumericValue = (s: string) => /^-?\d[\d.,e+-]*$/.test(s);
+
 /**
- * Normalize argv so that `--filter-cluster` / `-D` without an explicit value
- * gets converted to `--filter-cluster=` (empty string value).
- * This prevents parseArgs from consuming the next positional (e.g. the output
- * filename) as the option value.
+ * Normalize argv so that all string options use the `=` form (`--option=value`).
+ * This prevents parseArgs from misinterpreting negative numeric values (e.g.
+ * `-0.5,0,0`) as flags. Optional-value options (`--filter-cluster`,
+ * `--filter-floaters`) get an empty `=` when no value is provided.
  *
  * @param args - Raw command-line arguments (process.argv.slice(2)).
  * @returns Normalized argument array.
@@ -79,13 +132,17 @@ const normalizeArgv = (args: string[]): string[] => {
     const result: string[] = [];
     for (let i = 0; i < args.length; i++) {
         const arg = args[i];
-        if (arg === '--filter-cluster' || arg === '-D' || arg === '--filter-floaters' || arg === '-G') {
-            const next = args[i + 1];
-            if (next === undefined || (next.startsWith('-') && !next.match(/^-\d/)) || (!next.includes(',') && !next.match(/^\d/))) {
-                result.push(`${arg}=`);
+        const next = args[i + 1];
+        if (optionalValueOptions.has(arg)) {
+            if (next !== undefined && isNumericValue(next)) {
+                result.push(`${arg}=${next}`);
+                i++;
             } else {
-                result.push(arg);
+                result.push(`${arg}=`);
             }
+        } else if (stringOptionNames.has(arg) && next !== undefined) {
+            result.push(`${arg}=${next}`);
+            i++;
         } else {
             result.push(arg);
         }
@@ -100,47 +157,7 @@ const parseArguments = async () => {
         strict: true,
         allowPositionals: true,
         allowNegative: true,
-        options: {
-            // global options
-            overwrite: { type: 'boolean', short: 'w', default: false },
-            help: { type: 'boolean', short: 'h', default: false },
-            version: { type: 'boolean', short: 'v', default: false },
-            quiet: { type: 'boolean', short: 'q', default: false },
-            mem: { type: 'boolean', default: false },
-            iterations: { type: 'string', short: 'i', default: '10' },
-            'list-gpus': { type: 'boolean', short: 'L', default: false },
-            gpu: { type: 'string', short: 'g', default: '-1' },
-            'lod-select': { type: 'string', short: 'O', default: '' },
-            'viewer-settings': { type: 'string', short: 'E', default: '' },
-            'lod-chunk-count': { type: 'string', short: 'C', default: '512' },
-            'lod-chunk-extent': { type: 'string', short: 'X', default: '16' },
-            unbundled: { type: 'boolean', short: 'U', default: false },
-            'voxel-resolution': { type: 'string', short: 'R', default: '0.05' },
-            'opacity-cutoff': { type: 'string', short: 'A', default: '0.1' },
-            'nav-simplify': { type: 'boolean', default: true },
-            'nav-exterior-radius': { type: 'string', default: '' },
-            'nav-capsule': { type: 'string', default: '' },
-            'nav-seed': { type: 'string', default: '' },
-            'collision-mesh': { type: 'boolean', short: 'K', default: false },
-            'mesh-simplify-error': { type: 'string', default: '' },
-
-            // per-file options
-            translate: { type: 'string', short: 't', multiple: true },
-            rotate: { type: 'string', short: 'r', multiple: true },
-            scale: { type: 'string', short: 's', multiple: true },
-            'filter-nan': { type: 'boolean', short: 'N', multiple: true },
-            'filter-value': { type: 'string', short: 'V', multiple: true },
-            'filter-harmonics': { type: 'string', short: 'H', multiple: true },
-            'filter-box': { type: 'string', short: 'B', multiple: true },
-            'filter-sphere': { type: 'string', short: 'S', multiple: true },
-            'decimate': { type: 'string', short: 'F', multiple: true },
-            'filter-cluster': { type: 'string', short: 'D', multiple: true },
-            'filter-floaters': { type: 'string', short: 'G', multiple: true },
-            params: { type: 'string', short: 'p', multiple: true },
-            lod: { type: 'string', short: 'l', multiple: true },
-            summary: { type: 'boolean', short: 'm', multiple: true },
-            'morton-order': { type: 'boolean', short: 'M', multiple: true }
-        }
+        options: cliOptionsConfig
     });
 
     const parseNumber = (value: string, min?: number): number => {
