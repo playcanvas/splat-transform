@@ -191,6 +191,8 @@ type FilterCluster = {
     seed?: Vec3;
     /** Opacity threshold for solid voxels. Default: 0.99 */
     opacityCutoff?: number;
+    /** Minimum Gaussian contribution at a cluster voxel center to be kept. Default: 1/255 */
+    minContribution?: number;
 };
 
 /**
@@ -581,7 +583,8 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                     options.createDevice,
                     processAction.voxelResolution,
                     processAction.seed,
-                    processAction.opacityCutoff
+                    processAction.opacityCutoff,
+                    processAction.minContribution
                 );
                 break;
             }

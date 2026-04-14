@@ -468,6 +468,9 @@ const parseArguments = async () => {
                         if (parts.length >= 2) {
                             fcAction.opacityCutoff = parseNumber(parts[1]);
                         }
+                        if (parts.length >= 3) {
+                            fcAction.minContribution = parseNumber(parts[2]);
+                        }
                     }
                     if (navSeed) {
                         fcAction.seed = new Vec3(navSeed.x, navSeed.y, navSeed.z);
@@ -534,9 +537,9 @@ ACTIONS (can be repeated, in any order)
     -G, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel.
                                               Evaluates each Gaussian at occupied voxel centers.
                                               Default: size=0.05, opacity=0.1, min=0.004 (1/255)
-    -D, --filter-cluster   [res,op]         Keep only the connected cluster at --seed-pos.
+    -D, --filter-cluster   [res,op,min]     Keep only the connected cluster at --seed-pos.
                                               GPU-voxelizes at coarse resolution (res world units/voxel).
-                                              Default: res=1.0, opacity=0.99
+                                              Default: res=1.0, opacity=0.99, min=0.004 (1/255)
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
     -l, --lod              <n>              Specify the level of detail, n >= 0
     -m, --summary                           Print per-column statistics to stdout

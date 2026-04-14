@@ -166,6 +166,7 @@ const findNearestOccupiedBlock = (
  * @param voxelResolution - Voxel size in world units for coarse voxelization. Default: 1.0.
  * @param seed - Seed position in world space. Default: (0,0,0).
  * @param opacityCutoff - Opacity threshold for solid voxels. Default: 0.99.
+ * @param minContribution - Minimum Gaussian contribution at a cluster voxel center to be kept. Default: 1/255.
  * @returns Filtered DataTable containing only Gaussians in the seed's cluster.
  */
 const filterCluster = async (
@@ -173,7 +174,8 @@ const filterCluster = async (
     createDevice: DeviceCreator,
     voxelResolution: number = 1.0,
     seed: Vec3 = Vec3.ZERO,
-    opacityCutoff: number = 0.99
+    opacityCutoff: number = 0.99,
+    minContribution: number = 1 / 255
 ): Promise<DataTable> => {
     const numRows = dataTable.numRows;
     if (numRows === 0) return dataTable;
@@ -273,7 +275,6 @@ const filterCluster = async (
         logger.progress.step('Filtering Gaussians');
 
         const gaussianCols = buildGaussianColumns(ctx);
-        const minContribution = 1 / 255;
         const keepIndices: number[] = [];
 
         for (let i = 0; i < numRows; i++) {
