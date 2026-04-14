@@ -377,7 +377,7 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
             case 'filterNaN': {
                 const infOk = new Set(['opacity']);
                 const negInfOk = new Set(['scale_0', 'scale_1', 'scale_2']);
-                const columnNames = dataTable.columnNames;
+                const columnNames = result.columnNames;
 
                 const predicate = (row: any, rowIndex: number) => {
                     for (const key of columnNames) {
@@ -400,7 +400,14 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 if (rawColumnMap[columnName]) {
                     columnName = rawColumnMap[columnName];
                 } else if (inverseTransforms[columnName]) {
+                    if (columnName === 'opacity' && (value <= 0 || value >= 1)) {
+                        throw new Error(`filterByValue: opacity value must be between 0 and 1 (exclusive), got ${value}`);
+                    }
                     value = inverseTransforms[columnName](value);
+                }
+
+                if (!result.hasColumn(columnName)) {
+                    throw new Error(`filterByValue: column '${columnName}' not found in DataTable`);
                 }
 
                 if (!result.transform.isIdentity() && isTransformColumn(columnName)) {

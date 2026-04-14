@@ -9,7 +9,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { BlockMaskBuffer } from '../src/lib/voxel/block-mask-buffer.js';
-import { xyzToMorton, popcount } from '../src/lib/voxel/morton.js';
+import { SparseVoxelGrid } from '../src/lib/voxel/sparse-voxel-grid.js';
+import { xyzToMorton, mortonToXYZ, popcount } from '../src/lib/voxel/morton.js';
 import { alignGridBounds } from '../src/lib/voxel/voxelize.js';
 import { carveInterior } from '../src/lib/voxel/carve-interior.js';
 
@@ -28,6 +29,16 @@ function countSolidVoxels(acc) {
         count += popcount(mixed.masks[i * 2]) + popcount(mixed.masks[i * 2 + 1]);
     }
     return count;
+}
+
+/**
+ * Convert a BlockMaskBuffer to a SparseVoxelGrid for voxel-level queries.
+ */
+function bufferToGrid(buffer, gridBounds, voxelResolution) {
+    const nx = Math.round((gridBounds.max.x - gridBounds.min.x) / voxelResolution);
+    const ny = Math.round((gridBounds.max.y - gridBounds.min.y) / voxelResolution);
+    const nz = Math.round((gridBounds.max.z - gridBounds.min.z) / voxelResolution);
+    return SparseVoxelGrid.fromBuffer(buffer, nx, ny, nz);
 }
 
 /**
@@ -91,6 +102,69 @@ describe('carveInterior', function () {
             assert.ok(resultCount < totalCells,
                 `Result (${resultCount}) must leave reachable cells empty (total grid: ${totalCells})`);
         });
+
+        it('should leave the seed voxel unoccupied in the output', function () {
+            const { acc, gridBounds } = buildHollowBox(6, voxelResolution);
+
+            const centerWorld = (gridBounds.min.x + gridBounds.max.x) / 2;
+            const seed = { x: centerWorld, y: centerWorld, z: centerWorld };
+
+            const result = carveInterior(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
+
+            const grid = bufferToGrid(result.buffer, result.gridBounds, voxelResolution);
+            const seedIx = Math.floor((seed.x - result.gridBounds.min.x) / voxelResolution);
+            const seedIy = Math.floor((seed.y - result.gridBounds.min.y) / voxelResolution);
+            const seedIz = Math.floor((seed.z - result.gridBounds.min.z) / voxelResolution);
+
+            if (seedIx >= 0 && seedIx < grid.nx && seedIy >= 0 && seedIy < grid.ny && seedIz >= 0 && seedIz < grid.nz) {
+                assert.strictEqual(grid.getVoxel(seedIx, seedIy, seedIz), 0,
+                    'Seed voxel should be free (navigable) in the carved output');
+            }
+        });
+
+        it('should produce a smaller grid due to cropping', function () {
+            const sizeBlocks = 6;
+            const { acc, gridBounds } = buildHollowBox(sizeBlocks, voxelResolution);
+
+            const totalSize = (sizeBlocks + 4) * 4 * voxelResolution;
+            const paddedBounds = alignGridBounds(0, 0, 0, totalSize, totalSize, totalSize, voxelResolution);
+
+            const centerWorld = sizeBlocks * 4 * voxelResolution / 2;
+            const seed = { x: centerWorld, y: centerWorld, z: centerWorld };
+
+            const result = carveInterior(acc, paddedBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
+
+            const inputExtentX = paddedBounds.max.x - paddedBounds.min.x;
+            const outputExtentX = result.gridBounds.max.x - result.gridBounds.min.x;
+
+            assert.ok(outputExtentX <= inputExtentX,
+                `Output grid (${outputExtentX}) should be cropped to <= input (${inputExtentX})`);
+        });
+
+        it('should have solid voxels near the original walls', function () {
+            const sizeBlocks = 6;
+            const { acc, gridBounds } = buildHollowBox(sizeBlocks, voxelResolution);
+
+            const centerWorld = (gridBounds.min.x + gridBounds.max.x) / 2;
+            const seed = { x: centerWorld, y: centerWorld, z: centerWorld };
+
+            const result = carveInterior(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
+            const grid = bufferToGrid(result.buffer, result.gridBounds, voxelResolution);
+
+            let solidNearWall = 0;
+            const wallBlock = 0;
+            const wallVoxelMax = 4;
+            for (let iy = 0; iy < Math.min(wallVoxelMax, grid.ny); iy++) {
+                for (let iz = 0; iz < Math.min(wallVoxelMax, grid.nz); iz++) {
+                    for (let ix = 0; ix < Math.min(wallVoxelMax, grid.nx); ix++) {
+                        if (grid.getVoxel(ix, iy, iz)) solidNearWall++;
+                    }
+                }
+            }
+
+            assert.ok(solidNearWall > 0,
+                'Should have solid voxels in the corner region near the original walls');
+        });
     });
 
     describe('seed validation', function () {
@@ -105,10 +179,6 @@ describe('carveInterior', function () {
         });
 
         it('should return original buffer if seed is in solid region', function () {
-            // 3-block box: walls at blocks 0 and 2, interior is only block 1
-            // (4 voxels per axis). After dilation by yHalfExtent=3 in Y the
-            // interior is fully blocked, so no free cell exists within search
-            // radius and the function returns the original buffer.
             const { acc, gridBounds } = buildHollowBox(3, voxelResolution);
 
             const seed = {
@@ -139,6 +209,16 @@ describe('carveInterior', function () {
             assert.ok(resultCount < totalCells,
                 'With no obstacles the entire grid is reachable; most cells should be empty');
         });
+
+        it('should return empty buffer when input is empty', function () {
+            const acc = new BlockMaskBuffer();
+            assert.strictEqual(acc.count, 0);
+            const gridBounds = alignGridBounds(0, 0, 0, 1, 1, 1, voxelResolution);
+            const seed = { x: 0.5, y: 0.5, z: 0.5 };
+
+            const result = carveInterior(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
+            assert.strictEqual(result.buffer, acc, 'Empty input should return same buffer reference');
+        });
     });
 
     describe('single solid block', function () {
@@ -155,6 +235,8 @@ describe('carveInterior', function () {
             const resultCount = countSolidVoxels(result.buffer);
             assert.ok(resultCount > 0,
                 'Should retain solid voxels near the reachable space');
+            assert.ok(resultCount >= 64,
+                `Should retain at least the original 64 voxels (got ${resultCount})`);
         });
     });
 
@@ -194,6 +276,35 @@ describe('carveInterior', function () {
             const totalCells = nx * ny * nz;
             assert.ok(resultCount < totalCells,
                 `Result (${resultCount}) should leave reachable interior empty (total: ${totalCells})`);
+        });
+    });
+
+    describe('parameter validation', function () {
+        it('should throw for zero voxel resolution', function () {
+            const acc = new BlockMaskBuffer();
+            const gridBounds = alignGridBounds(0, 0, 0, 1, 1, 1, 0.25);
+            assert.throws(
+                () => carveInterior(acc, gridBounds, 0, capsuleHeight, capsuleRadius, { x: 0.5, y: 0.5, z: 0.5 }),
+                /voxelResolution must be finite and > 0/
+            );
+        });
+
+        it('should throw for negative capsule height', function () {
+            const acc = new BlockMaskBuffer();
+            const gridBounds = alignGridBounds(0, 0, 0, 1, 1, 1, 0.25);
+            assert.throws(
+                () => carveInterior(acc, gridBounds, voxelResolution, -1, capsuleRadius, { x: 0.5, y: 0.5, z: 0.5 }),
+                /capsuleHeight must be finite and > 0/
+            );
+        });
+
+        it('should throw for negative capsule radius', function () {
+            const acc = new BlockMaskBuffer();
+            const gridBounds = alignGridBounds(0, 0, 0, 1, 1, 1, 0.25);
+            assert.throws(
+                () => carveInterior(acc, gridBounds, voxelResolution, capsuleHeight, -0.5, { x: 0.5, y: 0.5, z: 0.5 }),
+                /capsuleRadius must be finite and >= 0/
+            );
         });
     });
 });

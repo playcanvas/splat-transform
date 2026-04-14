@@ -118,11 +118,11 @@ const readSplat = async (source: ReadSource): Promise<DataTable> => {
             (columns[12].data as Float32Array)[splatIndex] = rot2Norm / length;
             (columns[13].data as Float32Array)[splatIndex] = rot3Norm / length;
         } else {
-            // Default to identity quaternion if invalid
-            (columns[10].data as Float32Array)[splatIndex] = 0.0;
+            // Default to identity quaternion if invalid (rot_0 = w)
+            (columns[10].data as Float32Array)[splatIndex] = 1.0;
             (columns[11].data as Float32Array)[splatIndex] = 0.0;
             (columns[12].data as Float32Array)[splatIndex] = 0.0;
-            (columns[13].data as Float32Array)[splatIndex] = 1.0;
+            (columns[13].data as Float32Array)[splatIndex] = 0.0;
         }
     }
 

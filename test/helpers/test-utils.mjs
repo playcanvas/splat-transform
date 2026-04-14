@@ -74,11 +74,11 @@ function createTestDataTable(count, options = {}) {
         // Opacity: sigmoid-encoded
         columns[9].data[i] = packOpacity(0.9);
 
-        // Rotation: identity quaternion
-        columns[10].data[i] = 0; // rot_0
-        columns[11].data[i] = 0; // rot_1
-        columns[12].data[i] = 0; // rot_2
-        columns[13].data[i] = 1; // rot_3
+        // Rotation: identity quaternion (rot_0 = w)
+        columns[10].data[i] = 1; // rot_0 (w)
+        columns[11].data[i] = 0; // rot_1 (x)
+        columns[12].data[i] = 0; // rot_2 (y)
+        columns[13].data[i] = 0; // rot_3 (z)
     }
 
     // Add spherical harmonics if requested
