@@ -83,7 +83,7 @@ const cliOptionsConfig = {
     unbundled: { type: 'boolean', short: 'U', default: false },
     'voxel-params': { type: 'string', default: '' },
     'voxel-external-fill': { type: 'string' },
-    'voxel-carve-interior': { type: 'string' },
+    'voxel-interior-carve': { type: 'string' },
     'seed-pos': { type: 'string', default: '' },
     'collision-mesh': { type: 'boolean', short: 'K', default: false },
     'mesh-simplify-error': { type: 'string', default: '' },
@@ -113,7 +113,7 @@ const stringOptionNames = new Set(Object.entries(cliOptionsConfig)
 
 const optionalValueOptions = new Set([
     '--filter-cluster', '-D', '--filter-floaters', '-G',
-    '--voxel-external-fill', '--voxel-carve-interior',
+    '--voxel-external-fill', '--voxel-interior-carve',
     '--voxel-params'
 ]);
 
@@ -237,7 +237,7 @@ const parseArguments = async () => {
     // Parse voxel processing options
     const voxelParamsStr = v['voxel-params'];
     const externalFillStr = v['voxel-external-fill'];
-    const carveInteriorStr = v['voxel-carve-interior'];
+    const carveInteriorStr = v['voxel-interior-carve'];
     const seedPosStr = v['seed-pos'];
 
     let voxelResolution = 0.05;
@@ -262,7 +262,7 @@ const parseArguments = async () => {
         if (carveInteriorStr) {
             const [height, radius] = parseVec(carveInteriorStr, 2);
             if (height < 0 || radius < 0) {
-                throw new Error(`Invalid voxel-carve-interior value: ${carveInteriorStr}. Height and radius must be >= 0`);
+                throw new Error(`Invalid voxel-interior-carve value: ${carveInteriorStr}. Height and radius must be >= 0`);
             }
             navCapsule = { height, radius };
         } else {
@@ -558,7 +558,7 @@ GLOBAL OPTIONS
     -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
         --voxel-params     [size,opacity]   Voxel size and opacity threshold for .voxel.json. Default: 0.05,0.1
         --voxel-external-fill [size]        Fill exterior voxels by dilation from seed. Default size: 1.6
-        --voxel-carve-interior [h,r]        Carve navigable interior using capsule flood fill from seed.
+        --voxel-interior-carve [h,r]        Carve navigable interior using capsule flood fill from seed.
                                               Default: height=1.6, radius=0.2
         --seed-pos         <x,y,z>          Seed position for voxel processing and --filter-cluster. Default: 0,0,0
     -K, --collision-mesh                    Generate collision mesh (.collision.glb) with voxel output
@@ -590,10 +590,10 @@ EXAMPLES
     splat-transform --voxel-params 0.1,0.3 input.ply output.voxel.json
 
     # Generate voxel data with exterior fill and interior carve
-    splat-transform --voxel-external-fill --voxel-carve-interior input.ply output.voxel.json
+    splat-transform --voxel-external-fill --voxel-interior-carve input.ply output.voxel.json
 
     # Generate voxel data with custom seed position and carve parameters
-    splat-transform --seed-pos 1,0,0 --voxel-carve-interior 2.0,0.3 input.ply output.voxel.json
+    splat-transform --seed-pos 1,0,0 --voxel-interior-carve 2.0,0.3 input.ply output.voxel.json
 
     # Print statistical summary, then write output
     splat-transform bunny.ply --summary output.ply

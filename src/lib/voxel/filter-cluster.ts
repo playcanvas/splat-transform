@@ -1,6 +1,5 @@
 import { Vec3 } from 'playcanvas';
 
-import { filterAndFillBlocks } from './block-cleanup';
 import {
     setupVoxelFilter,
     buildGaussianColumns,
@@ -226,8 +225,6 @@ const filterCluster = async (
     );
 
     ctx.gpuVoxelization.destroy();
-
-    buffer = filterAndFillBlocks(buffer);
 
     logger.progress.step('Finding cluster');
 

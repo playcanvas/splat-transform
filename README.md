@@ -114,7 +114,7 @@ Actions can be repeated and applied in any order:
 -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
     --voxel-params     [size,opacity]   Voxel size and opacity threshold for .voxel.json. Default: 0.05,0.1
     --voxel-external-fill [size]        Fill exterior voxels by dilation from seed. Default size: 1.6
-    --voxel-carve-interior [h,r]        Carve navigable interior using capsule flood fill from seed.
+    --voxel-interior-carve [h,r]        Carve navigable interior using capsule flood fill from seed.
                                           Default: height=1.6, radius=0.2
     --seed-pos         <x,y,z>          Seed position for voxel processing and --filter-cluster. Default: 0,0,0
 -K, --collision-mesh                    Generate collision mesh (.collision.glb) with voxel output
@@ -246,10 +246,10 @@ splat-transform input.ply output.voxel.json
 splat-transform --voxel-params 0.1,0.3 input.ply output.voxel.json
 
 # Generate voxel data with exterior fill and interior carve
-splat-transform --voxel-external-fill --voxel-carve-interior input.ply output.voxel.json
+splat-transform --voxel-external-fill --voxel-interior-carve input.ply output.voxel.json
 
 # Generate voxel data with custom seed position and carve parameters
-splat-transform --seed-pos 1,0,0 --voxel-carve-interior 2.0,0.3 input.ply output.voxel.json
+splat-transform --seed-pos 1,0,0 --voxel-interior-carve 2.0,0.3 input.ply output.voxel.json
 ```
 
 ### Device Selection for SOG Compression
