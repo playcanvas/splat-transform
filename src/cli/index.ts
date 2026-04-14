@@ -119,10 +119,18 @@ const optionalValueOptions = new Set([
 
 const isNumericValue = (s: string) => /^-?\d[\d.,e+-]*$/.test(s);
 
+const shortToLong = new Map<string, string>(
+    Object.entries(cliOptionsConfig)
+    .filter(([, v]) => 'short' in v)
+    .map(([name, v]) => [`-${(v as { short: string }).short}`, `--${name}`])
+);
+
 /**
- * Normalize argv so that all string options use the `=` form (`--option=value`).
- * This prevents parseArgs from misinterpreting negative numeric values (e.g.
- * `-0.5,0,0`) as flags. Optional-value options (e.g. `--filter-cluster`,
+ * Normalize argv so that all string options use the long `=` form
+ * (`--option=value`). This prevents parseArgs from misinterpreting negative
+ * numeric values (e.g. `-0.5,0,0`) as flags. Short-form flags are converted
+ * to long form because parseArgs only treats `=` as a separator for long
+ * options. Optional-value options (e.g. `--filter-cluster`,
  * `--voxel-external-fill`) get an empty `=` when no value is provided.
  *
  * @param args - Raw command-line arguments (process.argv.slice(2)).
@@ -133,15 +141,16 @@ const normalizeArgv = (args: string[]): string[] => {
     for (let i = 0; i < args.length; i++) {
         const arg = args[i];
         const next = args[i + 1];
+        const longArg = shortToLong.get(arg) ?? arg;
         if (optionalValueOptions.has(arg)) {
             if (next !== undefined && isNumericValue(next)) {
-                result.push(`${arg}=${next}`);
+                result.push(`${longArg}=${next}`);
                 i++;
             } else {
-                result.push(`${arg}=`);
+                result.push(`${longArg}=`);
             }
         } else if (stringOptionNames.has(arg) && next !== undefined) {
-            result.push(`${arg}=${next}`);
+            result.push(`${longArg}=${next}`);
             i++;
         } else {
             result.push(arg);

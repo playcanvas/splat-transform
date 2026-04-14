@@ -11,7 +11,7 @@
 
 SplatTransform is an open source library and CLI tool for converting and editing Gaussian splats. It can:
 
-📥 Read PLY, Compressed PLY, SOG, SPLAT, KSPLAT, SPZ, LCC and Voxel formats  
+📥 Read PLY, Compressed PLY, SOG, SPLAT, KSPLAT, SPZ and LCC formats  
 📤 Write PLY, Compressed PLY, SOG, GLB, CSV, HTML Viewer, LOD and Voxel formats  
 📊 Generate statistical summaries for data analysis  
 🔗 Merge multiple splats  
@@ -63,7 +63,7 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 | `.glb` | ❌ | ✅ | Binary glTF with [KHR_gaussian_splatting](https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_gaussian_splatting) extension |
 | `.csv` | ❌ | ✅ | Comma-separated values spreadsheet |
 | `.html` | ❌ | ✅ | HTML viewer app (single-page or unbundled) based on SOG |
-| `.voxel.json` | ✅ | ✅ | Sparse voxel octree for collision detection |
+| `.voxel.json` | ❌ | ✅ | Sparse voxel octree for collision detection |
 
 ## Actions
 
@@ -112,12 +112,11 @@ Actions can be repeated and applied in any order:
 -O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC input
 -C, --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
 -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
--R, --voxel-resolution <n>              Voxel size in world units for .voxel.json. Default: 0.05
--A, --voxel-opacity-cutoff <n>          Opacity threshold for solid voxels. Default: 0.1
-    --nav-simplify                      Enable nav simplification for voxel output. Default: true
-    --nav-exterior-radius <n>           Exterior fill radius in world units (0 to disable). Default: 1.6 when nav active
-    --nav-capsule      <height,radius>  Capsule dimensions for nav simplification (height=0 disables interior carve). Default: 1.6,0.2
-    --nav-seed         <x,y,z>          Seed position for nav simplification. Default: 0,0,0
+    --voxel-params     [size,opacity]   Voxel size and opacity threshold for .voxel.json. Default: 0.05,0.1
+    --voxel-external-fill [size]        Fill exterior voxels by dilation from seed. Default size: 1.6
+    --voxel-carve-interior [h,r]        Carve navigable interior using capsule flood fill from seed.
+                                          Default: height=1.6, radius=0.2
+    --seed-pos         <x,y,z>          Seed position for voxel processing and --filter-cluster. Default: 0,0,0
 -K, --collision-mesh                    Generate collision mesh (.collision.glb) with voxel output
     --mesh-simplify-error <n>           Max geometric error for collision mesh simplification as a fraction of voxelResolution. Default: 0.08
 ```
@@ -239,35 +238,18 @@ splat-transform gen-grid.mjs -p width=10,height=10,scale=10,color=0.1 scenes/gri
 
 The voxel format stores sparse voxel octree data for collision detection. It consists of two files: `.voxel.json` (metadata) and `.voxel.bin` (binary octree data).
 
-#### Writing Voxel Data
-
 ```bash
 # Generate voxel collision data from a splat file
 splat-transform input.ply output.voxel.json
 
-# Generate voxel data with custom resolution (10cm voxels)
-splat-transform -R 0.1 input.ply output.voxel.json
+# Generate voxel data with custom resolution and opacity threshold
+splat-transform --voxel-params 0.1,0.3 input.ply output.voxel.json
 
-# Generate voxel data with lower opacity threshold
-splat-transform -A 0.3 input.ply output.voxel.json
+# Generate voxel data with exterior fill and interior carve
+splat-transform --voxel-external-fill --voxel-carve-interior input.ply output.voxel.json
 
-# Combine resolution and opacity settings
-splat-transform -R 0.1 -A 0.3 input.ply output.voxel.json
-```
-
-> [!NOTE]
-> The voxel resolution controls the size of individual voxels in world units. The opacity cutoff determines the threshold above which voxels are considered solid.
-
-#### Reading Voxel Data
-
-Voxel files can be read back and converted to other formats. The reader traverses the octree and converts leaf blocks into Gaussian splats for visualization or further processing.
-
-```bash
-# Convert voxel data back to PLY for visualization
-splat-transform scene.voxel.json scene-voxels.ply
-
-# Convert voxel data to CSV for analysis
-splat-transform scene.voxel.json scene-voxels.csv
+# Generate voxel data with custom seed position and carve parameters
+splat-transform --seed-pos 1,0,0 --voxel-carve-interior 2.0,0.3 input.ply output.voxel.json
 ```
 
 ### Device Selection for SOG Compression
@@ -339,7 +321,7 @@ import {
 | `computeSummary` | Generate statistical summary of data |
 | `sortMortonOrder` | Sort indices by Morton code for spatial locality |
 | `sortByVisibility` | Sort indices by visibility score for filtering |
-| `readVoxel`, `writeVoxel` | Read/write sparse voxel octree files |
+| `writeVoxel` | Write sparse voxel octree files |
 
 ### File System Abstractions
 

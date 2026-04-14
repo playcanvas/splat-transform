@@ -257,7 +257,6 @@ describe('voxel-query', function () {
                 extentZ: new Float32Array([8.0])
             };
 
-            const blockIdx0 = 0;
             const emptyFilter = new Set([999]);
 
             const withoutFilter = gaussianContributesToVoxels(0, gaussianCols, grid, lookup, 1e-6);
