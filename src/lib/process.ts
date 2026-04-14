@@ -385,7 +385,7 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                     for (const key of columnNames) {
                         const value = row[key];
                         if (!isFinite(value)) {
-                            if (value === -Infinity && (infOk.has(key) || negInfOk.has(key))) continue;
+                            if (value === -Infinity && negInfOk.has(key)) continue;
                             if (value === Infinity && infOk.has(key)) continue;
                             return false;
                         }

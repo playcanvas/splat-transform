@@ -40,61 +40,69 @@ const filterFloaters = async (
 
     logger.progress.begin(4);
 
-    logger.progress.step('Computing extents');
+    let ctx;
+    try {
+        logger.progress.step('Computing extents');
 
-    const ctx = await setupVoxelFilter(dataTable, createDevice);
+        ctx = await setupVoxelFilter(dataTable, createDevice);
 
-    const blockSize = 4 * voxelResolution;
+        const blockSize = 4 * voxelResolution;
 
-    logger.log(`filterFloaters: voxel size ${voxelResolution}m, block size ${blockSize}m, minContribution ${minContribution.toFixed(6)}`);
+        logger.log(`filterFloaters: voxel size ${voxelResolution}m, block size ${blockSize}m, minContribution ${minContribution.toFixed(6)}`);
 
-    logger.progress.step('Building BVH');
+        logger.progress.step('Building BVH');
 
-    const gridBounds = alignGridBounds(
-        ctx.sceneBounds.min.x, ctx.sceneBounds.min.y, ctx.sceneBounds.min.z,
-        ctx.sceneBounds.max.x, ctx.sceneBounds.max.y, ctx.sceneBounds.max.z,
-        voxelResolution
-    );
+        const gridBounds = alignGridBounds(
+            ctx.sceneBounds.min.x, ctx.sceneBounds.min.y, ctx.sceneBounds.min.z,
+            ctx.sceneBounds.max.x, ctx.sceneBounds.max.y, ctx.sceneBounds.max.z,
+            voxelResolution
+        );
 
-    logger.progress.step('Voxelizing');
+        logger.progress.step('Voxelizing');
 
-    const buffer = await voxelizeToBuffer(
-        ctx.bvh, ctx.gpuVoxelization, gridBounds, voxelResolution, opacityCutoff
-    );
+        const buffer = await voxelizeToBuffer(
+            ctx.bvh, ctx.gpuVoxelization, gridBounds, voxelResolution, opacityCutoff
+        );
 
-    ctx.gpuVoxelization.destroy();
+        ctx.gpuVoxelization.destroy();
+        ctx.gpuVoxelization = null;
 
-    const grid = buildBlockGridParams(gridBounds, voxelResolution);
-    const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+        const grid = buildBlockGridParams(gridBounds, voxelResolution);
+        const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
 
-    logger.log(`filterFloaters: ${lookup.solidSet.size + lookup.mixedMap.size} occupied blocks (${lookup.solidSet.size} solid, ${lookup.mixedMap.size} mixed)`);
+        logger.log(`filterFloaters: ${lookup.solidSet.size + lookup.mixedMap.size} occupied blocks (${lookup.solidSet.size} solid, ${lookup.mixedMap.size} mixed)`);
 
-    logger.progress.step('Filtering Gaussians');
+        logger.progress.step('Filtering Gaussians');
 
-    const gaussianCols = buildGaussianColumns(ctx);
-    const keepIndices: number[] = [];
+        const gaussianCols = buildGaussianColumns(ctx);
+        const keepIndices: number[] = [];
 
-    for (let i = 0; i < numRows; i++) {
-        const px = gaussianCols.posX[i];
-        const py = gaussianCols.posY[i];
-        const pz = gaussianCols.posZ[i];
+        for (let i = 0; i < numRows; i++) {
+            const px = gaussianCols.posX[i];
+            const py = gaussianCols.posY[i];
+            const pz = gaussianCols.posZ[i];
 
-        if (isCenterInOccupiedVoxel(px, py, pz, grid, lookup)) {
-            keepIndices.push(i);
-            continue;
+            if (isCenterInOccupiedVoxel(px, py, pz, grid, lookup)) {
+                keepIndices.push(i);
+                continue;
+            }
+
+            if (gaussianContributesToVoxels(i, gaussianCols, grid, lookup, minContribution)) {
+                keepIndices.push(i);
+            }
         }
 
-        if (gaussianContributesToVoxels(i, gaussianCols, grid, lookup, minContribution)) {
-            keepIndices.push(i);
-        }
+        const removed = numRows - keepIndices.length;
+        logger.log(`filterFloaters: keeping ${keepIndices.length} of ${numRows} Gaussians (removed ${removed})`);
+
+        if (removed === 0) return dataTable;
+
+        return dataTable.clone({ rows: keepIndices });
+    } catch (e) {
+        ctx?.gpuVoxelization.destroy();
+        logger.progress.cancel();
+        throw e;
     }
-
-    const removed = numRows - keepIndices.length;
-    logger.log(`filterFloaters: keeping ${keepIndices.length} of ${numRows} Gaussians (removed ${removed})`);
-
-    if (removed === 0) return dataTable;
-
-    return dataTable.clone({ rows: keepIndices });
 };
 
 export { filterFloaters };

@@ -179,119 +179,128 @@ const filterCluster = async (
 
     logger.progress.begin(5);
 
-    logger.progress.step('Computing extents');
+    let ctx;
+    try {
+        logger.progress.step('Computing extents');
 
-    const ctx = await setupVoxelFilter(dataTable, createDevice);
+        ctx = await setupVoxelFilter(dataTable, createDevice);
 
-    const clampedResolution = Math.max(0.01, voxelResolution);
-    const blockSize = 4 * clampedResolution;
-    const maxGridExtent = 8192 * clampedResolution;
+        const clampedResolution = Math.max(0.01, voxelResolution);
+        const blockSize = 4 * clampedResolution;
+        const maxGridExtent = 8192 * clampedResolution;
 
-    const sceneExtentX = ctx.sceneBounds.max.x - ctx.sceneBounds.min.x;
-    const sceneExtentY = ctx.sceneBounds.max.y - ctx.sceneBounds.min.y;
-    const sceneExtentZ = ctx.sceneBounds.max.z - ctx.sceneBounds.min.z;
-    const maxSceneExtent = Math.max(sceneExtentX, sceneExtentY, sceneExtentZ);
+        const sceneExtentX = ctx.sceneBounds.max.x - ctx.sceneBounds.min.x;
+        const sceneExtentY = ctx.sceneBounds.max.y - ctx.sceneBounds.min.y;
+        const sceneExtentZ = ctx.sceneBounds.max.z - ctx.sceneBounds.min.z;
+        const maxSceneExtent = Math.max(sceneExtentX, sceneExtentY, sceneExtentZ);
 
-    logger.log(`filterCluster: scene extent ${maxSceneExtent.toFixed(2)}m, voxel resolution ${clampedResolution.toFixed(4)}m`);
+        logger.log(`filterCluster: scene extent ${maxSceneExtent.toFixed(2)}m, voxel resolution ${clampedResolution.toFixed(4)}m`);
 
-    logger.progress.step('Building BVH');
+        logger.progress.step('Building BVH');
 
-    const gridBounds = alignGridBounds(
-        ctx.sceneBounds.min.x, ctx.sceneBounds.min.y, ctx.sceneBounds.min.z,
-        ctx.sceneBounds.max.x, ctx.sceneBounds.max.y, ctx.sceneBounds.max.z,
-        clampedResolution
-    );
+        const gridBounds = alignGridBounds(
+            ctx.sceneBounds.min.x, ctx.sceneBounds.min.y, ctx.sceneBounds.min.z,
+            ctx.sceneBounds.max.x, ctx.sceneBounds.max.y, ctx.sceneBounds.max.z,
+            clampedResolution
+        );
 
-    const clampAxis = (min: number, max: number) => {
-        const extent = max - min;
-        if (extent > maxGridExtent) {
-            const center = (min + max) * 0.5;
-            const half = maxGridExtent * 0.5;
-            return { min: center - half, max: center + half };
-        }
-        return { min, max };
-    };
+        const clampAxis = (min: number, max: number) => {
+            const extent = max - min;
+            if (extent > maxGridExtent) {
+                const center = (min + max) * 0.5;
+                const half = maxGridExtent * 0.5;
+                return { min: center - half, max: center + half };
+            }
+            return { min, max };
+        };
 
-    const cx = clampAxis(gridBounds.min.x, gridBounds.max.x);
-    const cy = clampAxis(gridBounds.min.y, gridBounds.max.y);
-    const cz = clampAxis(gridBounds.min.z, gridBounds.max.z);
-    gridBounds.min.set(cx.min, cy.min, cz.min);
-    gridBounds.max.set(cx.max, cy.max, cz.max);
+        const cx = clampAxis(gridBounds.min.x, gridBounds.max.x);
+        const cy = clampAxis(gridBounds.min.y, gridBounds.max.y);
+        const cz = clampAxis(gridBounds.min.z, gridBounds.max.z);
+        gridBounds.min.set(cx.min, cy.min, cz.min);
+        gridBounds.max.set(cx.max, cy.max, cz.max);
 
-    logger.progress.step('Voxelizing');
+        logger.progress.step('Voxelizing');
 
-    let buffer = await voxelizeToBuffer(
-        ctx.bvh, ctx.gpuVoxelization, gridBounds, clampedResolution, opacityCutoff
-    );
+        let buffer = await voxelizeToBuffer(
+            ctx.bvh, ctx.gpuVoxelization, gridBounds, clampedResolution, opacityCutoff
+        );
 
-    ctx.gpuVoxelization.destroy();
+        ctx.gpuVoxelization.destroy();
+        ctx.gpuVoxelization = null;
 
-    logger.progress.step('Finding cluster');
+        logger.progress.step('Finding cluster');
 
-    const grid = buildBlockGridParams(gridBounds, clampedResolution);
+        const grid = buildBlockGridParams(gridBounds, clampedResolution);
 
-    let seedBx = Math.floor((seed.x - gridBounds.min.x) / blockSize);
-    let seedBy = Math.floor((seed.y - gridBounds.min.y) / blockSize);
-    let seedBz = Math.floor((seed.z - gridBounds.min.z) / blockSize);
+        let seedBx = Math.floor((seed.x - gridBounds.min.x) / blockSize);
+        let seedBy = Math.floor((seed.y - gridBounds.min.y) / blockSize);
+        let seedBz = Math.floor((seed.z - gridBounds.min.z) / blockSize);
 
-    seedBx = Math.max(0, Math.min(seedBx, grid.numBlocksX - 1));
-    seedBy = Math.max(0, Math.min(seedBy, grid.numBlocksY - 1));
-    seedBz = Math.max(0, Math.min(seedBz, grid.numBlocksZ - 1));
+        seedBx = Math.max(0, Math.min(seedBx, grid.numBlocksX - 1));
+        seedBy = Math.max(0, Math.min(seedBy, grid.numBlocksY - 1));
+        seedBz = Math.max(0, Math.min(seedBz, grid.numBlocksZ - 1));
 
-    const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
-    const occupied = new Set<number>([...lookup.solidSet, ...lookup.mixedMap.keys()]);
+        const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+        const occupied = new Set<number>([...lookup.solidSet, ...lookup.mixedMap.keys()]);
 
-    const maxSearchRadius = Math.max(grid.numBlocksX, grid.numBlocksY, grid.numBlocksZ);
-    const nearest = findNearestOccupiedBlock(occupied, seedBx, seedBy, seedBz, maxSearchRadius, grid.numBlocksX, grid.numBlocksY, grid.numBlocksZ);
+        const maxSearchRadius = Math.max(grid.numBlocksX, grid.numBlocksY, grid.numBlocksZ);
+        const nearest = findNearestOccupiedBlock(occupied, seedBx, seedBy, seedBz, maxSearchRadius, grid.numBlocksX, grid.numBlocksY, grid.numBlocksZ);
 
-    if (!nearest) {
-        logger.warn('filterCluster: no occupied blocks found, returning empty result');
-        return dataTable.clone({ rows: [] });
-    }
-
-    if (nearest.bx !== seedBx || nearest.by !== seedBy || nearest.bz !== seedBz) {
-        const worldX = gridBounds.min.x + (nearest.bx + 0.5) * blockSize;
-        const worldY = gridBounds.min.y + (nearest.by + 0.5) * blockSize;
-        const worldZ = gridBounds.min.z + (nearest.bz + 0.5) * blockSize;
-        logger.log(`filterCluster: seed block unoccupied, using nearest at (${worldX.toFixed(2)}, ${worldY.toFixed(2)}, ${worldZ.toFixed(2)})`);
-    }
-
-    const ccSet = findClusterFromSeed(occupied, nearest.bx, nearest.by, nearest.bz, grid.numBlocksX, grid.numBlocksY, grid.numBlocksZ);
-    logger.log(`filterCluster: cluster has ${ccSet.size} blocks out of ${buffer.count} total`);
-
-    if (ccSet.size === buffer.count) {
-        logger.log('filterCluster: all blocks in one cluster, no filtering needed');
-        logger.progress.step();
-        return dataTable;
-    }
-
-    logger.progress.step('Filtering Gaussians');
-
-    const gaussianCols = buildGaussianColumns(ctx);
-    const minContribution = 1 / 255;
-    const keepIndices: number[] = [];
-
-    for (let i = 0; i < numRows; i++) {
-        const px = gaussianCols.posX[i];
-        const py = gaussianCols.posY[i];
-        const pz = gaussianCols.posZ[i];
-
-        if (isCenterInOccupiedVoxel(px, py, pz, grid, lookup, ccSet)) {
-            keepIndices.push(i);
-            continue;
+        if (!nearest) {
+            logger.warn('filterCluster: no occupied blocks found, returning empty result');
+            logger.progress.cancel();
+            return dataTable.clone({ rows: [] });
         }
 
-        if (gaussianContributesToVoxels(i, gaussianCols, grid, lookup, minContribution, ccSet)) {
-            keepIndices.push(i);
+        if (nearest.bx !== seedBx || nearest.by !== seedBy || nearest.bz !== seedBz) {
+            const worldX = gridBounds.min.x + (nearest.bx + 0.5) * blockSize;
+            const worldY = gridBounds.min.y + (nearest.by + 0.5) * blockSize;
+            const worldZ = gridBounds.min.z + (nearest.bz + 0.5) * blockSize;
+            logger.log(`filterCluster: seed block unoccupied, using nearest at (${worldX.toFixed(2)}, ${worldY.toFixed(2)}, ${worldZ.toFixed(2)})`);
         }
+
+        const ccSet = findClusterFromSeed(occupied, nearest.bx, nearest.by, nearest.bz, grid.numBlocksX, grid.numBlocksY, grid.numBlocksZ);
+        logger.log(`filterCluster: cluster has ${ccSet.size} blocks out of ${buffer.count} total`);
+
+        if (ccSet.size === buffer.count) {
+            logger.log('filterCluster: all blocks in one cluster, no filtering needed');
+            logger.progress.step();
+            return dataTable;
+        }
+
+        logger.progress.step('Filtering Gaussians');
+
+        const gaussianCols = buildGaussianColumns(ctx);
+        const minContribution = 1 / 255;
+        const keepIndices: number[] = [];
+
+        for (let i = 0; i < numRows; i++) {
+            const px = gaussianCols.posX[i];
+            const py = gaussianCols.posY[i];
+            const pz = gaussianCols.posZ[i];
+
+            if (isCenterInOccupiedVoxel(px, py, pz, grid, lookup, ccSet)) {
+                keepIndices.push(i);
+                continue;
+            }
+
+            if (gaussianContributesToVoxels(i, gaussianCols, grid, lookup, minContribution, ccSet)) {
+                keepIndices.push(i);
+            }
+        }
+
+        const removed = numRows - keepIndices.length;
+        logger.log(`filterCluster: keeping ${keepIndices.length} of ${numRows} Gaussians (removed ${removed})`);
+
+        if (removed === 0) return dataTable;
+
+        return dataTable.clone({ rows: keepIndices });
+    } catch (e) {
+        ctx?.gpuVoxelization?.destroy();
+        logger.progress.cancel();
+        throw e;
     }
-
-    const removed = numRows - keepIndices.length;
-    logger.log(`filterCluster: keeping ${keepIndices.length} of ${numRows} Gaussians (removed ${removed})`);
-
-    if (removed === 0) return dataTable;
-
-    return dataTable.clone({ rows: keepIndices });
 };
 
 export { filterCluster };
