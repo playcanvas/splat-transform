@@ -3,6 +3,8 @@ import { Vec3 } from 'playcanvas';
 import { Column, DataTable, simplifyGaussians, sortMortonOrder, computeSummary, type SummaryData, convertToSpace } from './data-table';
 import type { DeviceCreator } from './types';
 import { logger, Transform } from './utils';
+import { filterCluster as filterClusterFn } from './voxel/filter-cluster';
+import { filterFloaters as filterFloatersFn } from './voxel/filter-floaters';
 
 /**
  * Translate splats by a 3D vector offset.
@@ -557,8 +559,7 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 if (!options?.createDevice) {
                     throw new Error('filterFloaters requires a createDevice function (GPU voxelization)');
                 }
-                const { filterFloaters } = await import('./voxel/filter-floaters');
-                result = await filterFloaters(
+                result = await filterFloatersFn(
                     result,
                     options.createDevice,
                     processAction.voxelResolution,
@@ -571,8 +572,7 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 if (!options?.createDevice) {
                     throw new Error('filterCluster requires a createDevice function (GPU voxelization)');
                 }
-                const { filterCluster } = await import('./voxel/filter-cluster');
-                result = await filterCluster(
+                result = await filterClusterFn(
                     result,
                     options.createDevice,
                     processAction.voxelResolution,
