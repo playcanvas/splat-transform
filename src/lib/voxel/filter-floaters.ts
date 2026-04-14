@@ -73,7 +73,7 @@ const filterFloaters = async (
         logger.progress.step('Voxelizing');
 
         const buffer = await voxelizeToBuffer(
-            ctx.bvh, ctx.gpuVoxelization, gridBounds, voxelResolution, opacityCutoff
+            ctx.bvh, ctx.gpuVoxelization!, gridBounds, voxelResolution, opacityCutoff
         );
 
         ctx.gpuVoxelization.destroy();

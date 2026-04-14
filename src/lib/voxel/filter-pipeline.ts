@@ -52,8 +52,14 @@ const setupVoxelFilter = async (
     const bvh = new GaussianBVH(pcDataTable, extentsResult.extents);
     const device = await createDevice();
 
-    const gpuVoxelization = new GpuVoxelization(device);
-    gpuVoxelization.uploadAllGaussians(pcDataTable, extentsResult.extents);
+    let gpuVoxelization: GpuVoxelization | null = null;
+    try {
+        gpuVoxelization = new GpuVoxelization(device);
+        gpuVoxelization.uploadAllGaussians(pcDataTable, extentsResult.extents);
+    } catch (e) {
+        gpuVoxelization?.destroy();
+        throw e;
+    }
 
     return { pcDataTable, extentsResult, sceneBounds, bvh, gpuVoxelization };
 };

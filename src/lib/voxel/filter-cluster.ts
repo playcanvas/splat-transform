@@ -237,7 +237,7 @@ const filterCluster = async (
         logger.progress.step('Voxelizing');
 
         const buffer = await voxelizeToBuffer(
-            ctx.bvh, ctx.gpuVoxelization, gridBounds, clampedResolution, opacityCutoff
+            ctx.bvh, ctx.gpuVoxelization!, gridBounds, clampedResolution, opacityCutoff
         );
 
         ctx.gpuVoxelization.destroy();
