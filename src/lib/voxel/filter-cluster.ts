@@ -286,6 +286,9 @@ const filterCluster = async (
 
         if (ccSet.size === buffer.count) {
             logger.log('filterCluster: all blocks in one cluster, no filtering needed');
+            progressComplete = true;
+            logger.progress.step();
+            logger.progress.step();
             return dataTable;
         }
 
