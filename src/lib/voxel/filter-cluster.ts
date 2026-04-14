@@ -195,7 +195,7 @@ const filterCluster = async (
     let ctx: VoxelFilterContext | undefined;
     let progressComplete = false;
     try {
-        logger.progress.step('Computing extents');
+        logger.progress.step('Initializing voxel pipeline');
 
         ctx = await setupVoxelFilter(dataTable, createDevice);
 
@@ -210,7 +210,7 @@ const filterCluster = async (
 
         logger.log(`filterCluster: scene extent ${maxSceneExtent.toFixed(2)}m, voxel resolution ${clampedResolution.toFixed(4)}m`);
 
-        logger.progress.step('Building BVH');
+        logger.progress.step('Aligning grid bounds');
 
         const gridBounds = alignGridBounds(
             ctx.sceneBounds.min.x, ctx.sceneBounds.min.y, ctx.sceneBounds.min.z,

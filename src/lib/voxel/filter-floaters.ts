@@ -54,7 +54,7 @@ const filterFloaters = async (
     let ctx: VoxelFilterContext | undefined;
     let progressComplete = false;
     try {
-        logger.progress.step('Computing extents');
+        logger.progress.step('Initializing voxel pipeline');
 
         ctx = await setupVoxelFilter(dataTable, createDevice);
 
@@ -62,7 +62,7 @@ const filterFloaters = async (
 
         logger.log(`filterFloaters: voxel size ${voxelResolution}m, block size ${blockSize}m, minContribution ${minContribution.toFixed(6)}`);
 
-        logger.progress.step('Building BVH');
+        logger.progress.step('Aligning grid bounds');
 
         const gridBounds = alignGridBounds(
             ctx.sceneBounds.min.x, ctx.sceneBounds.min.y, ctx.sceneBounds.min.z,
