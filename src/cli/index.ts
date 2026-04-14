@@ -547,7 +547,7 @@ GLOBAL OPTIONS
     -O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC input
     -C, --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
     -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
-        --voxel-params     [size,opacity]    Voxel size and opacity threshold for .voxel.json. Default: 0.05,0.1
+        --voxel-params     [size,opacity]   Voxel size and opacity threshold for .voxel.json. Default: 0.05,0.1
         --voxel-external-fill [size]        Fill exterior voxels by dilation from seed. Default size: 1.6
         --voxel-carve-interior [h,r]        Carve navigable interior using capsule flood fill from seed.
                                               Default: height=1.6, radius=0.2
