@@ -70,19 +70,28 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 Actions can be repeated and applied in any order:
 
 ```none
--t, --translate        <x,y,z>          Translate splats by (x, y, z)
--r, --rotate           <x,y,z>          Rotate splats by Euler angles (x, y, z) in degrees
--s, --scale            <factor>         Uniformly scale splats by factor
+-t, --translate        <x,y,z>          Translate Gaussians by (x, y, z)
+-r, --rotate           <x,y,z>          Rotate Gaussians by Euler angles (x, y, z), in degrees
+-s, --scale            <factor>         Uniformly scale Gaussians by factor
 -H, --filter-harmonics <0|1|2|3>        Remove spherical harmonic bands > n
 -N, --filter-nan                        Remove Gaussians with NaN or Inf values
 -B, --filter-box       <x,y,z,X,Y,Z>    Remove Gaussians outside box (min, max corners)
 -S, --filter-sphere    <x,y,z,radius>   Remove Gaussians outside sphere (center, radius)
--V, --filter-value     <name,cmp,value> Keep splats where <name> <cmp> <value>
+-V, --filter-value     <name,cmp,value> Keep Gaussians where <name> <cmp> <value>
                                           cmp ∈ {lt,lte,gt,gte,eq,neq}
--F, --decimate         <n|n%>          Simplify to n splats via progressive pairwise merging
-                                          Use n% to keep a percentage of splats
+                                          opacity, scale_*, f_dc_* use transformed values
+                                          (linear opacity 0-1, linear scale, linear color 0-1).
+                                          Append _raw for raw PLY values (e.g. opacity_raw).
+-F, --decimate         <n|n%>           Simplify to n Gaussians via progressive pairwise merging
+                                          Use n% to keep a percentage of Gaussians
+-G, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel.
+                                          Evaluates each Gaussian at occupied voxel centers.
+                                          Default: size=0.05, opacity=0.1, min=0.004 (1/255)
+-D, --filter-cluster   [x,y,z,res,op]  Keep only the connected cluster at seed (x,y,z).
+                                          GPU-voxelizes at coarse resolution (res world units/voxel).
+                                          Default: seed=(0,0,0), res=1.0, opacity=0.99
 -p, --params           <key=val,...>    Pass parameters to .mjs generator script
--l, --lod              <n>              Specify the level of detail of this model, n >= 0.
+-l, --lod              <n>              Specify the level of detail, n >= 0
 -m, --summary                           Print per-column statistics to stdout
 -M, --morton-order                      Reorder Gaussians by Morton code (Z-order curve)
 ```
@@ -93,17 +102,24 @@ Actions can be repeated and applied in any order:
 -h, --help                              Show this help and exit
 -v, --version                           Show version and exit
 -q, --quiet                             Suppress non-error output
+    --mem                               Show memory usage in progress output
 -w, --overwrite                         Overwrite output file if it exists
 -i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10
--L, --list-gpus                         List all available GPU adapters and exit
+-L, --list-gpus                         List available GPU adapters and exit
 -g, --gpu              <n|cpu>          Select device for SOG compression: GPU adapter index | 'cpu'
 -E, --viewer-settings  <settings.json>  HTML viewer settings JSON file
 -U, --unbundled                         Generate unbundled HTML viewer with separate files
 -O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC input
--C, --lod-chunk-count  <n>              Approx number of Gaussians per LOD chunk in K. Default: 512
--X, --lod-chunk-extent <n>              Approx size of an LOD chunk in world units (m). Default: 16
+-C, --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
+-X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
 -R, --voxel-resolution <n>              Voxel size in world units for .voxel.json. Default: 0.05
 -A, --voxel-opacity-cutoff <n>          Opacity threshold for solid voxels. Default: 0.1
+    --nav-simplify                      Enable nav simplification for voxel output. Default: true
+    --nav-exterior-radius <n>           Exterior fill radius in world units (0 to disable). Default: 1.6 when nav active
+    --nav-capsule      <height,radius>  Capsule dimensions for nav simplification (height=0 disables interior carve). Default: 1.6,0.2
+    --nav-seed         <x,y,z>          Seed position for nav simplification. Default: 0,0,0
+-K, --collision-mesh                    Generate collision mesh (.collision.glb) with voxel output
+    --mesh-simplify-error <n>           Max geometric error for collision mesh simplification as a fraction of voxelResolution. Default: 0.08
 ```
 
 > [!NOTE]
