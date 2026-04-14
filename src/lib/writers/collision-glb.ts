@@ -144,7 +144,7 @@ const buildCollisionMesh = async (
     logger.log(`collision mesh (raw): ${rawMesh.positions.length / 3} vertices, ${rawMesh.indices.length / 3} triangles`);
 
     if (rawMesh.indices.length < 3) {
-        logger.progress.step('Simplifying collision mesh');
+        logger.progress.step('Skipping collision mesh');
         logger.log('collision mesh: no triangles generated, skipping GLB output');
         return null;
     }
