@@ -1,7 +1,8 @@
 import {
     setupVoxelFilter,
     buildGaussianColumns,
-    buildBlockGridParams
+    buildBlockGridParams,
+    type VoxelFilterContext
 } from './filter-pipeline';
 import {
     buildBlockLookup,
@@ -40,7 +41,7 @@ const filterFloaters = async (
 
     logger.progress.begin(4);
 
-    let ctx;
+    let ctx: VoxelFilterContext | undefined;
     try {
         logger.progress.step('Computing extents');
 
@@ -99,7 +100,7 @@ const filterFloaters = async (
 
         return dataTable.clone({ rows: keepIndices });
     } catch (e) {
-        ctx?.gpuVoxelization.destroy();
+        ctx?.gpuVoxelization?.destroy();
         logger.progress.cancel();
         throw e;
     }

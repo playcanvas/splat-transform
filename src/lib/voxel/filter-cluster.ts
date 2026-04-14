@@ -3,7 +3,8 @@ import { Vec3 } from 'playcanvas';
 import {
     setupVoxelFilter,
     buildGaussianColumns,
-    buildBlockGridParams
+    buildBlockGridParams,
+    type VoxelFilterContext
 } from './filter-pipeline';
 import {
     buildBlockLookup,
@@ -179,7 +180,7 @@ const filterCluster = async (
 
     logger.progress.begin(5);
 
-    let ctx;
+    let ctx: VoxelFilterContext | undefined;
     try {
         logger.progress.step('Computing extents');
 
