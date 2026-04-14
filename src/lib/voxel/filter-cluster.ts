@@ -255,7 +255,10 @@ const filterCluster = async (
         seedBz = Math.max(0, Math.min(seedBz, grid.numBlocksZ - 1));
 
         const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
-        const occupied = new Set<number>([...lookup.solidSet, ...lookup.mixedMap.keys()]);
+        const occupied = new Set<number>(lookup.solidSet);
+        for (const key of lookup.mixedMap.keys()) {
+            occupied.add(key);
+        }
 
         const maxSearchRadius = Math.max(grid.numBlocksX, grid.numBlocksY, grid.numBlocksZ);
         const nearest = findNearestOccupiedBlock(occupied, seedBx, seedBy, seedBz, maxSearchRadius, grid.numBlocksX, grid.numBlocksY, grid.numBlocksZ);
