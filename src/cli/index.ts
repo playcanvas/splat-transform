@@ -81,12 +81,10 @@ const cliOptionsConfig = {
     'lod-chunk-count': { type: 'string', short: 'C', default: '512' },
     'lod-chunk-extent': { type: 'string', short: 'X', default: '16' },
     unbundled: { type: 'boolean', short: 'U', default: false },
-    'voxel-resolution': { type: 'string', short: 'R', default: '0.05' },
-    'voxel-opacity-cutoff': { type: 'string', short: 'A', default: '0.1' },
-    'nav-simplify': { type: 'boolean', default: true },
-    'nav-exterior-radius': { type: 'string', default: '' },
-    'nav-capsule': { type: 'string', default: '' },
-    'nav-seed': { type: 'string', default: '' },
+    'voxel-params': { type: 'string', default: '' },
+    'voxel-external-fill': { type: 'string' },
+    'voxel-carve-interior': { type: 'string' },
+    'seed-pos': { type: 'string', default: '' },
     'collision-mesh': { type: 'boolean', short: 'K', default: false },
     'mesh-simplify-error': { type: 'string', default: '' },
 
@@ -114,7 +112,9 @@ const stringOptionNames = new Set(Object.entries(cliOptionsConfig)
 );
 
 const optionalValueOptions = new Set([
-    '--filter-cluster', '-D', '--filter-floaters', '-G'
+    '--filter-cluster', '-D', '--filter-floaters', '-G',
+    '--voxel-external-fill', '--voxel-carve-interior',
+    '--voxel-params'
 ]);
 
 const isNumericValue = (s: string) => /^-?\d[\d.,e+-]*$/.test(s);
@@ -122,8 +122,8 @@ const isNumericValue = (s: string) => /^-?\d[\d.,e+-]*$/.test(s);
 /**
  * Normalize argv so that all string options use the `=` form (`--option=value`).
  * This prevents parseArgs from misinterpreting negative numeric values (e.g.
- * `-0.5,0,0`) as flags. Optional-value options (`--filter-cluster`,
- * `--filter-floaters`) get an empty `=` when no value is provided.
+ * `-0.5,0,0`) as flags. Optional-value options (e.g. `--filter-cluster`,
+ * `--voxel-external-fill`) get an empty `=` when no value is provided.
  *
  * @param args - Raw command-line arguments (process.argv.slice(2)).
  * @returns Normalized argument array.
@@ -225,32 +225,49 @@ const parseArguments = async () => {
 
     const viewerSettingsPath = v['viewer-settings'];
 
-    // Parse nav simplification options
-    const navCapsuleStr = v['nav-capsule'];
-    const navSeedStr = v['nav-seed'];
-    const navSimplify = v['nav-simplify'];
-    let navCapsule: { height: number; radius: number } | undefined;
-    let navSeed: { x: number; y: number; z: number } | undefined;
+    // Parse voxel processing options
+    const voxelParamsStr = v['voxel-params'];
+    const externalFillStr = v['voxel-external-fill'];
+    const carveInteriorStr = v['voxel-carve-interior'];
+    const seedPosStr = v['seed-pos'];
 
-    if (navSimplify) {
-        if (navCapsuleStr) {
-            const [height, radius] = parseVec(navCapsuleStr, 2);
+    let voxelResolution = 0.05;
+    let opacityCutoff = 0.1;
+    if (voxelParamsStr) {
+        const parts = voxelParamsStr.split(',').map((p: string) => p.trim());
+        if (parts.length >= 1 && parts[0] !== '') {
+            voxelResolution = parseNumber(parts[0], 0);
+        }
+        if (parts.length >= 2) {
+            opacityCutoff = parseNumber(parts[1], 0);
+        }
+    }
+
+    let navExteriorRadius: number | undefined;
+    if (externalFillStr !== undefined) {
+        navExteriorRadius = externalFillStr ? parseNumber(externalFillStr, 0) : 1.6;
+    }
+
+    let navCapsule: { height: number; radius: number } | undefined;
+    if (carveInteriorStr !== undefined) {
+        if (carveInteriorStr) {
+            const [height, radius] = parseVec(carveInteriorStr, 2);
             if (height < 0 || radius < 0) {
-                throw new Error(`Invalid nav-capsule value: ${navCapsuleStr}. Height and radius must be >= 0`);
+                throw new Error(`Invalid voxel-carve-interior value: ${carveInteriorStr}. Height and radius must be >= 0`);
             }
             navCapsule = { height, radius };
         } else {
             navCapsule = { height: 1.6, radius: 0.2 };
         }
-        if (navSeedStr) {
-            const [x, y, z] = parseVec(navSeedStr, 3);
-            navSeed = { x, y, z };
-        } else {
-            navSeed = { x: 0, y: 0, z: 0 };
-        }
+    }
+    let navSeed: { x: number; y: number; z: number };
+    if (seedPosStr) {
+        const [x, y, z] = parseVec(seedPosStr, 3);
+        navSeed = { x, y, z };
+    } else {
+        navSeed = { x: 0, y: 0, z: 0 };
     }
 
-    const navExteriorRadius = v['nav-exterior-radius'] ? parseNumber(v['nav-exterior-radius'], 0) : undefined;
     const meshSimplifyError = v['mesh-simplify-error'] ? parseNumber(v['mesh-simplify-error'], 0) : undefined;
 
     const options: CliOptions = {
@@ -267,9 +284,8 @@ const parseArguments = async () => {
         unbundled: v.unbundled,
         lodChunkCount: parseInteger(v['lod-chunk-count']),
         lodChunkExtent: parseInteger(v['lod-chunk-extent']),
-        voxelResolution: parseNumber(v['voxel-resolution']),
-        opacityCutoff: parseNumber(v['voxel-opacity-cutoff']),
-        navSimplify,
+        voxelResolution,
+        opacityCutoff,
         navExteriorRadius,
         navCapsule,
         navSeed,
@@ -437,19 +453,15 @@ const parseArguments = async () => {
                     const fcAction: FilterCluster = { kind: 'filterCluster' };
                     if (t.value) {
                         const parts = t.value.split(',').map((p: string) => p.trim());
-                        if (parts.length >= 3) {
-                            fcAction.seed = new Vec3(
-                                parseNumber(parts[0]),
-                                parseNumber(parts[1]),
-                                parseNumber(parts[2])
-                            );
+                        if (parts.length >= 1 && parts[0] !== '') {
+                            fcAction.voxelResolution = parseNumber(parts[0]);
                         }
-                        if (parts.length >= 4 && parts[3] !== '') {
-                            fcAction.voxelResolution = parseNumber(parts[3]);
+                        if (parts.length >= 2) {
+                            fcAction.opacityCutoff = parseNumber(parts[1]);
                         }
-                        if (parts.length >= 5) {
-                            fcAction.opacityCutoff = parseNumber(parts[4]);
-                        }
+                    }
+                    if (navSeed) {
+                        fcAction.seed = new Vec3(navSeed.x, navSeed.y, navSeed.z);
                     }
                     current.processActions.push(fcAction);
                     break;
@@ -513,9 +525,9 @@ ACTIONS (can be repeated, in any order)
     -G, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel.
                                               Evaluates each Gaussian at occupied voxel centers.
                                               Default: size=0.05, opacity=0.1, min=0.004 (1/255)
-    -D, --filter-cluster   [x,y,z,res,op]   Keep only the connected cluster at seed (x,y,z).
+    -D, --filter-cluster   [res,op]         Keep only the connected cluster at --seed-pos.
                                               GPU-voxelizes at coarse resolution (res world units/voxel).
-                                              Default: seed=(0,0,0), res=1.0, opacity=0.99
+                                              Default: res=1.0, opacity=0.99
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
     -l, --lod              <n>              Specify the level of detail, n >= 0
     -m, --summary                           Print per-column statistics to stdout
@@ -535,12 +547,11 @@ GLOBAL OPTIONS
     -O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC input
     -C, --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
     -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
-    -R, --voxel-resolution <n>              Voxel size in world units for .voxel.json. Default: 0.05
-    -A, --voxel-opacity-cutoff <n>          Opacity threshold for solid voxels. Default: 0.1
-        --nav-simplify                      Enable nav simplification for voxel output. Default: true
-        --nav-exterior-radius <n>           Exterior fill radius in world units (0 to disable). Default: 1.6 when nav active
-        --nav-capsule      <height,radius>  Capsule dimensions for nav simplification (height=0 disables interior carve). Default: 1.6,0.2
-        --nav-seed         <x,y,z>          Seed position for nav simplification. Default: 0,0,0
+        --voxel-params     [size,opacity]    Voxel size and opacity threshold for .voxel.json. Default: 0.05,0.1
+        --voxel-external-fill [size]        Fill exterior voxels by dilation from seed. Default size: 1.6
+        --voxel-carve-interior [h,r]        Carve navigable interior using capsule flood fill from seed.
+                                              Default: height=1.6, radius=0.2
+        --seed-pos         <x,y,z>          Seed position for voxel processing and --filter-cluster. Default: 0,0,0
     -K, --collision-mesh                    Generate collision mesh (.collision.glb) with voxel output
         --mesh-simplify-error <n>           Max geometric error for collision mesh simplification as a fraction of voxelResolution. Default: 0.08
 
@@ -567,10 +578,13 @@ EXAMPLES
     splat-transform -K input.ply output.voxel.json
 
     # Generate voxel data with custom resolution and opacity threshold
-    splat-transform -R 0.1 -A 0.3 input.ply output.voxel.json
+    splat-transform --voxel-params 0.1,0.3 input.ply output.voxel.json
 
-    # Generate voxel data with nav simplification disabled
-    splat-transform --no-nav-simplify input.ply output.voxel.json
+    # Generate voxel data with exterior fill and interior carve
+    splat-transform --voxel-external-fill --voxel-carve-interior input.ply output.voxel.json
+
+    # Generate voxel data with custom seed position and carve parameters
+    splat-transform --seed-pos 1,0,0 --voxel-carve-interior 2.0,0.3 input.ply output.voxel.json
 
     # Print statistical summary, then write output
     splat-transform bunny.ply --summary output.ply

@@ -34,13 +34,13 @@ type WriteVoxelOptions = {
     /** Optional function to create a GPU device for voxelization */
     createDevice?: DeviceCreator;
 
-    /** Exterior fill radius in world units. Set to 0 to disable exterior fill. Defaults to 1.6 when nav simplification is active. Requires navSeed to be set; ignored without it. */
+    /** Exterior fill radius in world units. Enables exterior fill when set. Requires navSeed; ignored without it. */
     navExteriorRadius?: number;
 
-    /** Capsule dimensions for navigation simplification. Height of 0 disables interior carve. When height > 0, only voxels contactable from the seed are kept. */
+    /** Capsule dimensions for interior carve. Height of 0 disables interior carve. When height > 0, only voxels contactable from the seed are kept. Requires navSeed. */
     navCapsule?: { height: number; radius: number };
 
-    /** Seed position in world space for navigation flood fill. Required when navCapsule is set with height > 0. */
+    /** Seed position in world space for exterior fill and interior carve flood fill. */
     navSeed?: NavSeed;
 
     /** Whether to generate a collision mesh (.collision.glb) alongside the voxel data. Default: false */
@@ -186,10 +186,8 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     if (navCapsule && !navSeed) {
         logger.warn('writeVoxel: navCapsule requires navSeed for interior nav carving, skipping nav carving');
     }
-    const hasNavBase = !!(navCapsule && navSeed);
-    const hasNav = hasNavBase && navCapsule!.height > 0;
-    const exteriorRadius = hasNav ? (navExteriorRadius ?? 1.6) : navExteriorRadius;
-    const hasFillExterior = !!(exteriorRadius && navSeed);
+    const hasNav = !!(navCapsule && navSeed && navCapsule.height > 0);
+    const hasFillExterior = !!(navExteriorRadius && navSeed);
     let stepCount = 5;
     if (collisionMesh) stepCount += 2;
     if (hasFillExterior) stepCount += 1;
@@ -247,7 +245,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         logger.progress.step('Fill exterior');
         const fillResult = fillExterior(
             buffer, gridBounds, voxelResolution,
-            exteriorRadius!, navSeed!
+            navExteriorRadius!, navSeed!
         );
         buffer = fillResult.buffer;
         gridBounds = fillResult.gridBounds;
