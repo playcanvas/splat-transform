@@ -38,6 +38,12 @@ const setupVoxelFilter = async (
     ];
     const delta = computeWriteTransform(dataTable.transform, Transform.IDENTITY);
     const cols = transformColumns(dataTable, voxelColumns, delta);
+
+    const missing = voxelColumns.filter(name => !cols.has(name));
+    if (missing.length > 0) {
+        throw new Error(`setupVoxelFilter: input DataTable is missing required columns: ${missing.join(', ')}`);
+    }
+
     const pcDataTable = new DataTable(voxelColumns.map(name => new Column(name, cols.get(name)!)));
 
     const extentsResult = computeGaussianExtents(pcDataTable);

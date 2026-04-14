@@ -177,6 +177,16 @@ const filterCluster = async (
     opacityCutoff: number = 0.99,
     minContribution: number = 1 / 255
 ): Promise<DataTable> => {
+    if (!Number.isFinite(voxelResolution) || voxelResolution <= 0) {
+        throw new Error(`filterCluster: voxelResolution must be a positive finite number, got ${voxelResolution}`);
+    }
+    if (!Number.isFinite(opacityCutoff) || opacityCutoff < 0 || opacityCutoff > 1) {
+        throw new Error(`filterCluster: opacityCutoff must be a finite number in [0, 1], got ${opacityCutoff}`);
+    }
+    if (!Number.isFinite(minContribution) || minContribution < 0) {
+        throw new Error(`filterCluster: minContribution must be a non-negative finite number, got ${minContribution}`);
+    }
+
     const numRows = dataTable.numRows;
     if (numRows === 0) return dataTable;
 
