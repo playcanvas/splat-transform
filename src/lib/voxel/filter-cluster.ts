@@ -222,7 +222,7 @@ const filterCluster = async (
 
         logger.progress.step('Voxelizing');
 
-        let buffer = await voxelizeToBuffer(
+        const buffer = await voxelizeToBuffer(
             ctx.bvh, ctx.gpuVoxelization, gridBounds, clampedResolution, opacityCutoff
         );
 
