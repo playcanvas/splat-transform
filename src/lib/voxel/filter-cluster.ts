@@ -190,9 +190,10 @@ const filterCluster = async (
     const numRows = dataTable.numRows;
     if (numRows === 0) return dataTable;
 
-    logger.progress.begin(5);
+    logger.progress.begin(6);
 
     let ctx: VoxelFilterContext | undefined;
+    let progressComplete = false;
     try {
         logger.progress.step('Computing extents');
 
@@ -260,12 +261,16 @@ const filterCluster = async (
             occupied.add(key);
         }
 
+        if (occupied.size === 0) {
+            logger.warn('filterCluster: no occupied blocks found, returning empty result');
+            return dataTable.clone({ rows: [] });
+        }
+
         const maxSearchRadius = Math.max(grid.numBlocksX, grid.numBlocksY, grid.numBlocksZ);
         const nearest = findNearestOccupiedBlock(occupied, seedBx, seedBy, seedBz, maxSearchRadius, grid.numBlocksX, grid.numBlocksY, grid.numBlocksZ);
 
         if (!nearest) {
             logger.warn('filterCluster: no occupied blocks found, returning empty result');
-            logger.progress.cancel();
             return dataTable.clone({ rows: [] });
         }
 
@@ -281,7 +286,6 @@ const filterCluster = async (
 
         if (ccSet.size === buffer.count) {
             logger.log('filterCluster: all blocks in one cluster, no filtering needed');
-            logger.progress.step();
             return dataTable;
         }
 
@@ -308,13 +312,19 @@ const filterCluster = async (
         const removed = numRows - keepIndices.length;
         logger.log(`filterCluster: keeping ${keepIndices.length} of ${numRows} Gaussians (removed ${removed})`);
 
+        progressComplete = true;
+        logger.progress.step();
+
         if (removed === 0) return dataTable;
 
         return dataTable.clone({ rows: keepIndices });
     } catch (e) {
         ctx?.gpuVoxelization?.destroy();
-        logger.progress.cancel();
         throw e;
+    } finally {
+        if (!progressComplete) {
+            logger.progress.cancel();
+        }
     }
 };
 

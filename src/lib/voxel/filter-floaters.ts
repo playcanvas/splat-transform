@@ -49,9 +49,10 @@ const filterFloaters = async (
     const numRows = dataTable.numRows;
     if (numRows === 0) return dataTable;
 
-    logger.progress.begin(4);
+    logger.progress.begin(5);
 
     let ctx: VoxelFilterContext | undefined;
+    let progressComplete = false;
     try {
         logger.progress.step('Computing extents');
 
@@ -106,13 +107,19 @@ const filterFloaters = async (
         const removed = numRows - keepIndices.length;
         logger.log(`filterFloaters: keeping ${keepIndices.length} of ${numRows} Gaussians (removed ${removed})`);
 
+        progressComplete = true;
+        logger.progress.step();
+
         if (removed === 0) return dataTable;
 
         return dataTable.clone({ rows: keepIndices });
     } catch (e) {
         ctx?.gpuVoxelization?.destroy();
-        logger.progress.cancel();
         throw e;
+    } finally {
+        if (!progressComplete) {
+            logger.progress.cancel();
+        }
     }
 };
 
