@@ -1,7 +1,7 @@
 import { TypedArray } from '../data-table';
 
 /**
- * Partition indices around the k-th largest element using quickselect
+ * Partition indices around the k-th smallest element using quickselect
  * (median-of-three pivot selection).
  *
  * After this call, `idx[k]` holds the index of the k-th smallest value

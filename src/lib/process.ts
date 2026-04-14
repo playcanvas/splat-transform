@@ -424,12 +424,16 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                     'eq': (row: any) => row[columnName] === value,
                     'neq': (row: any) => row[columnName] !== value
                 };
-                const predicate = Predicates[comparator] ?? ((row: any) => true);
+                const predicate = Predicates[comparator as keyof typeof Predicates];
+                if (!predicate) {
+                    throw new Error(`filterByValue: unknown comparator '${comparator}', expected one of: ${Object.keys(Predicates).join(', ')}`);
+                }
                 result = filter(result, predicate);
                 break;
             }
             case 'filterBands': {
-                const inputBands = { '9': 1, '24': 2, '-1': 3 }[shNames.findIndex(v => !dataTable.hasColumn(v))] ?? 0;
+                const currentTable = result;
+                const inputBands = { '9': 1, '24': 2, '-1': 3 }[shNames.findIndex(v => !currentTable.hasColumn(v))] ?? 0;
                 const outputBands = processAction.value;
 
                 if (outputBands < inputBands) {
