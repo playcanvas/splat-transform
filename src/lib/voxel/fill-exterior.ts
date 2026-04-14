@@ -58,7 +58,7 @@ const fillExterior = (
     const nby = ny >> 2;
     const nbz = nz >> 2;
 
-    logger.progress.begin(10);
+    logger.progress.begin(4);
     let progressComplete = false;
 
     try {

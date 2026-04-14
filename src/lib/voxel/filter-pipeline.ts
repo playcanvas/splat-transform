@@ -13,7 +13,7 @@ interface VoxelFilterContext {
     extentsResult: GaussianExtentsResult;
     sceneBounds: Bounds;
     bvh: GaussianBVH;
-    gpuVoxelization: GpuVoxelization;
+    gpuVoxelization: GpuVoxelization | null;
 }
 
 /**
