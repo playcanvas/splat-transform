@@ -1,7 +1,7 @@
 import { GraphicsDevice } from 'playcanvas';
 
 import { KdTree } from './kd-tree';
-import { Column, DataTable } from '../data-table/data-table';
+import { Column, DataTable } from '../data-table';
 import { GpuClustering } from '../gpu';
 import { logger } from '../utils';
 
