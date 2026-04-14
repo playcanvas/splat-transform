@@ -87,9 +87,9 @@ Actions can be repeated and applied in any order:
 -G, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel.
                                           Evaluates each Gaussian at occupied voxel centers.
                                           Default: size=0.05, opacity=0.1, min=0.004 (1/255)
--D, --filter-cluster   [x,y,z,res,op]  Keep only the connected cluster at seed (x,y,z).
+-D, --filter-cluster   [res,op,min]     Keep only the connected cluster at --seed-pos.
                                           GPU-voxelizes at coarse resolution (res world units/voxel).
-                                          Default: seed=(0,0,0), res=1.0, opacity=0.99
+                                          Default: res=1.0, opacity=0.99, min=0.004 (1/255)
 -p, --params           <key=val,...>    Pass parameters to .mjs generator script
 -l, --lod              <n>              Specify the level of detail, n >= 0
 -m, --summary                           Print per-column statistics to stdout
