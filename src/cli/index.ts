@@ -82,7 +82,7 @@ const cliOptionsConfig = {
     'lod-chunk-extent': { type: 'string', short: 'X', default: '16' },
     unbundled: { type: 'boolean', short: 'U', default: false },
     'voxel-resolution': { type: 'string', short: 'R', default: '0.05' },
-    'opacity-cutoff': { type: 'string', short: 'A', default: '0.1' },
+    'voxel-opacity-cutoff': { type: 'string', short: 'A', default: '0.1' },
     'nav-simplify': { type: 'boolean', default: true },
     'nav-exterior-radius': { type: 'string', default: '' },
     'nav-capsule': { type: 'string', default: '' },
@@ -268,7 +268,7 @@ const parseArguments = async () => {
         lodChunkCount: parseInteger(v['lod-chunk-count']),
         lodChunkExtent: parseInteger(v['lod-chunk-extent']),
         voxelResolution: parseNumber(v['voxel-resolution']),
-        opacityCutoff: parseNumber(v['opacity-cutoff']),
+        opacityCutoff: parseNumber(v['voxel-opacity-cutoff']),
         navSimplify,
         navExteriorRadius,
         navCapsule,
@@ -536,7 +536,7 @@ GLOBAL OPTIONS
     -C, --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
     -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
     -R, --voxel-resolution <n>              Voxel size in world units for .voxel.json. Default: 0.05
-    -A, --opacity-cutoff   <n>              Opacity threshold for solid voxels. Default: 0.1
+    -A, --voxel-opacity-cutoff <n>          Opacity threshold for solid voxels. Default: 0.1
         --nav-simplify                      Enable nav simplification for voxel output. Default: true
         --nav-exterior-radius <n>           Exterior fill radius in world units (0 to disable). Default: 1.6 when nav active
         --nav-capsule      <height,radius>  Capsule dimensions for nav simplification (height=0 disables interior carve). Default: 1.6,0.2
