@@ -23,7 +23,7 @@ type Options = {
     /** Size of each voxel in world units for voxel output. Default: 0.05 */
     voxelResolution?: number;
 
-    /** Opacity threshold for solid voxels - voxels below this are considered empty. Default: 0.1 */
+    /** Opacity threshold for solid voxels - voxels below this are considered empty. Default: 0.5 */
     opacityCutoff?: number;
 
     /** Exterior fill radius in world units. Enables exterior fill when set. Requires navSeed. */
