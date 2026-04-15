@@ -75,7 +75,8 @@ const buildInvertedGrid = (
 /**
  * Find the connected component of occupied voxels reachable from a seed
  * position via 6-connected voxel-level flood fill. Returns the set of block
- * linear indices that contain at least one reachable voxel.
+ * linear indices that contain at least one reachable voxel, the visited grid,
+ * and the resolved seed position.
  *
  * If the seed voxel is not occupied, finds the nearest occupied voxel first.
  *
@@ -86,13 +87,13 @@ const buildInvertedGrid = (
  * @param seedIx - Seed voxel X coordinate.
  * @param seedIy - Seed voxel Y coordinate.
  * @param seedIz - Seed voxel Z coordinate.
- * @returns Object with ccSet (block indices in cluster) and the resolved seed, or null if no occupied voxel found.
+ * @returns Object with ccSet, visited grid, and the resolved seed, or null if no occupied voxel found.
  */
 const findClusterVoxelFlood = (
     buffer: BlockMaskBuffer,
     nx: number, ny: number, nz: number,
     seedIx: number, seedIy: number, seedIz: number
-): { ccSet: Set<number>; resolvedSeed: { ix: number; iy: number; iz: number } } | null => {
+): { ccSet: Set<number>; visited: SparseVoxelGrid; resolvedSeed: { ix: number; iy: number; iz: number } } | null => {
     const blocked = buildInvertedGrid(buffer, nx, ny, nz);
     const nbx = nx >> 2;
     const bStride = nbx * (ny >> 2);
@@ -129,7 +130,7 @@ const findClusterVoxelFlood = (
         }
     }
 
-    return { ccSet, resolvedSeed: { ix: seedIx, iy: seedIy, iz: seedIz } };
+    return { ccSet, visited, resolvedSeed: { ix: seedIx, iy: seedIy, iz: seedIz } };
 };
 
 /**
@@ -239,7 +240,7 @@ const filterCluster = async (
             return dataTable.clone({ rows: [] });
         }
 
-        const { ccSet, resolvedSeed } = floodResult;
+        const { ccSet, visited: visitedGrid, resolvedSeed } = floodResult;
         if (resolvedSeed.ix !== seedIx || resolvedSeed.iy !== seedIy || resolvedSeed.iz !== seedIz) {
             const worldX = gridBounds.min.x + (resolvedSeed.ix + 0.5) * clampedResolution;
             const worldY = gridBounds.min.y + (resolvedSeed.iy + 0.5) * clampedResolution;
@@ -248,7 +249,15 @@ const filterCluster = async (
         }
         logger.log(`filterCluster: cluster has ${ccSet.size} blocks out of ${buffer.count} total`);
 
-        const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+        const nbx = grid.numBlocksX;
+        const nby = grid.numBlocksY;
+        const nbz = grid.numBlocksZ;
+
+        // Build lookup from visited voxels only (not all original voxels in ccSet blocks).
+        // Every visited voxel is originally-occupied (the BFS only traverses through them),
+        // so the visited grid is a correct subset of the original buffer.
+        const visitedBuffer = visitedGrid.toBuffer(0, 0, 0, nbx, nby, nbz);
+        const lookup = buildBlockLookup(visitedBuffer, grid.strideY, grid.strideZ);
 
         if (ccSet.size === buffer.count) {
             logger.log('filterCluster: all blocks in one cluster, no filtering needed');
@@ -268,12 +277,12 @@ const filterCluster = async (
             const py = gaussianCols.posY[i];
             const pz = gaussianCols.posZ[i];
 
-            if (isCenterInOccupiedVoxel(px, py, pz, grid, lookup, ccSet)) {
+            if (isCenterInOccupiedVoxel(px, py, pz, grid, lookup)) {
                 keepIndices.push(i);
                 continue;
             }
 
-            if (gaussianContributesToVoxels(i, gaussianCols, grid, lookup, minContribution, ccSet)) {
+            if (gaussianContributesToVoxels(i, gaussianCols, grid, lookup, minContribution)) {
                 keepIndices.push(i);
             }
         }
@@ -297,4 +306,4 @@ const filterCluster = async (
     }
 };
 
-export { filterCluster };
+export { buildInvertedGrid, findClusterVoxelFlood, filterCluster };
