@@ -29,6 +29,9 @@ type Options = {
     /** Exterior fill radius in world units. Enables exterior fill when set. Requires navSeed. */
     navExteriorRadius?: number;
 
+    /** Floor fill dilation radius in world units. Fills below floor surface to block outdoor edges. Enables floor fill when set. */
+    navFloorRadius?: number;
+
     /** Capsule dimensions for interior carve. Height of 0 disables interior carve. Requires navSeed. */
     navCapsule?: { height: number; radius: number };
 

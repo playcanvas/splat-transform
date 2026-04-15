@@ -11,6 +11,7 @@ import {
     alignGridBounds,
     carveInterior,
     fillExterior,
+    fillFloor,
     type NavSeed,
     voxelizeToBuffer
 } from '../voxel';
@@ -42,6 +43,9 @@ type WriteVoxelOptions = {
 
     /** Seed position in world space for exterior fill and interior carve flood fill. */
     navSeed?: NavSeed;
+
+    /** Floor fill dilation radius in world units. Fills below the floor surface and fills no-floor columns entirely with solid. Enables floor fill when set. */
+    navFloorRadius?: number;
 
     /** Whether to generate a collision mesh (.collision.glb) alongside the voxel data. Default: false */
     collisionMesh?: boolean;
@@ -173,6 +177,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         opacityCutoff = 0.1,
         createDevice,
         navExteriorRadius,
+        navFloorRadius,
         navCapsule,
         navSeed,
         collisionMesh = false,
@@ -188,9 +193,11 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     }
     const hasNav = !!(navCapsule && navSeed && navCapsule.height > 0);
     const hasFillExterior = !!(navExteriorRadius && navSeed);
+    const hasFloorFill = !!navFloorRadius;
     let stepCount = 5;
     if (collisionMesh) stepCount += 2;
     if (hasFillExterior) stepCount += 1;
+    if (hasFloorFill) stepCount += 1;
     if (hasNav) stepCount += 1;
     logger.progress.begin(stepCount);
 
@@ -252,6 +259,16 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             );
             buffer = fillResult.buffer;
             gridBounds = fillResult.gridBounds;
+        }
+
+        if (hasFloorFill) {
+            logger.progress.step('Fill floor');
+            const floorResult = fillFloor(
+                buffer, gridBounds, voxelResolution,
+                navFloorRadius!
+            );
+            buffer = floorResult.buffer;
+            gridBounds = floorResult.gridBounds;
         }
 
         if (hasNav) {

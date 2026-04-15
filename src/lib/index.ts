@@ -48,7 +48,7 @@ export { writeSog, writePly, writeCompressedPly, writeCsv, writeHtml, writeLod, 
 export type { WriteVoxelOptions, VoxelMetadata } from './writers';
 
 // Voxel
-export { carveInterior, fillExterior, filterCluster, filterFloaters, voxelizeToBuffer } from './voxel';
+export { carveInterior, fillExterior, fillFloor, filterCluster, filterFloaters, voxelizeToBuffer } from './voxel';
 export type { NavSeed, NavSimplifyResult } from './voxel';
 
 // Types
