@@ -1,6 +1,6 @@
 import { Column, DataTable } from './data-table';
 import { KdTree } from '../spatial/kd-tree';
-import { logger } from '../utils/logger.js';
+import { logger } from '../utils';
 
 const TWO_PI_POW_1_5 = Math.pow(2 * Math.PI, 1.5);
 const LOG2PI = Math.log(2 * Math.PI);

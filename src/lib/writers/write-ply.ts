@@ -1,7 +1,7 @@
-import { convertToSpace } from '../data-table/transform';
+import { convertToSpace } from '../data-table';
 import { type FileSystem } from '../io/write';
-import { PlyData } from '../readers/read-ply';
-import { Transform } from '../utils/math';
+import { PlyData } from '../readers';
+import { Transform } from '../utils';
 
 const columnTypeToPlyType = (type: string): string => {
     switch (type) {

@@ -1,6 +1,6 @@
 import { lstat, mkdir, readFile as pathReadFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
-import { exit, hrtime } from 'node:process';
+import process, { exit, hrtime } from 'node:process';
 import { parseArgs } from 'node:util';
 
 import { GraphicsDevice, Vec3 } from 'playcanvas';
@@ -17,6 +17,8 @@ import {
     writeFile,
     processDataTable,
     type ProcessAction,
+    type FilterFloaters,
+    type FilterCluster,
     type Options as LibOptions,
     logger
 } from '../lib/index';
@@ -64,51 +66,107 @@ type File = {
     processActions: ProcessAction[];
 };
 
+const cliOptionsConfig = {
+    // global options
+    overwrite: { type: 'boolean', short: 'w', default: false },
+    help: { type: 'boolean', short: 'h', default: false },
+    version: { type: 'boolean', short: 'v', default: false },
+    quiet: { type: 'boolean', short: 'q', default: false },
+    mem: { type: 'boolean', default: false },
+    iterations: { type: 'string', short: 'i', default: '10' },
+    'list-gpus': { type: 'boolean', short: 'L', default: false },
+    gpu: { type: 'string', short: 'g', default: '-1' },
+    'lod-select': { type: 'string', short: 'O', default: '' },
+    'viewer-settings': { type: 'string', short: 'E', default: '' },
+    'lod-chunk-count': { type: 'string', short: 'C', default: '512' },
+    'lod-chunk-extent': { type: 'string', short: 'X', default: '16' },
+    unbundled: { type: 'boolean', short: 'U', default: false },
+    'voxel-params': { type: 'string', default: '' },
+    'voxel-external-fill': { type: 'string' },
+    'voxel-interior-carve': { type: 'string' },
+    'seed-pos': { type: 'string', default: '' },
+    'collision-mesh': { type: 'boolean', short: 'K', default: false },
+    'mesh-simplify-error': { type: 'string', default: '' },
+
+    // per-file options
+    translate: { type: 'string', short: 't', multiple: true },
+    rotate: { type: 'string', short: 'r', multiple: true },
+    scale: { type: 'string', short: 's', multiple: true },
+    'filter-nan': { type: 'boolean', short: 'N', multiple: true },
+    'filter-value': { type: 'string', short: 'V', multiple: true },
+    'filter-harmonics': { type: 'string', short: 'H', multiple: true },
+    'filter-box': { type: 'string', short: 'B', multiple: true },
+    'filter-sphere': { type: 'string', short: 'S', multiple: true },
+    'decimate': { type: 'string', short: 'F', multiple: true },
+    'filter-cluster': { type: 'string', short: 'D', multiple: true },
+    'filter-floaters': { type: 'string', short: 'G', multiple: true },
+    params: { type: 'string', short: 'p', multiple: true },
+    lod: { type: 'string', short: 'l', multiple: true },
+    summary: { type: 'boolean', short: 'm', multiple: true },
+    'morton-order': { type: 'boolean', short: 'M', multiple: true }
+} as const;
+
+const stringOptionNames = new Set(Object.entries(cliOptionsConfig)
+.filter(([, v]) => v.type === 'string')
+.flatMap(([name, v]) => [`--${name}`, ...('short' in v ? [`-${v.short}`] : [])])
+);
+
+const optionalValueOptions = new Set([
+    '--filter-cluster', '-D', '--filter-floaters', '-G',
+    '--voxel-external-fill', '--voxel-interior-carve',
+    '--voxel-params'
+]);
+
+const isNumericValue = (s: string) => /^-?\d[\d.,e+-]*$/.test(s);
+
+const shortToLong = new Map<string, string>(
+    Object.entries(cliOptionsConfig)
+    .filter(([, v]) => 'short' in v)
+    .map(([name, v]) => [`-${(v as { short: string }).short}`, `--${name}`])
+);
+
+/**
+ * Normalize argv so that all string options use the long `=` form
+ * (`--option=value`). This prevents parseArgs from misinterpreting negative
+ * numeric values (e.g. `-0.5,0,0`) as flags. Short-form flags are converted
+ * to long form because parseArgs only treats `=` as a separator for long
+ * options. Optional-value options (e.g. `--filter-cluster`,
+ * `--voxel-external-fill`) get an empty `=` when no value is provided.
+ *
+ * @param args - Raw command-line arguments (process.argv.slice(2)).
+ * @returns Normalized argument array.
+ */
+const normalizeArgv = (args: string[]): string[] => {
+    const result: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        const next = args[i + 1];
+        const longArg = shortToLong.get(arg) ?? arg;
+        if (optionalValueOptions.has(arg)) {
+            if (next !== undefined && isNumericValue(next)) {
+                result.push(`${longArg}=${next}`);
+                i++;
+            } else {
+                result.push(`${longArg}=`);
+            }
+        } else if (stringOptionNames.has(arg) && next !== undefined) {
+            result.push(`${longArg}=${next}`);
+            i++;
+        } else {
+            result.push(arg);
+        }
+    }
+    return result;
+};
+
 const parseArguments = async () => {
     const { values: v, tokens } = parseArgs({
+        args: normalizeArgv(process.argv.slice(2)),
         tokens: true,
         strict: true,
         allowPositionals: true,
         allowNegative: true,
-        options: {
-            // global options
-            overwrite: { type: 'boolean', short: 'w', default: false },
-            help: { type: 'boolean', short: 'h', default: false },
-            version: { type: 'boolean', short: 'v', default: false },
-            quiet: { type: 'boolean', short: 'q', default: false },
-            mem: { type: 'boolean', default: false },
-            iterations: { type: 'string', short: 'i', default: '10' },
-            'list-gpus': { type: 'boolean', short: 'L', default: false },
-            gpu: { type: 'string', short: 'g', default: '-1' },
-            'lod-select': { type: 'string', short: 'O', default: '' },
-            'viewer-settings': { type: 'string', short: 'E', default: '' },
-            'lod-chunk-count': { type: 'string', short: 'C', default: '512' },
-            'lod-chunk-extent': { type: 'string', short: 'X', default: '16' },
-            unbundled: { type: 'boolean', short: 'U', default: false },
-            'voxel-resolution': { type: 'string', short: 'R', default: '0.05' },
-            'opacity-cutoff': { type: 'string', short: 'A', default: '0.1' },
-            'nav-simplify': { type: 'boolean', default: true },
-            'nav-exterior-radius': { type: 'string', default: '' },
-            'nav-capsule': { type: 'string', default: '' },
-            'nav-seed': { type: 'string', default: '' },
-            'collision-mesh': { type: 'boolean', short: 'K', default: false },
-            'mesh-simplify-error': { type: 'string', default: '' },
-
-            // per-file options
-            translate: { type: 'string', short: 't', multiple: true },
-            rotate: { type: 'string', short: 'r', multiple: true },
-            scale: { type: 'string', short: 's', multiple: true },
-            'filter-nan': { type: 'boolean', short: 'N', multiple: true },
-            'filter-value': { type: 'string', short: 'V', multiple: true },
-            'filter-harmonics': { type: 'string', short: 'H', multiple: true },
-            'filter-box': { type: 'string', short: 'B', multiple: true },
-            'filter-sphere': { type: 'string', short: 'S', multiple: true },
-            'decimate': { type: 'string', short: 'F', multiple: true },
-            params: { type: 'string', short: 'p', multiple: true },
-            lod: { type: 'string', short: 'l', multiple: true },
-            summary: { type: 'boolean', short: 'm', multiple: true },
-            'morton-order': { type: 'boolean', short: 'M', multiple: true }
-        }
+        options: cliOptionsConfig
     });
 
     const parseNumber = (value: string, min?: number): number => {
@@ -176,32 +234,49 @@ const parseArguments = async () => {
 
     const viewerSettingsPath = v['viewer-settings'];
 
-    // Parse nav simplification options
-    const navCapsuleStr = v['nav-capsule'];
-    const navSeedStr = v['nav-seed'];
-    const navSimplify = v['nav-simplify'];
-    let navCapsule: { height: number; radius: number } | undefined;
-    let navSeed: { x: number; y: number; z: number } | undefined;
+    // Parse voxel processing options
+    const voxelParamsStr = v['voxel-params'];
+    const externalFillStr = v['voxel-external-fill'];
+    const carveInteriorStr = v['voxel-interior-carve'];
+    const seedPosStr = v['seed-pos'];
 
-    if (navSimplify) {
-        if (navCapsuleStr) {
-            const [height, radius] = parseVec(navCapsuleStr, 2);
+    let voxelResolution = 0.05;
+    let opacityCutoff = 0.1;
+    if (voxelParamsStr) {
+        const parts = voxelParamsStr.split(',').map((p: string) => p.trim());
+        if (parts.length >= 1 && parts[0] !== '') {
+            voxelResolution = parseNumber(parts[0], 0);
+        }
+        if (parts.length >= 2) {
+            opacityCutoff = parseNumber(parts[1], 0);
+        }
+    }
+
+    let navExteriorRadius: number | undefined;
+    if (externalFillStr !== undefined) {
+        navExteriorRadius = externalFillStr ? parseNumber(externalFillStr, 0) : 1.6;
+    }
+
+    let navCapsule: { height: number; radius: number } | undefined;
+    if (carveInteriorStr !== undefined) {
+        if (carveInteriorStr) {
+            const [height, radius] = parseVec(carveInteriorStr, 2);
             if (height < 0 || radius < 0) {
-                throw new Error(`Invalid nav-capsule value: ${navCapsuleStr}. Height and radius must be >= 0`);
+                throw new Error(`Invalid voxel-interior-carve value: ${carveInteriorStr}. Height and radius must be >= 0`);
             }
             navCapsule = { height, radius };
         } else {
             navCapsule = { height: 1.6, radius: 0.2 };
         }
-        if (navSeedStr) {
-            const [x, y, z] = parseVec(navSeedStr, 3);
-            navSeed = { x, y, z };
-        } else {
-            navSeed = { x: 0, y: 0, z: 0 };
-        }
+    }
+    let navSeed: { x: number; y: number; z: number };
+    if (seedPosStr) {
+        const [x, y, z] = parseVec(seedPosStr, 3);
+        navSeed = { x, y, z };
+    } else {
+        navSeed = { x: 0, y: 0, z: 0 };
     }
 
-    const navExteriorRadius = v['nav-exterior-radius'] ? parseNumber(v['nav-exterior-radius'], 0) : undefined;
     const meshSimplifyError = v['mesh-simplify-error'] ? parseNumber(v['mesh-simplify-error'], 0) : undefined;
 
     const options: CliOptions = {
@@ -218,9 +293,8 @@ const parseArguments = async () => {
         unbundled: v.unbundled,
         lodChunkCount: parseInteger(v['lod-chunk-count']),
         lodChunkExtent: parseInteger(v['lod-chunk-extent']),
-        voxelResolution: parseNumber(v['voxel-resolution']),
-        opacityCutoff: parseNumber(v['opacity-cutoff']),
-        navSimplify,
+        voxelResolution,
+        opacityCutoff,
         navExteriorRadius,
         navCapsule,
         navSeed,
@@ -384,6 +458,43 @@ const parseArguments = async () => {
                     });
                     break;
                 }
+                case 'filter-cluster': {
+                    const fcAction: FilterCluster = { kind: 'filterCluster' };
+                    if (t.value) {
+                        const parts = t.value.split(',').map((p: string) => p.trim());
+                        if (parts.length >= 1 && parts[0] !== '') {
+                            fcAction.voxelResolution = parseNumber(parts[0]);
+                        }
+                        if (parts.length >= 2) {
+                            fcAction.opacityCutoff = parseNumber(parts[1]);
+                        }
+                        if (parts.length >= 3) {
+                            fcAction.minContribution = parseNumber(parts[2]);
+                        }
+                    }
+                    if (navSeed) {
+                        fcAction.seed = new Vec3(navSeed.x, navSeed.y, navSeed.z);
+                    }
+                    current.processActions.push(fcAction);
+                    break;
+                }
+                case 'filter-floaters': {
+                    const ffAction: FilterFloaters = { kind: 'filterFloaters' };
+                    if (t.value) {
+                        const parts = t.value.split(',').map((p: string) => p.trim());
+                        if (parts.length >= 1 && parts[0] !== '') {
+                            ffAction.voxelResolution = parseNumber(parts[0]);
+                        }
+                        if (parts.length >= 2) {
+                            ffAction.opacityCutoff = parseNumber(parts[1]);
+                        }
+                        if (parts.length >= 3) {
+                            ffAction.minContribution = parseNumber(parts[2]);
+                        }
+                    }
+                    current.processActions.push(ffAction);
+                    break;
+                }
             }
         }
     }
@@ -403,7 +514,7 @@ USAGE
   • Use 'null' as output to discard file output.
 
 SUPPORTED INPUTS
-    .ply   .compressed.ply   .sog   meta.json   .ksplat   .splat   .spz   .mjs   .lcc   .voxel.json
+    .ply   .compressed.ply   .sog   meta.json   .ksplat   .splat   .spz   .mjs   .lcc
 
 SUPPORTED OUTPUTS
     .ply   .compressed.ply   .sog   meta.json   lod-meta.json   .glb   .csv   .html   .voxel.json   null
@@ -423,6 +534,12 @@ ACTIONS (can be repeated, in any order)
                                               Append _raw for raw PLY values (e.g. opacity_raw).
     -F, --decimate         <n|n%>           Simplify to n Gaussians via progressive pairwise merging
                                               Use n% to keep a percentage of Gaussians
+    -G, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel.
+                                              Evaluates each Gaussian at occupied voxel centers.
+                                              Default: size=0.05, opacity=0.1, min=0.004 (1/255)
+    -D, --filter-cluster   [res,op,min]     Keep only the connected cluster at --seed-pos.
+                                              GPU-voxelizes at coarse resolution (res world units/voxel).
+                                              Default: res=1.0, opacity=0.99, min=0.004 (1/255)
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
     -l, --lod              <n>              Specify the level of detail, n >= 0
     -m, --summary                           Print per-column statistics to stdout
@@ -442,12 +559,11 @@ GLOBAL OPTIONS
     -O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC input
     -C, --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
     -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
-    -R, --voxel-resolution <n>              Voxel size in world units for .voxel.json. Default: 0.05
-    -A, --opacity-cutoff   <n>              Opacity threshold for solid voxels. Default: 0.1
-        --nav-simplify                      Enable nav simplification for voxel output. Default: true
-        --nav-exterior-radius <n>           Exterior fill radius in world units (0 to disable). Default: 1.6 when nav active
-        --nav-capsule      <height,radius>  Capsule dimensions for nav simplification (height=0 disables interior carve). Default: 1.6,0.2
-        --nav-seed         <x,y,z>          Seed position for nav simplification. Default: 0,0,0
+        --voxel-params     [size,opacity]   Voxel size and opacity threshold for .voxel.json. Default: 0.05,0.1
+        --voxel-external-fill [size]        Fill exterior voxels by dilation from seed. Default size: 1.6
+        --voxel-interior-carve [h,r]        Carve navigable interior using capsule flood fill from seed.
+                                              Default: height=1.6, radius=0.2
+        --seed-pos         <x,y,z>          Seed position for voxel processing and --filter-cluster. Default: 0,0,0
     -K, --collision-mesh                    Generate collision mesh (.collision.glb) with voxel output
         --mesh-simplify-error <n>           Max geometric error for collision mesh simplification as a fraction of voxelResolution. Default: 0.08
 
@@ -474,13 +590,13 @@ EXAMPLES
     splat-transform -K input.ply output.voxel.json
 
     # Generate voxel data with custom resolution and opacity threshold
-    splat-transform -R 0.1 -A 0.3 input.ply output.voxel.json
+    splat-transform --voxel-params 0.1,0.3 input.ply output.voxel.json
 
-    # Generate voxel data with nav simplification disabled
-    splat-transform -n input.ply output.voxel.json
+    # Generate voxel data with exterior fill and interior carve
+    splat-transform --voxel-external-fill --voxel-interior-carve input.ply output.voxel.json
 
-    # Convert voxel data back to PLY for visualization
-    splat-transform scene.voxel.json scene-voxels.ply
+    # Generate voxel data with custom seed position and carve parameters
+    splat-transform --seed-pos 1,0,0 --voxel-interior-carve 2.0,0.3 input.ply output.voxel.json
 
     # Print statistical summary, then write output
     splat-transform bunny.ply --summary output.ply
@@ -619,6 +735,31 @@ const main = async () => {
     }
 
     try {
+        // Create device creator function with caching (needed for processDataTable + writeFile)
+        // deviceIdx: -1 = auto, -2 = CPU, 0+ = specific GPU index
+        let cachedDevice: GraphicsDevice | undefined;
+        const deviceCreator = options.deviceIdx === -2 ? undefined : async () => {
+            if (cachedDevice) {
+                return cachedDevice;
+            }
+
+            let adapterName: string | undefined;
+            if (options.deviceIdx >= 0) {
+                const adapters = await enumerateAdapters();
+                const adapter = adapters[options.deviceIdx];
+                if (adapter) {
+                    adapterName = adapter.name;
+                } else {
+                    logger.warn(`GPU adapter index ${options.deviceIdx} not found, using default`);
+                }
+            }
+
+            cachedDevice = await createDevice(adapterName);
+            return cachedDevice;
+        };
+
+        const processOptions = deviceCreator ? { createDevice: deviceCreator } : undefined;
+
         // Create file system for reading (reused across all input files)
         const nodeFs = new NodeReadFileSystem();
 
@@ -651,7 +792,10 @@ const main = async () => {
                     throw new Error(`Unsupported data in file '${inputArg.filename}'`);
                 }
 
-                dataTables[i] = processDataTable(dataTable, inputArg.processActions);
+                const isEnv = dataTable.hasColumn('lod') && dataTable.getColumnByName('lod').data.every(v => v === -1);
+                if (!isEnv) {
+                    dataTables[i] = await processDataTable(dataTable, inputArg.processActions, processOptions);
+                }
             }
 
             return dataTables;
@@ -662,47 +806,26 @@ const main = async () => {
         const nonEnvDataTables = inputDataTables.filter(dt => !dt.hasColumn('lod') || dt.getColumnByName('lod').data.some(v => v !== -1));
 
         // combine inputs into a single output dataTable
-        const dataTable = nonEnvDataTables.length > 0 && processDataTable(
+        const dataTable = nonEnvDataTables.length > 0 && await processDataTable(
             combine(nonEnvDataTables),
-            outputArg.processActions
+            outputArg.processActions,
+            processOptions
         );
 
         if (!dataTable || dataTable.numRows === 0) {
             throw new Error('No Gaussians to write');
         }
 
-        const envDataTable = envDataTables.length > 0 && processDataTable(
+        const envDataTable = envDataTables.length > 0 && await processDataTable(
             combine(envDataTables),
-            outputArg.processActions
+            outputArg.processActions,
+            processOptions
         );
 
         logger.log(`Total gaussians loaded: ${dataTable.numRows}`);
 
         // Skip file writing for null output
         if (!isNullOutput) {
-            // Create device creator function with caching
-            // deviceIdx: -1 = auto, -2 = CPU, 0+ = specific GPU index
-            let cachedDevice: GraphicsDevice | undefined;
-            const deviceCreator = options.deviceIdx === -2 ? undefined : async () => {
-                if (cachedDevice) {
-                    return cachedDevice;
-                }
-
-                let adapterName: string | undefined;
-                if (options.deviceIdx >= 0) {
-                    const adapters = await enumerateAdapters();
-                    const adapter = adapters[options.deviceIdx];
-                    if (adapter) {
-                        adapterName = adapter.name;
-                    } else {
-                        logger.warn(`GPU adapter index ${options.deviceIdx} not found, using default`);
-                    }
-                }
-
-                cachedDevice = await createDevice(adapterName);
-                return cachedDevice;
-            };
-
             // write file
             await writeFile({
                 filename: outputFilename,

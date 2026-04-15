@@ -1,7 +1,6 @@
-import { Column, DataTable } from '../data-table/data-table';
+import { Column, DataTable } from '../data-table';
 import { dirname, join, ReadFileSystem, readFile } from '../io/read';
-import { Transform } from '../utils/math';
-import { WebPCodec } from '../utils/webp-codec';
+import { Transform, WebPCodec } from '../utils';
 
 type Meta = {
     version: number;

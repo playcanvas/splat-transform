@@ -8,7 +8,7 @@ const EMPTY = -1;
  * Keys are non-negative block indices. Values are lo/hi uint32 mask pairs.
  * Uses Fibonacci hashing with linear probing and backward-shift deletion.
  */
-class MaskStore {
+class BlockMaskMap {
     keys: Int32Array;
     lo: Uint32Array;
     hi: Uint32Array;
@@ -138,8 +138,8 @@ class MaskStore {
         }
     }
 
-    clone(): MaskStore {
-        const c = new MaskStore(this._capacity);
+    clone(): BlockMaskMap {
+        const c = new BlockMaskMap(this._capacity);
         c.keys.set(this.keys);
         c.lo.set(this.lo);
         c.hi.set(this.hi);
@@ -172,4 +172,4 @@ class MaskStore {
     }
 }
 
-export { MaskStore };
+export { BlockMaskMap };

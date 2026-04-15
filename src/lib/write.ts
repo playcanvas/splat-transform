@@ -1,15 +1,8 @@
-import { DataTable } from './data-table/data-table';
+import { DataTable } from './data-table';
 import { type FileSystem } from './io/write';
-import { Options } from './types';
-import { logger } from './utils/logger';
-import { writeCompressedPly } from './writers/write-compressed-ply';
-import { writeCsv } from './writers/write-csv';
-import { writeGlb } from './writers/write-glb';
-import { writeHtml } from './writers/write-html';
-import { writeLod } from './writers/write-lod';
-import { writePly } from './writers/write-ply';
-import { writeSog, type DeviceCreator } from './writers/write-sog';
-import { writeVoxel } from './writers/write-voxel';
+import { type DeviceCreator, type Options } from './types';
+import { logger } from './utils';
+import { writeCompressedPly, writeCsv, writeGlb, writeHtml, writeLod, writePly, writeSog, writeVoxel } from './writers';
 
 /**
  * Supported output file formats for Gaussian splat data.
@@ -166,24 +159,20 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
                 createDevice
             }, fs);
             break;
-        case 'voxel': {
-            const enableNav = options.navSimplify !== false;
-            const navCapsule = enableNav ? (options.navCapsule ?? { height: 1.6, radius: 0.2 }) : undefined;
-            const navSeed = enableNav ? (options.navSeed ?? { x: 0, y: 0, z: 0 }) : undefined;
+        case 'voxel':
             await writeVoxel({
                 filename,
                 dataTable,
                 voxelResolution: options.voxelResolution,
                 opacityCutoff: options.opacityCutoff,
                 navExteriorRadius: options.navExteriorRadius,
-                navCapsule,
-                navSeed,
+                navCapsule: options.navCapsule,
+                navSeed: options.navSeed,
                 collisionMesh: options.collisionMesh,
                 meshSimplifyError: options.meshSimplifyError,
                 createDevice
             }, fs);
             break;
-        }
     }
 };
 

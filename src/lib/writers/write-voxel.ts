@@ -1,30 +1,19 @@
-import { MeshoptSimplifier } from 'meshoptimizer/simplifier';
-import { Vec3 } from 'playcanvas';
-
-import type { DeviceCreator } from './write-sog';
-import { Column, DataTable } from '../data-table/data-table';
-import { computeWriteTransform, transformColumns } from '../data-table/transform';
+import { buildCollisionMesh } from './collision-glb';
+import { Column, DataTable, computeGaussianExtents, computeWriteTransform, transformColumns } from '../data-table';
+import { GpuVoxelization } from '../gpu';
 import { type FileSystem, writeFile } from '../io/write';
-import { logger } from '../utils/logger';
-import { Transform } from '../utils/math';
-import { buildCollisionGlb } from '../voxel/collision-glb';
+import { GaussianBVH } from '../spatial';
+import type { DeviceCreator } from '../types';
+import { logger, Transform } from '../utils';
+import { buildSparseOctree, type SparseOctree } from './sparse-octree';
 import {
-    computeGaussianExtents,
-    GaussianBVH,
-    GpuVoxelization,
-    buildSparseOctree,
+    filterAndFillBlocks,
     alignGridBounds,
-    type BatchSpec,
-    type MultiBatchResult
-} from '../voxel/index';
-import { marchingCubes } from '../voxel/marching-cubes';
-import { fillExterior, simplifyForCapsule, type NavSeed } from '../voxel/nav-simplify';
-import {
-    BlockAccumulator,
-    xyzToMorton,
-    type SparseOctree
-} from '../voxel/sparse-octree';
-import { filterAndFillBlocks } from '../voxel/voxel-filter';
+    carveInterior,
+    fillExterior,
+    type NavSeed,
+    voxelizeToBuffer
+} from '../voxel';
 
 /**
  * Options for writing a voxel octree file.
@@ -39,19 +28,19 @@ type WriteVoxelOptions = {
     /** Size of each voxel in world units. Default: 0.05 */
     voxelResolution?: number;
 
-    /** Opacity threshold for solid voxels - voxels below this are considered empty. Default: 0.5 */
+    /** Opacity threshold for solid voxels - voxels below this are considered empty. Default: 0.1 */
     opacityCutoff?: number;
 
     /** Optional function to create a GPU device for voxelization */
     createDevice?: DeviceCreator;
 
-    /** Exterior fill radius in world units. Set to 0 to disable exterior fill. Defaults to 1.6 when nav simplification is active. Requires navSeed to be set; ignored without it. */
+    /** Exterior fill radius in world units. Enables exterior fill when set. Requires navSeed; ignored without it. */
     navExteriorRadius?: number;
 
-    /** Capsule dimensions for navigation simplification. Height of 0 disables interior carve. When height > 0, only voxels contactable from the seed are kept. */
+    /** Capsule dimensions for interior carve. Height of 0 disables interior carve. When height > 0, only voxels contactable from the seed are kept. Requires navSeed. */
     navCapsule?: { height: number; radius: number };
 
-    /** Seed position in world space for navigation flood fill. Required when navCapsule is set with height > 0. */
+    /** Seed position in world space for exterior fill and interior carve flood fill. */
     navSeed?: NavSeed;
 
     /** Whether to generate a collision mesh (.collision.glb) alongside the voxel data. Default: false */
@@ -170,7 +159,7 @@ const writeOctreeFiles = async (
  *     filename: 'scene.voxel.json',
  *     dataTable: myDataTable,
  *     voxelResolution: 0.05,
- *     opacityCutoff: 0.5,
+ *     opacityCutoff: 0.1,
  *     collisionMesh: true,
  *     createDevice: async () => myGraphicsDevice
  * }, fs);
@@ -181,7 +170,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         filename,
         dataTable,
         voxelResolution = 0.05,
-        opacityCutoff = 0.5,
+        opacityCutoff = 0.1,
         createDevice,
         navExteriorRadius,
         navCapsule,
@@ -197,10 +186,8 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     if (navCapsule && !navSeed) {
         logger.warn('writeVoxel: navCapsule requires navSeed for interior nav carving, skipping nav carving');
     }
-    const hasNavBase = !!(navCapsule && navSeed);
-    const hasNav = hasNavBase && navCapsule!.height > 0;
-    const exteriorRadius = hasNav ? (navExteriorRadius ?? 1.6) : navExteriorRadius;
-    const hasFillExterior = !!(exteriorRadius && navSeed);
+    const hasNav = !!(navCapsule && navSeed && navCapsule.height > 0);
+    const hasFillExterior = !!(navExteriorRadius && navSeed);
     let stepCount = 5;
     if (collisionMesh) stepCount += 2;
     if (hasFillExterior) stepCount += 1;
@@ -232,338 +219,91 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     const bvh = new GaussianBVH(pcDataTable, extentsResult.extents);
     const device = await createDevice();
 
-    const gpuVoxelization = new GpuVoxelization(device);
-    gpuVoxelization.uploadAllGaussians(pcDataTable, extentsResult.extents);
+    let gpuVoxelization: GpuVoxelization | null = new GpuVoxelization(device);
+    let progressComplete = false;
+    try {
+        gpuVoxelization.uploadAllGaussians(pcDataTable, extentsResult.extents);
 
-    // Align grid bounds to block boundaries BEFORE voxelization so the
-    // block coordinates used during voxelization match what the reader expects.
-    const blockSize = 4 * voxelResolution;  // Each block is 4x4x4 voxels
-    let gridBounds = alignGridBounds(
-        bounds.min.x, bounds.min.y, bounds.min.z,
-        bounds.max.x, bounds.max.y, bounds.max.z,
-        voxelResolution
-    );
-
-    const numBlocksX = Math.round((gridBounds.max.x - gridBounds.min.x) / blockSize);
-    const numBlocksY = Math.round((gridBounds.max.y - gridBounds.min.y) / blockSize);
-    const numBlocksZ = Math.round((gridBounds.max.z - gridBounds.min.z) / blockSize);
-
-    // Phase 4: Double-buffered pipelined voxelization
-    // Uses two GPU dispatch slots so the CPU can prepare the next mega-dispatch
-    // (BVH queries + index copying) while the GPU executes the current one.
-    let accumulator = new BlockAccumulator();
-    const batchSize = 16;  // 16x16x16 = 4096 blocks max per batch
-
-    logger.progress.step('Voxelizing');
-    logger.debug(`blocks: ${numBlocksX} x ${numBlocksY} x ${numBlocksZ} (${(numBlocksX * numBlocksY * numBlocksZ / 1e6).toFixed(1)}M)`);
-    logger.debug(`voxels: ${numBlocksX * 4} x ${numBlocksY * 4} x ${numBlocksZ * 4} (${(numBlocksX * numBlocksY * numBlocksZ * 64 / 1e9).toFixed(2)}B)`);
-
-    // Mega-dispatch thresholds: flush when either limit is reached
-    const MEGA_MAX_BATCHES = 512;
-    const MEGA_MAX_INDICES = 4 * 1024 * 1024;  // 4M indices
-
-    const maxBlocks = GpuVoxelization.MAX_BLOCKS_PER_BATCH;
-    const numSlots = GpuVoxelization.NUM_SLOTS;
-
-    // Batch collection state — per-slot for double buffering
-    interface PendingBatch extends BatchSpec {
-        bx: number;  // absolute block start X (for Morton codes)
-        by: number;
-        bz: number;
-        numBlocksX: number;
-        numBlocksY: number;
-        numBlocksZ: number;
-    }
-
-    // Per-slot CPU-side index arrays
-    const slotIndexArrays: Uint32Array[] = [];
-    const slotCapacities: number[] = [];
-    for (let i = 0; i < numSlots; i++) {
-        slotCapacities.push(1024 * 1024);
-        slotIndexArrays.push(new Uint32Array(1024 * 1024));
-    }
-
-    let currentSlot = 0;
-    let indexOffset = 0;
-    const pendingBatches: PendingBatch[] = [];
-    let megaDispatchCount = 0;
-    let skippedEmpty = 0;
-
-    // Inflight dispatch from previous flush (for pipelining)
-    let inflight: {
-        resultPromise: Promise<MultiBatchResult>;
-        batches: PendingBatch[];
-    } | null = null;
-
-    /**
-     * Process GPU results back into the block accumulator.
-     *
-     * @param masks - Raw Uint32 voxel masks from the GPU readback.
-     * @param batches - Batch metadata used to decode block positions.
-     */
-    const processResults = (masks: Uint32Array, batches: PendingBatch[]): void => {
-        for (let b = 0; b < batches.length; b++) {
-            const batch = batches[b];
-            const batchResultOffset = b * maxBlocks * 2;
-            const totalBatchBlocks = batch.numBlocksX * batch.numBlocksY * batch.numBlocksZ;
-
-            for (let blockIdx = 0; blockIdx < totalBatchBlocks; blockIdx++) {
-                const maskLo = masks[batchResultOffset + blockIdx * 2];
-                const maskHi = masks[batchResultOffset + blockIdx * 2 + 1];
-
-                // Skip empty blocks — vast majority are empty
-                if (maskLo === 0 && maskHi === 0) continue;
-
-                // Compute block coordinates directly from flat index
-                const localX = blockIdx % batch.numBlocksX;
-                const localY = (blockIdx / batch.numBlocksX | 0) % batch.numBlocksY;
-                const localZ = (blockIdx / (batch.numBlocksX * batch.numBlocksY)) | 0;
-
-                const absBlockX = batch.bx + localX;
-                const absBlockY = batch.by + localY;
-                const absBlockZ = batch.bz + localZ;
-
-                const morton = xyzToMorton(absBlockX, absBlockY, absBlockZ);
-                accumulator.addBlock(morton, maskLo, maskHi);
-            }
-        }
-    };
-
-    /**
-     * Submit pending batches as a GPU mega-dispatch and set up pipelining.
-     * The GPU dispatch is fire-and-forget — the result promise is stored
-     * in `inflight` and awaited on the NEXT flush, allowing the CPU to
-     * prepare more batches while the GPU is busy.
-     */
-    const flushPendingBatches = async (): Promise<void> => {
-        if (pendingBatches.length === 0) return;
-
-        // Capture current batch state before clearing
-        const batchesToSubmit = pendingBatches.slice();
-        const submitSlot = currentSlot;
-        const submitIndexArray = slotIndexArrays[submitSlot];
-        const submitIndexCount = indexOffset;
-
-        // Switch to the other slot for collecting the next round
-        currentSlot = (currentSlot + 1) % numSlots;
-        pendingBatches.length = 0;
-        indexOffset = 0;
-
-        // Submit new dispatch FIRST so GPU starts working immediately
-        const resultPromise = gpuVoxelization.submitMultiBatch(
-            submitSlot,
-            submitIndexArray,
-            submitIndexCount,
-            batchesToSubmit,
-            voxelResolution,
-            opacityCutoff
+        // Align grid bounds to block boundaries BEFORE voxelization so the
+        // block coordinates used during voxelization match what the reader expects.
+        let gridBounds = alignGridBounds(
+            bounds.min.x, bounds.min.y, bounds.min.z,
+            bounds.max.x, bounds.max.y, bounds.max.z,
+            voxelResolution
         );
 
-        // THEN await and process the previous inflight dispatch
-        // (the GPU was computing it while the CPU prepared this batch)
-        if (inflight) {
-            const result = await inflight.resultPromise;
-            processResults(result.masks, inflight.batches);
-            megaDispatchCount++;
-        }
+        logger.progress.step('Voxelizing');
 
-        inflight = { resultPromise, batches: batchesToSubmit };
-    };
-
-    // Inner progress for voxelization batches
-    const numZBatches = Math.max(1, Math.ceil(numBlocksZ / batchSize));
-    logger.progress.begin(10);
-    let lastVoxelStep = 0;
-    let totalBatches = 0;
-
-    // Process the entire scene, collecting batches for multi-dispatch
-    for (let bz = 0; bz < numBlocksZ; bz += batchSize) {
-        // Report inner progress scaled to 10 steps
-        const currentVoxelStep = Math.min(10, Math.floor(((bz / batchSize) + 1) / numZBatches * 10));
-        while (lastVoxelStep < currentVoxelStep) {
-            logger.progress.step();
-            lastVoxelStep++;
-        }
-
-        for (let by = 0; by < numBlocksY; by += batchSize) {
-            for (let bx = 0; bx < numBlocksX; bx += batchSize) {
-                const currBatchX = Math.min(batchSize, numBlocksX - bx);
-                const currBatchY = Math.min(batchSize, numBlocksY - by);
-                const currBatchZ = Math.min(batchSize, numBlocksZ - bz);
-
-                const blockMinX = gridBounds.min.x + bx * blockSize;
-                const blockMinY = gridBounds.min.y + by * blockSize;
-                const blockMinZ = gridBounds.min.z + bz * blockSize;
-                const blockMaxX = blockMinX + currBatchX * blockSize;
-                const blockMaxY = blockMinY + currBatchY * blockSize;
-                const blockMaxZ = blockMinZ + currBatchZ * blockSize;
-
-                // Query BVH for overlapping Gaussians
-                const overlapping = bvh.queryOverlappingRaw(
-                    blockMinX, blockMinY, blockMinZ,
-                    blockMaxX, blockMaxY, blockMaxZ
-                );
-
-                if (overlapping.length === 0) {
-                    skippedEmpty++;
-                    continue;
-                }
-
-                // Ensure current slot's index array has enough capacity
-                const needed = indexOffset + overlapping.length;
-                if (needed > slotCapacities[currentSlot]) {
-                    slotCapacities[currentSlot] = Math.max(slotCapacities[currentSlot] * 2, needed);
-                    const newArray = new Uint32Array(slotCapacities[currentSlot]);
-                    newArray.set(slotIndexArrays[currentSlot].subarray(0, indexOffset));
-                    slotIndexArrays[currentSlot] = newArray;
-                }
-
-                // Copy overlapping Gaussian indices into current slot's array
-                slotIndexArrays[currentSlot].set(overlapping, indexOffset);
-
-                // Record batch metadata
-                pendingBatches.push({
-                    indexOffset,
-                    indexCount: overlapping.length,
-                    blockMin: { x: blockMinX, y: blockMinY, z: blockMinZ },
-                    numBlocksX: currBatchX,
-                    numBlocksY: currBatchY,
-                    numBlocksZ: currBatchZ,
-                    bx,
-                    by,
-                    bz
-                });
-
-                indexOffset += overlapping.length;
-                totalBatches++;
-
-                // Flush when mega-dispatch thresholds are reached
-                if (pendingBatches.length >= MEGA_MAX_BATCHES || indexOffset >= MEGA_MAX_INDICES) {
-                    await flushPendingBatches();
-                }
-            }
-        }
-    }
-
-    // Flush remaining pending batches
-    await flushPendingBatches();
-
-    // Await and process the final inflight dispatch
-    if (inflight) {
-        const result = await inflight.resultPromise;
-        processResults(result.masks, inflight.batches);
-        megaDispatchCount++;
-        inflight = null;
-    }
-
-    // Flush remaining inner voxelization progress steps
-    while (lastVoxelStep < 10) {
-        logger.progress.step();
-        lastVoxelStep++;
-    }
-
-    // Cleanup GPU resources (device lifecycle managed by caller)
-    gpuVoxelization.destroy();
-
-    logger.progress.step('Filtering');
-    accumulator = filterAndFillBlocks(accumulator);
-
-    if (hasFillExterior) {
-        logger.progress.step('Fill exterior');
-        const fillResult = fillExterior(
-            accumulator, gridBounds, voxelResolution,
-            exteriorRadius!, navSeed!
+        let buffer = await voxelizeToBuffer(
+            bvh, gpuVoxelization, gridBounds, voxelResolution, opacityCutoff
         );
-        accumulator = fillResult.accumulator;
-        gridBounds = fillResult.gridBounds;
-    }
 
-    if (hasNav) {
-        logger.progress.step('Carve interior');
-        const navResult = simplifyForCapsule(
-            accumulator, gridBounds, voxelResolution,
-            navCapsule!.height, navCapsule!.radius,
-            navSeed!
-        );
-        accumulator = navResult.accumulator;
-        gridBounds = navResult.gridBounds;
-    }
+        gpuVoxelization.destroy();
+        gpuVoxelization = null;
 
-    let glbBytes: Uint8Array | null = null;
+        logger.progress.step('Filtering');
+        buffer = filterAndFillBlocks(buffer);
 
-    if (collisionMesh) {
-        logger.progress.step('Extracting collision mesh');
-        const rawMesh = marchingCubes(accumulator, gridBounds, voxelResolution);
-        logger.log(`collision mesh (raw): ${rawMesh.positions.length / 3} vertices, ${rawMesh.indices.length / 3} triangles`);
-
-        if (rawMesh.indices.length < 3) {
-            logger.progress.step('Simplifying collision mesh');
-            logger.log('collision mesh: no triangles generated, skipping GLB output');
-        } else {
-            logger.progress.step('Simplifying collision mesh');
-            await MeshoptSimplifier.ready;
-
-            const errorFraction = Number.isFinite(meshSimplifyError) && meshSimplifyError >= 0 ? meshSimplifyError : 0.08;
-            const simplifyError = errorFraction * voxelResolution;
-            const [simplifiedIndices] = MeshoptSimplifier.simplify(
-                rawMesh.indices,
-                rawMesh.positions,
-                3,
-                0,
-                simplifyError,
-                ['ErrorAbsolute']
+        if (hasFillExterior) {
+            logger.progress.step('Fill exterior');
+            const fillResult = fillExterior(
+                buffer, gridBounds, voxelResolution,
+                navExteriorRadius!, navSeed!
             );
-
-            const vertexRemap = new Map<number, number>();
-            let newVertexCount = 0;
-            for (let i = 0; i < simplifiedIndices.length; i++) {
-                if (!vertexRemap.has(simplifiedIndices[i])) {
-                    vertexRemap.set(simplifiedIndices[i], newVertexCount++);
-                }
-            }
-            const compactPositions = new Float32Array(newVertexCount * 3);
-            for (const [oldIdx, newIdx] of vertexRemap) {
-                compactPositions[newIdx * 3] = rawMesh.positions[oldIdx * 3];
-                compactPositions[newIdx * 3 + 1] = rawMesh.positions[oldIdx * 3 + 1];
-                compactPositions[newIdx * 3 + 2] = rawMesh.positions[oldIdx * 3 + 2];
-            }
-            const compactIndices = new Uint32Array(simplifiedIndices.length);
-            for (let i = 0; i < simplifiedIndices.length; i++) {
-                compactIndices[i] = vertexRemap.get(simplifiedIndices[i])!;
-            }
-
-            const reduction = (1 - simplifiedIndices.length / rawMesh.indices.length) * 100;
-            logger.log(`collision mesh (simplified): ${newVertexCount} vertices, ${simplifiedIndices.length / 3} triangles (${reduction.toFixed(0)}% reduction)`);
-
-            glbBytes = buildCollisionGlb(compactPositions, compactIndices);
+            buffer = fillResult.buffer;
+            gridBounds = fillResult.gridBounds;
         }
-    }
 
-    logger.progress.step('Building octree');
-    const octree = buildSparseOctree(
-        accumulator,
-        gridBounds,
-        bounds,
-        voxelResolution
-    );
-    accumulator.clear();
+        if (hasNav) {
+            logger.progress.step('Carve interior');
+            const navResult = carveInterior(
+                buffer, gridBounds, voxelResolution,
+                navCapsule!.height, navCapsule!.radius,
+                navSeed!
+            );
+            buffer = navResult.buffer;
+            gridBounds = navResult.gridBounds;
+        }
 
-    logger.log(`octree: depth=${octree.treeDepth}, interior=${octree.numInteriorNodes}, mixed=${octree.numMixedLeaves}`);
+        const glbBytes = collisionMesh ?
+            await buildCollisionMesh(buffer, gridBounds, voxelResolution, meshSimplifyError) :
+            null;
 
-    logger.progress.step('Writing');
-    await writeOctreeFiles(fs, filename, octree);
+        logger.progress.step('Building octree');
+        const octree = buildSparseOctree(
+            buffer,
+            gridBounds,
+            bounds,
+            voxelResolution
+        );
+        buffer.clear();
 
-    if (glbBytes) {
-        const glbFilename = filename.replace('.voxel.json', '.collision.glb');
-        logger.log(`writing '${glbFilename}'...`);
-        await writeFile(fs, glbFilename, glbBytes);
-    }
+        logger.log(`octree: depth=${octree.treeDepth}, interior=${octree.numInteriorNodes}, mixed=${octree.numMixedLeaves}`);
 
-    const totalBytes = (octree.nodes.length + octree.leafData.length) * 4;
-    if (glbBytes) {
-        logger.log(`total size: octree ${(totalBytes / 1024).toFixed(1)} KB, collision mesh ${(glbBytes.length / 1024).toFixed(1)} KB`);
-    } else {
-        logger.log(`total size: ${(totalBytes / 1024).toFixed(1)} KB`);
+        logger.progress.step('Writing');
+        await writeOctreeFiles(fs, filename, octree);
+
+        if (glbBytes) {
+            const glbFilename = filename.replace('.voxel.json', '.collision.glb');
+            logger.log(`writing '${glbFilename}'...`);
+            await writeFile(fs, glbFilename, glbBytes);
+        }
+
+        const totalBytes = (octree.nodes.length + octree.leafData.length) * 4;
+        if (glbBytes) {
+            logger.log(`total size: octree ${(totalBytes / 1024).toFixed(1)} KB, collision mesh ${(glbBytes.length / 1024).toFixed(1)} KB`);
+        } else {
+            logger.log(`total size: ${(totalBytes / 1024).toFixed(1)} KB`);
+        }
+
+        progressComplete = true;
+    } catch (e) {
+        gpuVoxelization?.destroy();
+        throw e;
+    } finally {
+        if (!progressComplete) {
+            logger.progress.cancel();
+        }
     }
 };
 

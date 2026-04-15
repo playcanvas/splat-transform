@@ -16,7 +16,7 @@ import {
     UniformFormat
 } from 'playcanvas';
 
-import { DataTable } from '../data-table/data-table.js';
+import { DataTable } from '../data-table';
 
 /**
  * WGSL shader for multi-batch voxelization of 4x4x4 blocks.

@@ -1,8 +1,15 @@
 import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
-import type { Bounds } from './sparse-octree.js';
-import { Column, DataTable } from '../data-table/data-table.js';
-import { logger } from '../utils/logger.js';
+import { Column, DataTable } from './data-table';
+import { logger } from '../utils';
+
+/**
+ * Bounds specification with min/max Vec3.
+ */
+interface Bounds {
+    min: Vec3;
+    max: Vec3;
+}
 
 /**
  * Result of computing Gaussian extents.
@@ -144,76 +151,8 @@ const computeGaussianExtents = (dataTable: DataTable): GaussianExtentsResult => 
     };
 };
 
-/**
- * Get the AABB for a specific Gaussian.
- *
- * @param extents - DataTable with extent_x, extent_y, extent_z columns
- * @param dataTable - DataTable containing position data (x, y, z)
- * @param index - Gaussian index
- * @param outMin - Output Vec3 for minimum corner
- * @param outMax - Output Vec3 for maximum corner
- */
-const getGaussianAABB = (
-    extents: DataTable,
-    dataTable: DataTable,
-    index: number,
-    outMin: Vec3,
-    outMax: Vec3
-): void => {
-    const x = dataTable.getColumnByName('x').data;
-    const y = dataTable.getColumnByName('y').data;
-    const z = dataTable.getColumnByName('z').data;
-
-    const ex = extents.getColumnByName('extent_x').data;
-    const ey = extents.getColumnByName('extent_y').data;
-    const ez = extents.getColumnByName('extent_z').data;
-
-    outMin.set(x[index] - ex[index], y[index] - ey[index], z[index] - ez[index]);
-    outMax.set(x[index] + ex[index], y[index] + ey[index], z[index] + ez[index]);
-};
-
-/**
- * Check if a Gaussian's AABB overlaps with a given box.
- *
- * @param extents - DataTable with extent_x, extent_y, extent_z columns
- * @param dataTable - DataTable containing position data (x, y, z)
- * @param index - Gaussian index
- * @param boxMin - Minimum corner of query box
- * @param boxMax - Maximum corner of query box
- * @returns true if AABBs overlap
- */
-const gaussianOverlapsBox = (
-    extents: DataTable,
-    dataTable: DataTable,
-    index: number,
-    boxMin: Vec3,
-    boxMax: Vec3
-): boolean => {
-    const x = dataTable.getColumnByName('x').data;
-    const y = dataTable.getColumnByName('y').data;
-    const z = dataTable.getColumnByName('z').data;
-
-    const ex = extents.getColumnByName('extent_x').data;
-    const ey = extents.getColumnByName('extent_y').data;
-    const ez = extents.getColumnByName('extent_z').data;
-
-    const gMinX = x[index] - ex[index];
-    const gMinY = y[index] - ey[index];
-    const gMinZ = z[index] - ez[index];
-    const gMaxX = x[index] + ex[index];
-    const gMaxY = y[index] + ey[index];
-    const gMaxZ = z[index] + ez[index];
-
-    // AABB overlap test
-    return !(gMaxX < boxMin.x || gMinX > boxMax.x ||
-             gMaxY < boxMin.y || gMinY > boxMax.y ||
-             gMaxZ < boxMin.z || gMinZ > boxMax.z);
-};
-
 export {
-    computeGaussianExtents,
-    getGaussianAABB,
-    gaussianOverlapsBox
+    computeGaussianExtents
 };
 
-export type { GaussianExtentsResult };
+export type { Bounds, GaussianExtentsResult };

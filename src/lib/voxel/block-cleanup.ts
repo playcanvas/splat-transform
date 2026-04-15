@@ -1,10 +1,10 @@
+import { BlockMaskBuffer } from './block-mask-buffer';
 import {
-    BlockAccumulator,
     xyzToMorton,
     mortonToXYZ,
     popcount
-} from './sparse-octree';
-import { logger } from '../utils/logger';
+} from './morton';
+import { logger } from '../utils';
 
 // ============================================================================
 // Edge mask constants for 4x4x4 voxel blocks
@@ -42,12 +42,12 @@ const SOLID_MASK = 0xFFFFFFFF >>> 0;
  *
  * Blocks that become empty or solid as a consequence are handled automatically.
  *
- * @param accumulator - BlockAccumulator with voxelization results
- * @returns New BlockAccumulator with filtered/filled data
+ * @param buffer - BlockMaskBuffer with voxelization results
+ * @returns New BlockMaskBuffer with filtered/filled data
  */
-function filterAndFillBlocks(accumulator: BlockAccumulator): BlockAccumulator {
-    const mixed = accumulator.getMixedBlocks();
-    const solid = accumulator.getSolidBlocks();
+function filterAndFillBlocks(buffer: BlockMaskBuffer): BlockMaskBuffer {
+    const mixed = buffer.getMixedBlocks();
+    const solid = buffer.getSolidBlocks();
     const masks = mixed.masks;
 
     // Build lookup structures from original (unmodified) data
@@ -74,7 +74,6 @@ function filterAndFillBlocks(accumulator: BlockAccumulator): BlockAccumulator {
         const [bx, by, bz] = mortonToXYZ(morton);
 
         // --- In-block per-direction occupancy masks ---
-        // Each gives: bit p = 1 iff position p's neighbor in that direction is occupied
 
         // +X: result[p] = mask[p+1], valid for lx < 3
         let pxLo = (origLo >>> 1) & ~FACE_X3;
@@ -101,8 +100,6 @@ function filterAndFillBlocks(accumulator: BlockAccumulator): BlockAccumulator {
         let mzHi = (origHi << 16) | (origLo >>> 16);
 
         // --- Cross-block contributions ---
-        // For each face direction: look up the adjacent block, extract opposite-face
-        // bits, shift to align with our face positions, OR into the direction mask.
 
         // +X: our lx=3 face <- adjacent's lx=0 face (shifted left by 3)
         addCrossFace(bx + 1, by, bz, solidSet, mixedMap, masks,
@@ -165,13 +162,12 @@ function filterAndFillBlocks(accumulator: BlockAccumulator): BlockAccumulator {
         newMasks[i * 2 + 1] = hi;
     }
 
-    // Rebuild accumulator with state transitions (mixed->empty, mixed->solid)
-    const result = new BlockAccumulator();
+    // Rebuild buffer with state transitions (mixed->empty, mixed->solid)
+    const result = new BlockMaskBuffer();
 
     for (let i = 0; i < mixed.morton.length; i++) {
         const lo = newMasks[i * 2];
         const hi = newMasks[i * 2 + 1];
-        // addBlock handles empty (discarded) and solid (stored without mask)
         result.addBlock(mixed.morton[i], lo, hi);
     }
 
@@ -188,23 +184,6 @@ function filterAndFillBlocks(accumulator: BlockAccumulator): BlockAccumulator {
 // Cross-block face helpers
 // ============================================================================
 
-/**
- * Add cross-block face contribution for X/Y directions (shift stays within lo/hi words).
- *
- * @param nx - Adjacent block X coordinate.
- * @param ny - Adjacent block Y coordinate.
- * @param nz - Adjacent block Z coordinate.
- * @param solidSet - Set of Morton codes for solid blocks.
- * @param mixedMap - Map from Morton code to index in the mixed masks array.
- * @param masks - Interleaved voxel masks for mixed blocks [lo0, hi0, lo1, hi1, ...].
- * @param ourFaceMask - Bit mask selecting our block's face positions.
- * @param adjFaceMask - Bit mask selecting the adjacent block's opposite face positions.
- * @param shiftAmount - Number of bits to shift the adjacent face into our face positions.
- * @param shiftLeft - True to shift left, false to shift right.
- * @param curLo - Current low 32 bits of the direction mask.
- * @param curHi - Current high 32 bits of the direction mask.
- * @param write - Callback to write the updated (lo, hi) direction mask.
- */
 function addCrossFace(
     nx: number, ny: number, nz: number,
     solidSet: Set<number>,
@@ -242,23 +221,6 @@ function addCrossFace(
     }
 }
 
-/**
- * Add cross-block face contribution for Z direction (crosses lo/hi boundary).
- *
- * +Z: our lz=3 (hi bits 16-31) <- adjacent's lz=0 (lo bits 0-15), shift left by 16
- * -Z: our lz=0 (lo bits 0-15) <- adjacent's lz=3 (hi bits 16-31), shift right by 16
- *
- * @param nx - Adjacent block X coordinate.
- * @param ny - Adjacent block Y coordinate.
- * @param nz - Adjacent block Z coordinate.
- * @param solidSet - Set of Morton codes for solid blocks.
- * @param mixedMap - Map from Morton code to index in the mixed masks array.
- * @param masks - Interleaved voxel masks for mixed blocks [lo0, hi0, lo1, hi1, ...].
- * @param plusZ - True for +Z direction, false for -Z.
- * @param curLo - Current low 32 bits of the direction mask.
- * @param curHi - Current high 32 bits of the direction mask.
- * @param write - Callback to write the updated (lo, hi) direction mask.
- */
 function addCrossFaceZ(
     nx: number, ny: number, nz: number,
     solidSet: Set<number>,

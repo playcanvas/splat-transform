@@ -27,7 +27,7 @@ import { Mat4, Quat, Vec3 } from 'playcanvas';
 // -- Transform class --
 
 describe('Transform class', () => {
-    it('constructor defaults to identity', () => {
+    it('constructor defaults to identity', async () => {
         const t = new Transform();
         assertClose(t.translation.x, 0, 1e-10, 'tx');
         assertClose(t.translation.y, 0, 1e-10, 'ty');
@@ -39,7 +39,7 @@ describe('Transform class', () => {
         assertClose(t.scale, 1, 1e-10, 'scale');
     });
 
-    it('constructor clones inputs', () => {
+    it('constructor clones inputs', async () => {
         const pos = new Vec3(1, 2, 3);
         const rot = new Quat().setFromEulerAngles(0, 90, 0);
         const t = new Transform(pos, rot, 2);
@@ -53,11 +53,11 @@ describe('Transform class', () => {
         assertClose(t.scale, 2, 1e-10, 'scale');
     });
 
-    it('IDENTITY is identity', () => {
+    it('IDENTITY is identity', async () => {
         assert.ok(Transform.IDENTITY.isIdentity(), 'IDENTITY should be identity');
     });
 
-    it('fromEulers creates rotation-only transform', () => {
+    it('fromEulers creates rotation-only transform', async () => {
         const t = new Transform().fromEulers(0, 0, 180);
         assert.ok(!t.isIdentity(), 'euler(0,0,180) should not be identity');
         assertClose(t.translation.x, 0, 1e-10, 'tx');
@@ -66,13 +66,13 @@ describe('Transform class', () => {
         assertClose(t.scale, 1, 1e-10, 'scale');
     });
 
-    it('isIdentity with epsilon', () => {
+    it('isIdentity with epsilon', async () => {
         const t = new Transform(new Vec3(1e-7, 0, 0));
         assert.ok(t.isIdentity(1e-6), 'should be identity within epsilon');
         assert.ok(!t.isIdentity(1e-8), 'should not be identity with tight epsilon');
     });
 
-    it('clone creates independent copy', () => {
+    it('clone creates independent copy', async () => {
         const t = new Transform().fromEulers(0, 0, 180);
         const c = t.clone();
 
@@ -82,19 +82,19 @@ describe('Transform class', () => {
         assert.ok(!c.isIdentity(), 'cloned should still have rotation');
     });
 
-    it('invert produces correct inverse', () => {
+    it('invert produces correct inverse', async () => {
         const t = new Transform(new Vec3(1, 2, 3), new Quat().setFromEulerAngles(30, 45, 60), 2);
         const inv = t.clone().invert();
         const composed = t.mul(inv);
         assert.ok(composed.isIdentity(1e-5), 'T * T^-1 should be identity');
     });
 
-    it('invert of identity is identity', () => {
+    it('invert of identity is identity', async () => {
         const inv = Transform.IDENTITY.clone().invert();
         assert.ok(inv.isIdentity(), 'inverse of identity should be identity');
     });
 
-    it('mul composes correctly', () => {
+    it('mul composes correctly', async () => {
         const translate = new Transform(new Vec3(10, 0, 0));
         const scale = new Transform(undefined, undefined, 2);
 
@@ -116,7 +116,7 @@ describe('Transform class', () => {
         assertClose(p.x, 12, 1e-5, 'composed point x');
     });
 
-    it('getMatrix matches TRS', () => {
+    it('getMatrix matches TRS', async () => {
         const t = new Transform(new Vec3(1, 2, 3), new Quat().setFromEulerAngles(0, 90, 0), 2);
         const mat = new Mat4();
         t.getMatrix(mat);
@@ -132,7 +132,7 @@ describe('Transform class', () => {
         }
     });
 
-    it('euler(0,0,180) is self-inverse', () => {
+    it('euler(0,0,180) is self-inverse', async () => {
         const t = new Transform().fromEulers(0, 0, 180);
         const inv = t.clone().invert();
         const composed = t.clone().mul(inv);
@@ -147,17 +147,17 @@ describe('Transform class', () => {
 // -- computeWriteTransform --
 
 describe('computeWriteTransform', () => {
-    it('same-to-same returns null (identity delta)', () => {
+    it('same-to-same returns null (identity delta)', async () => {
         const result = computeWriteTransform(Transform.PLY, Transform.PLY);
         assert.strictEqual(result, null, 'same-to-same delta should be null');
     });
 
-    it('PLY-to-engine returns non-null (needs transform)', () => {
+    it('PLY-to-engine returns non-null (needs transform)', async () => {
         const result = computeWriteTransform(Transform.PLY, Transform.IDENTITY);
         assert.notStrictEqual(result, null, 'PLY-to-engine delta should not be null');
     });
 
-    it('identity-to-identity returns null', () => {
+    it('identity-to-identity returns null', async () => {
         const result = computeWriteTransform(Transform.IDENTITY, Transform.IDENTITY);
         assert.strictEqual(result, null, 'identity-to-identity should be null');
     });
@@ -172,18 +172,18 @@ describe('transformColumns', () => {
         testData = createMinimalTestData();
     });
 
-    it('returns original arrays when delta is null', () => {
+    it('returns original arrays when delta is null', async () => {
         const cols = transformColumns(testData, ['x', 'y', 'z'], null);
         assert.strictEqual(cols.get('x'), testData.getColumnByName('x').data, 'should be same reference');
         assert.strictEqual(cols.get('y'), testData.getColumnByName('y').data, 'should be same reference');
     });
 
-    it('returns original arrays when delta is identity', () => {
+    it('returns original arrays when delta is identity', async () => {
         const cols = transformColumns(testData, ['x', 'y', 'z'], Transform.IDENTITY);
         assert.strictEqual(cols.get('x'), testData.getColumnByName('x').data, 'should be same reference');
     });
 
-    it('transforms positions with PLY transform', () => {
+    it('transforms positions with PLY transform', async () => {
         const cols = transformColumns(testData, ['x', 'y', 'z'], Transform.PLY);
         const rawX = testData.getColumnByName('x').data;
         const rawY = testData.getColumnByName('y').data;
@@ -197,20 +197,20 @@ describe('transformColumns', () => {
         }
     });
 
-    it('returns original arrays for unaffected columns', () => {
+    it('returns original arrays for unaffected columns', async () => {
         const cols = transformColumns(testData, ['opacity', 'f_dc_0'], Transform.PLY);
         assert.strictEqual(cols.get('opacity'), testData.getColumnByName('opacity').data, 'opacity should be same reference');
         assert.strictEqual(cols.get('f_dc_0'), testData.getColumnByName('f_dc_0').data, 'f_dc_0 should be same reference');
     });
 
-    it('transforms rotation columns', () => {
+    it('transforms rotation columns', async () => {
         const cols = transformColumns(testData, ['rot_0', 'rot_1', 'rot_2', 'rot_3'], Transform.PLY);
 
         // Should return new arrays (not same reference)
         assert.notStrictEqual(cols.get('rot_0'), testData.getColumnByName('rot_0').data, 'rot_0 should be new array');
     });
 
-    it('transforms scale columns when scale != 1', () => {
+    it('transforms scale columns when scale != 1', async () => {
         const delta = new Transform(undefined, undefined, 2);
         const cols = transformColumns(testData, ['scale_0', 'scale_1', 'scale_2'], delta);
         const rawScale0 = testData.getColumnByName('scale_0').data;
@@ -221,7 +221,7 @@ describe('transformColumns', () => {
         }
     });
 
-    it('does not transform scale columns when scale == 1', () => {
+    it('does not transform scale columns when scale == 1', async () => {
         const cols = transformColumns(testData, ['scale_0'], Transform.PLY);
         assert.strictEqual(cols.get('scale_0'), testData.getColumnByName('scale_0').data, 'scale_0 should be same reference when scale=1');
     });
@@ -230,7 +230,7 @@ describe('transformColumns', () => {
 // -- Transform.transformPoint --
 
 describe('Transform.transformPoint', () => {
-    it('with identity transform is no-op', () => {
+    it('with identity transform is no-op', async () => {
         const point = new Vec3(1, 2, 3);
         Transform.IDENTITY.transformPoint(point, point);
         assertClose(point.x, 1, 1e-10, 'x');
@@ -238,7 +238,7 @@ describe('Transform.transformPoint', () => {
         assertClose(point.z, 3, 1e-10, 'z');
     });
 
-    it('inverse of PLY transform negates x and y', () => {
+    it('inverse of PLY transform negates x and y', async () => {
         const point = new Vec3(1, 2, 3);
         Transform.PLY.clone().invert().transformPoint(point, point);
         assertClose(point.x, -1, 1e-5, 'x');
@@ -250,12 +250,12 @@ describe('Transform.transformPoint', () => {
 // -- DataTable transform --
 
 describe('DataTable transform', () => {
-    it('defaults to identity', () => {
+    it('defaults to identity', async () => {
         const dt = new DataTable([new Column('x', new Float32Array([1]))]);
         assert.ok(dt.transform.isIdentity(), 'default should be identity');
     });
 
-    it('clone preserves transform', () => {
+    it('clone preserves transform', async () => {
         const dt = createMinimalTestData();
         dt.transform = Transform.PLY.clone();
 
@@ -267,7 +267,7 @@ describe('DataTable transform', () => {
         assertClose(cloned.transform.translation.x, 0, 1e-10, 'cloned should be independent');
     });
 
-    it('clone with row selection preserves transform', () => {
+    it('clone with row selection preserves transform', async () => {
         const dt = createMinimalTestData();
         dt.transform = new Transform().fromEulers(90, 0, 180);
 
@@ -280,7 +280,7 @@ describe('DataTable transform', () => {
 // -- combine with different transforms --
 
 describe('combine with transforms', () => {
-    it('preserves transform when all tables match', () => {
+    it('preserves transform when all tables match', async () => {
         const dt1 = createMinimalTestData();
         const dt2 = createMinimalTestData();
         dt1.transform = Transform.PLY;
@@ -291,7 +291,7 @@ describe('combine with transforms', () => {
         assert.strictEqual(result.numRows, dt1.numRows + dt2.numRows);
     });
 
-    it('converts to engine space when transforms differ', () => {
+    it('converts to engine space when transforms differ', async () => {
         const dt1 = createMinimalTestData();
         const dt2 = createMinimalTestData();
         dt1.transform = Transform.PLY;
@@ -306,14 +306,14 @@ describe('combine with transforms', () => {
 // -- processDataTable spatial filters with transform --
 
 describe('processDataTable spatial filters with transform', () => {
-    it('filterBox works correctly with non-identity transform', () => {
+    it('filterBox works correctly with non-identity transform', async () => {
         const dt = createMinimalTestData();
         dt.transform = Transform.PLY;
 
         // In engine space, euler(0,0,180) negates x and y.
         // Raw x values are centered around 0 (range approx -1.5 to 1.5).
         // Engine x = -raw_x. So filtering engine x >= 0 keeps raw x <= 0.
-        const result = processDataTable(dt, [{
+        const result = await processDataTable(dt, [{
             kind: 'filterBox',
             min: new Vec3(0, -1e6, -1e6),
             max: new Vec3(1e6, 1e6, 1e6)
@@ -329,12 +329,12 @@ describe('processDataTable spatial filters with transform', () => {
         }
     });
 
-    it('filterSphere works correctly with non-identity transform', () => {
+    it('filterSphere works correctly with non-identity transform', async () => {
         const dt = createMinimalTestData();
         dt.transform = Transform.PLY;
 
         // Engine (0,0,0) maps to raw (0,0,0) for euler(0,0,180)
-        const result = processDataTable(dt, [{
+        const result = await processDataTable(dt, [{
             kind: 'filterSphere',
             center: new Vec3(0, 0, 0),
             radius: 1.0
@@ -352,11 +352,11 @@ describe('processDataTable spatial filters with transform', () => {
         }
     });
 
-    it('filterBands preserves transform', () => {
+    it('filterBands preserves transform', async () => {
         const dt = createMinimalTestData({ includeSH: true, shBands: 2 });
         dt.transform = Transform.PLY;
 
-        const result = processDataTable(dt, [{
+        const result = await processDataTable(dt, [{
             kind: 'filterBands',
             value: 1
         }]);
@@ -368,12 +368,12 @@ describe('processDataTable spatial filters with transform', () => {
 // -- Round-trip transform verification --
 
 describe('Round-trip transform scenarios', () => {
-    it('PLY round-trip: computeWriteTransform returns null', () => {
+    it('PLY round-trip: computeWriteTransform returns null', async () => {
         const delta = computeWriteTransform(Transform.PLY, Transform.PLY);
         assert.strictEqual(delta, null, 'PLY->PLY write should need no transform');
     });
 
-    it('PLY->engine: data is correctly transformed to engine space', () => {
+    it('PLY->engine: data is correctly transformed to engine space', async () => {
         const dt = createMinimalTestData();
         dt.transform = Transform.PLY;
 
@@ -391,7 +391,7 @@ describe('Round-trip transform scenarios', () => {
         }
     });
 
-    it('engine -> PLY: data is correctly transformed to PLY space', () => {
+    it('engine -> PLY: data is correctly transformed to PLY space', async () => {
         const dt = createMinimalTestData();
         dt.transform = Transform.IDENTITY;
 

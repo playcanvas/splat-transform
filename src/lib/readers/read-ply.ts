@@ -1,7 +1,7 @@
 import { isCompressedPly, decompressPly } from './decompress-ply';
-import { Column, DataTable } from '../data-table/data-table';
+import { Column, DataTable } from '../data-table';
 import { ReadSource, ReadStream } from '../io/read';
-import { Transform } from '../utils/math';
+import { Transform } from '../utils';
 
 type PlyProperty = {
     name: string;               // 'x', f_dc_0', etc

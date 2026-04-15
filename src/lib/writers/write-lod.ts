@@ -1,15 +1,12 @@
 import { dirname, resolve } from 'pathe';
 import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
-import { writeSog, type DeviceCreator } from './write-sog.js';
-import { TypedArray, DataTable } from '../data-table/data-table';
-import { sortMortonOrder } from '../data-table/morton-order';
-import { convertToSpace } from '../data-table/transform';
+import { writeSog } from './write-sog.js';
+import { type TypedArray, DataTable, sortMortonOrder, convertToSpace } from '../data-table';
 import { type FileSystem } from '../io/write';
-import { BTreeNode, BTree } from '../spatial/b-tree';
-import { logger } from '../utils/logger';
-import { Transform } from '../utils/math';
-
+import { BTreeNode, BTree } from '../spatial';
+import type { DeviceCreator } from '../types';
+import { logger, Transform } from '../utils';
 
 type Aabb = {
     min: number[],

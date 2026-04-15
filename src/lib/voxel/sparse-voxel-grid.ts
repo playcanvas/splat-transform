@@ -1,9 +1,6 @@
-import { MaskStore } from './mask-store';
-import {
-    BlockAccumulator,
-    mortonToXYZ,
-    xyzToMorton
-} from './sparse-octree';
+import { BlockMaskBuffer } from './block-mask-buffer';
+import { BlockMaskMap } from './block-mask-map';
+import { mortonToXYZ, xyzToMorton } from './morton';
 
 const SOLID_LO = 0xFFFFFFFF >>> 0;
 const SOLID_HI = 0xFFFFFFFF >>> 0;
@@ -41,7 +38,7 @@ const FACE_MASKS_HI = [
 // Each block has a type stored in blockType[blockIdx]:
 //   0 (EMPTY):  no voxels set
 //   1 (SOLID):  all 64 voxels set, no mask entry
-//   2 (MIXED):  partial voxels, lo/hi mask in MaskStore
+//   2 (MIXED):  partial voxels, lo/hi mask in BlockMaskMap
 //
 // An occupancy bitfield is maintained in parallel for fast scanning
 // of occupied blocks (used by active-pair computation in dilation).
@@ -58,7 +55,7 @@ class SparseVoxelGrid {
 
     blockType: Uint8Array;
     occupancy: Uint32Array;
-    masks: MaskStore;
+    masks: BlockMaskMap;
 
     constructor(nx: number, ny: number, nz: number) {
         this.nx = nx;
@@ -71,7 +68,7 @@ class SparseVoxelGrid {
         const totalBlocks = this.nbx * this.nby * this.nbz;
         this.blockType = new Uint8Array(totalBlocks);
         this.occupancy = new Uint32Array(((totalBlocks) + 31) >>> 5);
-        this.masks = new MaskStore();
+        this.masks = new BlockMaskMap();
     }
 
     getVoxel(ix: number, iy: number, iz: number): number {
@@ -144,7 +141,7 @@ class SparseVoxelGrid {
         return g;
     }
 
-    static fromAccumulator(acc: BlockAccumulator, nx: number, ny: number, nz: number): SparseVoxelGrid {
+    static fromBuffer(acc: BlockMaskBuffer, nx: number, ny: number, nz: number): SparseVoxelGrid {
         const g = new SparseVoxelGrid(nx, ny, nz);
         const solidMortons = acc.getSolidBlocks();
         for (let i = 0; i < solidMortons.length; i++) {
@@ -164,12 +161,12 @@ class SparseVoxelGrid {
         return g;
     }
 
-    toAccumulator(
+    toBuffer(
         cropMinBx: number, cropMinBy: number, cropMinBz: number,
         cropMaxBx: number, cropMaxBy: number, cropMaxBz: number,
         defaultSolid = false
-    ): BlockAccumulator {
-        const acc = new BlockAccumulator();
+    ): BlockMaskBuffer {
+        const acc = new BlockMaskBuffer();
         for (let bz = cropMinBz; bz < cropMaxBz; bz++) {
             for (let by = cropMinBy; by < cropMaxBy; by++) {
                 for (let bx = cropMinBx; bx < cropMaxBx; bx++) {
@@ -201,11 +198,11 @@ class SparseVoxelGrid {
         return acc;
     }
 
-    toAccumulatorInverted(
+    toBufferInverted(
         cropMinBx: number, cropMinBy: number, cropMinBz: number,
         cropMaxBx: number, cropMaxBy: number, cropMaxBz: number
-    ): BlockAccumulator {
-        const acc = new BlockAccumulator();
+    ): BlockMaskBuffer {
+        const acc = new BlockMaskBuffer();
         for (let bz = cropMinBz; bz < cropMaxBz; bz++) {
             for (let by = cropMinBy; by < cropMaxBy; by++) {
                 for (let bx = cropMinBx; bx < cropMaxBx; bx++) {
@@ -232,6 +229,75 @@ class SparseVoxelGrid {
             }
         }
         return acc;
+    }
+
+    /**
+     * Get the bounding box of occupied blocks.
+     *
+     * @returns Block coordinate bounds, or null if no blocks are occupied.
+     */
+    getOccupiedBlockBounds(): {
+        minBx: number; minBy: number; minBz: number;
+        maxBx: number; maxBy: number; maxBz: number;
+    } | null {
+        const { nbx, nby } = this;
+        const totalBlocks = this.nbx * this.nby * this.nbz;
+        let minBx = nbx, minBy = nby, minBz = this.nbz;
+        let maxBx = 0, maxBy = 0, maxBz = 0;
+        for (let w = 0; w < this.occupancy.length; w++) {
+            let bits = this.occupancy[w];
+            while (bits) {
+                const bitPos = 31 - Math.clz32(bits & -bits);
+                const blockIdx = w * 32 + bitPos;
+                if (blockIdx >= totalBlocks) break;
+                const bx = blockIdx % nbx;
+                const byBz = (blockIdx / nbx) | 0;
+                const by = byBz % nby;
+                const bz = (byBz / nby) | 0;
+                if (bx < minBx) minBx = bx;
+                if (bx > maxBx) maxBx = bx;
+                if (by < minBy) minBy = by;
+                if (by > maxBy) maxBy = by;
+                if (bz < minBz) minBz = bz;
+                if (bz > maxBz) maxBz = bz;
+                bits &= bits - 1;
+            }
+        }
+        return minBx <= maxBx ? { minBx, minBy, minBz, maxBx, maxBy, maxBz } : null;
+    }
+
+    /**
+     * Find the nearest free (unblocked) voxel to a seed position using
+     * expanding cube shells.
+     *
+     * @param blocked - Grid to search for free cells in.
+     * @param seedIx - Seed voxel X coordinate.
+     * @param seedIy - Seed voxel Y coordinate.
+     * @param seedIz - Seed voxel Z coordinate.
+     * @param maxRadius - Maximum search radius in voxels.
+     * @returns Coordinates of the nearest free voxel, or null.
+     */
+    static findNearestFreeCell(
+        blocked: SparseVoxelGrid,
+        seedIx: number, seedIy: number, seedIz: number,
+        maxRadius: number
+    ): { ix: number; iy: number; iz: number } | null {
+        const { nx, ny, nz } = blocked;
+        for (let r = 1; r <= maxRadius; r++) {
+            for (let dz = -r; dz <= r; dz++) {
+                for (let dy = -r; dy <= r; dy++) {
+                    for (let dx = -r; dx <= r; dx++) {
+                        if (Math.abs(dx) !== r && Math.abs(dy) !== r && Math.abs(dz) !== r) continue;
+                        const ix = seedIx + dx;
+                        const iy = seedIy + dy;
+                        const iz = seedIz + dz;
+                        if (ix < 0 || ix >= nx || iy < 0 || iy >= ny || iz < 0 || iz >= nz) continue;
+                        if (!blocked.getVoxel(ix, iy, iz)) return { ix, iy, iz };
+                    }
+                }
+            }
+        }
+        return null;
     }
 }
 

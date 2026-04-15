@@ -1,15 +1,22 @@
-import { BlockAccumulator, mortonToXYZ, xyzToMorton, type Bounds } from './sparse-octree';
+import type { Bounds } from '../data-table';
+import { BlockMaskBuffer } from '../voxel/block-mask-buffer';
+import { mortonToXYZ, xyzToMorton } from '../voxel/morton';
 
 /**
- * Result of marching cubes surface extraction.
+ * A simple triangle mesh with positions and indices.
  */
-interface MarchingCubesMesh {
+interface Mesh {
     /** Vertex positions (3 floats per vertex) */
     positions: Float32Array;
 
     /** Triangle indices (3 indices per triangle) */
     indices: Uint32Array;
 }
+
+/**
+ * Result of marching cubes surface extraction.
+ */
+type MarchingCubesMesh = Mesh;
 
 // ============================================================================
 // Voxel bit helpers
@@ -37,22 +44,22 @@ function isVoxelSet(lo: number, hi: number, lx: number, ly: number, lz: number):
 }
 
 // ============================================================================
-// Occupancy grid from BlockAccumulator
+// Occupancy grid from BlockMaskBuffer
 // ============================================================================
 
 /**
- * Build a fast-lookup occupancy structure from a BlockAccumulator.
+ * Build a fast-lookup occupancy structure from a BlockMaskBuffer.
  * Returns a function that queries whether a voxel at global coordinates
  * (vx, vy, vz) is occupied.
  *
- * @param accumulator - Block data
+ * @param buffer - Block data
  * @returns Lookup function (vx, vy, vz) => boolean
  */
-function buildOccupancyLookup(accumulator: BlockAccumulator): (vx: number, vy: number, vz: number) => boolean {
+function buildOccupancyLookup(buffer: BlockMaskBuffer): (vx: number, vy: number, vz: number) => boolean {
     // Map from "bx,by,bz" encoded as single number to {lo,hi} or solid flag
     // Block key = bx + by * stride + bz * stride^2 where stride is large enough
-    const mixed = accumulator.getMixedBlocks();
-    const solid = accumulator.getSolidBlocks();
+    const mixed = buffer.getMixedBlocks();
+    const solid = buffer.getSolidBlocks();
 
     // Use a Map<number, number> where value encodes index into mask arrays.
     // For solid blocks, store -1 as sentinel.
@@ -89,30 +96,30 @@ function buildOccupancyLookup(accumulator: BlockAccumulator): (vx: number, vy: n
 // ============================================================================
 
 /**
- * Extract a triangle mesh from a BlockAccumulator using marching cubes.
+ * Extract a triangle mesh from a BlockMaskBuffer using marching cubes.
  *
  * Each voxel is treated as a cell in the marching cubes grid. Corner values
  * are binary (0 = empty, 1 = occupied) with a 0.5 threshold. Vertices are
  * placed at edge midpoints, producing a mesh that follows voxel boundaries.
  *
- * @param accumulator - Voxel block data after filtering
+ * @param buffer - Voxel block data after filtering
  * @param gridBounds - Grid bounds aligned to block boundaries
  * @param voxelResolution - Size of each voxel in world units
  * @returns Mesh with positions and indices
  */
 function marchingCubes(
-    accumulator: BlockAccumulator,
+    buffer: BlockMaskBuffer,
     gridBounds: Bounds,
     voxelResolution: number
 ): MarchingCubesMesh {
-    const isOccupied = buildOccupancyLookup(accumulator);
+    const isOccupied = buildOccupancyLookup(buffer);
 
     // Collect all voxel coordinates that need processing.
     // We need to check every cell where at least one corner differs from
     // the others, which means we need to check occupied voxels and their
     // immediate neighbors.
-    const mixed = accumulator.getMixedBlocks();
-    const solid = accumulator.getSolidBlocks();
+    const mixed = buffer.getMixedBlocks();
+    const solid = buffer.getSolidBlocks();
 
     // Collect set of all block coordinates that exist
     const blockSet = new Set<number>();
@@ -166,6 +173,12 @@ function marchingCubes(
         return idx;
     };
 
+    // Track processed orphan cells to avoid duplicate triangles.
+    // When a cell's owner block doesn't exist, multiple neighboring blocks
+    // can reach it via the -1 boundary extension. The Set ensures each
+    // orphan cell is only processed once.
+    const processedOrphans = new Set<number>();
+
     // Process all blocks and their boundary neighbors
     const allMortons: number[] = [];
     blockSet.forEach(m => allMortons.push(m));
@@ -195,6 +208,12 @@ function marchingCubes(
                         // Guard negative coords: xyzToMorton assumes non-negative inputs.
                         if (ownerBx >= 0 && ownerBy >= 0 && ownerBz >= 0 &&
                             blockSet.has(xyzToMorton(ownerBx, ownerBy, ownerBz))) continue;
+
+                        // Owner block doesn't exist — deduplicate so only the
+                        // first neighboring block to reach this cell emits triangles.
+                        const cellKey = (vx + 1) + (vy + 1) * strideX + (vz + 1) * strideXY;
+                        if (processedOrphans.has(cellKey)) continue;
+                        processedOrphans.add(cellKey);
                     }
 
                     // Get corner values for this cell (8 corners)
@@ -556,4 +575,4 @@ const TRI_TABLE: number[][] = [
 ];
 
 export { marchingCubes };
-export type { MarchingCubesMesh };
+export type { Mesh, MarchingCubesMesh };

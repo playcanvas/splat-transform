@@ -23,19 +23,16 @@ type Options = {
     /** Size of each voxel in world units for voxel output. Default: 0.05 */
     voxelResolution?: number;
 
-    /** Opacity threshold for solid voxels - voxels below this are considered empty. Default: 0.5 */
+    /** Opacity threshold for solid voxels - voxels below this are considered empty. Default: 0.1 */
     opacityCutoff?: number;
 
-    /** Enable navigation simplification with default capsule (height 1.6, radius 0.2) and seed (0,0,0). Default: true (set to false to disable). */
-    navSimplify?: boolean;
-
-    /** Exterior fill radius in world units. Set to 0 to disable exterior fill. When omitted, defaults to 1.6 when nav is active. Requires navSeed to be set; ignored without it. */
+    /** Exterior fill radius in world units. Enables exterior fill when set. Requires navSeed. */
     navExteriorRadius?: number;
 
-    /** Capsule dimensions for navigation simplification. Height of 0 disables interior carve. Default: { height: 1.6, radius: 0.2 } */
+    /** Capsule dimensions for interior carve. Height of 0 disables interior carve. Requires navSeed. */
     navCapsule?: { height: number; radius: number };
 
-    /** Seed position in world space for navigation flood fill. Default: { x: 0, y: 0, z: 0 } */
+    /** Seed position in world space for exterior fill and interior carve flood fill. */
     navSeed?: { x: number; y: number; z: number };
 
     /** Whether to generate a collision mesh (.collision.glb) alongside voxel output. Default: false */
@@ -54,4 +51,14 @@ type Param = {
     value: string;
 };
 
-export type { Options, Param };
+/**
+ * A function that creates a PlayCanvas GraphicsDevice on demand.
+ *
+ * Used for GPU-accelerated operations such as SOG compression and voxelization.
+ * The application is responsible for caching if needed.
+ *
+ * @returns Promise resolving to a GraphicsDevice instance.
+ */
+type DeviceCreator = () => Promise<import('playcanvas').GraphicsDevice>;
+
+export type { Options, Param, DeviceCreator };

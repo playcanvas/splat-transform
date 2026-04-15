@@ -1,9 +1,9 @@
 import { GraphicsDevice } from 'playcanvas';
 
 import { KdTree } from './kd-tree';
-import { Column, DataTable } from '../data-table/data-table';
-import { GpuClustering } from '../gpu/gpu-clustering';
-import { logger } from '../utils/logger';
+import { Column, DataTable } from '../data-table';
+import { GpuClustering } from '../gpu';
+import { logger } from '../utils';
 
 // use floyd's algorithm to pick m unique random indices from 0..n-1
 const pickRandomIndices = (n: number, m: number) => {
