@@ -14,6 +14,7 @@ import {
     carveInterior,
     fillExterior,
     fillFloor,
+    findClusterVoxelFlood,
     type NavSeed,
     voxelizeToBuffer
 } from '../voxel';
@@ -282,7 +283,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     if (collisionMesh) stepCount += 2;
     if (hasFillExterior) stepCount += 1;
     if (hasFloorFill) stepCount += 1;
-    if (hasNav) stepCount += 1;
+    if (hasNav) stepCount += 2;
     logger.progress.begin(stepCount);
 
     // Build a DataTable in engine space containing only the columns needed
@@ -358,6 +359,25 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             );
             buffer = navResult.buffer;
             gridBounds = navResult.gridBounds;
+
+            logger.progress.step('Remove disconnected');
+            const nx = Math.round((gridBounds.max.x - gridBounds.min.x) / voxelResolution);
+            const ny = Math.round((gridBounds.max.y - gridBounds.min.y) / voxelResolution);
+            const nz = Math.round((gridBounds.max.z - gridBounds.min.z) / voxelResolution);
+            const seedIx = Math.max(0, Math.min(Math.floor((navSeed!.x - gridBounds.min.x) / voxelResolution), nx - 1));
+            const seedIy = Math.max(0, Math.min(Math.floor((navSeed!.y - gridBounds.min.y) / voxelResolution), ny - 1));
+            const seedIz = Math.max(0, Math.min(Math.floor((navSeed!.z - gridBounds.min.z) / voxelResolution), nz - 1));
+
+            const floodResult = findClusterVoxelFlood(buffer, nx, ny, nz, seedIx, seedIy, seedIz);
+            if (floodResult) {
+                const { ccSet, visited } = floodResult;
+                if (ccSet.size < buffer.count) {
+                    logger.log(`remove disconnected: keeping ${ccSet.size} of ${buffer.count} blocks`);
+                    buffer = visited.toBuffer(0, 0, 0, nx >> 2, ny >> 2, nz >> 2);
+                } else {
+                    logger.log('remove disconnected: all blocks connected, no filtering needed');
+                }
+            }
         }
 
         if (hasFloorFill) {
