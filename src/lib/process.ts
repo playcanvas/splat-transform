@@ -189,9 +189,9 @@ type FilterCluster = {
     voxelResolution?: number;
     /** Seed position for finding the connected component. Default: Vec3(0,0,0) */
     seed?: Vec3;
-    /** Opacity threshold for solid voxels. Default: 0.99 */
+    /** Opacity threshold for solid voxels. Default: 0.999 */
     opacityCutoff?: number;
-    /** Minimum Gaussian contribution at a cluster voxel center to be kept. Default: 1/255 */
+    /** Minimum Gaussian contribution at a cluster voxel center to be kept. Default: 0.1 */
     minContribution?: number;
 };
 

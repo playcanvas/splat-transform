@@ -541,7 +541,7 @@ ACTIONS (can be repeated, in any order)
                                               Default: size=0.05, opacity=0.1, min=0.004 (1/255)
     -D, --filter-cluster   [res,op,min]     Keep only the connected cluster at --seed-pos.
                                               GPU-voxelizes at coarse resolution (res world units/voxel).
-                                              Default: res=1.0, opacity=0.99, min=0.004 (1/255)
+                                              Default: res=1.0, opacity=0.999, min=0.1
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
     -l, --lod              <n>              Specify the level of detail, n >= 0
     -m, --summary                           Print per-column statistics to stdout

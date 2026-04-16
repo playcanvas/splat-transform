@@ -141,8 +141,8 @@ const findClusterVoxelFlood = (
  * @param createDevice - Function to create a GPU device for voxelization.
  * @param voxelResolution - Voxel size in world units for coarse voxelization. Default: 1.0.
  * @param seed - Seed position in world space. Default: (0,0,0).
- * @param opacityCutoff - Opacity threshold for solid voxels. Default: 0.99.
- * @param minContribution - Minimum Gaussian contribution at a cluster voxel center to be kept. Default: 1/255.
+ * @param opacityCutoff - Opacity threshold for solid voxels. Default: 0.999.
+ * @param minContribution - Minimum Gaussian contribution at a cluster voxel center to be kept. Default: 0.1.
  * @returns Filtered DataTable containing only Gaussians in the seed's cluster.
  */
 const filterCluster = async (
@@ -150,8 +150,8 @@ const filterCluster = async (
     createDevice: DeviceCreator,
     voxelResolution: number = 1.0,
     seed: Vec3 = Vec3.ZERO,
-    opacityCutoff: number = 0.99,
-    minContribution: number = 1 / 255
+    opacityCutoff: number = 0.999,
+    minContribution: number = 0.1
 ): Promise<DataTable> => {
     if (!Number.isFinite(voxelResolution) || voxelResolution <= 0) {
         throw new Error(`filterCluster: voxelResolution must be a positive finite number, got ${voxelResolution}`);

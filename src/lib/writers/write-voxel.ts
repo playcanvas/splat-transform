@@ -20,7 +20,7 @@ import {
 } from '../voxel';
 import { BlockMaskBuffer } from '../voxel/block-mask-buffer';
 import { mortonToXYZ } from '../voxel/morton';
-import { SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
+import { BLOCK_SOLID, SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
 
 /**
  * Options for writing a voxel octree file.
@@ -154,6 +154,89 @@ const cropToOccupied = (
     }
 
     const grid = SparseVoxelGrid.fromBuffer(buffer, nx, ny, nz);
+    const croppedBuffer = grid.toBuffer(minBx, minBy, minBz, cropMaxBx, cropMaxBy, cropMaxBz);
+
+    const blockSize = 4 * voxelResolution;
+    const croppedMin = new Vec3(
+        gridBounds.min.x + minBx * blockSize,
+        gridBounds.min.y + minBy * blockSize,
+        gridBounds.min.z + minBz * blockSize
+    );
+    const croppedBounds: Bounds = {
+        min: croppedMin,
+        max: new Vec3(
+            croppedMin.x + (cropMaxBx - minBx) * blockSize,
+            croppedMin.y + (cropMaxBy - minBy) * blockSize,
+            croppedMin.z + (cropMaxBz - minBz) * blockSize
+        )
+    };
+
+    return { buffer: croppedBuffer, gridBounds: croppedBounds };
+};
+
+/**
+ * Crop a voxel buffer to fit the navigable (non-fully-solid) region tightly.
+ * Since the runtime treats outside-the-grid as solid, we only need to include
+ * blocks that contain at least one empty voxel. Fully-solid blocks beyond the
+ * navigable boundary are redundant.
+ *
+ * @param buffer - Voxelized scene data.
+ * @param gridBounds - Axis-aligned bounds of the voxel grid.
+ * @param voxelResolution - Size of each voxel in world units.
+ * @returns Cropped buffer and grid bounds.
+ */
+const cropToNavigable = (
+    buffer: BlockMaskBuffer,
+    gridBounds: Bounds,
+    voxelResolution: number
+): { buffer: BlockMaskBuffer; gridBounds: Bounds } => {
+    if (buffer.count === 0) {
+        return { buffer, gridBounds };
+    }
+
+    const nx = Math.round((gridBounds.max.x - gridBounds.min.x) / voxelResolution);
+    const ny = Math.round((gridBounds.max.y - gridBounds.min.y) / voxelResolution);
+    const nz = Math.round((gridBounds.max.z - gridBounds.min.z) / voxelResolution);
+    const nbx = nx >> 2;
+    const nby = ny >> 2;
+    const nbz = nz >> 2;
+
+    const grid = SparseVoxelGrid.fromBuffer(buffer, nx, ny, nz);
+
+    let minBx = nbx, minBy = nby, minBz = nbz;
+    let maxBx = 0, maxBy = 0, maxBz = 0;
+    let found = false;
+
+    for (let bz = 0; bz < nbz; bz++) {
+        for (let by = 0; by < nby; by++) {
+            for (let bx = 0; bx < nbx; bx++) {
+                const blockIdx = bx + by * nbx + bz * (nbx * nby);
+                if (grid.blockType[blockIdx] !== BLOCK_SOLID) {
+                    if (bx < minBx) minBx = bx;
+                    if (by < minBy) minBy = by;
+                    if (bz < minBz) minBz = bz;
+                    if (bx > maxBx) maxBx = bx;
+                    if (by > maxBy) maxBy = by;
+                    if (bz > maxBz) maxBz = bz;
+                    found = true;
+                }
+            }
+        }
+    }
+
+    if (!found) {
+        return { buffer, gridBounds };
+    }
+
+    const cropMaxBx = maxBx + 1;
+    const cropMaxBy = maxBy + 1;
+    const cropMaxBz = maxBz + 1;
+
+    if (minBx === 0 && minBy === 0 && minBz === 0 &&
+        cropMaxBx === nbx && cropMaxBy === nby && cropMaxBz === nbz) {
+        return { buffer, gridBounds };
+    }
+
     const croppedBuffer = grid.toBuffer(minBx, minBy, minBz, cropMaxBx, cropMaxBy, cropMaxBz);
 
     const blockSize = 4 * voxelResolution;
@@ -388,6 +471,10 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             buffer = floorResult.buffer;
             gridBounds = floorResult.gridBounds;
         }
+
+        const finalCrop = cropToNavigable(buffer, gridBounds, voxelResolution);
+        buffer = finalCrop.buffer;
+        gridBounds = finalCrop.gridBounds;
 
         const glbBytes = collisionMesh ?
             await buildCollisionMesh(buffer, gridBounds, voxelResolution, meshSimplifyError) :
