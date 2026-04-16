@@ -1,5 +1,7 @@
+import { Vec3 } from 'playcanvas';
+
 import { buildCollisionMesh } from './collision-glb';
-import { Column, DataTable, computeGaussianExtents, computeWriteTransform, transformColumns } from '../data-table';
+import { Column, DataTable, computeGaussianExtents, computeWriteTransform, transformColumns, type Bounds } from '../data-table';
 import { GpuVoxelization } from '../gpu';
 import { type FileSystem, writeFile } from '../io/write';
 import { GaussianBVH } from '../spatial';
@@ -15,6 +17,9 @@ import {
     type NavSeed,
     voxelizeToBuffer
 } from '../voxel';
+import { BlockMaskBuffer } from '../voxel/block-mask-buffer';
+import { mortonToXYZ } from '../voxel/morton';
+import { SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
 
 /**
  * Options for writing a voxel octree file.
@@ -88,6 +93,85 @@ interface VoxelMetadata {
     /** Total number of Uint32 entries in the leafData array */
     leafDataCount: number;
 }
+
+/**
+ * Crop a voxel buffer and its grid bounds to the occupied block range.
+ * Removes empty padding that arises from Gaussian 3-sigma extents being
+ * much larger than the actual solid voxel footprint.
+ *
+ * @param buffer - Voxelized scene data.
+ * @param gridBounds - Axis-aligned bounds of the voxel grid.
+ * @param voxelResolution - Size of each voxel in world units.
+ * @returns Cropped buffer and grid bounds.
+ */
+const cropToOccupied = (
+    buffer: BlockMaskBuffer,
+    gridBounds: Bounds,
+    voxelResolution: number
+): { buffer: BlockMaskBuffer; gridBounds: Bounds } => {
+    if (buffer.count === 0) {
+        return { buffer, gridBounds };
+    }
+
+    const nx = Math.round((gridBounds.max.x - gridBounds.min.x) / voxelResolution);
+    const ny = Math.round((gridBounds.max.y - gridBounds.min.y) / voxelResolution);
+    const nz = Math.round((gridBounds.max.z - gridBounds.min.z) / voxelResolution);
+    const nbx = nx >> 2;
+    const nby = ny >> 2;
+    const nbz = nz >> 2;
+
+    let minBx = nbx, minBy = nby, minBz = nbz;
+    let maxBx = 0, maxBy = 0, maxBz = 0;
+
+    const scanMorton = (morton: number) => {
+        const [bx, by, bz] = mortonToXYZ(morton);
+        if (bx < minBx) minBx = bx;
+        if (by < minBy) minBy = by;
+        if (bz < minBz) minBz = bz;
+        if (bx > maxBx) maxBx = bx;
+        if (by > maxBy) maxBy = by;
+        if (bz > maxBz) maxBz = bz;
+    };
+
+    const solidMortons = buffer.getSolidBlocks();
+    for (let i = 0; i < solidMortons.length; i++) scanMorton(solidMortons[i]);
+
+    const mixed = buffer.getMixedBlocks();
+    for (let i = 0; i < mixed.morton.length; i++) scanMorton(mixed.morton[i]);
+
+    if (minBx > maxBx) {
+        return { buffer, gridBounds };
+    }
+
+    const cropMaxBx = maxBx + 1;
+    const cropMaxBy = maxBy + 1;
+    const cropMaxBz = maxBz + 1;
+
+    if (minBx === 0 && minBy === 0 && minBz === 0 &&
+        cropMaxBx === nbx && cropMaxBy === nby && cropMaxBz === nbz) {
+        return { buffer, gridBounds };
+    }
+
+    const grid = SparseVoxelGrid.fromBuffer(buffer, nx, ny, nz);
+    const croppedBuffer = grid.toBuffer(minBx, minBy, minBz, cropMaxBx, cropMaxBy, cropMaxBz);
+
+    const blockSize = 4 * voxelResolution;
+    const croppedMin = new Vec3(
+        gridBounds.min.x + minBx * blockSize,
+        gridBounds.min.y + minBy * blockSize,
+        gridBounds.min.z + minBz * blockSize
+    );
+    const croppedBounds: Bounds = {
+        min: croppedMin,
+        max: new Vec3(
+            croppedMin.x + (cropMaxBx - minBx) * blockSize,
+            croppedMin.y + (cropMaxBy - minBy) * blockSize,
+            croppedMin.z + (cropMaxBz - minBz) * blockSize
+        )
+    };
+
+    return { buffer: croppedBuffer, gridBounds: croppedBounds };
+};
 
 /**
  * Write octree data to files.
@@ -250,6 +334,10 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
 
         logger.progress.step('Filtering');
         // buffer = filterAndFillBlocks(buffer);
+
+        const cropResult = cropToOccupied(buffer, gridBounds, voxelResolution);
+        buffer = cropResult.buffer;
+        gridBounds = cropResult.gridBounds;
 
         if (hasFillExterior) {
             logger.progress.step('Fill exterior');

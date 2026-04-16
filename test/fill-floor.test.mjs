@@ -150,7 +150,7 @@ describe('fillFloor', function () {
                 `Edge column at (${edgeIx}, *, ${edgeIz}) within dilation radius should be filled below floor (got ${solidCount}/${floorVoxelY})`);
         });
 
-        it('should not fill columns beyond dilation radius', function () {
+        it('should fill columns beyond dilation radius solid to the top', function () {
             const sizeXZ = 10;
             const sizeY = 4;
             const floorBlockY = 1;
@@ -170,6 +170,7 @@ describe('fillFloor', function () {
 
             // halfExtent = ceil(1.0 / 0.25) = 4. Floor edge at voxel 11.
             // Column at voxel 20 (block 5) is 9 voxels past the edge, beyond radius.
+            // With no floor even after dilation, it should be filled solid to the top.
             const farIx = 5 * 4;
             const farIz = 5 * 4;
 
@@ -178,8 +179,8 @@ describe('fillFloor', function () {
                 if (grid.getVoxel(farIx, iy, farIz)) solidCount++;
             }
 
-            assert.strictEqual(solidCount, 0,
-                `Column at (${farIx}, *, ${farIz}) beyond dilation radius should not be filled`);
+            assert.strictEqual(solidCount, grid.ny,
+                `Column at (${farIx}, *, ${farIz}) beyond dilation radius should be filled solid to the top`);
         });
     });
 
@@ -233,6 +234,110 @@ describe('fillFloor', function () {
 
             assert.strictEqual(belowFloor, 0,
                 'Floor-having columns should not have fill below them');
+        });
+    });
+
+    describe('no-floor columns (scene edges)', function () {
+        it('should fill completely empty columns solid from bottom to top', function () {
+            // Floor covers only a small part of the grid (blocks 0..1 in XZ).
+            // Grid extends to block 7 in XZ. Dilation is small (1 voxel radius).
+            // Columns far from the floor have no floor even after dilation.
+            const sizeXZ = 8;
+            const sizeY = 4;
+            const floorBlockY = 1;
+
+            const acc = new BlockMaskBuffer();
+            for (let bz = 0; bz < 2; bz++) {
+                for (let bx = 0; bx < 2; bx++) {
+                    acc.addBlock(xyzToMorton(bx, floorBlockY, bz), SOLID_LO, SOLID_HI);
+                }
+            }
+            const worldSize = sizeXZ * 4 * voxelResolution;
+            const worldY = sizeY * 4 * voxelResolution;
+            const gridBounds = alignGridBounds(0, 0, 0, worldSize, worldY, worldSize, voxelResolution);
+
+            const smallDilation = 0.25;
+            const result = fillFloor(acc, gridBounds, voxelResolution, smallDilation);
+            const grid = bufferToGrid(result.buffer, result.gridBounds, voxelResolution);
+
+            // Column at block 6 is far from floor, no dilation can reach it.
+            const farIx = 6 * 4;
+            const farIz = 6 * 4;
+
+            let solidCount = 0;
+            for (let iy = 0; iy < grid.ny; iy++) {
+                if (grid.getVoxel(farIx, iy, farIz)) solidCount++;
+            }
+
+            assert.strictEqual(solidCount, grid.ny,
+                `No-floor column at (${farIx}, *, ${farIz}) should be completely solid (got ${solidCount}/${grid.ny})`);
+        });
+
+        it('should fill all no-floor columns, not just those adjacent to floor', function () {
+            // Verify every column without a floor gets filled solid.
+            const sizeXZ = 4;
+            const sizeY = 4;
+            const floorBlockY = 1;
+
+            // Floor only at block (0, 1, 0)
+            const acc = new BlockMaskBuffer();
+            acc.addBlock(xyzToMorton(0, floorBlockY, 0), SOLID_LO, SOLID_HI);
+
+            const worldSize = sizeXZ * 4 * voxelResolution;
+            const worldY = sizeY * 4 * voxelResolution;
+            const gridBounds = alignGridBounds(0, 0, 0, worldSize, worldY, worldSize, voxelResolution);
+
+            const smallDilation = 0.25;
+            const result = fillFloor(acc, gridBounds, voxelResolution, smallDilation);
+            const grid = bufferToGrid(result.buffer, result.gridBounds, voxelResolution);
+
+            // Check a column far from the single floor block
+            const farIx = 3 * 4;
+            const farIz = 3 * 4;
+
+            let solidCount = 0;
+            for (let iy = 0; iy < grid.ny; iy++) {
+                if (grid.getVoxel(farIx, iy, farIz)) solidCount++;
+            }
+
+            assert.strictEqual(solidCount, grid.ny,
+                `Distant no-floor column at (${farIx}, *, ${farIz}) should be fully solid`);
+        });
+
+        it('should not modify columns that already have a floor', function () {
+            // Floor at blocks (0..1, 1, 0..1). Grid extends further.
+            // With small dilation, far columns get filled solid.
+            // But columns WITH floor should remain unchanged.
+            const sizeXZ = 6;
+            const sizeY = 4;
+            const floorBlockY = 1;
+
+            const acc = new BlockMaskBuffer();
+            for (let bz = 0; bz < 2; bz++) {
+                for (let bx = 0; bx < 2; bx++) {
+                    acc.addBlock(xyzToMorton(bx, floorBlockY, bz), SOLID_LO, SOLID_HI);
+                }
+            }
+            const worldSize = sizeXZ * 4 * voxelResolution;
+            const worldY = sizeY * 4 * voxelResolution;
+            const gridBounds = alignGridBounds(0, 0, 0, worldSize, worldY, worldSize, voxelResolution);
+
+            const smallDilation = 0.25;
+            const result = fillFloor(acc, gridBounds, voxelResolution, smallDilation);
+            const grid = bufferToGrid(result.buffer, result.gridBounds, voxelResolution);
+
+            // Column at (0,*,0) already has floor at block Y=1. Should not have fill below.
+            const floorIx = 0;
+            const floorIz = 0;
+            const floorVoxelY = floorBlockY * 4;
+
+            let belowFloor = 0;
+            for (let iy = 0; iy < floorVoxelY; iy++) {
+                if (grid.getVoxel(floorIx, iy, floorIz)) belowFloor++;
+            }
+
+            assert.strictEqual(belowFloor, 0,
+                'Columns with an existing floor should not have fill added below them');
         });
     });
 

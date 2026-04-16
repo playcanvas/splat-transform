@@ -133,8 +133,8 @@ const fillGapColumns = (
                 for (let lx = 0; lx < 4; lx++) {
                     const col = ((bz << 2) + lz) * nx + (bx << 2) + lx;
                     let fty = 0;
-                    if (originalFloorY[col] >= ny && dilatedFloorY[col] < ny) {
-                        fty = dilatedFloorY[col];
+                    if (originalFloorY[col] >= ny) {
+                        fty = dilatedFloorY[col] < ny ? dilatedFloorY[col] : ny;
                     }
                     const idx = lz * 4 + lx;
                     fills[idx] = fty;
