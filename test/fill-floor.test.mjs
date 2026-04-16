@@ -1,9 +1,6 @@
 /**
- * Tests for fillFloor -- fills gap/edge columns to block outdoor scene edges.
- *
- * The new implementation only fills columns where the original floor is absent
- * but neighbors within the dilation radius have a floor (gap/edge columns).
- * Columns that already have a floor are left unmodified.
+ * Tests for fillFloor -- fills each voxel column upward from the bottom
+ * until hitting an existing solid voxel or the top of the grid.
  */
 
 import { describe, it } from 'node:test';
@@ -35,309 +32,146 @@ function bufferToGrid(buffer, gridBounds, voxelResolution) {
     return SparseVoxelGrid.fromBuffer(buffer, nx, ny, nz);
 }
 
-function buildFloor(sizeBlocksXZ, sizeBlocksY, floorBlockY, voxelResolution) {
-    const acc = new BlockMaskBuffer();
-    for (let bz = 0; bz < sizeBlocksXZ; bz++) {
-        for (let bx = 0; bx < sizeBlocksXZ; bx++) {
-            acc.addBlock(xyzToMorton(bx, floorBlockY, bz), SOLID_LO, SOLID_HI);
-        }
-    }
-    const worldX = sizeBlocksXZ * 4 * voxelResolution;
-    const worldY = sizeBlocksY * 4 * voxelResolution;
-    const worldZ = sizeBlocksXZ * 4 * voxelResolution;
-    const gridBounds = alignGridBounds(0, 0, 0, worldX, worldY, worldZ, voxelResolution);
-    return { acc, gridBounds };
-}
-
-function buildFloorWithGap(sizeBlocksXZ, sizeBlocksY, floorBlockY, gapBx, gapBz, voxelResolution) {
-    const acc = new BlockMaskBuffer();
-    for (let bz = 0; bz < sizeBlocksXZ; bz++) {
-        for (let bx = 0; bx < sizeBlocksXZ; bx++) {
-            if (bx === gapBx && bz === gapBz) continue;
-            acc.addBlock(xyzToMorton(bx, floorBlockY, bz), SOLID_LO, SOLID_HI);
-        }
-    }
-    const worldX = sizeBlocksXZ * 4 * voxelResolution;
-    const worldY = sizeBlocksY * 4 * voxelResolution;
-    const worldZ = sizeBlocksXZ * 4 * voxelResolution;
-    const gridBounds = alignGridBounds(0, 0, 0, worldX, worldY, worldZ, voxelResolution);
-    return { acc, gridBounds };
+function makeGridBounds(nbx, nby, nbz, voxelResolution) {
+    const worldX = nbx * 4 * voxelResolution;
+    const worldY = nby * 4 * voxelResolution;
+    const worldZ = nbz * 4 * voxelResolution;
+    return alignGridBounds(0, 0, 0, worldX, worldY, worldZ, voxelResolution);
 }
 
 describe('fillFloor', function () {
     const voxelResolution = 0.25;
-    const dilation = 1.0;
 
-    describe('complete floor (no gaps)', function () {
-        it('should not modify a floor that has no gaps', function () {
-            const sizeXZ = 4;
-            const sizeY = 6;
-            const floorBlockY = 2;
-            const { acc, gridBounds } = buildFloor(sizeXZ, sizeY, floorBlockY, voxelResolution);
+    describe('empty column fill', function () {
+        it('should fill entirely empty columns solid from bottom to top', function () {
+            const nbx = 2, nby = 4, nbz = 2;
+            const gridBounds = makeGridBounds(nbx, nby, nbz, voxelResolution);
 
-            const inputCount = countSolidVoxels(acc);
-            const result = fillFloor(acc, gridBounds, voxelResolution, dilation);
-            const resultCount = countSolidVoxels(result.buffer);
+            // Only one block at (0, 2, 0) is solid; all other columns are empty.
+            const acc = new BlockMaskBuffer();
+            acc.addBlock(xyzToMorton(0, 2, 0), SOLID_LO, SOLID_HI);
 
-            assert.strictEqual(resultCount, inputCount,
-                'A complete floor should not be modified');
-        });
-
-        it('should not fill above the floor', function () {
-            const sizeXZ = 4;
-            const sizeY = 6;
-            const floorBlockY = 2;
-            const { acc, gridBounds } = buildFloor(sizeXZ, sizeY, floorBlockY, voxelResolution);
-
-            const result = fillFloor(acc, gridBounds, voxelResolution, dilation);
+            const result = fillFloor(acc, gridBounds, voxelResolution);
             const grid = bufferToGrid(result.buffer, result.gridBounds, voxelResolution);
 
-            const ny = grid.ny;
+            // Column at (4, *, 4) has no solid -- should be filled entirely.
+            for (let iy = 0; iy < grid.ny; iy++) {
+                assert.strictEqual(grid.getVoxel(4, iy, 4), 1,
+                    `Empty column voxel (4, ${iy}, 4) should be solid`);
+            }
+        });
+    });
+
+    describe('fill below solid', function () {
+        it('should fill below the floor block and not above', function () {
+            const nbx = 2, nby = 4, nbz = 2;
+            const floorBlockY = 2;
+            const gridBounds = makeGridBounds(nbx, nby, nbz, voxelResolution);
+
+            // Solid floor at y-block 2 across all XZ
+            const acc = new BlockMaskBuffer();
+            for (let bz = 0; bz < nbz; bz++) {
+                for (let bx = 0; bx < nbx; bx++) {
+                    acc.addBlock(xyzToMorton(bx, floorBlockY, bz), SOLID_LO, SOLID_HI);
+                }
+            }
+
+            const result = fillFloor(acc, gridBounds, voxelResolution);
+            const grid = bufferToGrid(result.buffer, result.gridBounds, voxelResolution);
+
+            const floorVoxelY = floorBlockY * 4;
             const floorTopVoxelY = (floorBlockY + 1) * 4;
 
-            let solidAboveFloor = 0;
             for (let iz = 0; iz < grid.nz; iz++) {
                 for (let ix = 0; ix < grid.nx; ix++) {
-                    for (let iy = floorTopVoxelY; iy < ny; iy++) {
-                        if (grid.getVoxel(ix, iy, iz)) solidAboveFloor++;
+                    // Below floor should be filled solid
+                    for (let iy = 0; iy < floorVoxelY; iy++) {
+                        assert.strictEqual(grid.getVoxel(ix, iy, iz), 1,
+                            `Voxel (${ix}, ${iy}, ${iz}) below floor should be solid`);
+                    }
+                    // Floor itself should remain solid
+                    for (let iy = floorVoxelY; iy < floorTopVoxelY; iy++) {
+                        assert.strictEqual(grid.getVoxel(ix, iy, iz), 1,
+                            `Floor voxel (${ix}, ${iy}, ${iz}) should remain solid`);
+                    }
+                    // Above floor should remain empty
+                    for (let iy = floorTopVoxelY; iy < grid.ny; iy++) {
+                        assert.strictEqual(grid.getVoxel(ix, iy, iz), 0,
+                            `Voxel (${ix}, ${iy}, ${iz}) above floor should be empty`);
+                    }
+                }
+            }
+        });
+
+        it('should stop at the first solid voxel per sub-column in a mixed block', function () {
+            const nbx = 1, nby = 3, nbz = 1;
+            const gridBounds = makeGridBounds(nbx, nby, nbz, voxelResolution);
+
+            // Place a single solid voxel at (0, 5, 0) in block (0, 1, 0).
+            // bitIdx = lx + (ly << 2) + (lz << 4) = 0 + (1 << 2) + 0 = 4
+            const acc = new BlockMaskBuffer();
+            const lo = (1 << 4) >>> 0;
+            acc.addBlock(xyzToMorton(0, 1, 0), lo, 0);
+
+            const result = fillFloor(acc, gridBounds, voxelResolution);
+            const grid = bufferToGrid(result.buffer, result.gridBounds, voxelResolution);
+
+            // Sub-column (lx=0, lz=0): solid at iy=5, should fill iy=0..4
+            for (let iy = 0; iy < 5; iy++) {
+                assert.strictEqual(grid.getVoxel(0, iy, 0), 1,
+                    `Voxel (0, ${iy}, 0) below the solid at iy=5 should be filled`);
+            }
+            assert.strictEqual(grid.getVoxel(0, 5, 0), 1, 'The original solid voxel should remain');
+            // Above the solid should be empty
+            for (let iy = 6; iy < grid.ny; iy++) {
+                assert.strictEqual(grid.getVoxel(0, iy, 0), 0,
+                    `Voxel (0, ${iy}, 0) above the solid at iy=5 should be empty`);
+            }
+
+            // Sub-column (lx=1, lz=0) has no solid; should be filled entirely
+            for (let iy = 0; iy < grid.ny; iy++) {
+                assert.strictEqual(grid.getVoxel(1, iy, 0), 1,
+                    `Voxel (1, ${iy}, 0) in a no-solid sub-column should be solid`);
+            }
+        });
+    });
+
+    describe('already solid from bottom', function () {
+        it('should not modify a fully solid grid', function () {
+            const nbx = 2, nby = 2, nbz = 2;
+            const gridBounds = makeGridBounds(nbx, nby, nbz, voxelResolution);
+
+            const acc = new BlockMaskBuffer();
+            for (let bz = 0; bz < nbz; bz++) {
+                for (let bx = 0; bx < nbx; bx++) {
+                    for (let by = 0; by < nby; by++) {
+                        acc.addBlock(xyzToMorton(bx, by, bz), SOLID_LO, SOLID_HI);
                     }
                 }
             }
 
-            assert.strictEqual(solidAboveFloor, 0,
-                'No voxels above the floor layer should be solid');
+            const inputCount = countSolidVoxels(acc);
+            const result = fillFloor(acc, gridBounds, voxelResolution);
+            const resultCount = countSolidVoxels(result.buffer);
+
+            assert.strictEqual(resultCount, inputCount,
+                'A fully solid grid should not be modified');
         });
-    });
 
-    describe('edge columns within dilation radius', function () {
-        it('should fill no-floor columns adjacent to the floor edge', function () {
-            // Floor covers blocks (0..2, 1, 0..2), grid extends to block 5.
-            // Block 3 is 1 block past the floor edge. With dilation=1.0 and
-            // voxelResolution=0.25, halfExtent = ceil(4) = 4 voxels = 1 block.
-            // The no-floor column at block 3 voxel 12 is within dilation of
-            // the floor edge at voxel 11.
-            const sizeXZ = 6;
-            const sizeY = 4;
-            const floorBlockY = 1;
+        it('should not add voxels when the bottom block is already solid', function () {
+            const nbx = 1, nby = 3, nbz = 1;
+            const gridBounds = makeGridBounds(nbx, nby, nbz, voxelResolution);
 
+            // Solid block at bottom (by=0), empty above
             const acc = new BlockMaskBuffer();
-            for (let bz = 0; bz < 3; bz++) {
-                for (let bx = 0; bx < 3; bx++) {
-                    acc.addBlock(xyzToMorton(bx, floorBlockY, bz), SOLID_LO, SOLID_HI);
-                }
-            }
-            const worldX = sizeXZ * 4 * voxelResolution;
-            const worldY = sizeY * 4 * voxelResolution;
-            const gridBounds = alignGridBounds(0, 0, 0, worldX, worldY, worldX, voxelResolution);
+            acc.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
 
-            const largeDilation = 2.0;
-            const result = fillFloor(acc, gridBounds, voxelResolution, largeDilation);
-            const grid = bufferToGrid(result.buffer, result.gridBounds, voxelResolution);
+            const inputCount = countSolidVoxels(acc);
+            const result = fillFloor(acc, gridBounds, voxelResolution);
+            const resultCount = countSolidVoxels(result.buffer);
 
-            // Check a column just past the floor edge, within dilation reach.
-            // Floor edge is at voxel x=11. halfExtent = ceil(2.0/0.25) = 8.
-            // Voxel x=12 (block 3) is 1 past the edge, well within radius.
-            const edgeIx = 3 * 4;
-            const edgeIz = 1 * 4;
-            const floorVoxelY = floorBlockY * 4;
-
-            let solidCount = 0;
-            for (let iy = 0; iy < floorVoxelY; iy++) {
-                if (grid.getVoxel(edgeIx, iy, edgeIz)) solidCount++;
-            }
-
-            assert.ok(solidCount > 0,
-                `Edge column at (${edgeIx}, *, ${edgeIz}) within dilation radius should be filled below floor (got ${solidCount}/${floorVoxelY})`);
-        });
-
-        it('should fill columns beyond dilation radius solid to the top', function () {
-            const sizeXZ = 10;
-            const sizeY = 4;
-            const floorBlockY = 1;
-
-            const acc = new BlockMaskBuffer();
-            for (let bz = 0; bz < 3; bz++) {
-                for (let bx = 0; bx < 3; bx++) {
-                    acc.addBlock(xyzToMorton(bx, floorBlockY, bz), SOLID_LO, SOLID_HI);
-                }
-            }
-            const worldX = sizeXZ * 4 * voxelResolution;
-            const worldY = sizeY * 4 * voxelResolution;
-            const gridBounds = alignGridBounds(0, 0, 0, worldX, worldY, worldX, voxelResolution);
-
-            const result = fillFloor(acc, gridBounds, voxelResolution, dilation);
-            const grid = bufferToGrid(result.buffer, result.gridBounds, voxelResolution);
-
-            // halfExtent = ceil(1.0 / 0.25) = 4. Floor edge at voxel 11.
-            // Column at voxel 20 (block 5) is 9 voxels past the edge, beyond radius.
-            // With no floor even after dilation, it should be filled solid to the top.
-            const farIx = 5 * 4;
-            const farIz = 5 * 4;
-
-            let solidCount = 0;
-            for (let iy = 0; iy < grid.ny; iy++) {
-                if (grid.getVoxel(farIx, iy, farIz)) solidCount++;
-            }
-
-            assert.strictEqual(solidCount, grid.ny,
-                `Column at (${farIx}, *, ${farIz}) beyond dilation radius should be filled solid to the top`);
-        });
-    });
-
-    describe('floor with gap', function () {
-        it('should bridge small gaps with dilation', function () {
-            const sizeXZ = 6;
-            const sizeY = 6;
-            const floorBlockY = 2;
-            const gapBx = 3;
-            const gapBz = 3;
-            const { acc, gridBounds } = buildFloorWithGap(sizeXZ, sizeY, floorBlockY, gapBx, gapBz, voxelResolution);
-
-            const largeDilation = 2.0;
-            const result = fillFloor(acc, gridBounds, voxelResolution, largeDilation);
-            const grid = bufferToGrid(result.buffer, result.gridBounds, voxelResolution);
-
-            const gapIx = gapBx * 4;
-            const gapIz = gapBz * 4;
-            const floorVoxelY = floorBlockY * 4;
-
-            let solidBelowGap = 0;
-            for (let iy = 0; iy < floorVoxelY; iy++) {
-                if (grid.getVoxel(gapIx, iy, gapIz)) solidBelowGap++;
-            }
-
-            assert.ok(solidBelowGap > 0,
-                'Dilation should bridge the gap, so below-gap voxels should be filled');
-        });
-
-        it('should add voxels only at gap columns, not below existing floor', function () {
-            const sizeXZ = 6;
-            const sizeY = 6;
-            const floorBlockY = 2;
-            const gapBx = 3;
-            const gapBz = 3;
-            const { acc, gridBounds } = buildFloorWithGap(sizeXZ, sizeY, floorBlockY, gapBx, gapBz, voxelResolution);
-
-            const largeDilation = 2.0;
-            const result = fillFloor(acc, gridBounds, voxelResolution, largeDilation);
-            const grid = bufferToGrid(result.buffer, result.gridBounds, voxelResolution);
-
-            // A column that already has floor should not have fill below it
-            const floorIx = 0;
-            const floorIz = 0;
-            const floorVoxelY = floorBlockY * 4;
-
-            let belowFloor = 0;
-            for (let iy = 0; iy < floorVoxelY; iy++) {
-                if (grid.getVoxel(floorIx, iy, floorIz)) belowFloor++;
-            }
-
-            assert.strictEqual(belowFloor, 0,
-                'Floor-having columns should not have fill below them');
-        });
-    });
-
-    describe('no-floor columns (scene edges)', function () {
-        it('should fill completely empty columns solid from bottom to top', function () {
-            // Floor covers only a small part of the grid (blocks 0..1 in XZ).
-            // Grid extends to block 7 in XZ. Dilation is small (1 voxel radius).
-            // Columns far from the floor have no floor even after dilation.
-            const sizeXZ = 8;
-            const sizeY = 4;
-            const floorBlockY = 1;
-
-            const acc = new BlockMaskBuffer();
-            for (let bz = 0; bz < 2; bz++) {
-                for (let bx = 0; bx < 2; bx++) {
-                    acc.addBlock(xyzToMorton(bx, floorBlockY, bz), SOLID_LO, SOLID_HI);
-                }
-            }
-            const worldSize = sizeXZ * 4 * voxelResolution;
-            const worldY = sizeY * 4 * voxelResolution;
-            const gridBounds = alignGridBounds(0, 0, 0, worldSize, worldY, worldSize, voxelResolution);
-
-            const smallDilation = 0.25;
-            const result = fillFloor(acc, gridBounds, voxelResolution, smallDilation);
-            const grid = bufferToGrid(result.buffer, result.gridBounds, voxelResolution);
-
-            // Column at block 6 is far from floor, no dilation can reach it.
-            const farIx = 6 * 4;
-            const farIz = 6 * 4;
-
-            let solidCount = 0;
-            for (let iy = 0; iy < grid.ny; iy++) {
-                if (grid.getVoxel(farIx, iy, farIz)) solidCount++;
-            }
-
-            assert.strictEqual(solidCount, grid.ny,
-                `No-floor column at (${farIx}, *, ${farIz}) should be completely solid (got ${solidCount}/${grid.ny})`);
-        });
-
-        it('should fill all no-floor columns, not just those adjacent to floor', function () {
-            // Verify every column without a floor gets filled solid.
-            const sizeXZ = 4;
-            const sizeY = 4;
-            const floorBlockY = 1;
-
-            // Floor only at block (0, 1, 0)
-            const acc = new BlockMaskBuffer();
-            acc.addBlock(xyzToMorton(0, floorBlockY, 0), SOLID_LO, SOLID_HI);
-
-            const worldSize = sizeXZ * 4 * voxelResolution;
-            const worldY = sizeY * 4 * voxelResolution;
-            const gridBounds = alignGridBounds(0, 0, 0, worldSize, worldY, worldSize, voxelResolution);
-
-            const smallDilation = 0.25;
-            const result = fillFloor(acc, gridBounds, voxelResolution, smallDilation);
-            const grid = bufferToGrid(result.buffer, result.gridBounds, voxelResolution);
-
-            // Check a column far from the single floor block
-            const farIx = 3 * 4;
-            const farIz = 3 * 4;
-
-            let solidCount = 0;
-            for (let iy = 0; iy < grid.ny; iy++) {
-                if (grid.getVoxel(farIx, iy, farIz)) solidCount++;
-            }
-
-            assert.strictEqual(solidCount, grid.ny,
-                `Distant no-floor column at (${farIx}, *, ${farIz}) should be fully solid`);
-        });
-
-        it('should not modify columns that already have a floor', function () {
-            // Floor at blocks (0..1, 1, 0..1). Grid extends further.
-            // With small dilation, far columns get filled solid.
-            // But columns WITH floor should remain unchanged.
-            const sizeXZ = 6;
-            const sizeY = 4;
-            const floorBlockY = 1;
-
-            const acc = new BlockMaskBuffer();
-            for (let bz = 0; bz < 2; bz++) {
-                for (let bx = 0; bx < 2; bx++) {
-                    acc.addBlock(xyzToMorton(bx, floorBlockY, bz), SOLID_LO, SOLID_HI);
-                }
-            }
-            const worldSize = sizeXZ * 4 * voxelResolution;
-            const worldY = sizeY * 4 * voxelResolution;
-            const gridBounds = alignGridBounds(0, 0, 0, worldSize, worldY, worldSize, voxelResolution);
-
-            const smallDilation = 0.25;
-            const result = fillFloor(acc, gridBounds, voxelResolution, smallDilation);
-            const grid = bufferToGrid(result.buffer, result.gridBounds, voxelResolution);
-
-            // Column at (0,*,0) already has floor at block Y=1. Should not have fill below.
-            const floorIx = 0;
-            const floorIz = 0;
-            const floorVoxelY = floorBlockY * 4;
-
-            let belowFloor = 0;
-            for (let iy = 0; iy < floorVoxelY; iy++) {
-                if (grid.getVoxel(floorIx, iy, floorIz)) belowFloor++;
-            }
-
-            assert.strictEqual(belowFloor, 0,
-                'Columns with an existing floor should not have fill added below them');
+            assert.strictEqual(resultCount, inputCount,
+                'Column with solid at bottom should not gain any voxels');
         });
     });
 
@@ -345,9 +179,9 @@ describe('fillFloor', function () {
         it('should return the same buffer reference when input is empty', function () {
             const acc = new BlockMaskBuffer();
             assert.strictEqual(acc.count, 0);
-            const gridBounds = alignGridBounds(0, 0, 0, 1, 1, 1, voxelResolution);
+            const gridBounds = makeGridBounds(2, 2, 2, voxelResolution);
 
-            const result = fillFloor(acc, gridBounds, voxelResolution, dilation);
+            const result = fillFloor(acc, gridBounds, voxelResolution);
             assert.strictEqual(result.buffer, acc, 'Empty input should return same buffer reference');
         });
     });
@@ -356,44 +190,67 @@ describe('fillFloor', function () {
         it('should throw for zero voxel resolution', function () {
             const acc = new BlockMaskBuffer();
             acc.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
-            const gridBounds = alignGridBounds(0, 0, 0, 1, 1, 1, 0.25);
+            const gridBounds = makeGridBounds(1, 1, 1, 0.25);
             assert.throws(
-                () => fillFloor(acc, gridBounds, 0, dilation),
+                () => fillFloor(acc, gridBounds, 0),
                 /voxelResolution must be finite and > 0/
             );
         });
 
-        it('should throw for zero dilation', function () {
+        it('should throw for negative voxel resolution', function () {
             const acc = new BlockMaskBuffer();
             acc.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
-            const gridBounds = alignGridBounds(0, 0, 0, 1, 1, 1, 0.25);
+            const gridBounds = makeGridBounds(1, 1, 1, 0.25);
             assert.throws(
-                () => fillFloor(acc, gridBounds, 0.25, 0),
-                /dilation must be finite and > 0/
-            );
-        });
-
-        it('should throw for negative dilation', function () {
-            const acc = new BlockMaskBuffer();
-            acc.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
-            const gridBounds = alignGridBounds(0, 0, 0, 1, 1, 1, 0.25);
-            assert.throws(
-                () => fillFloor(acc, gridBounds, 0.25, -1),
-                /dilation must be finite and > 0/
+                () => fillFloor(acc, gridBounds, -1),
+                /voxelResolution must be finite and > 0/
             );
         });
     });
 
     describe('gridBounds preserved', function () {
         it('should return the same gridBounds as input', function () {
-            const sizeXZ = 4;
-            const sizeY = 4;
-            const { acc, gridBounds } = buildFloor(sizeXZ, sizeY, 1, voxelResolution);
+            const nbx = 2, nby = 2, nbz = 2;
+            const gridBounds = makeGridBounds(nbx, nby, nbz, voxelResolution);
 
-            const result = fillFloor(acc, gridBounds, voxelResolution, dilation);
+            const acc = new BlockMaskBuffer();
+            acc.addBlock(xyzToMorton(0, 1, 0), SOLID_LO, SOLID_HI);
+
+            const result = fillFloor(acc, gridBounds, voxelResolution);
 
             assert.strictEqual(result.gridBounds, gridBounds,
                 'gridBounds should be the same object reference');
+        });
+    });
+
+    describe('multiple solids in column', function () {
+        it('should stop at the first (lowest) solid and not fill between solids', function () {
+            const nbx = 1, nby = 4, nbz = 1;
+            const gridBounds = makeGridBounds(nbx, nby, nbz, voxelResolution);
+
+            // Solid blocks at by=1 and by=3, empty at by=0 and by=2
+            const acc = new BlockMaskBuffer();
+            acc.addBlock(xyzToMorton(0, 1, 0), SOLID_LO, SOLID_HI);
+            acc.addBlock(xyzToMorton(0, 3, 0), SOLID_LO, SOLID_HI);
+
+            const result = fillFloor(acc, gridBounds, voxelResolution);
+            const grid = bufferToGrid(result.buffer, result.gridBounds, voxelResolution);
+
+            // by=0 should be filled (below the first solid at by=1)
+            for (let iy = 0; iy < 4; iy++) {
+                assert.strictEqual(grid.getVoxel(0, iy, 0), 1,
+                    `Voxel (0, ${iy}, 0) below first solid should be filled`);
+            }
+            // by=1 (first solid) remains solid
+            for (let iy = 4; iy < 8; iy++) {
+                assert.strictEqual(grid.getVoxel(0, iy, 0), 1,
+                    `Voxel (0, ${iy}, 0) in first solid block should remain`);
+            }
+            // by=2 should remain empty (above first solid, fill stopped)
+            for (let iy = 8; iy < 12; iy++) {
+                assert.strictEqual(grid.getVoxel(0, iy, 0), 0,
+                    `Voxel (0, ${iy}, 0) between solids should remain empty`);
+            }
         });
     });
 });

@@ -49,8 +49,8 @@ type WriteVoxelOptions = {
     /** Seed position in world space for exterior fill and interior carve flood fill. */
     navSeed?: NavSeed;
 
-    /** Floor fill dilation radius in world units. Fills below the floor surface and fills no-floor columns entirely with solid. Enables floor fill when set. */
-    navFloorRadius?: number;
+    /** Fill each voxel column upward from the bottom until hitting solid. Runs after interior carve. Default: false */
+    floorFill?: boolean;
 
     /** Whether to generate a collision mesh (.collision.glb) alongside the voxel data. Default: false */
     collisionMesh?: boolean;
@@ -261,7 +261,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         opacityCutoff = 0.5,
         createDevice,
         navExteriorRadius,
-        navFloorRadius,
+        floorFill = false,
         navCapsule,
         navSeed,
         collisionMesh = false,
@@ -277,7 +277,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     }
     const hasNav = !!(navCapsule && navSeed && navCapsule.height > 0);
     const hasFillExterior = !!(navExteriorRadius && navSeed);
-    const hasFloorFill = !!navFloorRadius;
+    const hasFloorFill = floorFill;
     let stepCount = 5;
     if (collisionMesh) stepCount += 2;
     if (hasFillExterior) stepCount += 1;
@@ -349,16 +349,6 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             gridBounds = fillResult.gridBounds;
         }
 
-        if (hasFloorFill) {
-            logger.progress.step('Fill floor');
-            const floorResult = fillFloor(
-                buffer, gridBounds, voxelResolution,
-                navFloorRadius!
-            );
-            buffer = floorResult.buffer;
-            gridBounds = floorResult.gridBounds;
-        }
-
         if (hasNav) {
             logger.progress.step('Carve interior');
             const navResult = carveInterior(
@@ -368,6 +358,15 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             );
             buffer = navResult.buffer;
             gridBounds = navResult.gridBounds;
+        }
+
+        if (hasFloorFill) {
+            logger.progress.step('Fill floor');
+            const floorResult = fillFloor(
+                buffer, gridBounds, voxelResolution
+            );
+            buffer = floorResult.buffer;
+            gridBounds = floorResult.gridBounds;
         }
 
         const glbBytes = collisionMesh ?

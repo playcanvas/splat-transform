@@ -83,7 +83,7 @@ const cliOptionsConfig = {
     unbundled: { type: 'boolean', short: 'U', default: false },
     'voxel-params': { type: 'string', default: '' },
     'voxel-external-fill': { type: 'string' },
-    'voxel-floor-fill': { type: 'string' },
+    'voxel-floor-fill': { type: 'boolean', default: false },
     'voxel-interior-carve': { type: 'string' },
     'seed-pos': { type: 'string', default: '' },
     'collision-mesh': { type: 'boolean', short: 'K', default: false },
@@ -114,7 +114,7 @@ const stringOptionNames = new Set(Object.entries(cliOptionsConfig)
 
 const optionalValueOptions = new Set([
     '--filter-cluster', '-D', '--filter-floaters', '-G',
-    '--voxel-external-fill', '--voxel-floor-fill', '--voxel-interior-carve',
+    '--voxel-external-fill', '--voxel-interior-carve',
     '--voxel-params'
 ]);
 
@@ -238,7 +238,6 @@ const parseArguments = async () => {
     // Parse voxel processing options
     const voxelParamsStr = v['voxel-params'];
     const externalFillStr = v['voxel-external-fill'];
-    const floorFillStr = v['voxel-floor-fill'];
     const carveInteriorStr = v['voxel-interior-carve'];
     const seedPosStr = v['seed-pos'];
 
@@ -257,11 +256,6 @@ const parseArguments = async () => {
     let navExteriorRadius: number | undefined;
     if (externalFillStr !== undefined) {
         navExteriorRadius = externalFillStr ? parseNumber(externalFillStr, 0) : 1.6;
-    }
-
-    let navFloorRadius: number | undefined;
-    if (floorFillStr !== undefined) {
-        navFloorRadius = floorFillStr ? parseNumber(floorFillStr, 0) : 1.6;
     }
 
     let navCapsule: { height: number; radius: number } | undefined;
@@ -303,7 +297,7 @@ const parseArguments = async () => {
         voxelResolution,
         opacityCutoff,
         navExteriorRadius,
-        navFloorRadius,
+        floorFill: v['voxel-floor-fill'],
         navCapsule,
         navSeed,
         collisionMesh: v['collision-mesh'],
@@ -569,7 +563,7 @@ GLOBAL OPTIONS
     -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
         --voxel-params     [size,opacity]   Voxel size and opacity threshold for .voxel.json. Default: 0.05,0.5
         --voxel-external-fill [size]        Fill exterior voxels by dilation from seed. Default size: 1.6
-        --voxel-floor-fill    [size]        Fill below floor surface to block outdoor edges. Default size: 1.6
+        --voxel-floor-fill                   Fill each column upward from bottom until hitting solid (runs after carve)
         --voxel-interior-carve [h,r]        Carve navigable interior using capsule flood fill from seed.
                                               Default: height=1.6, radius=0.2
         --seed-pos         <x,y,z>          Seed position for voxel processing and --filter-cluster. Default: 0,0,0
