@@ -401,9 +401,14 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
 
         // Align grid bounds to block boundaries BEFORE voxelization so the
         // block coordinates used during voxelization match what the reader expects.
+        // When fillExterior runs, pad by halfExtent + 1 voxels per side so the
+        // boundary-face flood seeds survive the dilation (notably below the floor).
+        const exteriorPad = hasFillExterior ?
+            (Math.ceil(navExteriorRadius! / voxelResolution) + 1) * voxelResolution :
+            0;
         let gridBounds = alignGridBounds(
-            bounds.min.x, bounds.min.y, bounds.min.z,
-            bounds.max.x, bounds.max.y, bounds.max.z,
+            bounds.min.x - exteriorPad, bounds.min.y - exteriorPad, bounds.min.z - exteriorPad,
+            bounds.max.x + exteriorPad, bounds.max.y + exteriorPad, bounds.max.z + exteriorPad,
             voxelResolution
         );
 
@@ -417,11 +422,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         gpuVoxelization = null;
 
         logger.progress.step('Filtering');
-        // buffer = filterAndFillBlocks(buffer);
-
-        const cropResult = cropToOccupied(buffer, gridBounds, voxelResolution);
-        buffer = cropResult.buffer;
-        gridBounds = cropResult.gridBounds;
+        buffer = filterAndFillBlocks(buffer);
 
         if (hasFillExterior) {
             logger.progress.step('Fill exterior');
@@ -472,7 +473,9 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             gridBounds = floorResult.gridBounds;
         }
 
-        const finalCrop = cropToNavigable(buffer, gridBounds, voxelResolution);
+        const finalCrop = hasFillExterior || hasFloorFill ?
+            cropToNavigable(buffer, gridBounds, voxelResolution) :
+            cropToOccupied(buffer, gridBounds, voxelResolution);
         buffer = finalCrop.buffer;
         gridBounds = finalCrop.gridBounds;
 
