@@ -20,7 +20,7 @@ import {
 } from '../voxel';
 import { BlockMaskBuffer } from '../voxel/block-mask-buffer';
 import { mortonToXYZ } from '../voxel/morton';
-import { BLOCK_SOLID, SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
+import { SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
 
 /**
  * Options for writing a voxel octree file.
@@ -203,31 +203,12 @@ const cropToNavigable = (
 
     const grid = SparseVoxelGrid.fromBuffer(buffer, nx, ny, nz);
 
-    let minBx = nbx, minBy = nby, minBz = nbz;
-    let maxBx = 0, maxBy = 0, maxBz = 0;
-    let found = false;
-
-    for (let bz = 0; bz < nbz; bz++) {
-        for (let by = 0; by < nby; by++) {
-            for (let bx = 0; bx < nbx; bx++) {
-                const blockIdx = bx + by * nbx + bz * (nbx * nby);
-                if (grid.blockType[blockIdx] !== BLOCK_SOLID) {
-                    if (bx < minBx) minBx = bx;
-                    if (by < minBy) minBy = by;
-                    if (bz < minBz) minBz = bz;
-                    if (bx > maxBx) maxBx = bx;
-                    if (by > maxBy) maxBy = by;
-                    if (bz > maxBz) maxBz = bz;
-                    found = true;
-                }
-            }
-        }
-    }
-
-    if (!found) {
+    const navBounds = grid.getNavigableBlockBounds();
+    if (!navBounds) {
         return { buffer, gridBounds };
     }
 
+    const { minBx, minBy, minBz, maxBx, maxBy, maxBz } = navBounds;
     const cropMaxBx = maxBx + 1;
     const cropMaxBy = maxBy + 1;
     const cropMaxBz = maxBz + 1;
@@ -521,4 +502,4 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     }
 };
 
-export { writeVoxel, writeOctreeFiles, type WriteVoxelOptions, type VoxelMetadata };
+export { writeVoxel, type WriteVoxelOptions, type VoxelMetadata };

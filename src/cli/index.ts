@@ -563,7 +563,7 @@ GLOBAL OPTIONS
     -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
         --voxel-params     [size,opacity]   Voxel size and opacity threshold for .voxel.json. Default: 0.05,0.1
         --voxel-external-fill [size]        Fill exterior voxels by dilation from seed. Default size: 1.6
-        --voxel-floor-fill                   Fill each column upward from bottom until hitting solid (runs after carve)
+        --voxel-floor-fill                  Fill each column upward from bottom until hitting solid (runs after carve)
         --voxel-interior-carve [h,r]        Carve navigable interior using capsule flood fill from seed.
                                               Default: height=1.6, radius=0.2
         --seed-pos         <x,y,z>          Seed position for voxel processing and --filter-cluster. Default: 0,0,0

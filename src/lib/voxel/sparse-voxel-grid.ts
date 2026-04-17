@@ -267,6 +267,73 @@ class SparseVoxelGrid {
     }
 
     /**
+     * Get the bounding box of navigable (non-fully-solid) blocks. A block is
+     * navigable if it is EMPTY or MIXED (i.e. contains at least one empty
+     * voxel). Useful when the runtime treats out-of-grid as solid, so fully
+     * solid blocks beyond the navigable region can be cropped away.
+     *
+     * @returns Block coordinate bounds, or null if every block is solid.
+     */
+    getNavigableBlockBounds(): {
+        minBx: number; minBy: number; minBz: number;
+        maxBx: number; maxBy: number; maxBz: number;
+    } | null {
+        const { nbx, nby } = this;
+        const totalBlocks = this.nbx * this.nby * this.nbz;
+        const words = (totalBlocks + 31) >>> 5;
+        const remainder = totalBlocks & 31;
+        const lastMask = remainder === 0 ? 0xFFFFFFFF >>> 0 : (((1 << remainder) - 1) >>> 0);
+
+        let minBx = nbx, minBy = nby, minBz = this.nbz;
+        let maxBx = -1, maxBy = 0, maxBz = 0;
+
+        for (let w = 0; w < words; w++) {
+            // Build a bitmask of SOLID blocks in this 32-block word.
+            // SOLID requires occupancy bit set AND blockType === BLOCK_SOLID.
+            // EMPTY blocks have occupancy bit clear, so ~occupancy already
+            // accounts for them. We only need to OR in MIXED bits explicitly.
+            const baseIdx = w * 32;
+            const upper = Math.min(32, totalBlocks - baseIdx);
+            const occWord = this.occupancy[w];
+            let solid = 0 >>> 0;
+            let occBits = occWord;
+            while (occBits) {
+                const bitPos = 31 - Math.clz32(occBits & -occBits);
+                if (this.blockType[baseIdx + bitPos] === BLOCK_SOLID) {
+                    solid |= (1 << bitPos);
+                }
+                occBits &= occBits - 1;
+            }
+            let nonSolid = (~solid) >>> 0;
+            if (w === words - 1 && remainder > 0) nonSolid &= lastMask;
+            // Trim bits past totalBlocks for any partial last word (already
+            // handled above, but guard against upper < 32 in non-last words
+            // which shouldn't happen).
+            if (upper < 32 && w < words - 1) {
+                nonSolid &= ((1 << upper) - 1) >>> 0;
+            }
+
+            while (nonSolid) {
+                const bitPos = 31 - Math.clz32(nonSolid & -nonSolid);
+                const blockIdx = baseIdx + bitPos;
+                const bx = blockIdx % nbx;
+                const byBz = (blockIdx / nbx) | 0;
+                const by = byBz % nby;
+                const bz = (byBz / nby) | 0;
+                if (bx < minBx) minBx = bx;
+                if (bx > maxBx) maxBx = bx;
+                if (by < minBy) minBy = by;
+                if (by > maxBy) maxBy = by;
+                if (bz < minBz) minBz = bz;
+                if (bz > maxBz) maxBz = bz;
+                nonSolid &= nonSolid - 1;
+            }
+        }
+
+        return maxBx >= 0 ? { minBx, minBy, minBz, maxBx, maxBy, maxBz } : null;
+    }
+
+    /**
      * Find the nearest free (unblocked) voxel to a seed position using
      * expanding cube shells.
      *
