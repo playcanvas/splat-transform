@@ -1,5 +1,7 @@
+import { Vec3 } from 'playcanvas';
+
 import { buildCollisionMesh } from './collision-glb';
-import { Column, DataTable, computeGaussianExtents, computeWriteTransform, transformColumns } from '../data-table';
+import { Column, DataTable, computeGaussianExtents, computeWriteTransform, transformColumns, type Bounds } from '../data-table';
 import { GpuVoxelization } from '../gpu';
 import { type FileSystem, writeFile } from '../io/write';
 import { GaussianBVH } from '../spatial';
@@ -9,11 +11,15 @@ import { buildSparseOctree, type SparseOctree } from './sparse-octree';
 import {
     filterAndFillBlocks,
     alignGridBounds,
-    carveInterior,
+    carve,
     fillExterior,
+    fillFloor,
     type NavSeed,
     voxelizeToBuffer
 } from '../voxel';
+import { BlockMaskBuffer } from '../voxel/block-mask-buffer';
+import { mortonToXYZ } from '../voxel/morton';
+import { SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
 
 /**
  * Options for writing a voxel octree file.
@@ -37,11 +43,17 @@ type WriteVoxelOptions = {
     /** Exterior fill radius in world units. Enables exterior fill when set. Requires navSeed; ignored without it. */
     navExteriorRadius?: number;
 
-    /** Capsule dimensions for interior carve. Height of 0 disables interior carve. When height > 0, only voxels contactable from the seed are kept. Requires navSeed. */
+    /** Capsule dimensions for carve. Height of 0 disables carve. When height > 0, only voxels contactable from the seed are kept. Requires navSeed. */
     navCapsule?: { height: number; radius: number };
 
-    /** Seed position in world space for exterior fill and interior carve flood fill. */
+    /** Seed position in world space for exterior fill and carve flood fill. */
     navSeed?: NavSeed;
+
+    /** Fill each voxel column upward from the bottom until hitting solid. Runs before carve so the carve's BFS is confined to the actual navigable bubble. Default: false */
+    floorFill?: boolean;
+
+    /** When `floorFill` is enabled, dilation radius in world units used to identify "interior" XZ columns to patch. Empty XZ areas larger than `2 * floorFillDilation` from any solid column are treated as exterior and left empty. Default: 0 (patch every empty column). */
+    floorFillDilation?: number;
 
     /** Whether to generate a collision mesh (.collision.glb) alongside the voxel data. Default: false */
     collisionMesh?: boolean;
@@ -84,6 +96,149 @@ interface VoxelMetadata {
     /** Total number of Uint32 entries in the leafData array */
     leafDataCount: number;
 }
+
+/**
+ * Crop a voxel buffer and its grid bounds to the occupied block range.
+ * Removes empty padding that arises from Gaussian 3-sigma extents being
+ * much larger than the actual solid voxel footprint.
+ *
+ * @param buffer - Voxelized scene data.
+ * @param gridBounds - Axis-aligned bounds of the voxel grid.
+ * @param voxelResolution - Size of each voxel in world units.
+ * @returns Cropped buffer and grid bounds.
+ */
+const cropToOccupied = (
+    buffer: BlockMaskBuffer,
+    gridBounds: Bounds,
+    voxelResolution: number
+): { buffer: BlockMaskBuffer; gridBounds: Bounds } => {
+    if (buffer.count === 0) {
+        return { buffer, gridBounds };
+    }
+
+    const nx = Math.round((gridBounds.max.x - gridBounds.min.x) / voxelResolution);
+    const ny = Math.round((gridBounds.max.y - gridBounds.min.y) / voxelResolution);
+    const nz = Math.round((gridBounds.max.z - gridBounds.min.z) / voxelResolution);
+    const nbx = nx >> 2;
+    const nby = ny >> 2;
+    const nbz = nz >> 2;
+
+    let minBx = nbx, minBy = nby, minBz = nbz;
+    let maxBx = 0, maxBy = 0, maxBz = 0;
+
+    const scanMorton = (morton: number) => {
+        const [bx, by, bz] = mortonToXYZ(morton);
+        if (bx < minBx) minBx = bx;
+        if (by < minBy) minBy = by;
+        if (bz < minBz) minBz = bz;
+        if (bx > maxBx) maxBx = bx;
+        if (by > maxBy) maxBy = by;
+        if (bz > maxBz) maxBz = bz;
+    };
+
+    const solidMortons = buffer.getSolidBlocks();
+    for (let i = 0; i < solidMortons.length; i++) scanMorton(solidMortons[i]);
+
+    const mixed = buffer.getMixedBlocks();
+    for (let i = 0; i < mixed.morton.length; i++) scanMorton(mixed.morton[i]);
+
+    if (minBx > maxBx) {
+        return { buffer, gridBounds };
+    }
+
+    const cropMaxBx = maxBx + 1;
+    const cropMaxBy = maxBy + 1;
+    const cropMaxBz = maxBz + 1;
+
+    if (minBx === 0 && minBy === 0 && minBz === 0 &&
+        cropMaxBx === nbx && cropMaxBy === nby && cropMaxBz === nbz) {
+        return { buffer, gridBounds };
+    }
+
+    const grid = SparseVoxelGrid.fromBuffer(buffer, nx, ny, nz);
+    const croppedBuffer = grid.toBuffer(minBx, minBy, minBz, cropMaxBx, cropMaxBy, cropMaxBz);
+
+    const blockSize = 4 * voxelResolution;
+    const croppedMin = new Vec3(
+        gridBounds.min.x + minBx * blockSize,
+        gridBounds.min.y + minBy * blockSize,
+        gridBounds.min.z + minBz * blockSize
+    );
+    const croppedBounds: Bounds = {
+        min: croppedMin,
+        max: new Vec3(
+            croppedMin.x + (cropMaxBx - minBx) * blockSize,
+            croppedMin.y + (cropMaxBy - minBy) * blockSize,
+            croppedMin.z + (cropMaxBz - minBz) * blockSize
+        )
+    };
+
+    return { buffer: croppedBuffer, gridBounds: croppedBounds };
+};
+
+/**
+ * Crop a voxel buffer to fit the navigable (non-fully-solid) region tightly.
+ * Since the runtime treats outside-the-grid as solid, we only need to include
+ * blocks that contain at least one empty voxel. Fully-solid blocks beyond the
+ * navigable boundary are redundant.
+ *
+ * @param buffer - Voxelized scene data.
+ * @param gridBounds - Axis-aligned bounds of the voxel grid.
+ * @param voxelResolution - Size of each voxel in world units.
+ * @returns Cropped buffer and grid bounds.
+ */
+const cropToNavigable = (
+    buffer: BlockMaskBuffer,
+    gridBounds: Bounds,
+    voxelResolution: number
+): { buffer: BlockMaskBuffer; gridBounds: Bounds } => {
+    if (buffer.count === 0) {
+        return { buffer, gridBounds };
+    }
+
+    const nx = Math.round((gridBounds.max.x - gridBounds.min.x) / voxelResolution);
+    const ny = Math.round((gridBounds.max.y - gridBounds.min.y) / voxelResolution);
+    const nz = Math.round((gridBounds.max.z - gridBounds.min.z) / voxelResolution);
+    const nbx = nx >> 2;
+    const nby = ny >> 2;
+    const nbz = nz >> 2;
+
+    const grid = SparseVoxelGrid.fromBuffer(buffer, nx, ny, nz);
+
+    const navBounds = grid.getNavigableBlockBounds();
+    if (!navBounds) {
+        return { buffer, gridBounds };
+    }
+
+    const { minBx, minBy, minBz, maxBx, maxBy, maxBz } = navBounds;
+    const cropMaxBx = maxBx + 1;
+    const cropMaxBy = maxBy + 1;
+    const cropMaxBz = maxBz + 1;
+
+    if (minBx === 0 && minBy === 0 && minBz === 0 &&
+        cropMaxBx === nbx && cropMaxBy === nby && cropMaxBz === nbz) {
+        return { buffer, gridBounds };
+    }
+
+    const croppedBuffer = grid.toBuffer(minBx, minBy, minBz, cropMaxBx, cropMaxBy, cropMaxBz);
+
+    const blockSize = 4 * voxelResolution;
+    const croppedMin = new Vec3(
+        gridBounds.min.x + minBx * blockSize,
+        gridBounds.min.y + minBy * blockSize,
+        gridBounds.min.z + minBz * blockSize
+    );
+    const croppedBounds: Bounds = {
+        min: croppedMin,
+        max: new Vec3(
+            croppedMin.x + (cropMaxBx - minBx) * blockSize,
+            croppedMin.y + (cropMaxBy - minBy) * blockSize,
+            croppedMin.z + (cropMaxBz - minBz) * blockSize
+        )
+    };
+
+    return { buffer: croppedBuffer, gridBounds: croppedBounds };
+};
 
 /**
  * Write octree data to files.
@@ -173,6 +328,8 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         opacityCutoff = 0.1,
         createDevice,
         navExteriorRadius,
+        floorFill = false,
+        floorFillDilation = 0,
         navCapsule,
         navSeed,
         collisionMesh = false,
@@ -184,13 +341,15 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     }
 
     if (navCapsule && !navSeed) {
-        logger.warn('writeVoxel: navCapsule requires navSeed for interior nav carving, skipping nav carving');
+        logger.warn('writeVoxel: navCapsule requires navSeed for nav carving, skipping nav carving');
     }
     const hasNav = !!(navCapsule && navSeed && navCapsule.height > 0);
     const hasFillExterior = !!(navExteriorRadius && navSeed);
+    const hasFloorFill = floorFill;
     let stepCount = 5;
     if (collisionMesh) stepCount += 2;
     if (hasFillExterior) stepCount += 1;
+    if (hasFloorFill) stepCount += 1;
     if (hasNav) stepCount += 1;
     logger.progress.begin(stepCount);
 
@@ -226,9 +385,14 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
 
         // Align grid bounds to block boundaries BEFORE voxelization so the
         // block coordinates used during voxelization match what the reader expects.
+        // When fillExterior runs, pad by halfExtent + 1 voxels per side so the
+        // boundary-face flood seeds survive the dilation (notably below the floor).
+        const exteriorPad = hasFillExterior ?
+            (Math.ceil(navExteriorRadius! / voxelResolution) + 1) * voxelResolution :
+            0;
         let gridBounds = alignGridBounds(
-            bounds.min.x, bounds.min.y, bounds.min.z,
-            bounds.max.x, bounds.max.y, bounds.max.z,
+            bounds.min.x - exteriorPad, bounds.min.y - exteriorPad, bounds.min.z - exteriorPad,
+            bounds.max.x + exteriorPad, bounds.max.y + exteriorPad, bounds.max.z + exteriorPad,
             voxelResolution
         );
 
@@ -254,9 +418,18 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             gridBounds = fillResult.gridBounds;
         }
 
+        if (hasFloorFill) {
+            logger.progress.step('Fill floor');
+            const floorResult = fillFloor(
+                buffer, gridBounds, voxelResolution, floorFillDilation
+            );
+            buffer = floorResult.buffer;
+            gridBounds = floorResult.gridBounds;
+        }
+
         if (hasNav) {
-            logger.progress.step('Carve interior');
-            const navResult = carveInterior(
+            logger.progress.step('Carve');
+            const navResult = carve(
                 buffer, gridBounds, voxelResolution,
                 navCapsule!.height, navCapsule!.radius,
                 navSeed!
@@ -264,6 +437,12 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             buffer = navResult.buffer;
             gridBounds = navResult.gridBounds;
         }
+
+        const finalCrop = hasFillExterior || hasFloorFill ?
+            cropToNavigable(buffer, gridBounds, voxelResolution) :
+            cropToOccupied(buffer, gridBounds, voxelResolution);
+        buffer = finalCrop.buffer;
+        gridBounds = finalCrop.gridBounds;
 
         const glbBytes = collisionMesh ?
             await buildCollisionMesh(buffer, gridBounds, voxelResolution, meshSimplifyError) :

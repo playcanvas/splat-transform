@@ -1,11 +1,20 @@
 import { Vec3 } from 'playcanvas';
 
+import { BlockMaskBuffer } from './block-mask-buffer';
 import {
     setupVoxelFilter,
     buildGaussianColumns,
     buildBlockGridParams,
     type VoxelFilterContext
 } from './filter-pipeline';
+import { twoLevelBFS } from './flood-fill';
+import { mortonToXYZ } from './morton';
+import {
+    BLOCK_EMPTY,
+    BLOCK_MIXED,
+    BLOCK_SOLID,
+    SparseVoxelGrid
+} from './sparse-voxel-grid';
 import {
     buildBlockLookup,
     isCenterInOccupiedVoxel,
@@ -17,144 +26,111 @@ import type { DeviceCreator } from '../types';
 import { logger } from '../utils';
 
 /**
- * Find the connected component of occupied blocks reachable from a seed block
- * via 6-connected DFS.
+ * Build an inverted SparseVoxelGrid from a BlockMaskBuffer for flood-filling
+ * through occupied voxels. In the returned grid, originally-occupied voxels
+ * are free (unblocked) and empty space is blocked.
  *
- * @param occupied - Set of linear indices for occupied blocks.
- * @param seedBx - Seed block X coordinate.
- * @param seedBy - Seed block Y coordinate.
- * @param seedBz - Seed block Z coordinate.
- * @param numBlocksX - Grid dimension X.
- * @param numBlocksY - Grid dimension Y.
- * @param numBlocksZ - Grid dimension Z.
- * @returns Set of linear indices for blocks in the connected component.
+ * @param buffer - Block mask buffer with voxelization results.
+ * @param nx - Grid dimension X in voxels.
+ * @param ny - Grid dimension Y in voxels.
+ * @param nz - Grid dimension Z in voxels.
+ * @returns Inverted grid suitable for twoLevelBFS.
  */
-const findClusterFromSeed = (
-    occupied: Set<number>,
-    seedBx: number,
-    seedBy: number,
-    seedBz: number,
-    numBlocksX: number,
-    numBlocksY: number,
-    numBlocksZ: number
-): Set<number> => {
-    const strideY = numBlocksX;
-    const strideZ = numBlocksX * numBlocksY;
+const buildInvertedGrid = (
+    buffer: BlockMaskBuffer,
+    nx: number, ny: number, nz: number
+): SparseVoxelGrid => {
+    const grid = new SparseVoxelGrid(nx, ny, nz);
 
-    const seedIdx = seedBx + seedBy * strideY + seedBz * strideZ;
-    if (!occupied.has(seedIdx)) {
-        return new Set<number>();
+    // Default blockType is BLOCK_EMPTY (0). For the inverted grid,
+    // non-occupied blocks must be BLOCK_SOLID (fully blocked).
+    grid.blockType.fill(BLOCK_SOLID);
+    grid.occupancy.fill(0xFFFFFFFF >>> 0);
+    const totalBlocks = grid.nbx * grid.nby * grid.nbz;
+    const lastWord = totalBlocks >>> 5;
+    const remainder = totalBlocks & 31;
+    if (remainder > 0) {
+        grid.occupancy[lastWord] = ((1 << remainder) - 1) >>> 0;
     }
 
-    const ccSet = new Set<number>();
-    const visited = new Set<number>();
-    const stack: [number, number, number][] = [[seedBx, seedBy, seedBz]];
-    visited.add(seedIdx);
-
-    while (stack.length > 0) {
-        const [bx, by, bz] = stack.pop()!;
-        const idx = bx + by * strideY + bz * strideZ;
-        if (occupied.has(idx)) {
-            ccSet.add(idx);
-        }
-
-        if (bx > 0) {
-            const ni = idx - 1;
-            if (!visited.has(ni) && occupied.has(ni)) {
-                visited.add(ni);
-                stack.push([bx - 1, by, bz]);
-            }
-        }
-        if (bx < numBlocksX - 1) {
-            const ni = idx + 1;
-            if (!visited.has(ni) && occupied.has(ni)) {
-                visited.add(ni);
-                stack.push([bx + 1, by, bz]);
-            }
-        }
-        if (by > 0) {
-            const ni = idx - strideY;
-            if (!visited.has(ni) && occupied.has(ni)) {
-                visited.add(ni);
-                stack.push([bx, by - 1, bz]);
-            }
-        }
-        if (by < numBlocksY - 1) {
-            const ni = idx + strideY;
-            if (!visited.has(ni) && occupied.has(ni)) {
-                visited.add(ni);
-                stack.push([bx, by + 1, bz]);
-            }
-        }
-        if (bz > 0) {
-            const ni = idx - strideZ;
-            if (!visited.has(ni) && occupied.has(ni)) {
-                visited.add(ni);
-                stack.push([bx, by, bz - 1]);
-            }
-        }
-        if (bz < numBlocksZ - 1) {
-            const ni = idx + strideZ;
-            if (!visited.has(ni) && occupied.has(ni)) {
-                visited.add(ni);
-                stack.push([bx, by, bz + 1]);
-            }
-        }
+    const solidMortons = buffer.getSolidBlocks();
+    for (let i = 0; i < solidMortons.length; i++) {
+        const [bx, by, bz] = mortonToXYZ(solidMortons[i]);
+        const blockIdx = bx + by * grid.nbx + bz * grid.bStride;
+        grid.blockType[blockIdx] = BLOCK_EMPTY;
+        grid.occupancy[blockIdx >>> 5] &= ~(1 << (blockIdx & 31));
     }
 
-    return ccSet;
+    const mixed = buffer.getMixedBlocks();
+    for (let i = 0; i < mixed.morton.length; i++) {
+        const [bx, by, bz] = mortonToXYZ(mixed.morton[i]);
+        const blockIdx = bx + by * grid.nbx + bz * grid.bStride;
+        grid.blockType[blockIdx] = BLOCK_MIXED;
+        grid.masks.set(blockIdx, (~mixed.masks[i * 2]) >>> 0, (~mixed.masks[i * 2 + 1]) >>> 0);
+    }
+
+    return grid;
 };
 
 /**
- * Find the nearest occupied block to a given position using expanding cube shells.
+ * Find the connected component of occupied voxels reachable from a seed
+ * position via 6-connected voxel-level flood fill. Returns the set of block
+ * linear indices that contain at least one reachable voxel, the visited grid,
+ * and the resolved seed position.
  *
- * @param occupied - Set of linear indices for occupied blocks.
- * @param seedBx - Starting block X.
- * @param seedBy - Starting block Y.
- * @param seedBz - Starting block Z.
- * @param maxRadius - Maximum search radius in blocks.
- * @param numBlocksX - Grid dimension X.
- * @param numBlocksY - Grid dimension Y.
- * @param numBlocksZ - Grid dimension Z.
- * @returns Coordinates of nearest occupied block, or null.
+ * If the seed voxel is not occupied, finds the nearest occupied voxel first.
+ *
+ * @param buffer - Block mask buffer with voxelization results.
+ * @param nx - Grid dimension X in voxels.
+ * @param ny - Grid dimension Y in voxels.
+ * @param nz - Grid dimension Z in voxels.
+ * @param seedIx - Seed voxel X coordinate.
+ * @param seedIy - Seed voxel Y coordinate.
+ * @param seedIz - Seed voxel Z coordinate.
+ * @returns Object with ccSet, visited grid, and the resolved seed, or null if no occupied voxel found.
  */
-const findNearestOccupiedBlock = (
-    occupied: Set<number>,
-    seedBx: number,
-    seedBy: number,
-    seedBz: number,
-    maxRadius: number,
-    numBlocksX: number,
-    numBlocksY: number,
-    numBlocksZ: number
-): { bx: number; by: number; bz: number } | null => {
-    const strideY = numBlocksX;
-    const strideZ = numBlocksX * numBlocksY;
+const findClusterVoxelFlood = (
+    buffer: BlockMaskBuffer,
+    nx: number, ny: number, nz: number,
+    seedIx: number, seedIy: number, seedIz: number
+): { ccSet: Set<number>; visited: SparseVoxelGrid; resolvedSeed: { ix: number; iy: number; iz: number } } | null => {
+    const blocked = buildInvertedGrid(buffer, nx, ny, nz);
+    const nbx = nx >> 2;
+    const bStride = nbx * (ny >> 2);
 
-    if (occupied.has(seedBx + seedBy * strideY + seedBz * strideZ)) {
-        return { bx: seedBx, by: seedBy, bz: seedBz };
+    // In the inverted grid, occupied voxels are "free" (unblocked).
+    // If seed is blocked (unoccupied), find nearest free (occupied) voxel.
+    if (blocked.getVoxel(seedIx, seedIy, seedIz)) {
+        const maxRadius = Math.max(nx, ny, nz);
+        const nearest = SparseVoxelGrid.findNearestFreeCell(blocked, seedIx, seedIy, seedIz, maxRadius);
+        if (!nearest) return null;
+        seedIx = nearest.ix;
+        seedIy = nearest.iy;
+        seedIz = nearest.iz;
     }
 
-    for (let r = 1; r <= maxRadius; r++) {
-        for (let dz = -r; dz <= r; dz++) {
-            const nz = seedBz + dz;
-            if (nz < 0 || nz >= numBlocksZ) continue;
-            for (let dy = -r; dy <= r; dy++) {
-                const ny = seedBy + dy;
-                if (ny < 0 || ny >= numBlocksY) continue;
-                for (let dx = -r; dx <= r; dx++) {
-                    if (Math.abs(dx) !== r && Math.abs(dy) !== r && Math.abs(dz) !== r) continue;
-                    const nx = seedBx + dx;
-                    if (nx < 0 || nx >= numBlocksX) continue;
-                    if (occupied.has(nx + ny * strideY + nz * strideZ)) {
-                        return { bx: nx, by: ny, bz: nz };
-                    }
-                }
+    const seedBlockIdx = (seedIx >> 2) + (seedIy >> 2) * nbx + (seedIz >> 2) * bStride;
+    const seedBt = blocked.blockType[seedBlockIdx];
+    const blockSeeds = seedBt === BLOCK_EMPTY ? [seedBlockIdx] : [];
+    const voxelSeeds = seedBt === BLOCK_EMPTY ? [] : [{ ix: seedIx, iy: seedIy, iz: seedIz }];
+
+    const visited = twoLevelBFS(blocked, blockSeeds, voxelSeeds, nx, ny, nz);
+
+    const ccSet = new Set<number>();
+    const totalBlocks = nbx * (ny >> 2) * (nz >> 2);
+    for (let w = 0; w < visited.occupancy.length; w++) {
+        let bits = visited.occupancy[w];
+        while (bits) {
+            const bitPos = 31 - Math.clz32(bits & -bits);
+            const blockIdx = w * 32 + bitPos;
+            if (blockIdx < totalBlocks) {
+                ccSet.add(blockIdx);
             }
+            bits &= bits - 1;
         }
     }
 
-    return null;
+    return { ccSet, visited, resolvedSeed: { ix: seedIx, iy: seedIy, iz: seedIz } };
 };
 
 /**
@@ -165,8 +141,8 @@ const findNearestOccupiedBlock = (
  * @param createDevice - Function to create a GPU device for voxelization.
  * @param voxelResolution - Voxel size in world units for coarse voxelization. Default: 1.0.
  * @param seed - Seed position in world space. Default: (0,0,0).
- * @param opacityCutoff - Opacity threshold for solid voxels. Default: 0.99.
- * @param minContribution - Minimum Gaussian contribution at a cluster voxel center to be kept. Default: 1/255.
+ * @param opacityCutoff - Opacity threshold for solid voxels. Default: 0.999.
+ * @param minContribution - Minimum Gaussian contribution at a cluster voxel center to be kept. Default: 0.1.
  * @returns Filtered DataTable containing only Gaussians in the seed's cluster.
  */
 const filterCluster = async (
@@ -174,8 +150,8 @@ const filterCluster = async (
     createDevice: DeviceCreator,
     voxelResolution: number = 1.0,
     seed: Vec3 = Vec3.ZERO,
-    opacityCutoff: number = 0.99,
-    minContribution: number = 1 / 255
+    opacityCutoff: number = 0.999,
+    minContribution: number = 0.1
 ): Promise<DataTable> => {
     if (!Number.isFinite(voxelResolution) || voxelResolution <= 0) {
         throw new Error(`filterCluster: voxelResolution must be a positive finite number, got ${voxelResolution}`);
@@ -200,7 +176,6 @@ const filterCluster = async (
         ctx = await setupVoxelFilter(dataTable, createDevice);
 
         const clampedResolution = Math.max(0.01, voxelResolution);
-        const blockSize = 4 * clampedResolution;
         const maxGridExtent = 8192 * clampedResolution;
 
         const sceneExtentX = ctx.sceneBounds.max.x - ctx.sceneBounds.min.x;
@@ -246,43 +221,43 @@ const filterCluster = async (
         logger.progress.step('Finding cluster');
 
         const grid = buildBlockGridParams(gridBounds, clampedResolution);
+        const nx = grid.numBlocksX * 4;
+        const ny = grid.numBlocksY * 4;
+        const nz = grid.numBlocksZ * 4;
 
-        let seedBx = Math.floor((seed.x - gridBounds.min.x) / blockSize);
-        let seedBy = Math.floor((seed.y - gridBounds.min.y) / blockSize);
-        let seedBz = Math.floor((seed.z - gridBounds.min.z) / blockSize);
-
-        seedBx = Math.max(0, Math.min(seedBx, grid.numBlocksX - 1));
-        seedBy = Math.max(0, Math.min(seedBy, grid.numBlocksY - 1));
-        seedBz = Math.max(0, Math.min(seedBz, grid.numBlocksZ - 1));
-
-        const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
-        const occupied = new Set<number>(lookup.solidSet);
-        for (const key of lookup.mixedMap.keys()) {
-            occupied.add(key);
-        }
-
-        if (occupied.size === 0) {
+        if (buffer.count === 0) {
             logger.warn('filterCluster: no occupied blocks found, returning empty result');
             return dataTable.clone({ rows: [] });
         }
 
-        const maxSearchRadius = Math.max(grid.numBlocksX, grid.numBlocksY, grid.numBlocksZ);
-        const nearest = findNearestOccupiedBlock(occupied, seedBx, seedBy, seedBz, maxSearchRadius, grid.numBlocksX, grid.numBlocksY, grid.numBlocksZ);
+        const seedIx = Math.max(0, Math.min(Math.floor((seed.x - gridBounds.min.x) / clampedResolution), nx - 1));
+        const seedIy = Math.max(0, Math.min(Math.floor((seed.y - gridBounds.min.y) / clampedResolution), ny - 1));
+        const seedIz = Math.max(0, Math.min(Math.floor((seed.z - gridBounds.min.z) / clampedResolution), nz - 1));
 
-        if (!nearest) {
-            logger.warn('filterCluster: no occupied blocks found, returning empty result');
+        const floodResult = findClusterVoxelFlood(buffer, nx, ny, nz, seedIx, seedIy, seedIz);
+        if (!floodResult) {
+            logger.warn('filterCluster: no occupied voxel found near seed, returning empty result');
             return dataTable.clone({ rows: [] });
         }
 
-        if (nearest.bx !== seedBx || nearest.by !== seedBy || nearest.bz !== seedBz) {
-            const worldX = gridBounds.min.x + (nearest.bx + 0.5) * blockSize;
-            const worldY = gridBounds.min.y + (nearest.by + 0.5) * blockSize;
-            const worldZ = gridBounds.min.z + (nearest.bz + 0.5) * blockSize;
-            logger.log(`filterCluster: seed block unoccupied, using nearest at (${worldX.toFixed(2)}, ${worldY.toFixed(2)}, ${worldZ.toFixed(2)})`);
+        const { ccSet, visited: visitedGrid, resolvedSeed } = floodResult;
+        if (resolvedSeed.ix !== seedIx || resolvedSeed.iy !== seedIy || resolvedSeed.iz !== seedIz) {
+            const worldX = gridBounds.min.x + (resolvedSeed.ix + 0.5) * clampedResolution;
+            const worldY = gridBounds.min.y + (resolvedSeed.iy + 0.5) * clampedResolution;
+            const worldZ = gridBounds.min.z + (resolvedSeed.iz + 0.5) * clampedResolution;
+            logger.log(`filterCluster: seed voxel unoccupied, using nearest at (${worldX.toFixed(2)}, ${worldY.toFixed(2)}, ${worldZ.toFixed(2)})`);
         }
-
-        const ccSet = findClusterFromSeed(occupied, nearest.bx, nearest.by, nearest.bz, grid.numBlocksX, grid.numBlocksY, grid.numBlocksZ);
         logger.log(`filterCluster: cluster has ${ccSet.size} blocks out of ${buffer.count} total`);
+
+        const nbx = grid.numBlocksX;
+        const nby = grid.numBlocksY;
+        const nbz = grid.numBlocksZ;
+
+        // Build lookup from visited voxels only (not all original voxels in ccSet blocks).
+        // Every visited voxel is originally-occupied (the BFS only traverses through them),
+        // so the visited grid is a correct subset of the original buffer.
+        const visitedBuffer = visitedGrid.toBuffer(0, 0, 0, nbx, nby, nbz);
+        const lookup = buildBlockLookup(visitedBuffer, grid.strideY, grid.strideZ);
 
         if (ccSet.size === buffer.count) {
             logger.log('filterCluster: all blocks in one cluster, no filtering needed');
@@ -302,12 +277,12 @@ const filterCluster = async (
             const py = gaussianCols.posY[i];
             const pz = gaussianCols.posZ[i];
 
-            if (isCenterInOccupiedVoxel(px, py, pz, grid, lookup, ccSet)) {
+            if (isCenterInOccupiedVoxel(px, py, pz, grid, lookup)) {
                 keepIndices.push(i);
                 continue;
             }
 
-            if (gaussianContributesToVoxels(i, gaussianCols, grid, lookup, minContribution, ccSet)) {
+            if (gaussianContributesToVoxels(i, gaussianCols, grid, lookup, minContribution)) {
                 keepIndices.push(i);
             }
         }
@@ -331,4 +306,4 @@ const filterCluster = async (
     }
 };
 
-export { filterCluster };
+export { buildInvertedGrid, findClusterVoxelFlood, filterCluster };

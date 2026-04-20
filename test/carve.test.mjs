@@ -2,7 +2,7 @@
  * Tests for capsule-traced navigation voxel simplification.
  *
  * Constructs small voxel scenes (hollow boxes, corridors) using BlockMaskBuffer,
- * runs carveInterior, and verifies the output uses negative space carving
+ * runs carve, and verifies the output uses negative space carving
  * with erosion to restore correct surface positions.
  */
 
@@ -12,7 +12,7 @@ import { BlockMaskBuffer } from '../src/lib/voxel/block-mask-buffer.js';
 import { SparseVoxelGrid } from '../src/lib/voxel/sparse-voxel-grid.js';
 import { xyzToMorton, mortonToXYZ, popcount } from '../src/lib/voxel/morton.js';
 import { alignGridBounds } from '../src/lib/voxel/voxelize.js';
-import { carveInterior } from '../src/lib/voxel/carve-interior.js';
+import { carve } from '../src/lib/voxel/carve.js';
 
 const SOLID_LO = 0xFFFFFFFF >>> 0;
 const SOLID_HI = 0xFFFFFFFF >>> 0;
@@ -68,7 +68,7 @@ function buildHollowBox(sizeBlocks, voxelResolution) {
     return { acc, gridBounds };
 }
 
-describe('carveInterior', function () {
+describe('carve', function () {
     const voxelResolution = 0.25;
     const capsuleHeight = 1.5;
     const capsuleRadius = 0.2;
@@ -80,7 +80,7 @@ describe('carveInterior', function () {
             const centerWorld = (gridBounds.min.x + gridBounds.max.x) / 2;
             const seed = { x: centerWorld, y: centerWorld, z: centerWorld };
 
-            const result = carveInterior(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
+            const result = carve(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
             const resultCount = countSolidVoxels(result.buffer);
 
             assert.ok(resultCount > 0,
@@ -93,7 +93,7 @@ describe('carveInterior', function () {
             const centerWorld = (gridBounds.min.x + gridBounds.max.x) / 2;
             const seed = { x: centerWorld, y: centerWorld, z: centerWorld };
 
-            const result = carveInterior(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
+            const result = carve(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
 
             const resultCount = countSolidVoxels(result.buffer);
             const nx = Math.round((gridBounds.max.x - gridBounds.min.x) / voxelResolution);
@@ -109,7 +109,7 @@ describe('carveInterior', function () {
             const centerWorld = (gridBounds.min.x + gridBounds.max.x) / 2;
             const seed = { x: centerWorld, y: centerWorld, z: centerWorld };
 
-            const result = carveInterior(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
+            const result = carve(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
 
             const grid = bufferToGrid(result.buffer, result.gridBounds, voxelResolution);
             const seedIx = Math.floor((seed.x - result.gridBounds.min.x) / voxelResolution);
@@ -132,7 +132,7 @@ describe('carveInterior', function () {
             const centerWorld = sizeBlocks * 4 * voxelResolution / 2;
             const seed = { x: centerWorld, y: centerWorld, z: centerWorld };
 
-            const result = carveInterior(acc, paddedBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
+            const result = carve(acc, paddedBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
 
             const inputExtentX = paddedBounds.max.x - paddedBounds.min.x;
             const outputExtentX = result.gridBounds.max.x - result.gridBounds.min.x;
@@ -148,7 +148,7 @@ describe('carveInterior', function () {
             const centerWorld = (gridBounds.min.x + gridBounds.max.x) / 2;
             const seed = { x: centerWorld, y: centerWorld, z: centerWorld };
 
-            const result = carveInterior(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
+            const result = carve(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
             const grid = bufferToGrid(result.buffer, result.gridBounds, voxelResolution);
 
             let solidNearWall = 0;
@@ -172,7 +172,7 @@ describe('carveInterior', function () {
             const { acc, gridBounds } = buildHollowBox(4, voxelResolution);
 
             const seed = { x: -100, y: -100, z: -100 };
-            const result = carveInterior(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
+            const result = carve(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
 
             assert.strictEqual(countSolidVoxels(result.buffer), countSolidVoxels(acc),
                 'Should return original when seed is outside grid');
@@ -186,7 +186,7 @@ describe('carveInterior', function () {
                 y: gridBounds.min.y + voxelResolution,
                 z: gridBounds.min.z + voxelResolution
             };
-            const result = carveInterior(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
+            const result = carve(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
 
             assert.strictEqual(countSolidVoxels(result.buffer), countSolidVoxels(acc),
                 'Should return original when seed is in blocked region');
@@ -199,7 +199,7 @@ describe('carveInterior', function () {
             const gridBounds = alignGridBounds(0, 0, 0, 1, 1, 1, voxelResolution);
             const seed = { x: 0.5, y: 0.5, z: 0.5 };
 
-            const result = carveInterior(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
+            const result = carve(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
             const resultCount = countSolidVoxels(result.buffer);
             const nx = Math.round((gridBounds.max.x - gridBounds.min.x) / voxelResolution);
             const ny = Math.round((gridBounds.max.y - gridBounds.min.y) / voxelResolution);
@@ -216,7 +216,7 @@ describe('carveInterior', function () {
             const gridBounds = alignGridBounds(0, 0, 0, 1, 1, 1, voxelResolution);
             const seed = { x: 0.5, y: 0.5, z: 0.5 };
 
-            const result = carveInterior(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
+            const result = carve(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
             assert.strictEqual(result.buffer, acc, 'Empty input should return same buffer reference');
         });
     });
@@ -230,7 +230,7 @@ describe('carveInterior', function () {
             const blockMinX = 2 * 4 * voxelResolution;
             const seed = { x: blockMinX - capsuleRadius - voxelResolution, y: 2 * 4 * voxelResolution + 2 * voxelResolution, z: 2 * 4 * voxelResolution + 2 * voxelResolution };
 
-            const result = carveInterior(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
+            const result = carve(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
 
             const resultCount = countSolidVoxels(result.buffer);
             assert.ok(resultCount > 0,
@@ -264,7 +264,7 @@ describe('carveInterior', function () {
             const centerWorld = sizeBlocks * 4 * voxelResolution / 2;
             const seed = { x: centerWorld, y: centerWorld, z: centerWorld };
 
-            const result = carveInterior(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
+            const result = carve(acc, gridBounds, voxelResolution, capsuleHeight, capsuleRadius, seed);
             const resultCount = countSolidVoxels(result.buffer);
 
             assert.ok(resultCount > 0,
@@ -284,7 +284,7 @@ describe('carveInterior', function () {
             const acc = new BlockMaskBuffer();
             const gridBounds = alignGridBounds(0, 0, 0, 1, 1, 1, 0.25);
             assert.throws(
-                () => carveInterior(acc, gridBounds, 0, capsuleHeight, capsuleRadius, { x: 0.5, y: 0.5, z: 0.5 }),
+                () => carve(acc, gridBounds, 0, capsuleHeight, capsuleRadius, { x: 0.5, y: 0.5, z: 0.5 }),
                 /voxelResolution must be finite and > 0/
             );
         });
@@ -293,7 +293,7 @@ describe('carveInterior', function () {
             const acc = new BlockMaskBuffer();
             const gridBounds = alignGridBounds(0, 0, 0, 1, 1, 1, 0.25);
             assert.throws(
-                () => carveInterior(acc, gridBounds, voxelResolution, -1, capsuleRadius, { x: 0.5, y: 0.5, z: 0.5 }),
+                () => carve(acc, gridBounds, voxelResolution, -1, capsuleRadius, { x: 0.5, y: 0.5, z: 0.5 }),
                 /capsuleHeight must be finite and > 0/
             );
         });
@@ -302,7 +302,7 @@ describe('carveInterior', function () {
             const acc = new BlockMaskBuffer();
             const gridBounds = alignGridBounds(0, 0, 0, 1, 1, 1, 0.25);
             assert.throws(
-                () => carveInterior(acc, gridBounds, voxelResolution, capsuleHeight, -0.5, { x: 0.5, y: 0.5, z: 0.5 }),
+                () => carve(acc, gridBounds, voxelResolution, capsuleHeight, -0.5, { x: 0.5, y: 0.5, z: 0.5 }),
                 /capsuleRadius must be finite and >= 0/
             );
         });

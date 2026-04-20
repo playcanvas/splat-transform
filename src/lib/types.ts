@@ -29,10 +29,16 @@ type Options = {
     /** Exterior fill radius in world units. Enables exterior fill when set. Requires navSeed. */
     navExteriorRadius?: number;
 
-    /** Capsule dimensions for interior carve. Height of 0 disables interior carve. Requires navSeed. */
+    /** Fill each voxel column upward from the bottom until hitting solid. Runs before carve. Default: false */
+    floorFill?: boolean;
+
+    /** When `floorFill` is enabled, dilation radius in world units used to identify "interior" XZ columns to patch. Empty XZ areas larger than `2 * floorFillDilation` from any solid column are treated as exterior and left empty. Default: 0 (patch every empty column). */
+    floorFillDilation?: number;
+
+    /** Capsule dimensions for carve. Height of 0 disables carve. Requires navSeed. */
     navCapsule?: { height: number; radius: number };
 
-    /** Seed position in world space for exterior fill and interior carve flood fill. */
+    /** Seed position in world space for exterior fill and carve flood fill. */
     navSeed?: { x: number; y: number; z: number };
 
     /** Whether to generate a collision mesh (.collision.glb) alongside voxel output. Default: false */
