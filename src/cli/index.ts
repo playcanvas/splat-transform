@@ -23,6 +23,7 @@ import {
     type Options as LibOptions,
     logger
 } from '../lib/index';
+import { fmtTime } from '../lib/utils/logger';
 
 /**
  * CLI-specific options extending library options.
@@ -839,7 +840,7 @@ const main = async () => {
     }
 
     const elapsedMs = performance.now() - startTime;
-    logger.info(`done in ${(elapsedMs / 1000).toFixed(3)}s`);
+    logger.info(`done in ${fmtTime(elapsedMs)}`);
 
     // something in webgpu seems to keep the process alive after returning
     // from main so force exit

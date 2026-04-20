@@ -120,8 +120,14 @@ const messageVisible = (kind: MessageKind, v: Verbosity): boolean => {
 const taskVisible = (v: Verbosity): boolean => verbosityRank[v] >= verbosityRank.normal;
 
 const fmtTime = (ms: number): string => {
-    if (ms >= 60_000) return `${(ms / 60_000).toFixed(2)}m`;
-    return `${(ms / 1000).toFixed(3)}s`;
+    if (!Number.isFinite(ms) || ms < 0) return `${ms}ms`;
+    if (ms < 60_000) return `${(ms / 1000).toFixed(3)}s`;
+
+    const h = Math.floor(ms / 3_600_000);
+    const m = Math.floor((ms % 3_600_000) / 60_000);
+    const s = ((ms % 60_000) / 1000).toFixed(3);
+
+    return h > 0 ? `${h}h${m}m${s}s` : `${m}m${s}s`;
 };
 
 const fmtArgs = (args: any[]): string => {
