@@ -756,44 +756,42 @@ const main = async () => {
         for (const inputArg of inputArgs) {
             const phase = logger.group(`Read ${inputArg.filename}`, firstPhase ? { total: phaseTotal } : undefined);
             firstPhase = false;
-            try {
-                // extract params
-                const params = inputArg.processActions.filter(a => a.kind === 'param').map((p) => {
-                    return { name: p.name, value: p.value };
-                });
 
-                // read input
-                const filename = resolve(inputArg.filename);
-                const inputFormat = getInputFormat(filename);
+            // extract params
+            const params = inputArg.processActions.filter(a => a.kind === 'param').map((p) => {
+                return { name: p.name, value: p.value };
+            });
 
-                // For mjs format, convert to file:// URL (Node.js-specific)
-                const readFilename = inputFormat === 'mjs' ? `file://${filename}` : filename;
+            // read input
+            const filename = resolve(inputArg.filename);
+            const inputFormat = getInputFormat(filename);
 
-                const dataTables = await readFile({
-                    filename: readFilename,
-                    inputFormat,
-                    options,
-                    params,
-                    fileSystem: nodeFs
-                });
+            // For mjs format, convert to file:// URL (Node.js-specific)
+            const readFilename = inputFormat === 'mjs' ? `file://${filename}` : filename;
 
-                for (let i = 0; i < dataTables.length; ++i) {
-                    const dataTable = dataTables[i];
+            const dataTables = await readFile({
+                filename: readFilename,
+                inputFormat,
+                options,
+                params,
+                fileSystem: nodeFs
+            });
 
-                    if (dataTable.numRows === 0 || !isGSDataTable(dataTable)) {
-                        throw new Error(`Unsupported data in file '${inputArg.filename}'`);
-                    }
+            for (let i = 0; i < dataTables.length; ++i) {
+                const dataTable = dataTables[i];
 
-                    const isEnv = dataTable.hasColumn('lod') && dataTable.getColumnByName('lod').data.every(v => v === -1);
-                    if (!isEnv) {
-                        dataTables[i] = await processDataTable(dataTable, inputArg.processActions, processOptions);
-                    }
+                if (dataTable.numRows === 0 || !isGSDataTable(dataTable)) {
+                    throw new Error(`Unsupported data in file '${inputArg.filename}'`);
                 }
 
-                inputDataTables.push(...dataTables.filter(dt => dt !== null));
-            } finally {
-                phase.end();
+                const isEnv = dataTable.hasColumn('lod') && dataTable.getColumnByName('lod').data.every(v => v === -1);
+                if (!isEnv) {
+                    dataTables[i] = await processDataTable(dataTable, inputArg.processActions, processOptions);
+                }
             }
+
+            inputDataTables.push(...dataTables.filter(dt => dt !== null));
+            phase.end();
         }
 
         // special-case the environment dataTable
@@ -821,19 +819,16 @@ const main = async () => {
         if (!isNullOutput) {
             const phase = logger.group(`Write ${outputArg.filename}`, firstPhase ? { total: phaseTotal } : undefined);
             firstPhase = false;
-            try {
-                logger.info(`input gaussians: ${dataTable.numRows}`);
-                await writeFile({
-                    filename: outputFilename,
-                    outputFormat: outputFormat!,
-                    dataTable,
-                    envDataTable,
-                    options,
-                    createDevice: deviceCreator
-                }, new NodeFileSystem());
-            } finally {
-                phase.end();
-            }
+            logger.info(`input gaussians: ${dataTable.numRows}`);
+            await writeFile({
+                filename: outputFilename,
+                outputFormat: outputFormat!,
+                dataTable,
+                envDataTable,
+                options,
+                createDevice: deviceCreator
+            }, new NodeFileSystem());
+            phase.end();
         } else {
             logger.info(`input gaussians: ${dataTable.numRows}`);
         }

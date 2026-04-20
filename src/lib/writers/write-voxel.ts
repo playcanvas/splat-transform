@@ -364,110 +364,116 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     const extentsResult = computeGaussianExtents(pcDataTable);
     const bounds = extentsResult.sceneBounds;
 
-    const g = logger.group('Voxel build');
+    const g = logger.group('Build voxels');
+
+    const bvhSub = logger.group('Building BVH');
+    logger.debug(`scene extents: (${bounds.min.x.toFixed(2)},${bounds.min.y.toFixed(2)},${bounds.min.z.toFixed(2)}) - (${bounds.max.x.toFixed(2)},${bounds.max.y.toFixed(2)},${bounds.max.z.toFixed(2)})`);
+
+    const bvh = new GaussianBVH(pcDataTable, extentsResult.extents);
+    const device = await createDevice();
+    bvhSub.end();
+
+    let gpuVoxelization: GpuVoxelization | null = new GpuVoxelization(device);
     try {
-        g.step('Building BVH');
-        logger.debug(`scene extents: (${bounds.min.x.toFixed(2)},${bounds.min.y.toFixed(2)},${bounds.min.z.toFixed(2)}) - (${bounds.max.x.toFixed(2)},${bounds.max.y.toFixed(2)},${bounds.max.z.toFixed(2)})`);
+        gpuVoxelization.uploadAllGaussians(pcDataTable, extentsResult.extents);
 
-        const bvh = new GaussianBVH(pcDataTable, extentsResult.extents);
-        const device = await createDevice();
+        // Align grid bounds to block boundaries BEFORE voxelization so the
+        // block coordinates used during voxelization match what the reader expects.
+        // When fillExterior runs, pad by halfExtent + 1 voxels per side so the
+        // boundary-face flood seeds survive the dilation (notably below the floor).
+        const exteriorPad = hasFillExterior ?
+            (Math.ceil(navExteriorRadius! / voxelResolution) + 1) * voxelResolution :
+            0;
+        let gridBounds = alignGridBounds(
+            bounds.min.x - exteriorPad, bounds.min.y - exteriorPad, bounds.min.z - exteriorPad,
+            bounds.max.x + exteriorPad, bounds.max.y + exteriorPad, bounds.max.z + exteriorPad,
+            voxelResolution
+        );
 
-        let gpuVoxelization: GpuVoxelization | null = new GpuVoxelization(device);
-        try {
-            gpuVoxelization.uploadAllGaussians(pcDataTable, extentsResult.extents);
+        let buffer = await voxelizeToBuffer(
+            bvh, gpuVoxelization, gridBounds, voxelResolution, opacityCutoff
+        );
 
-            // Align grid bounds to block boundaries BEFORE voxelization so the
-            // block coordinates used during voxelization match what the reader expects.
-            // When fillExterior runs, pad by halfExtent + 1 voxels per side so the
-            // boundary-face flood seeds survive the dilation (notably below the floor).
-            const exteriorPad = hasFillExterior ?
-                (Math.ceil(navExteriorRadius! / voxelResolution) + 1) * voxelResolution :
-                0;
-            let gridBounds = alignGridBounds(
-                bounds.min.x - exteriorPad, bounds.min.y - exteriorPad, bounds.min.z - exteriorPad,
-                bounds.max.x + exteriorPad, bounds.max.y + exteriorPad, bounds.max.z + exteriorPad,
-                voxelResolution
+        gpuVoxelization.destroy();
+        gpuVoxelization = null;
+
+        const filterSub = logger.group('Filtering');
+        buffer = filterAndFillBlocks(buffer);
+        filterSub.end();
+
+        if (hasFillExterior) {
+            const sub = logger.group('Fill exterior');
+            const fillResult = fillExterior(
+                buffer, gridBounds, voxelResolution,
+                navExteriorRadius!, navSeed!
             );
-
-            let buffer = await voxelizeToBuffer(
-                bvh, gpuVoxelization, gridBounds, voxelResolution, opacityCutoff
-            );
-
-            gpuVoxelization.destroy();
-            gpuVoxelization = null;
-
-            g.step('Filtering');
-            buffer = filterAndFillBlocks(buffer);
-
-            if (hasFillExterior) {
-                g.step('Fill exterior');
-                const fillResult = fillExterior(
-                    buffer, gridBounds, voxelResolution,
-                    navExteriorRadius!, navSeed!
-                );
-                buffer = fillResult.buffer;
-                gridBounds = fillResult.gridBounds;
-            }
-
-            if (hasFloorFill) {
-                const floorResult = fillFloor(
-                    buffer, gridBounds, voxelResolution, floorFillDilation
-                );
-                buffer = floorResult.buffer;
-                gridBounds = floorResult.gridBounds;
-            }
-
-            if (hasNav) {
-                g.step('Carve');
-                const navResult = carve(
-                    buffer, gridBounds, voxelResolution,
-                    navCapsule!.height, navCapsule!.radius,
-                    navSeed!
-                );
-                buffer = navResult.buffer;
-                gridBounds = navResult.gridBounds;
-            }
-
-            const finalCrop = hasFillExterior || hasFloorFill ?
-                cropToNavigable(buffer, gridBounds, voxelResolution) :
-                cropToOccupied(buffer, gridBounds, voxelResolution);
-            buffer = finalCrop.buffer;
-            gridBounds = finalCrop.gridBounds;
-
-            const glbBytes = collisionMesh ?
-                await buildCollisionMesh(buffer, gridBounds, voxelResolution, meshSimplifyError) :
-                null;
-
-            const octree = buildSparseOctree(
-                buffer,
-                gridBounds,
-                bounds,
-                voxelResolution
-            );
-            buffer.clear();
-
-            logger.info(`octree depth: ${octree.treeDepth}`);
-            logger.info(`interior nodes: ${octree.numInteriorNodes}`);
-            logger.info(`mixed leaves: ${octree.numMixedLeaves}`);
-
-            g.step('Writing');
-            await writeOctreeFiles(fs, filename, octree);
-
-            if (glbBytes) {
-                const glbFilename = filename.replace('.voxel.json', '.collision.glb');
-                await writeFile(fs, glbFilename, glbBytes);
-                logger.info(`collision mesh: ${glbFilename} (${(glbBytes.length / 1024).toFixed(1)} KB)`);
-            }
-
-            const totalBytes = (octree.nodes.length + octree.leafData.length) * 4;
-            logger.info(`octree total size: ${(totalBytes / 1024).toFixed(1)} KB`);
-        } catch (e) {
-            gpuVoxelization?.destroy();
-            throw e;
+            buffer = fillResult.buffer;
+            gridBounds = fillResult.gridBounds;
+            sub.end();
         }
-    } finally {
-        g.end();
+
+        if (hasFloorFill) {
+            const sub = logger.group('Fill floor');
+            const floorResult = fillFloor(
+                buffer, gridBounds, voxelResolution, floorFillDilation
+            );
+            buffer = floorResult.buffer;
+            gridBounds = floorResult.gridBounds;
+            sub.end();
+        }
+
+        if (hasNav) {
+            const sub = logger.group('Carve');
+            const navResult = carve(
+                buffer, gridBounds, voxelResolution,
+                navCapsule!.height, navCapsule!.radius,
+                navSeed!
+            );
+            buffer = navResult.buffer;
+            gridBounds = navResult.gridBounds;
+            sub.end();
+        }
+
+        const finalCrop = hasFillExterior || hasFloorFill ?
+            cropToNavigable(buffer, gridBounds, voxelResolution) :
+            cropToOccupied(buffer, gridBounds, voxelResolution);
+        buffer = finalCrop.buffer;
+        gridBounds = finalCrop.gridBounds;
+
+        const glbBytes = collisionMesh ?
+            await buildCollisionMesh(buffer, gridBounds, voxelResolution, meshSimplifyError) :
+            null;
+
+        const octree = buildSparseOctree(
+            buffer,
+            gridBounds,
+            bounds,
+            voxelResolution
+        );
+        buffer.clear();
+
+        logger.info(`octree depth: ${octree.treeDepth}`);
+        logger.info(`interior nodes: ${octree.numInteriorNodes}`);
+        logger.info(`mixed leaves: ${octree.numMixedLeaves}`);
+
+        const writingSub = logger.group('Writing');
+        await writeOctreeFiles(fs, filename, octree);
+
+        if (glbBytes) {
+            const glbFilename = filename.replace('.voxel.json', '.collision.glb');
+            await writeFile(fs, glbFilename, glbBytes);
+            logger.info(`collision mesh: ${glbFilename} (${(glbBytes.length / 1024).toFixed(1)} KB)`);
+        }
+
+        const totalBytes = (octree.nodes.length + octree.leafData.length) * 4;
+        logger.info(`octree total size: ${(totalBytes / 1024).toFixed(1)} KB`);
+        writingSub.end();
+    } catch (e) {
+        gpuVoxelization?.destroy();
+        throw e;
     }
+
+    g.end();
 };
 
 export { writeVoxel, type WriteVoxelOptions, type VoxelMetadata };

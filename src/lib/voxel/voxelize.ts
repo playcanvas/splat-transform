@@ -130,7 +130,6 @@ const voxelizeToBuffer = async (
 
     const numZBatches = Math.max(1, Math.ceil(numBlocksZ / batchSize));
     const bar = logger.bar('Voxelizing', numZBatches);
-
     for (let bz = 0; bz < numBlocksZ; bz += batchSize) {
         for (let by = 0; by < numBlocksY; by += batchSize) {
             for (let bx = 0; bx < numBlocksX; bx += batchSize) {
@@ -196,7 +195,6 @@ const voxelizeToBuffer = async (
     }
 
     bar.end();
-
     return buffer;
 };
 

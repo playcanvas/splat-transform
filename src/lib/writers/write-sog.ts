@@ -75,7 +75,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     const zipFs = bundle ? new ZipFileSystem(await fs.createWriter(outputFilename)) : null;
     const outputFs = zipFs || fs;
 
-    const g = logger.group('SOG write');
+    const g = logger.group('Write SOG');
 
     const indices = options.indices || generateIndices(dataTable);
     const numRows = indices.length;
@@ -88,6 +88,8 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
 
     const writeWebp = async (filename: string, data: Uint8Array, w = width, h = height) => {
         const pathname = zipFs ? filename : resolve(dirname(outputFilename), filename);
+
+        logger.debug(`writing '${pathname}'`);
 
         // construct the encoder on first use
         if (!webPCodec) {
@@ -250,10 +252,11 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
         // Create GPU device lazily — only needed for SH k-means clustering
         const gpuDevice = createDevice ? await createDevice() : undefined;
 
-        g.step('Compressing spherical harmonics');
+        const compSub = logger.group('Compressing spherical harmonics');
         const { centroids, labels } = await kmeans(shDataTable, paletteSize, iterations, gpuDevice);
+        compSub.end();
 
-        g.step('Quantizing spherical harmonics');
+        const quantSub = logger.group('Quantizing spherical harmonics');
         const codebook = quantize1d(centroids);
 
         // write centroids
@@ -287,6 +290,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
             labelsBuf[ti * 4 + 3] = 0xff;
         }
         await writeWebp('shN_labels.webp', labelsBuf);
+        quantSub.end();
 
         return {
             count: paletteSize,
@@ -301,28 +305,32 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
 
     const shBands = { '9': 1, '24': 2, '-1': 3 }[shNames.findIndex(v => !dataTable.hasColumn(v))] ?? 0;
 
-    // convert and write attributes
-    g.step('Generating morton order');
+    const mortonSub = logger.group('Generating morton order');
     // indices already generated above
+    mortonSub.end();
 
-    g.step('Writing positions');
+    const positionsSub = logger.group('Writing positions');
     const meansMinMax = await writeMeans();
+    positionsSub.end();
 
-    g.step('Writing quaternions');
+    const quatsSub = logger.group('Writing quaternions');
     await writeQuaternions();
+    quatsSub.end();
 
-    g.step('Compressing scales');
+    const scalesSub = logger.group('Compressing scales');
     const scalesCodebook = await writeScales();
+    scalesSub.end();
 
-    g.step('Compressing colors');
+    const colorsSub = logger.group('Compressing colors');
     const colorsCodebook = await writeColors();
+    colorsSub.end();
 
     let shN = null;
     if (shBands > 0) {
         shN = await writeSH(shBands);
     }
 
-    g.step('Finalizing');
+    const finalizeSub = logger.group('Finalizing');
 
     // construct meta.json
     const meta: any = {
@@ -362,6 +370,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     if (zipFs) {
         await zipFs.close();
     }
+    finalizeSub.end();
 
     g.end();
 };

@@ -172,6 +172,8 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
         // ensure output folder exists before any files are written
         await fs.mkdir(dirname(pathname));
 
+        logger.debug(`writing '${pathname}'`);
+
         await writeSog({
             filename: pathname,
             dataTable: envDataTable,
@@ -312,6 +314,8 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
             for (let j = 0; j < indices.length; ++j) {
                 indices[j] = j;
             }
+
+            logger.debug(`writing '${pathname}'`);
 
             // write file unit to sog
             await writeSog({

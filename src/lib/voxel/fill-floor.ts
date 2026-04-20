@@ -77,11 +77,10 @@ const fillFloor = (
 
     const r = dilation > 0 ? Math.ceil(dilation / voxelResolution) : 0;
 
-    const bar = logger.bar('Filling floor', r > 0 ? 4 : 3);
+    logger.debug(`fill floor: ${nx}x${ny}x${nz} grid, dilation radius ${r} voxels`);
 
     const grid = SparseVoxelGrid.fromBuffer(buffer, nx, ny, nz);
     const dilatedSolid = r > 0 ? sparseDilate3(grid, r, 0) : grid;
-    bar.tick();
 
     const foundEmpty = new SparseVoxelGrid(nx, ny, nz);
 
@@ -155,19 +154,12 @@ const fillFloor = (
     }
 
     if (r > 0) dilatedSolid.clear();
-    bar.tick();
 
     const dilatedFound = r > 0 ? sparseDilate3(foundEmpty, r, 0) : foundEmpty;
-    if (r > 0) {
-        foundEmpty.clear();
-        bar.tick();
-    }
+    if (r > 0) foundEmpty.clear();
 
     const combined = sparseOrGrids(grid, dilatedFound);
     const result = combined.toBuffer(0, 0, 0, nbx, nby, nbz);
-
-    bar.tick();
-    bar.end();
 
     return { buffer: result, gridBounds };
 };

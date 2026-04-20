@@ -14,10 +14,9 @@ type MessageKind = 'error' | 'warn' | 'info' | 'debug';
  * Semantic event delivered to a {@link Renderer}. Renderers can filter, format
  * and display these as they wish.
  *
- * `scopeStart` / `scopeEnd` represent the open/close of any timed scope
- * (group or step - the renderer treats them identically). They carry optional
- * `index` / `total` fields when the scope is part of a numbered series, which
- * renderers can use to switch to a `[N/T] name` style.
+ * `scopeStart` / `scopeEnd` represent the open/close of a {@link Group}.
+ * They carry optional `index` / `total` fields when the scope is part of a
+ * numbered series, which renderers can use to switch to a `[N/T] name` style.
  *
  * `barStart` / `barTick` / `barEnd` represent an indeterminate progress bar.
  * The bar's `name` is repeated on every event so the renderer can keep its
@@ -66,33 +65,30 @@ interface Bar {
 
 /**
  * Named, timed scope returned from {@link Logger.group}. Manages the scope's
- * lifecycle only - free-form messages and bars are emitted via the global
- * `logger` (they auto-indent under the innermost active scope).
+ * lifecycle only - free-form messages, nested groups and bars are emitted via
+ * the global `logger` (they auto-indent under whatever is on top of the
+ * active-scope stack).
+ *
+ * Open scopes with `logger.group(name)` and close them with `sub.end()` after
+ * the body. There is no try/finally requirement: a thrown exception either
+ * exits the process or is reported via `logger.error()`, which calls
+ * {@link Logger.error}'s built-in `unwindAll()` to close every open scope.
  */
 interface Group {
     /**
-     * Open a new step within this group, automatically closing the previous
-     * step (and any open bar inside it).
-     * @param name - The step name.
-     */
-    step(name: string): void;
-    /**
-     * Close the group: ends any open step / bar inside it, then emits timing.
+     * Close the group, popping anything still open above it on the stack
+     * (defensively handles forgotten inner scopes) and emit the timing event.
      */
     end(): void;
 }
 
 /**
- * Internal node tracked on the active-scope stack.
- *
- * `group` scopes carry optional `index` / `total` when they are part of a
- * numbered series, so the closing event can re-emit the same numbering. Steps
- * differ from groups only in their auto-close-on-sibling sequencing inside
- * {@link Group.step}; on the wire they emit the same `scope*` events.
+ * Internal node tracked on the active-scope stack. Both kinds carry their own
+ * depth and start time; `group` may additionally carry `index` / `total` so a
+ * numbered series can re-emit the same numbering on close.
  */
 type Scope =
     | { kind: 'group'; name: string; depth: number; start: number; index?: number; total?: number }
-    | { kind: 'step'; name: string; depth: number; start: number }
     | { kind: 'bar'; name: string; depth: number; start: number; total: number; current: number };
 
 const now = (): number => {
@@ -368,29 +364,17 @@ class LoggerCore {
     }
 
     /**
-     * Open a labelled progress bar as a peer of any sibling steps within the
-     * innermost active group. Auto-closes any step or previous bar above
-     * that group, so successive bars and steps render as siblings rather
-     * than nesting inside each other.
-     *
-     * If no group is open, the bar is opened at the current stack depth
-     * (taking over from any open peer bar/step).
+     * Open a labelled progress bar at the current stack depth (i.e. nested
+     * directly under whatever scope is currently on top of the stack). This
+     * is a pure-push operation: it does not pop or auto-close anything.
+     * Callers control nesting purely by the order in which they open and
+     * close scopes.
      *
      * @param name - The bar's label, displayed alongside the progress indicator.
      * @param total - Total number of ticks the bar will report before completing.
      * @returns A handle for advancing and closing the bar.
      */
     pushBar(name: string, total: number): Bar {
-        let groupIdx = -1;
-        for (let i = this.stack.length - 1; i >= 0; i--) {
-            if (this.stack[i].kind === 'group') {
-                groupIdx = i;
-                break;
-            }
-        }
-        while (this.stack.length > groupIdx + 1) {
-            this.popScope();
-        }
         const scope: Scope = {
             kind: 'bar',
             name,
@@ -409,6 +393,13 @@ class LoggerCore {
         return {
             tick: (n = 1) => {
                 if (closed) return;
+                if (this.stack.indexOf(scope) === -1) {
+                    // scope was popped from underneath us (e.g. a sibling
+                    // bar opened inside a function call). Silently retire
+                    // the handle so further ticks are no-ops.
+                    closed = true;
+                    return;
+                }
                 scope.current = Math.min(scope.total, scope.current + Math.max(0, n));
                 this.emit({ kind: 'barTick', depth: scope.depth, name: scope.name, current: scope.current, total: scope.total });
             },
@@ -426,26 +417,7 @@ class LoggerCore {
     private makeGroup(scope: Scope & { kind: 'group' }): Group {
         let closed = false;
 
-        const stillOpen = (): boolean => {
-            if (closed) return false;
-            return this.stack.indexOf(scope) !== -1;
-        };
-
         return {
-            step: (name: string) => {
-                if (!stillOpen()) return;
-                while (this.stack.length > 0 && this.stack[this.stack.length - 1] !== scope) {
-                    this.popScope();
-                }
-                const stepScope: Scope = {
-                    kind: 'step',
-                    name,
-                    depth: scope.depth + 1,
-                    start: now()
-                };
-                this.stack.push(stepScope);
-                this.emit({ kind: 'scopeStart', depth: stepScope.depth, name });
-            },
             end: () => {
                 if (closed) return;
                 closed = true;
@@ -488,7 +460,14 @@ const core = new LoggerCore();
  * the first call of a numbered series; subsequent siblings auto-advance.
  * Indeterminate progress is reported with {@link Logger.bar}. Free-form
  * messages route through `info` / `warn` / `error` / `debug`, indented under
- * the innermost active scope.
+ * whatever is on top of the active-scope stack.
+ *
+ * Both `group` and `bar` are pure-push operations: opening a new scope simply
+ * places it on top of the stack without auto-closing siblings, so call order
+ * directly determines nesting. Close scopes with `handle.end()` after the
+ * body. There is no try/finally requirement: an unhandled throw aborts the
+ * process, and calls to {@link logger.error} call `unwindAll()` internally
+ * to close every still-open scope.
  */
 const logger = {
     /**

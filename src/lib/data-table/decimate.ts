@@ -641,14 +641,22 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
     // Pre-generate MC samples
     const Z = makeGaussianSamples(MC_SAMPLES, 0);
 
-    // Step 2: Iterative merging
+    // Step 2: Iterative merging.
+    // Each iteration roughly halves the row count (greedy disjoint pair
+    // selection picks up to n/2 merges), so log2(n / target) is a good
+    // upper bound for the [N/T] series numbering. Iterations beyond the
+    // estimate render unnumbered, which is fine.
+    const estIterations = Math.max(1, Math.ceil(Math.log2(current.numRows / targetCount)));
+    let firstIteration = true;
+
     while (current.numRows > targetCount) {
         const n = current.numRows;
         const kEff = Math.min(Math.max(1, KNN_K), Math.max(1, n - 1));
 
-        const g = logger.group('Decimate iteration');
+        const g = logger.group('Decimate iteration', firstIteration ? { total: estIterations } : undefined);
+        firstIteration = false;
 
-        g.step('Building KD-tree');
+        const kdSub = logger.group('Building KD-tree');
 
         const cx = current.getColumnByName('x')!.data;
         const cy = current.getColumnByName('y')!.data;
@@ -677,6 +685,8 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
         let edgeCount = 0;
         const queryPoint = new Float32Array(3);
 
+        kdSub.end();
+
         const knnInterval = Math.max(1, Math.ceil(n / PROGRESS_TICKS));
         const knnTicks = Math.ceil(n / knnInterval);
         const knnBar = logger.bar('Finding nearest neighbors', knnTicks);
@@ -704,6 +714,7 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
             if ((i + 1) % knnInterval === 0) knnBar.tick();
         }
         if (n % knnInterval !== 0) knnBar.tick();
+        knnBar.end();
 
         if (edgeCount === 0) {
             g.end();
@@ -728,6 +739,7 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
             if ((e + 1) % costInterval === 0) costBar.tick();
         }
         if (edgeCount % costInterval !== 0) costBar.tick();
+        costBar.end();
 
         // Sort and greedy disjoint pair selection
         const sorted = new Uint32Array(edgeCount);
@@ -844,8 +856,7 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
             if ((p + 1) % mergeInterval === 0) mergeBar.tick();
         }
         if (pairs.length % mergeInterval !== 0) mergeBar.tick();
-
-        g.step('Finalizing');
+        mergeBar.end();
 
         current = newTable;
         g.end();

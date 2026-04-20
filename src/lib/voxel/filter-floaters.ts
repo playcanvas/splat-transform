@@ -52,15 +52,16 @@ const filterFloaters = async (
     const g = logger.group('Filter floaters');
     let ctx: VoxelFilterContext | undefined;
     try {
-        g.step('Initializing voxel pipeline');
+        const initSub = logger.group('Initializing voxel pipeline');
         ctx = await setupVoxelFilter(dataTable, createDevice);
 
         const blockSize = 4 * voxelResolution;
         logger.info(`voxel size: ${voxelResolution}m`);
         logger.info(`block size: ${blockSize}m`);
         logger.info(`min contribution: ${minContribution.toFixed(6)}`);
+        initSub.end();
 
-        g.step('Aligning grid bounds');
+        const alignSub = logger.group('Aligning grid bounds');
 
         const gridBounds = alignGridBounds(
             ctx.sceneBounds.min.x, ctx.sceneBounds.min.y, ctx.sceneBounds.min.z,
@@ -79,8 +80,9 @@ const filterFloaters = async (
         const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
 
         logger.info(`occupied blocks: ${lookup.solidSet.size + lookup.mixedMap.size} (${lookup.solidSet.size} solid, ${lookup.mixedMap.size} mixed)`);
+        alignSub.end();
 
-        g.step('Filtering Gaussians');
+        const filterSub = logger.group('Filtering Gaussians');
 
         const gaussianCols = buildGaussianColumns(ctx);
         const keepIndices: number[] = [];
@@ -102,6 +104,9 @@ const filterFloaters = async (
 
         const removed = numRows - keepIndices.length;
         logger.info(`kept gaussians: ${keepIndices.length} of ${numRows} (removed ${removed})`);
+        filterSub.end();
+
+        g.end();
 
         if (removed === 0) return dataTable;
 
@@ -109,8 +114,6 @@ const filterFloaters = async (
     } catch (e) {
         ctx?.gpuVoxelization?.destroy();
         throw e;
-    } finally {
-        g.end();
     }
 };
 

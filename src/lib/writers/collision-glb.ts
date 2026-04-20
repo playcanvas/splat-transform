@@ -141,19 +141,20 @@ const buildCollisionMesh = async (
 ): Promise<Uint8Array | null> => {
     const g = logger.group('Collision mesh');
 
-    g.step('Extracting');
+    const extractSub = logger.group('Extracting');
     const rawMesh = marchingCubes(blockBuffer, gridBounds, voxelResolution);
     logger.info(`raw vertices: ${rawMesh.positions.length / 3}`);
     logger.info(`raw triangles: ${rawMesh.indices.length / 3}`);
 
     if (rawMesh.indices.length < 3) {
         logger.warn('no triangles generated, skipping GLB output');
+        extractSub.end();
         g.end();
         return null;
     }
+    extractSub.end();
 
-    g.step('Simplifying');
-
+    const simplifySub = logger.group('Simplifying');
     const errorFraction = Number.isFinite(meshSimplifyError) && meshSimplifyError! >= 0 ? meshSimplifyError! : 0.08;
     const simplified = await simplifyMesh(rawMesh, errorFraction * voxelResolution);
 
@@ -161,6 +162,7 @@ const buildCollisionMesh = async (
     logger.info(`simplified vertices: ${simplified.positions.length / 3}`);
     logger.info(`simplified triangles: ${simplified.indices.length / 3}`);
     logger.info(`reduction: ${reduction.toFixed(0)}%`);
+    simplifySub.end();
 
     g.end();
     return encodeGlb(simplified.positions, simplified.indices);
