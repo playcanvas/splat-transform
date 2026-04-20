@@ -11,7 +11,7 @@ import { buildSparseOctree, type SparseOctree } from './sparse-octree';
 import {
     filterAndFillBlocks,
     alignGridBounds,
-    carveInterior,
+    carve,
     fillExterior,
     fillFloor,
     type NavSeed,
@@ -43,13 +43,13 @@ type WriteVoxelOptions = {
     /** Exterior fill radius in world units. Enables exterior fill when set. Requires navSeed; ignored without it. */
     navExteriorRadius?: number;
 
-    /** Capsule dimensions for interior carve. Height of 0 disables interior carve. When height > 0, only voxels contactable from the seed are kept. Requires navSeed. */
+    /** Capsule dimensions for carve. Height of 0 disables carve. When height > 0, only voxels contactable from the seed are kept. Requires navSeed. */
     navCapsule?: { height: number; radius: number };
 
-    /** Seed position in world space for exterior fill and interior carve flood fill. */
+    /** Seed position in world space for exterior fill and carve flood fill. */
     navSeed?: NavSeed;
 
-    /** Fill each voxel column upward from the bottom until hitting solid. Runs before interior carve so the carve's BFS is confined to the actual interior bubble. Default: false */
+    /** Fill each voxel column upward from the bottom until hitting solid. Runs before carve so the carve's BFS is confined to the actual navigable bubble. Default: false */
     floorFill?: boolean;
 
     /** When `floorFill` is enabled, dilation radius in world units used to identify "interior" XZ columns to patch. Empty XZ areas larger than `2 * floorFillDilation` from any solid column are treated as exterior and left empty. Default: 0 (patch every empty column). */
@@ -341,7 +341,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     }
 
     if (navCapsule && !navSeed) {
-        logger.warn('writeVoxel: navCapsule requires navSeed for interior nav carving, skipping nav carving');
+        logger.warn('writeVoxel: navCapsule requires navSeed for nav carving, skipping nav carving');
     }
     const hasNav = !!(navCapsule && navSeed && navCapsule.height > 0);
     const hasFillExterior = !!(navExteriorRadius && navSeed);
@@ -428,8 +428,8 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         }
 
         if (hasNav) {
-            logger.progress.step('Carve interior');
-            const navResult = carveInterior(
+            logger.progress.step('Carve');
+            const navResult = carve(
                 buffer, gridBounds, voxelResolution,
                 navCapsule!.height, navCapsule!.radius,
                 navSeed!

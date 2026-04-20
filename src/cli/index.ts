@@ -84,7 +84,7 @@ const cliOptionsConfig = {
     'voxel-params': { type: 'string', default: '' },
     'voxel-external-fill': { type: 'string' },
     'voxel-floor-fill': { type: 'string' },
-    'voxel-interior-carve': { type: 'string' },
+    'voxel-carve': { type: 'string' },
     'seed-pos': { type: 'string', default: '' },
     'collision-mesh': { type: 'boolean', short: 'K', default: false },
     'mesh-simplify-error': { type: 'string', default: '' },
@@ -114,7 +114,7 @@ const stringOptionNames = new Set(Object.entries(cliOptionsConfig)
 
 const optionalValueOptions = new Set([
     '--filter-cluster', '-D', '--filter-floaters', '-G',
-    '--voxel-external-fill', '--voxel-floor-fill', '--voxel-interior-carve',
+    '--voxel-external-fill', '--voxel-floor-fill', '--voxel-carve',
     '--voxel-params'
 ]);
 
@@ -238,7 +238,7 @@ const parseArguments = async () => {
     // Parse voxel processing options
     const voxelParamsStr = v['voxel-params'];
     const externalFillStr = v['voxel-external-fill'];
-    const carveInteriorStr = v['voxel-interior-carve'];
+    const carveStr = v['voxel-carve'];
     const seedPosStr = v['seed-pos'];
 
     let voxelResolution = 0.05;
@@ -267,11 +267,11 @@ const parseArguments = async () => {
     }
 
     let navCapsule: { height: number; radius: number } | undefined;
-    if (carveInteriorStr !== undefined) {
-        if (carveInteriorStr) {
-            const [height, radius] = parseVec(carveInteriorStr, 2);
+    if (carveStr !== undefined) {
+        if (carveStr) {
+            const [height, radius] = parseVec(carveStr, 2);
             if (height < 0 || radius < 0) {
-                throw new Error(`Invalid voxel-interior-carve value: ${carveInteriorStr}. Height and radius must be >= 0`);
+                throw new Error(`Invalid voxel-carve value: ${carveStr}. Height and radius must be >= 0`);
             }
             navCapsule = { height, radius };
         } else {
@@ -576,7 +576,7 @@ GLOBAL OPTIONS
                                               Optional radius (world units): only patch XZ areas surrounded by floor
                                               within 2*radius; large empty exterior areas are left alone.
                                               Default radius: 1.6
-        --voxel-interior-carve [h,r]        Carve navigable interior using capsule flood fill from seed.
+        --voxel-carve [h,r]                 Carve navigable space using capsule flood fill from seed.
                                               Default: height=1.6, radius=0.2
         --seed-pos         <x,y,z>          Seed position for voxel processing and --filter-cluster. Default: 0,0,0
     -K, --collision-mesh                    Generate collision mesh (.collision.glb) with voxel output
@@ -607,11 +607,11 @@ EXAMPLES
     # Generate voxel data with custom resolution and opacity threshold
     splat-transform --voxel-params 0.1,0.3 input.ply output.voxel.json
 
-    # Generate voxel data with exterior fill and interior carve
-    splat-transform --voxel-external-fill --voxel-interior-carve input.ply output.voxel.json
+    # Generate voxel data with exterior fill and carve
+    splat-transform --voxel-external-fill --voxel-carve input.ply output.voxel.json
 
     # Generate voxel data with custom seed position and carve parameters
-    splat-transform --seed-pos 1,0,0 --voxel-interior-carve 2.0,0.3 input.ply output.voxel.json
+    splat-transform --seed-pos 1,0,0 --voxel-carve 2.0,0.3 input.ply output.voxel.json
 
     # Print statistical summary, then write output
     splat-transform bunny.ply --summary output.ply

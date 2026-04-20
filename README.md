@@ -115,7 +115,11 @@ Actions can be repeated and applied in any order:
 -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
     --voxel-params     [size,opacity]   Voxel size and opacity threshold for .voxel.json. Default: 0.05,0.1
     --voxel-external-fill [size]        Fill exterior voxels by dilation from seed. Default size: 1.6
-    --voxel-interior-carve [h,r]        Carve navigable interior using capsule flood fill from seed.
+    --voxel-floor-fill [radius]         Fill each column upward from bottom until hitting solid (runs before carve).
+                                          Optional radius (world units): only patch XZ areas surrounded by floor
+                                          within 2*radius; large empty exterior areas are left alone.
+                                          Default radius: 1.6
+    --voxel-carve [h,r]                 Carve navigable space using capsule flood fill from seed.
                                           Default: height=1.6, radius=0.2
     --seed-pos         <x,y,z>          Seed position for voxel processing and --filter-cluster. Default: 0,0,0
 -K, --collision-mesh                    Generate collision mesh (.collision.glb) with voxel output
@@ -246,11 +250,11 @@ splat-transform input.ply output.voxel.json
 # Generate voxel data with custom resolution and opacity threshold
 splat-transform --voxel-params 0.1,0.3 input.ply output.voxel.json
 
-# Generate voxel data with exterior fill and interior carve
-splat-transform --voxel-external-fill --voxel-interior-carve input.ply output.voxel.json
+# Generate voxel data with exterior fill and carve
+splat-transform --voxel-external-fill --voxel-carve input.ply output.voxel.json
 
 # Generate voxel data with custom seed position and carve parameters
-splat-transform --seed-pos 1,0,0 --voxel-interior-carve 2.0,0.3 input.ply output.voxel.json
+splat-transform --seed-pos 1,0,0 --voxel-carve 2.0,0.3 input.ply output.voxel.json
 ```
 
 ### Device Selection for SOG Compression
@@ -317,7 +321,7 @@ import {
 | `getOutputFormat` | Detect output format from filename |
 | `DataTable`, `Column` | Core data structures for splat data |
 | `combine` | Merge multiple DataTables into one |
-| `transform` | Apply spatial transformations |
+| `convertToSpace` | Convert a DataTable between coordinate spaces |
 | `processDataTable` | Apply a sequence of processing actions |
 | `computeSummary` | Generate statistical summary of data |
 | `sortMortonOrder` | Sort indices by Morton code for spatial locality |
@@ -399,11 +403,17 @@ type ProcessAction =
     | { kind: 'filterBands'; value: 0|1|2|3 }
     | { kind: 'filterBox'; min: Vec3; max: Vec3 }
     | { kind: 'filterSphere'; center: Vec3; radius: number }
+    | { kind: 'filterFloaters'; voxelResolution?: number; opacityCutoff?: number; minContribution?: number } // GPU
+    | { kind: 'filterCluster'; voxelResolution?: number; seed?: Vec3; opacityCutoff?: number; minContribution?: number } // GPU
     | { kind: 'decimate'; count: number | null; percent: number | null }
+    | { kind: 'param'; name: string; value: string }
     | { kind: 'lod'; value: number }
     | { kind: 'summary' }
     | { kind: 'mortonOrder' };
 ```
+
+> [!NOTE]
+> `filterFloaters` and `filterCluster` require a GPU device — pass `createDevice` via the `ProcessOptions` argument to `processDataTable`.
 
 ### Custom Logging
 

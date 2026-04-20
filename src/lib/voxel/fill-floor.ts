@@ -31,7 +31,7 @@ import { logger } from '../utils';
  *   4. `output = S | dilatedFound` adds the dilated under-surface region as
  *      solid on top of the original solids.
  *
- * Intended to run before `carveInterior`: it seals the under-side of the floor
+ * Intended to run before `carve`: it seals the under-side of the floor
  * (and patches small XZ holes via the dilation), and the carve handles the
  * remaining hole plugging via its 3D dilate + capsule BFS.
  *

@@ -12,7 +12,7 @@ import {
 } from './sparse-voxel-grid';
 import { logger } from '../utils';
 
-const carveInterior = (
+const carve = (
     buffer: BlockMaskBuffer,
     gridBounds: Bounds,
     voxelResolution: number,
@@ -21,13 +21,13 @@ const carveInterior = (
     seed: NavSeed
 ): NavSimplifyResult => {
     if (!Number.isFinite(voxelResolution) || voxelResolution <= 0) {
-        throw new Error(`carveInterior: voxelResolution must be finite and > 0, got ${voxelResolution}`);
+        throw new Error(`carve: voxelResolution must be finite and > 0, got ${voxelResolution}`);
     }
     if (!Number.isFinite(capsuleHeight) || capsuleHeight <= 0) {
-        throw new Error(`carveInterior: capsuleHeight must be finite and > 0, got ${capsuleHeight}`);
+        throw new Error(`carve: capsuleHeight must be finite and > 0, got ${capsuleHeight}`);
     }
     if (!Number.isFinite(capsuleRadius) || capsuleRadius < 0) {
-        throw new Error(`carveInterior: capsuleRadius must be finite and >= 0, got ${capsuleRadius}`);
+        throw new Error(`carve: capsuleRadius must be finite and >= 0, got ${capsuleRadius}`);
     }
 
     const nx = Math.round((gridBounds.max.x - gridBounds.min.x) / voxelResolution);
@@ -57,7 +57,7 @@ const carveInterior = (
     let seedIz = Math.floor((seed.z - gridBounds.min.z) / voxelResolution);
 
     if (seedIx < 0 || seedIx >= nx || seedIy < 0 || seedIy >= ny || seedIz < 0 || seedIz >= nz) {
-        logger.warn(`carveInterior: seed (${seed.x}, ${seed.y}, ${seed.z}) outside grid, skipping`);
+        logger.warn(`carve: seed (${seed.x}, ${seed.y}, ${seed.z}) outside grid, skipping`);
         return { buffer, gridBounds };
     }
 
@@ -65,7 +65,7 @@ const carveInterior = (
         const maxRadius = Math.max(kernelR, yHalfExtent) * 2;
         const found = SparseVoxelGrid.findNearestFreeCell(blocked, seedIx, seedIy, seedIz, maxRadius);
         if (!found) {
-            logger.warn(`carveInterior: seed (${seed.x}, ${seed.y}, ${seed.z}) blocked after dilation, no free cell within ${maxRadius} voxels, skipping`);
+            logger.warn(`carve: seed (${seed.x}, ${seed.y}, ${seed.z}) blocked after dilation, no free cell within ${maxRadius} voxels, skipping`);
             return { buffer, gridBounds };
         }
         seedIx = found.ix;
@@ -86,7 +86,7 @@ const carveInterior = (
     const navBounds = navRegion.getOccupiedBlockBounds();
 
     if (!navBounds) {
-        logger.warn('carveInterior: no navigable cells remain, returning empty result');
+        logger.warn('carve: no navigable cells remain, returning empty result');
         return {
             buffer: new BlockMaskBuffer(),
             gridBounds: { min: gridBounds.min.clone(), max: gridBounds.min.clone() }
@@ -125,4 +125,4 @@ const carveInterior = (
     };
 };
 
-export { carveInterior };
+export { carve };
