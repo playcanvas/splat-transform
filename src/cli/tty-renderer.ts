@@ -2,6 +2,7 @@ import process from 'node:process';
 
 import type { LogEvent, Renderer, Verbosity } from '../lib/index';
 import {
+    fmtBytes,
     fmtTime,
     indent,
     isPhaseHeader,
@@ -21,8 +22,7 @@ interface TtyRendererOptions {
 
 const fmtMem = (): string => {
     const m = process.memoryUsage();
-    const mb = (n: number) => `${(n / (1024 * 1024)).toFixed(0)}MB`;
-    return `  [rss: ${mb(m.rss)}, heap: ${mb(m.heapUsed)}, ab: ${mb(m.arrayBuffers)}]`;
+    return `  [rss: ${fmtBytes(m.rss)}, heap: ${fmtBytes(m.heapUsed)}, ab: ${fmtBytes(m.arrayBuffers)}]`;
 };
 
 const BAR_WIDTH = 20;

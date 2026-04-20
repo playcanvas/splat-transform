@@ -1,5 +1,5 @@
 // Data table
-export { Column, DataTable, combine, convertToSpace, computeSummary, sortMortonOrder, sortByVisibility, simplifyGaussians } from './data-table';
+export { Column, DataTable, combine, convertToSpace, computeSummary, sortMortonOrder, sortByVisibility, simplifyGaussians, getSHBands } from './data-table';
 export type { TypedArray, ColumnType, Row, ColumnStats, SummaryData } from './data-table';
 
 // Utils

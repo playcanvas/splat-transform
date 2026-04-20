@@ -1,6 +1,6 @@
 import { CompressedChunk } from './compressed-chunk';
 import { version } from '../../../package.json';
-import { DataTable, sortMortonOrder, convertToSpace } from '../data-table';
+import { DataTable, sortMortonOrder, convertToSpace, getSHBands, shRestNames } from '../data-table';
 import { type FileSystem } from '../io/write';
 import { Transform } from '../utils';
 
@@ -21,8 +21,6 @@ const vertexProps = [
     'packed_scale',
     'packed_color'
 ];
-
-const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
 // Size of a chunk in the compressed PLY format (number of splats per chunk)
 const CHUNK_SIZE = 256;
@@ -47,7 +45,7 @@ const writeCompressedPly = async (options: WriteCompressedPlyOptions, fs: FileSy
     const { filename } = options;
     const dataTable = convertToSpace(options.dataTable, Transform.PLY);
 
-    const shBands = { '9': 1, '24': 2, '-1': 3 }[shNames.findIndex(v => !dataTable.hasColumn(v))] ?? 0;
+    const shBands = getSHBands(dataTable);
     const outputSHCoeffs = [0, 3, 8, 15][shBands];
 
     const numSplats = dataTable.numRows;
@@ -100,7 +98,7 @@ const writeCompressedPly = async (options: WriteCompressedPlyOptions, fs: FileSy
             // quantize and write sh data
             let off = (i * CHUNK_SIZE + j) * outputSHCoeffs * 3;
             for (let k = 0; k < outputSHCoeffs * 3; ++k) {
-                const nvalue = row[shNames[k]] / 8 + 0.5;
+                const nvalue = row[shRestNames[k]] / 8 + 0.5;
                 shData[off++] = Math.max(0, Math.min(255, Math.trunc(nvalue * 256)));
             }
         }

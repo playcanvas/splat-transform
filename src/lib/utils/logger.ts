@@ -130,6 +130,14 @@ const fmtTime = (ms: number): string => {
     return h > 0 ? `${h}h${m}m${s}s` : `${m}m${s}s`;
 };
 
+const fmtBytes = (n: number): string => {
+    if (!Number.isFinite(n) || n < 0) return `${n}B`;
+    if (n < 1024) return `${n}B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
+    if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)}MB`;
+    return `${(n / (1024 * 1024 * 1024)).toFixed(2)}GB`;
+};
+
 const fmtArgs = (args: any[]): string => {
     return args.map((a) => {
         if (a instanceof Error) return a.stack ?? a.message;
@@ -611,6 +619,7 @@ const logger = {
 type Logger = typeof logger;
 
 export {
+    fmtBytes,
     fmtTime,
     indent,
     isPhaseHeader,

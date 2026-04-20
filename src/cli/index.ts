@@ -13,6 +13,7 @@ import {
     combine,
     DataTable,
     getInputFormat,
+    getSHBands,
     readFile,
     getOutputFormat,
     writeFile,
@@ -23,7 +24,7 @@ import {
     type Options as LibOptions,
     logger
 } from '../lib/index';
-import { fmtTime } from '../lib/utils/logger';
+import { fmtBytes, fmtTime } from '../lib/utils/logger';
 
 /**
  * CLI-specific options extending library options.
@@ -784,6 +785,8 @@ const main = async () => {
                 if (dataTable.numRows === 0 || !isGSDataTable(dataTable)) {
                     throw new Error(`Unsupported data in file '${inputArg.filename}'`);
                 }
+
+                logger.info(`gaussians: ${dataTable.numRows}, SH bands: ${getSHBands(dataTable)}, mem: ${fmtBytes(dataTable.byteLength)}`);
 
                 const isEnv = dataTable.hasColumn('lod') && dataTable.getColumnByName('lod').data.every(v => v === -1);
                 if (!isEnv) {
