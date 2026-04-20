@@ -225,6 +225,7 @@ const filterCluster = async (
 
         if (buffer.count === 0) {
             logger.warn('no occupied blocks found, returning empty result');
+            findSub.end();
             g.end();
             return dataTable.clone({ rows: [] });
         }
@@ -236,6 +237,7 @@ const filterCluster = async (
         const floodResult = findClusterVoxelFlood(buffer, nx, ny, nz, seedIx, seedIy, seedIz);
         if (!floodResult) {
             logger.warn('no occupied voxel found near seed, returning empty result');
+            findSub.end();
             g.end();
             return dataTable.clone({ rows: [] });
         }
@@ -245,7 +247,7 @@ const filterCluster = async (
             const worldX = gridBounds.min.x + (resolvedSeed.ix + 0.5) * clampedResolution;
             const worldY = gridBounds.min.y + (resolvedSeed.iy + 0.5) * clampedResolution;
             const worldZ = gridBounds.min.z + (resolvedSeed.iz + 0.5) * clampedResolution;
-            logger.info(`resolved seed: (${worldX.toFixed(2)}, ${worldY.toFixed(2)}, ${worldZ.toFixed(2)})`);
+            logger.warn(`seed (${seed.x.toFixed(2)}, ${seed.y.toFixed(2)}, ${seed.z.toFixed(2)}) unoccupied; resolved to nearest at (${worldX.toFixed(2)}, ${worldY.toFixed(2)}, ${worldZ.toFixed(2)})`);
         }
         logger.info(`cluster blocks: ${ccSet.size} of ${buffer.count}`);
 
@@ -261,6 +263,7 @@ const filterCluster = async (
 
         if (ccSet.size === buffer.count) {
             logger.info('all blocks in one cluster, no filtering needed');
+            findSub.end();
             g.end();
             return dataTable;
         }

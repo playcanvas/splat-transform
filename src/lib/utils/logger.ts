@@ -48,8 +48,9 @@ interface Renderer {
 }
 
 /**
- * Indeterminate progress bar handle. Auto-closes when the enclosing scope
- * advances or ends.
+ * Determinate progress bar handle. Closed explicitly via `end()`, or
+ * implicitly when an enclosing {@link Group}'s `end()` (or a
+ * {@link Logger.unwindAll}) pops it as part of cleanup.
  */
 interface Bar {
     /**
@@ -506,10 +507,14 @@ const logger = {
     },
 
     /**
-     * Open a labelled progress bar bound to the innermost active scope.
-     * Renders as a single line at child indent: `\u25b8 name [bar] %` while
-     * ticking, finalizing as `\u2713 name [bar] X.XXXs` (or
-     * `\u2717 name [bar] (failed) X.XXXs`).
+     * Open a labelled progress bar nested directly under whatever scope is
+     * currently on top of the active-scope stack. Renders as a single line
+     * at child indent: `\u25b8 name [bar] %` while ticking, finalizing as
+     * `\u2713 name [bar] X.XXXs` (or `\u2717 name [bar] (failed) X.XXXs`).
+     *
+     * Like {@link Logger.group}, this is a pure-push operation: it does not
+     * close any sibling already on the stack. Close with `bar.end()`, or let
+     * an enclosing group's `end()` / {@link Logger.unwindAll} pop it.
      *
      * @param name - The bar's label.
      * @param total - Expected number of ticks.

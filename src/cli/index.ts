@@ -74,7 +74,7 @@ const cliOptionsConfig = {
     help: { type: 'boolean', short: 'h', default: false },
     version: { type: 'boolean', short: 'v', default: false },
     quiet: { type: 'boolean', short: 'q', default: false },
-    verbose: { type: 'boolean', short: 'V', default: false },
+    verbose: { type: 'boolean', default: false },
     mem: { type: 'boolean', default: false },
     iterations: { type: 'string', short: 'i', default: '10' },
     'list-gpus': { type: 'boolean', short: 'L', default: false },
@@ -564,7 +564,7 @@ GLOBAL OPTIONS
     -h, --help                              Show this help and exit
     -v, --version                           Show version and exit
     -q, --quiet                             Suppress non-error output
-    -V, --verbose                           Show debug-level diagnostics
+        --verbose                           Show debug-level diagnostics
         --mem                               Show memory usage in progress output
     -w, --overwrite                         Overwrite output file if it exists
     -i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10

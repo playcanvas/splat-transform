@@ -86,7 +86,7 @@ const calcBound = (dataTable: DataTable, indices: number[]): Aabb => {
         const M = b.getMax();
 
         if (!isFinite(m.x) || !isFinite(m.y) || !isFinite(m.z) || !isFinite(M.x) || !isFinite(M.y) || !isFinite(M.z)) {
-            logger.warn(`skipping invalid bounding box at index ${index}`);
+            logger.warn(`skipping invalid bounding box at index ${index}: min=(${m.x}, ${m.y}, ${m.z}) max=(${M.x}, ${M.y}, ${M.z})`);
             continue;
         }
 
