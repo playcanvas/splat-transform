@@ -77,7 +77,7 @@ const fillFloor = (
 
     const r = dilation > 0 ? Math.ceil(dilation / voxelResolution) : 0;
 
-    logger.progress.begin(r > 0 ? 4 : 2);
+    logger.progress.begin(r > 0 ? 4 : 3);
     let progressComplete = false;
 
     try {
