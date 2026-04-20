@@ -572,12 +572,8 @@ GLOBAL OPTIONS
     -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
         --voxel-params     [size,opacity]   Voxel size and opacity threshold for .voxel.json. Default: 0.05,0.1
         --voxel-external-fill [size]        Fill exterior voxels by dilation from seed. Default size: 1.6
-        --voxel-floor-fill [radius]         Fill each column upward from bottom until hitting solid (runs before carve).
-                                              Optional radius (world units): only patch XZ areas surrounded by floor
-                                              within 2*radius; large empty exterior areas are left alone.
-                                              Default radius: 1.6
-        --voxel-carve [h,r]                 Carve navigable space using capsule flood fill from seed.
-                                              Default: height=1.6, radius=0.2
+        --voxel-floor-fill [size]           Fill below-floor voxels by upward column walk from bottom. Default size: 1.6
+        --voxel-carve [h,r]                 Carve navigable space using capsule flood fill from seed. Default: 1.6,0.2
         --seed-pos         <x,y,z>          Seed position for voxel processing and --filter-cluster. Default: 0,0,0
     -K, --collision-mesh                    Generate collision mesh (.collision.glb) with voxel output
         --mesh-simplify-error <n>           Max geometric error for collision mesh simplification as a fraction of voxelResolution. Default: 0.08

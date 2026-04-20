@@ -288,10 +288,10 @@ class SparseVoxelGrid {
         let maxBx = -1, maxBy = 0, maxBz = 0;
 
         for (let w = 0; w < words; w++) {
-            // Build a bitmask of SOLID blocks in this 32-block word.
-            // SOLID requires occupancy bit set AND blockType === BLOCK_SOLID.
-            // EMPTY blocks have occupancy bit clear, so ~occupancy already
-            // accounts for them. We only need to OR in MIXED bits explicitly.
+            // Build a bitmask of SOLID blocks in this 32-block word. SOLID
+            // requires occupancy bit set AND blockType === BLOCK_SOLID.
+            // nonSolid is then the inverse of that mask, so it includes any
+            // block not marked solid here, including both EMPTY and MIXED blocks.
             const baseIdx = w * 32;
             const upper = Math.min(32, totalBlocks - baseIdx);
             const occWord = this.occupancy[w];
