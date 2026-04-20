@@ -2,7 +2,6 @@ import { DataTable } from './data-table';
 import { ReadFileSystem, ZipReadFileSystem } from './io/read';
 import { readKsplat, readLcc, readMjs, readPly, readSog, readSplat, readSpz } from './readers';
 import { Options, Param } from './types';
-import { logger } from './utils';
 
 /**
  * Supported input file formats for Gaussian splat data.
@@ -96,8 +95,6 @@ const readFile = async (readFileOptions: ReadFileOptions): Promise<DataTable[]> 
     const { filename, inputFormat, options, params, fileSystem } = readFileOptions;
 
     let result: DataTable[];
-
-    logger.log(`reading '${filename}'...`);
 
     if (inputFormat === 'mjs') {
         result = [await readMjs(filename, params)];

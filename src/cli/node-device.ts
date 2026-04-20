@@ -77,7 +77,7 @@ const enumerateAdapters = async () => {
     }
 
     try {
-        logger.log('Detecting GPU adapters...');
+        logger.info('Detecting GPU adapters...');
 
         // Get the actual adapter names directly from Dawn
         const dawnAdapterNames = await getDawnAdapterNames();

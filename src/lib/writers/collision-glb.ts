@@ -139,24 +139,30 @@ const buildCollisionMesh = async (
     voxelResolution: number,
     meshSimplifyError?: number
 ): Promise<Uint8Array | null> => {
-    logger.progress.step('Extracting collision mesh');
+    const g = logger.group('Collision mesh');
+
+    g.step('Extracting');
     const rawMesh = marchingCubes(blockBuffer, gridBounds, voxelResolution);
-    logger.log(`collision mesh (raw): ${rawMesh.positions.length / 3} vertices, ${rawMesh.indices.length / 3} triangles`);
+    logger.info(`raw vertices: ${rawMesh.positions.length / 3}`);
+    logger.info(`raw triangles: ${rawMesh.indices.length / 3}`);
 
     if (rawMesh.indices.length < 3) {
-        logger.progress.step('Skipping collision mesh');
-        logger.log('collision mesh: no triangles generated, skipping GLB output');
+        logger.warn('no triangles generated, skipping GLB output');
+        g.end();
         return null;
     }
 
-    logger.progress.step('Simplifying collision mesh');
+    g.step('Simplifying');
 
     const errorFraction = Number.isFinite(meshSimplifyError) && meshSimplifyError! >= 0 ? meshSimplifyError! : 0.08;
     const simplified = await simplifyMesh(rawMesh, errorFraction * voxelResolution);
 
     const reduction = (1 - simplified.indices.length / rawMesh.indices.length) * 100;
-    logger.log(`collision mesh (simplified): ${simplified.positions.length / 3} vertices, ${simplified.indices.length / 3} triangles (${reduction.toFixed(0)}% reduction)`);
+    logger.info(`simplified vertices: ${simplified.positions.length / 3}`);
+    logger.info(`simplified triangles: ${simplified.indices.length / 3}`);
+    logger.info(`reduction: ${reduction.toFixed(0)}%`);
 
+    g.end();
     return encodeGlb(simplified.positions, simplified.indices);
 };
 

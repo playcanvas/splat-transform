@@ -3,8 +3,8 @@ export { Column, DataTable, combine, convertToSpace, computeSummary, sortMortonO
 export type { TypedArray, ColumnType, Row, ColumnStats, SummaryData } from './data-table';
 
 // Utils
-export { Transform, logger, WebPCodec } from './utils';
-export type { Logger, ProgressNode } from './utils';
+export { PlainRenderer, Transform, logger, WebPCodec } from './utils';
+export type { Bar, Group, LogEvent, Logger, Renderer, Verbosity } from './utils';
 
 // High-level read/write
 export { readFile, getInputFormat } from './read';

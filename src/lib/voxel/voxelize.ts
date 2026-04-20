@@ -129,8 +129,7 @@ const voxelizeToBuffer = async (
     };
 
     const numZBatches = Math.max(1, Math.ceil(numBlocksZ / batchSize));
-    logger.progress.begin(10);
-    let lastVoxelStep = 0;
+    const bar = logger.bar(numZBatches);
 
     try {
         for (let bz = 0; bz < numBlocksZ; bz += batchSize) {
@@ -186,11 +185,7 @@ const voxelizeToBuffer = async (
                 }
             }
 
-            const currentVoxelStep = Math.min(10, Math.floor(((bz / batchSize) + 1) / numZBatches * 10));
-            while (lastVoxelStep < currentVoxelStep) {
-                logger.progress.step();
-                lastVoxelStep++;
-            }
+            bar.tick();
         }
 
         await flushPendingBatches();
@@ -200,14 +195,8 @@ const voxelizeToBuffer = async (
             processResults(result.masks, inflight.batches);
             inflight = null;
         }
-
-        while (lastVoxelStep < 10) {
-            logger.progress.step();
-            lastVoxelStep++;
-        }
-    } catch (e) {
-        logger.progress.cancel();
-        throw e;
+    } finally {
+        bar.end();
     }
 
     return buffer;

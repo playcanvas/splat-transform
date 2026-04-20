@@ -75,6 +75,8 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     const zipFs = bundle ? new ZipFileSystem(await fs.createWriter(outputFilename)) : null;
     const outputFs = zipFs || fs;
 
+    const g = logger.group('SOG write');
+
     const indices = options.indices || generateIndices(dataTable);
     const numRows = indices.length;
     const width = Math.ceil(Math.sqrt(numRows) / 4) * 4;
@@ -86,7 +88,6 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
 
     const writeWebp = async (filename: string, data: Uint8Array, w = width, h = height) => {
         const pathname = zipFs ? filename : resolve(dirname(outputFilename), filename);
-        logger.log(`writing '${pathname}'...`);
 
         // construct the encoder on first use
         if (!webPCodec) {
@@ -249,10 +250,10 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
         // Create GPU device lazily — only needed for SH k-means clustering
         const gpuDevice = createDevice ? await createDevice() : undefined;
 
-        logger.progress.step('Compressing spherical harmonics');
+        g.step('Compressing spherical harmonics');
         const { centroids, labels } = await kmeans(shDataTable, paletteSize, iterations, gpuDevice);
 
-        logger.progress.step('Quantizing spherical harmonics');
+        g.step('Quantizing spherical harmonics');
         const codebook = quantize1d(centroids);
 
         // write centroids
@@ -299,24 +300,21 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     };
 
     const shBands = { '9': 1, '24': 2, '-1': 3 }[shNames.findIndex(v => !dataTable.hasColumn(v))] ?? 0;
-    const totalSteps = shBands > 0 ? 8 : 6;
 
     // convert and write attributes
-    logger.progress.begin(totalSteps);
-
-    logger.progress.step('Generating morton order');
+    g.step('Generating morton order');
     // indices already generated above
 
-    logger.progress.step('Writing positions');
+    g.step('Writing positions');
     const meansMinMax = await writeMeans();
 
-    logger.progress.step('Writing quaternions');
+    g.step('Writing quaternions');
     await writeQuaternions();
 
-    logger.progress.step('Compressing scales');
+    g.step('Compressing scales');
     const scalesCodebook = await writeScales();
 
-    logger.progress.step('Compressing colors');
+    g.step('Compressing colors');
     const colorsCodebook = await writeColors();
 
     let shN = null;
@@ -324,7 +322,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
         shN = await writeSH(shBands);
     }
 
-    logger.progress.step('Finalizing');
+    g.step('Finalizing');
 
     // construct meta.json
     const meta: any = {
@@ -364,6 +362,8 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     if (zipFs) {
         await zipFs.close();
     }
+
+    g.end();
 };
 
 export { writeSog };

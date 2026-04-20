@@ -1,12 +1,13 @@
 import { lstat, mkdir, readFile as pathReadFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
-import process, { exit, hrtime } from 'node:process';
+import process, { exit } from 'node:process';
 import { parseArgs } from 'node:util';
 
 import { GraphicsDevice, Vec3 } from 'playcanvas';
 
 import { createDevice, enumerateAdapters } from './node-device';
 import { NodeFileSystem, NodeReadFileSystem } from './node-file-system';
+import { TtyRenderer } from './tty-renderer';
 import { version } from '../../package.json';
 import {
     combine,
@@ -31,6 +32,7 @@ interface CliOptions extends LibOptions {
     help: boolean;
     version: boolean;
     quiet: boolean;
+    verbose: boolean;
     mem: boolean;
     listGpus: boolean;
     deviceIdx: number;  // -1 = auto, -2 = CPU, 0+ = GPU index
@@ -72,6 +74,7 @@ const cliOptionsConfig = {
     help: { type: 'boolean', short: 'h', default: false },
     version: { type: 'boolean', short: 'v', default: false },
     quiet: { type: 'boolean', short: 'q', default: false },
+    verbose: { type: 'boolean', short: 'V', default: false },
     mem: { type: 'boolean', default: false },
     iterations: { type: 'string', short: 'i', default: '10' },
     'list-gpus': { type: 'boolean', short: 'L', default: false },
@@ -293,6 +296,7 @@ const parseArguments = async () => {
         help: v.help,
         version: v.version,
         quiet: v.quiet,
+        verbose: v.verbose,
         mem: v.mem,
         iterations: parseInteger(v.iterations),
         listGpus: v['list-gpus'],
@@ -560,6 +564,7 @@ GLOBAL OPTIONS
     -h, --help                              Show this help and exit
     -v, --version                           Show version and exit
     -q, --quiet                             Suppress non-error output
+    -V, --verbose                           Show debug-level diagnostics
         --mem                               Show memory usage in progress output
     -w, --overwrite                         Overwrite output file if it exists
     -i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10
@@ -617,55 +622,22 @@ EXAMPLES
 `;
 
 const main = async () => {
-    const startTime = hrtime();
+    const startTime = performance.now();
 
     // read args
     const { files, options } = await parseArguments();
 
-    type Timing = [number, number];
+    // install TTY-aware renderer and configure verbosity
+    logger.setRenderer(new TtyRenderer({ showMem: options.mem }));
+    if (options.quiet) {
+        logger.setVerbosity('quiet');
+    } else if (options.verbose) {
+        logger.setVerbosity('verbose');
+    } else {
+        logger.setVerbosity('normal');
+    }
 
-    // timing state for anonymous progress blocks
-    const hrtimeDelta = (start: Timing, end: Timing) => (end[0] - start[0]) + (end[1] - start[1]) / 1e9;
-
-    let start: Timing | null = null;
-
-    const err = console.error.bind(console);
-    const warn = console.warn.bind(console);
-
-    const formatMem = options.mem ? () => {
-        const m = process.memoryUsage();
-        const mb = (n: number) => `${(n / (1024 * 1024)).toFixed(0)}MB`;
-        return `  [rss: ${mb(m.rss)}, heap: ${mb(m.heapUsed)}, ab: ${mb(m.arrayBuffers)}]`;
-    } : () => '';
-
-    // inject Node.js-specific logger - logs go to stderr, data output goes to stdout
-    logger.setLogger({
-        log: err,
-        warn: warn,
-        error: err,
-        debug: err,
-        output: console.log.bind(console),
-        onProgress: (node) => {
-            if (node.stepName) {
-                err(`[${node.step}/${node.totalSteps}] ${node.stepName}${formatMem()}`);
-            } else if (node.step === 0) {
-                start = hrtime();
-            } else {
-                const displaySteps = 10;
-                const curr = Math.round(displaySteps * node.step / node.totalSteps);
-                const prev = Math.round(displaySteps * (node.step - 1) / node.totalSteps);
-                if (curr > prev) process.stderr.write('#'.repeat(curr - prev));
-                if (node.step === node.totalSteps) {
-                    process.stderr.write(` (${hrtimeDelta(start, hrtime()).toFixed(3)}s)${formatMem()}\n`);
-                }
-            }
-        }
-    });
-
-    // configure logger
-    logger.setQuiet(options.quiet);
-
-    logger.log(`splat-transform v${version}`);
+    logger.info(`splat-transform v${version}`);
 
     // show version and exit
     if (options.version) {
@@ -674,20 +646,20 @@ const main = async () => {
 
     // list GPUs and exit
     if (options.listGpus) {
-        logger.log('Enumerating available GPU adapters...\n');
+        logger.info('Enumerating available GPU adapters...');
         try {
             const adapters = await enumerateAdapters();
             if (adapters.length === 0) {
-                logger.log('No GPU adapters found.');
-                logger.log('This could mean:');
-                logger.log('  - WebGPU is not available on your system');
-                logger.log('  - GPU drivers need to be updated');
-                logger.log('  - Your GPU does not support WebGPU');
+                logger.info('No GPU adapters found.');
+                logger.info('This could mean:');
+                logger.info('  - WebGPU is not available on your system');
+                logger.info('  - GPU drivers need to be updated');
+                logger.info('  - Your GPU does not support WebGPU');
             } else {
                 adapters.forEach((adapter) => {
-                    logger.log(`[${adapter.index}] ${adapter.name}`);
+                    logger.output(`[${adapter.index}] ${adapter.name}`);
                 });
-                logger.log('\nUse -g <index> to select a specific GPU adapter.');
+                logger.info('Use -g <index> to select a specific GPU adapter.');
             }
         } catch (err) {
             logger.error('Failed to enumerate GPU adapters:', err);
@@ -697,8 +669,9 @@ const main = async () => {
 
     // invalid args or show help
     if (files.length < 2 || options.help) {
-        logger.error(usage);
-        exit(1);
+        // help text goes to stdout via output, errors go to stderr
+        logger.output(usage);
+        exit(files.length < 2 ? 1 : 0);
     }
 
     const inputArgs = files.slice(0, -1);
@@ -774,43 +747,54 @@ const main = async () => {
         // Create file system for reading (reused across all input files)
         const nodeFs = new NodeReadFileSystem();
 
+        // declare phase total: one Read phase per input + one Write phase
+        const phaseTotal = inputArgs.length + (isNullOutput ? 0 : 1);
+        let firstPhase = true;
+
         // read, filter, process input files
-        const inputDataTables = (await Promise.all(inputArgs.map(async (inputArg) => {
-            // extract params
-            const params = inputArg.processActions.filter(a => a.kind === 'param').map((p) => {
-                return { name: p.name, value: p.value };
-            });
+        const inputDataTables: DataTable[] = [];
+        for (const inputArg of inputArgs) {
+            const phase = logger.group(`Read ${inputArg.filename}`, firstPhase ? { total: phaseTotal } : undefined);
+            firstPhase = false;
+            try {
+                // extract params
+                const params = inputArg.processActions.filter(a => a.kind === 'param').map((p) => {
+                    return { name: p.name, value: p.value };
+                });
 
-            // read input
-            const filename = resolve(inputArg.filename);
-            const inputFormat = getInputFormat(filename);
+                // read input
+                const filename = resolve(inputArg.filename);
+                const inputFormat = getInputFormat(filename);
 
-            // For mjs format, convert to file:// URL (Node.js-specific)
-            const readFilename = inputFormat === 'mjs' ? `file://${filename}` : filename;
+                // For mjs format, convert to file:// URL (Node.js-specific)
+                const readFilename = inputFormat === 'mjs' ? `file://${filename}` : filename;
 
-            const dataTables = await readFile({
-                filename: readFilename,
-                inputFormat,
-                options,
-                params,
-                fileSystem: nodeFs
-            });
+                const dataTables = await readFile({
+                    filename: readFilename,
+                    inputFormat,
+                    options,
+                    params,
+                    fileSystem: nodeFs
+                });
 
-            for (let i = 0; i < dataTables.length; ++i) {
-                const dataTable = dataTables[i];
+                for (let i = 0; i < dataTables.length; ++i) {
+                    const dataTable = dataTables[i];
 
-                if (dataTable.numRows === 0 || !isGSDataTable(dataTable)) {
-                    throw new Error(`Unsupported data in file '${inputArg.filename}'`);
+                    if (dataTable.numRows === 0 || !isGSDataTable(dataTable)) {
+                        throw new Error(`Unsupported data in file '${inputArg.filename}'`);
+                    }
+
+                    const isEnv = dataTable.hasColumn('lod') && dataTable.getColumnByName('lod').data.every(v => v === -1);
+                    if (!isEnv) {
+                        dataTables[i] = await processDataTable(dataTable, inputArg.processActions, processOptions);
+                    }
                 }
 
-                const isEnv = dataTable.hasColumn('lod') && dataTable.getColumnByName('lod').data.every(v => v === -1);
-                if (!isEnv) {
-                    dataTables[i] = await processDataTable(dataTable, inputArg.processActions, processOptions);
-                }
+                inputDataTables.push(...dataTables.filter(dt => dt !== null));
+            } finally {
+                phase.end();
             }
-
-            return dataTables;
-        }))).flat(1).filter(dataTable => dataTable !== null);
+        }
 
         // special-case the environment dataTable
         const envDataTables = inputDataTables.filter(dt => dt.hasColumn('lod') && dt.getColumnByName('lod').data.every(v => v === -1));
@@ -833,19 +817,25 @@ const main = async () => {
             processOptions
         );
 
-        logger.log(`Total gaussians loaded: ${dataTable.numRows}`);
-
         // Skip file writing for null output
         if (!isNullOutput) {
-            // write file
-            await writeFile({
-                filename: outputFilename,
-                outputFormat: outputFormat!,
-                dataTable,
-                envDataTable,
-                options,
-                createDevice: deviceCreator
-            }, new NodeFileSystem());
+            const phase = logger.group(`Write ${outputArg.filename}`, firstPhase ? { total: phaseTotal } : undefined);
+            firstPhase = false;
+            try {
+                logger.info(`input gaussians: ${dataTable.numRows}`);
+                await writeFile({
+                    filename: outputFilename,
+                    outputFormat: outputFormat!,
+                    dataTable,
+                    envDataTable,
+                    options,
+                    createDevice: deviceCreator
+                }, new NodeFileSystem());
+            } finally {
+                phase.end();
+            }
+        } else {
+            logger.info(`input gaussians: ${dataTable.numRows}`);
         }
     } catch (err) {
         // handle errors
@@ -853,9 +843,8 @@ const main = async () => {
         exit(1);
     }
 
-    const endTime = hrtime(startTime);
-
-    logger.log(`done in ${endTime[0] + endTime[1] / 1e9}s`);
+    const elapsedMs = performance.now() - startTime;
+    logger.info(`done in ${(elapsedMs / 1000).toFixed(3)}s`);
 
     // something in webgpu seems to keep the process alive after returning
     // from main so force exit

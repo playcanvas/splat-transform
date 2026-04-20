@@ -86,7 +86,7 @@ const calcBound = (dataTable: DataTable, indices: number[]): Aabb => {
         const M = b.getMax();
 
         if (!isFinite(m.x) || !isFinite(m.y) || !isFinite(m.z) || !isFinite(M.x) || !isFinite(M.y) || !isFinite(M.z)) {
-            logger.warn('Skipping invalid bounding box:', { m, M, index });
+            logger.warn(`skipping invalid bounding box at index ${index}`);
             continue;
         }
 
@@ -171,8 +171,6 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
 
         // ensure output folder exists before any files are written
         await fs.mkdir(dirname(pathname));
-
-        logger.log(`writing ${pathname}...`);
 
         await writeSog({
             filename: pathname,
@@ -316,8 +314,6 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
             }
 
             // write file unit to sog
-            logger.log(`writing ${pathname}...`);
-
             await writeSog({
                 filename: pathname,
                 dataTable: unitDataTable,

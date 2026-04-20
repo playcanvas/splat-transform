@@ -600,7 +600,7 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
         'rot_0', 'rot_1', 'rot_2', 'rot_3'];
     for (const name of requiredCols) {
         if (!dataTable.hasColumn(name)) {
-            logger.debug(`simplifyGaussians: missing required column '${name}', falling back to visibility pruning`);
+            logger.debug(`missing required column '${name}', falling back to visibility pruning`);
             const indices = new Uint32Array(N);
             for (let i = 0; i < N; i++) indices[i] = i;
             sortByVisibility(dataTable, indices);
@@ -646,9 +646,9 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
         const n = current.numRows;
         const kEff = Math.min(Math.max(1, KNN_K), Math.max(1, n - 1));
 
-        logger.progress.begin(5);
+        const g = logger.group('Decimate iteration');
 
-        logger.progress.step('Building KD-tree');
+        g.step('Building KD-tree');
 
         const cx = current.getColumnByName('x')!.data;
         const cy = current.getColumnByName('y')!.data;
@@ -671,7 +671,7 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
         ]);
         const kdTree = new KdTree(posTable);
 
-        logger.progress.step('Finding nearest neighbors');
+        g.step('Finding nearest neighbors');
 
         let edgeCapacity = Math.ceil(n * kEff / 2);
         let edgeU = new Uint32Array(edgeCapacity);
@@ -681,8 +681,7 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
 
         const knnInterval = Math.max(1, Math.ceil(n / PROGRESS_TICKS));
         const knnTicks = Math.ceil(n / knnInterval);
-        logger.progress.begin(knnTicks);
-
+        const knnBar = logger.bar(knnTicks);
         for (let i = 0; i < n; i++) {
             queryPoint[0] = cx[i] as number;
             queryPoint[1] = cy[i] as number;
@@ -704,16 +703,16 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
                 edgeV[edgeCount] = j;
                 edgeCount++;
             }
-            if ((i + 1) % knnInterval === 0) logger.progress.step();
+            if ((i + 1) % knnInterval === 0) knnBar.tick();
         }
-        if (n % knnInterval !== 0) logger.progress.step();
+        if (n % knnInterval !== 0) knnBar.tick();
 
         if (edgeCount === 0) {
-            logger.progress.cancel();
+            g.end();
             break;
         }
 
-        logger.progress.step('Computing edge costs');
+        g.step('Computing edge costs');
 
         const appData: any[] = [];
         for (let ai = 0; ai < allAppearanceCols.length; ai++) {
@@ -726,16 +725,15 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
 
         const costInterval = Math.max(1, Math.ceil(edgeCount / PROGRESS_TICKS));
         const costTicks = Math.ceil(edgeCount / costInterval);
-        logger.progress.begin(costTicks);
-
+        const costBar = logger.bar(costTicks);
         for (let e = 0; e < edgeCount; e++) {
             costs[e] = computeEdgeCost(edgeU[e], edgeV[e], cx, cy, cz,
                 cache, Z, appData, appData.length);
-            if ((e + 1) % costInterval === 0) logger.progress.step();
+            if ((e + 1) % costInterval === 0) costBar.tick();
         }
-        if (edgeCount % costInterval !== 0) logger.progress.step();
+        if (edgeCount % costInterval !== 0) costBar.tick();
 
-        logger.progress.step('Merging splats');
+        g.step('Merging splats');
 
         // Sort and greedy disjoint pair selection
         const sorted = new Uint32Array(edgeCount);
@@ -754,7 +752,7 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
         }
 
         if (pairs.length === 0) {
-            logger.progress.cancel();
+            g.end();
             break;
         }
 
@@ -821,8 +819,7 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
 
         const mergeInterval = Math.max(1, Math.ceil(pairs.length / PROGRESS_TICKS));
         const mergeTicks = Math.ceil(pairs.length / mergeInterval);
-        logger.progress.begin(mergeTicks);
-
+        const mergeBar = logger.bar(mergeTicks);
         for (let p = 0; p < pairs.length; p++, dst++) {
             const pi = pairs[p][0], pj = pairs[p][1];
 
@@ -850,13 +847,14 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
                 unhandledColPairs[u].dst.data[dst] = unhandledColPairs[u].src.data[dominant] as number;
             }
 
-            if ((p + 1) % mergeInterval === 0) logger.progress.step();
+            if ((p + 1) % mergeInterval === 0) mergeBar.tick();
         }
-        if (pairs.length % mergeInterval !== 0) logger.progress.step();
+        if (pairs.length % mergeInterval !== 0) mergeBar.tick();
 
-        logger.progress.step('Finalizing');
+        g.step('Finalizing');
 
         current = newTable;
+        g.end();
     }
 
     return current;
