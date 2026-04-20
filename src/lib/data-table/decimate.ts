@@ -678,14 +678,13 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
             new Column('z', cz instanceof Float32Array ? cz : new Float32Array(cz as any))
         ]);
         const kdTree = new KdTree(posTable);
+        kdSub.end();
 
         let edgeCapacity = Math.ceil(n * kEff / 2);
         let edgeU = new Uint32Array(edgeCapacity);
         let edgeV = new Uint32Array(edgeCapacity);
         let edgeCount = 0;
         const queryPoint = new Float32Array(3);
-
-        kdSub.end();
 
         const knnInterval = Math.max(1, Math.ceil(n / PROGRESS_TICKS));
         const knnTicks = Math.ceil(n / knnInterval);

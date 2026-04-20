@@ -370,8 +370,9 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     logger.debug(`scene extents: (${bounds.min.x.toFixed(2)},${bounds.min.y.toFixed(2)},${bounds.min.z.toFixed(2)}) - (${bounds.max.x.toFixed(2)},${bounds.max.y.toFixed(2)},${bounds.max.z.toFixed(2)})`);
 
     const bvh = new GaussianBVH(pcDataTable, extentsResult.extents);
-    const device = await createDevice();
     bvhSub.end();
+
+    const device = await createDevice();
 
     let gpuVoxelization: GpuVoxelization | null = new GpuVoxelization(device);
     try {

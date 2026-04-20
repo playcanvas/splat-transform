@@ -157,11 +157,12 @@ class TtyRenderer implements Renderer {
                 if (!taskVisible(this.verbosity)) return;
                 const glyph = event.failed ? '\u2717' : '\u2713';
                 const suffix = event.failed ? ` (failed) ${fmtTime(event.durationMs)}` : ` ${fmtTime(event.durationMs)}`;
+                const bar = renderBar(event.current, event.total);
                 if (this.isTty && this.barOpen) {
-                    this.write(`\r${indent(event.depth)}${glyph} ${event.name}  [${renderBar(1, 1)}]${suffix}${this.memSuffix()}\n`);
+                    this.write(`\r${indent(event.depth)}${glyph} ${event.name}  [${bar}]${suffix}${this.memSuffix()}\n`);
                     this.barOpen = false;
                 } else {
-                    this.write(`${indent(event.depth)}${glyph} ${event.name}  [${renderBar(1, 1)}]${suffix}${this.memSuffix()}\n`);
+                    this.write(`${indent(event.depth)}${glyph} ${event.name}  [${bar}]${suffix}${this.memSuffix()}\n`);
                 }
                 return;
             }

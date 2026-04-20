@@ -1,7 +1,7 @@
 /**
  * Verbosity level controlling which messages reach the renderer.
  *
- * - `quiet`   - errors only.
+ * - `quiet`   - errors and warnings only.
  * - `normal`  - tasks, bars, info, warn, error (default).
  * - `verbose` - normal + debug messages.
  */
@@ -27,7 +27,7 @@ type LogEvent =
     | { kind: 'scopeEnd'; depth: number; name: string; durationMs: number; failed?: boolean; index?: number; total?: number }
     | { kind: 'barStart'; depth: number; name: string; total: number }
     | { kind: 'barTick'; depth: number; name: string; current: number; total: number }
-    | { kind: 'barEnd'; depth: number; name: string; durationMs: number; failed?: boolean }
+    | { kind: 'barEnd'; depth: number; name: string; durationMs: number; current: number; total: number; failed?: boolean }
     | { kind: 'message'; depth: number; level: MessageKind; text: string }
     | { kind: 'output'; text: string };
 
@@ -70,9 +70,10 @@ interface Bar {
  * active-scope stack).
  *
  * Open scopes with `logger.group(name)` and close them with `sub.end()` after
- * the body. There is no try/finally requirement: a thrown exception either
- * exits the process or is reported via `logger.error()`, which calls
- * {@link Logger.error}'s built-in `unwindAll()` to close every open scope.
+ * the body. Embedders that catch their own exceptions (rather than letting
+ * them propagate to a `logger.error()` call) should call
+ * {@link Logger.unwindAll} from their catch to close any scopes/bars left
+ * dangling on the stack.
  */
 interface Group {
     /**
@@ -106,7 +107,7 @@ const verbosityRank: Record<Verbosity, number> = {
 
 const messageMinVerbosity: Record<MessageKind, Verbosity> = {
     error: 'quiet',
-    warn: 'normal',
+    warn: 'quiet',
     info: 'normal',
     debug: 'verbose'
 };
@@ -135,7 +136,13 @@ const fmtArgs = (args: any[]): string => {
     }).join(' ');
 };
 
-const PLAIN_BAR = '####################';
+const PLAIN_BAR_WIDTH = 20;
+
+const renderPlainBar = (current: number, total: number): string => {
+    const ratio = total <= 0 ? 0 : Math.min(1, Math.max(0, current / total));
+    const filled = Math.round(ratio * PLAIN_BAR_WIDTH);
+    return '#'.repeat(filled) + '.'.repeat(PLAIN_BAR_WIDTH - filled);
+};
 
 const indent = (depth: number): string => '  '.repeat(Math.max(0, depth));
 
@@ -217,7 +224,8 @@ class PlainRenderer implements Renderer {
                 if (!taskVisible(this.verbosity)) return;
                 const glyph = event.failed ? '\u2717' : '\u2713';
                 const suffix = event.failed ? ` (failed) ${fmtTime(event.durationMs)}` : ` ${fmtTime(event.durationMs)}`;
-                console.log(`${indent(event.depth)}${glyph} ${event.name} [${PLAIN_BAR}]${suffix}`);
+                const bar = renderPlainBar(event.current, event.total);
+                console.log(`${indent(event.depth)}${glyph} ${event.name} [${bar}]${suffix}`);
                 return;
             }
             case 'message': {
@@ -319,7 +327,15 @@ class LoggerCore {
         this.clearDeeperCounters(top.depth);
         const durationMs = now() - top.start;
         if (top.kind === 'bar') {
-            this.emit({ kind: 'barEnd', depth: top.depth, name: top.name, durationMs, failed });
+            this.emit({
+                kind: 'barEnd',
+                depth: top.depth,
+                name: top.name,
+                durationMs,
+                current: top.current,
+                total: top.total,
+                failed
+            });
             return;
         }
         const numbering = top.kind === 'group' && top.index !== undefined && top.total !== undefined ?
@@ -465,9 +481,9 @@ const core = new LoggerCore();
  * Both `group` and `bar` are pure-push operations: opening a new scope simply
  * places it on top of the stack without auto-closing siblings, so call order
  * directly determines nesting. Close scopes with `handle.end()` after the
- * body. There is no try/finally requirement: an unhandled throw aborts the
- * process, and calls to {@link logger.error} call `unwindAll()` internally
- * to close every still-open scope.
+ * body. Callers that route failures through {@link Logger.error} get scope
+ * cleanup for free; embedders that swallow exceptions should call
+ * {@link Logger.unwindAll} from their catch to close every still-open scope.
  */
 const logger = {
     /**
@@ -555,12 +571,23 @@ const logger = {
     },
 
     /**
-     * Set verbosity: `quiet` (errors only), `normal` (default), `verbose`
-     * (includes debug).
+     * Set verbosity: `quiet` (errors and warnings), `normal` (default),
+     * `verbose` (includes debug).
      * @param v - The verbosity level.
      */
     setVerbosity(v: Verbosity): void {
         core.setVerbosity(v);
+    },
+
+    /**
+     * Close every open scope and bar, optionally marking them as failed.
+     * Use this from an embedder's catch when an exception is being swallowed
+     * (rather than rethrown into a `logger.error()` call), to prevent
+     * dangling scopes from corrupting subsequent output.
+     * @param failed - When true, mark every closed scope as having failed.
+     */
+    unwindAll(failed = false): void {
+        core.unwindAll(failed);
     },
 
     /**
