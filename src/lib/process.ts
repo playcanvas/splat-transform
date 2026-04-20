@@ -1,8 +1,9 @@
 import { Vec3 } from 'playcanvas';
 
-import { Column, DataTable, simplifyGaussians, sortMortonOrder, computeSummary, type SummaryData, convertToSpace } from './data-table';
+import { Column, DataTable, getSHBands, simplifyGaussians, sortMortonOrder, computeSummary, type SummaryData, convertToSpace } from './data-table';
 import type { DeviceCreator } from './types';
 import { logger, Transform } from './utils';
+import { fmtBytes } from './utils/logger';
 import { filterCluster as filterClusterFn } from './voxel/filter-cluster';
 import { filterFloaters as filterFloatersFn } from './voxel/filter-floaters';
 
@@ -270,6 +271,15 @@ const transformColumnNames = new Set([
 
 const isTransformColumn = (name: string): boolean => transformColumnNames.has(name) || /^f_rest_\d+$/.test(name);
 
+// camelCase → kebab-case (e.g. 'filterByValue' → 'filter-by-value').
+const kebab = (s: string): string => s.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`);
+
+const logSummary = (label: string, dataTable: DataTable, prevRows: number) => {
+    const removed = prevRows - dataTable.numRows;
+    const delta = removed > 0 ? ` (-${removed})` : '';
+    logger.info(`${label}: gaussians: ${dataTable.numRows}${delta}, SH bands: ${getSHBands(dataTable)}, mem: ${fmtBytes(dataTable.byteLength)}`);
+};
+
 const formatMarkdown = (summary: SummaryData): string => {
     const lines: string[] = [];
 
@@ -363,6 +373,8 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
 
     for (let i = 0; i < processActions.length; i++) {
         const processAction = processActions[i];
+        const prevRows = result.numRows;
+        const prevColumnSig = result.columnNames.join(',');
 
         switch (processAction.kind) {
             case 'translate':
@@ -588,6 +600,10 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 );
                 break;
             }
+        }
+
+        if (result.numRows !== prevRows || result.columnNames.join(',') !== prevColumnSig) {
+            logSummary(kebab(processAction.kind), result, prevRows);
         }
     }
 

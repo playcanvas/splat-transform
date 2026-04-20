@@ -823,7 +823,6 @@ const main = async () => {
         if (!isNullOutput) {
             const phase = logger.group(`Write ${outputArg.filename}`, firstPhase ? { total: phaseTotal } : undefined);
             firstPhase = false;
-            logger.info(`input gaussians: ${dataTable.numRows}`);
             await writeFile({
                 filename: outputFilename,
                 outputFormat: outputFormat!,
@@ -833,8 +832,6 @@ const main = async () => {
                 createDevice: deviceCreator
             }, new NodeFileSystem());
             phase.end();
-        } else {
-            logger.info(`input gaussians: ${dataTable.numRows}`);
         }
     } catch (err) {
         // handle errors
