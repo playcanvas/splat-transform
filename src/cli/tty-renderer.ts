@@ -47,8 +47,8 @@ const renderBar = (current: number, total: number): string => {
  * finalizing as `\u2713 name [bar] X.XXXs` (or `\u2717 name [bar] (failed) X.XXXs`).
  *
  * Numbered groups at depth 0 (phase headers) are not buffered - they print
- * immediately as `[N/T] name` flush left, and on success their closer is
- * suppressed so consecutive phases form a clean chapter sequence.
+ * immediately as `[N/T] name` flush left, and their closer renders like any
+ * other group's (`done in X.XXXs` / `failed in X.XXXs` at content indent).
  */
 class TtyRenderer implements Renderer {
     private verbosity: Verbosity = 'normal';
@@ -114,12 +114,6 @@ class TtyRenderer implements Renderer {
             }
             case 'scopeEnd': {
                 this.commitBar();
-                if (isPhaseHeader(event)) {
-                    if (event.failed) {
-                        this.write(`\u2717 ${event.name} (failed) ${fmtTime(event.durationMs)}${this.memSuffix()}\n`);
-                    }
-                    return;
-                }
                 const top = this.pendingStarts[this.pendingStarts.length - 1];
                 if (top && top.depth === event.depth) {
                     this.pendingStarts.pop();

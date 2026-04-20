@@ -167,8 +167,8 @@ const isPhaseHeader = (event: { depth: number; index?: number; total?: number })
  * `done in X.XXXs` (or `failed in X.XXXs`).
  *
  * Numbered groups at depth 0 (phase headers) are not buffered - they print
- * immediately as `[N/T] name` flush left, and on success their closer is
- * suppressed so consecutive phases form a clean chapter sequence.
+ * immediately as `[N/T] name` flush left, and their closer renders like any
+ * other group's (`done in X.XXXs` / `failed in X.XXXs` at content indent).
  */
 class PlainRenderer implements Renderer {
     private verbosity: Verbosity = 'normal';
@@ -200,12 +200,6 @@ class PlainRenderer implements Renderer {
                 return;
             }
             case 'scopeEnd': {
-                if (isPhaseHeader(event)) {
-                    if (event.failed) {
-                        console.log(`\u2717 ${event.name} (failed) ${fmtTime(event.durationMs)}`);
-                    }
-                    return;
-                }
                 const top = this.pendingStarts[this.pendingStarts.length - 1];
                 if (top && top.depth === event.depth) {
                     this.pendingStarts.pop();
