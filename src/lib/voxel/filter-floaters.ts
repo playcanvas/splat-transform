@@ -68,8 +68,6 @@ const filterFloaters = async (
             voxelResolution
         );
 
-        g.step('Voxelizing');
-
         const buffer = await voxelizeToBuffer(
             ctx.bvh, ctx.gpuVoxelization!, gridBounds, voxelResolution, opacityCutoff
         );

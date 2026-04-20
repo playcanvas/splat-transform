@@ -389,8 +389,6 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
                 voxelResolution
             );
 
-            g.step('Voxelizing');
-
             let buffer = await voxelizeToBuffer(
                 bvh, gpuVoxelization, gridBounds, voxelResolution, opacityCutoff
             );
@@ -412,7 +410,6 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             }
 
             if (hasFloorFill) {
-                g.step('Fill floor');
                 const floorResult = fillFloor(
                     buffer, gridBounds, voxelResolution, floorFillDilation
                 );
@@ -441,7 +438,6 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
                 await buildCollisionMesh(buffer, gridBounds, voxelResolution, meshSimplifyError) :
                 null;
 
-            g.step('Building octree');
             const octree = buildSparseOctree(
                 buffer,
                 gridBounds,

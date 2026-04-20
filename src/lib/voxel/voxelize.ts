@@ -129,75 +129,73 @@ const voxelizeToBuffer = async (
     };
 
     const numZBatches = Math.max(1, Math.ceil(numBlocksZ / batchSize));
-    const bar = logger.bar(numZBatches);
+    const bar = logger.bar('Voxelizing', numZBatches);
 
-    try {
-        for (let bz = 0; bz < numBlocksZ; bz += batchSize) {
-            for (let by = 0; by < numBlocksY; by += batchSize) {
-                for (let bx = 0; bx < numBlocksX; bx += batchSize) {
-                    const currBatchX = Math.min(batchSize, numBlocksX - bx);
-                    const currBatchY = Math.min(batchSize, numBlocksY - by);
-                    const currBatchZ = Math.min(batchSize, numBlocksZ - bz);
+    for (let bz = 0; bz < numBlocksZ; bz += batchSize) {
+        for (let by = 0; by < numBlocksY; by += batchSize) {
+            for (let bx = 0; bx < numBlocksX; bx += batchSize) {
+                const currBatchX = Math.min(batchSize, numBlocksX - bx);
+                const currBatchY = Math.min(batchSize, numBlocksY - by);
+                const currBatchZ = Math.min(batchSize, numBlocksZ - bz);
 
-                    const blockMinX = gridBounds.min.x + bx * blockSize;
-                    const blockMinY = gridBounds.min.y + by * blockSize;
-                    const blockMinZ = gridBounds.min.z + bz * blockSize;
-                    const blockMaxX = blockMinX + currBatchX * blockSize;
-                    const blockMaxY = blockMinY + currBatchY * blockSize;
-                    const blockMaxZ = blockMinZ + currBatchZ * blockSize;
+                const blockMinX = gridBounds.min.x + bx * blockSize;
+                const blockMinY = gridBounds.min.y + by * blockSize;
+                const blockMinZ = gridBounds.min.z + bz * blockSize;
+                const blockMaxX = blockMinX + currBatchX * blockSize;
+                const blockMaxY = blockMinY + currBatchY * blockSize;
+                const blockMaxZ = blockMinZ + currBatchZ * blockSize;
 
-                    const overlapping = bvh.queryOverlappingRaw(
-                        blockMinX, blockMinY, blockMinZ,
-                        blockMaxX, blockMaxY, blockMaxZ
-                    );
+                const overlapping = bvh.queryOverlappingRaw(
+                    blockMinX, blockMinY, blockMinZ,
+                    blockMaxX, blockMaxY, blockMaxZ
+                );
 
-                    if (overlapping.length === 0) {
-                        continue;
-                    }
+                if (overlapping.length === 0) {
+                    continue;
+                }
 
-                    const needed = indexOffset + overlapping.length;
-                    if (needed > slotCapacities[currentSlot]) {
-                        slotCapacities[currentSlot] = Math.max(slotCapacities[currentSlot] * 2, needed);
-                        const newArray = new Uint32Array(slotCapacities[currentSlot]);
-                        newArray.set(slotIndexArrays[currentSlot].subarray(0, indexOffset));
-                        slotIndexArrays[currentSlot] = newArray;
-                    }
+                const needed = indexOffset + overlapping.length;
+                if (needed > slotCapacities[currentSlot]) {
+                    slotCapacities[currentSlot] = Math.max(slotCapacities[currentSlot] * 2, needed);
+                    const newArray = new Uint32Array(slotCapacities[currentSlot]);
+                    newArray.set(slotIndexArrays[currentSlot].subarray(0, indexOffset));
+                    slotIndexArrays[currentSlot] = newArray;
+                }
 
-                    slotIndexArrays[currentSlot].set(overlapping, indexOffset);
+                slotIndexArrays[currentSlot].set(overlapping, indexOffset);
 
-                    pendingBatches.push({
-                        indexOffset,
-                        indexCount: overlapping.length,
-                        blockMin: { x: blockMinX, y: blockMinY, z: blockMinZ },
-                        numBlocksX: currBatchX,
-                        numBlocksY: currBatchY,
-                        numBlocksZ: currBatchZ,
-                        bx,
-                        by,
-                        bz
-                    });
+                pendingBatches.push({
+                    indexOffset,
+                    indexCount: overlapping.length,
+                    blockMin: { x: blockMinX, y: blockMinY, z: blockMinZ },
+                    numBlocksX: currBatchX,
+                    numBlocksY: currBatchY,
+                    numBlocksZ: currBatchZ,
+                    bx,
+                    by,
+                    bz
+                });
 
-                    indexOffset += overlapping.length;
+                indexOffset += overlapping.length;
 
-                    if (pendingBatches.length >= MEGA_MAX_BATCHES || indexOffset >= MEGA_MAX_INDICES) {
-                        await flushPendingBatches();
-                    }
+                if (pendingBatches.length >= MEGA_MAX_BATCHES || indexOffset >= MEGA_MAX_INDICES) {
+                    await flushPendingBatches();
                 }
             }
-
-            bar.tick();
         }
 
-        await flushPendingBatches();
-
-        if (inflight) {
-            const result = await inflight.resultPromise;
-            processResults(result.masks, inflight.batches);
-            inflight = null;
-        }
-    } finally {
-        bar.end();
+        bar.tick();
     }
+
+    await flushPendingBatches();
+
+    if (inflight) {
+        const result = await inflight.resultPromise;
+        processResults(result.masks, inflight.batches);
+        inflight = null;
+    }
+
+    bar.end();
 
     return buffer;
 };

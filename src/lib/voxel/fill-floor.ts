@@ -77,102 +77,99 @@ const fillFloor = (
 
     const r = dilation > 0 ? Math.ceil(dilation / voxelResolution) : 0;
 
-    const bar = logger.bar(r > 0 ? 4 : 3);
+    const bar = logger.bar('Filling floor', r > 0 ? 4 : 3);
 
-    try {
-        const grid = SparseVoxelGrid.fromBuffer(buffer, nx, ny, nz);
-        const dilatedSolid = r > 0 ? sparseDilate3(grid, r, 0) : grid;
-        bar.tick();
+    const grid = SparseVoxelGrid.fromBuffer(buffer, nx, ny, nz);
+    const dilatedSolid = r > 0 ? sparseDilate3(grid, r, 0) : grid;
+    bar.tick();
 
-        const foundEmpty = new SparseVoxelGrid(nx, ny, nz);
+    const foundEmpty = new SparseVoxelGrid(nx, ny, nz);
 
-        for (let bz = 0; bz < nbz; bz++) {
-            for (let bx = 0; bx < nbx; bx++) {
-                let walking = 0xFFFF;
+    for (let bz = 0; bz < nbz; bz++) {
+        for (let bx = 0; bx < nbx; bx++) {
+            let walking = 0xFFFF;
 
-                for (let by = 0; by < nby && walking; by++) {
-                    const blockIdx = bx + by * nbx + bz * bStride;
-                    const bt = dilatedSolid.blockType[blockIdx];
+            for (let by = 0; by < nby && walking; by++) {
+                const blockIdx = bx + by * nbx + bz * bStride;
+                const bt = dilatedSolid.blockType[blockIdx];
 
-                    if (bt === BLOCK_SOLID) {
-                        break;
-                    }
+                if (bt === BLOCK_SOLID) {
+                    break;
+                }
 
-                    if (bt === BLOCK_EMPTY) {
-                        if (walking === 0xFFFF) {
-                            foundEmpty.orBlock(blockIdx, SOLID_LO, SOLID_HI);
-                        } else {
-                            let lo = 0, hi = 0;
-                            for (let lz = 0; lz < 4; lz++) {
-                                for (let lx = 0; lx < 4; lx++) {
-                                    if (!(walking & (1 << (lz * 4 + lx)))) continue;
-                                    for (let ly = 0; ly < 4; ly++) {
-                                        const bitIdx = lx + (ly << 2) + (lz << 4);
-                                        if (bitIdx < 32) lo |= (1 << bitIdx);
-                                        else hi |= (1 << (bitIdx - 32));
-                                    }
+                if (bt === BLOCK_EMPTY) {
+                    if (walking === 0xFFFF) {
+                        foundEmpty.orBlock(blockIdx, SOLID_LO, SOLID_HI);
+                    } else {
+                        let lo = 0, hi = 0;
+                        for (let lz = 0; lz < 4; lz++) {
+                            for (let lx = 0; lx < 4; lx++) {
+                                if (!(walking & (1 << (lz * 4 + lx)))) continue;
+                                for (let ly = 0; ly < 4; ly++) {
+                                    const bitIdx = lx + (ly << 2) + (lz << 4);
+                                    if (bitIdx < 32) lo |= (1 << bitIdx);
+                                    else hi |= (1 << (bitIdx - 32));
                                 }
                             }
-                            foundEmpty.orBlock(blockIdx, lo >>> 0, hi >>> 0);
                         }
-                        continue;
+                        foundEmpty.orBlock(blockIdx, lo >>> 0, hi >>> 0);
                     }
+                    continue;
+                }
 
-                    // BLOCK_MIXED: per-voxel walk
-                    const s = dilatedSolid.masks.slot(blockIdx);
-                    const dLo = dilatedSolid.masks.lo[s];
-                    const dHi = dilatedSolid.masks.hi[s];
+                // BLOCK_MIXED: per-voxel walk
+                const s = dilatedSolid.masks.slot(blockIdx);
+                const dLo = dilatedSolid.masks.lo[s];
+                const dHi = dilatedSolid.masks.hi[s];
 
-                    let foundLo = 0;
-                    let foundHi = 0;
+                let foundLo = 0;
+                let foundHi = 0;
 
-                    for (let lz = 0; lz < 4; lz++) {
-                        for (let lx = 0; lx < 4; lx++) {
-                            const subCol = 1 << (lz * 4 + lx);
-                            if (!(walking & subCol)) continue;
+                for (let lz = 0; lz < 4; lz++) {
+                    for (let lx = 0; lx < 4; lx++) {
+                        const subCol = 1 << (lz * 4 + lx);
+                        if (!(walking & subCol)) continue;
 
-                            for (let ly = 0; ly < 4; ly++) {
-                                const bitIdx = lx + (ly << 2) + (lz << 4);
-                                const inHi = bitIdx >= 32;
-                                const word = inHi ? dHi : dLo;
-                                const bit = 1 << (inHi ? bitIdx - 32 : bitIdx);
+                        for (let ly = 0; ly < 4; ly++) {
+                            const bitIdx = lx + (ly << 2) + (lz << 4);
+                            const inHi = bitIdx >= 32;
+                            const word = inHi ? dHi : dLo;
+                            const bit = 1 << (inHi ? bitIdx - 32 : bitIdx);
 
-                                if (word & bit) {
-                                    walking &= ~subCol;
-                                    break;
-                                }
-
-                                if (inHi) foundHi |= bit;
-                                else foundLo |= bit;
+                            if (word & bit) {
+                                walking &= ~subCol;
+                                break;
                             }
+
+                            if (inHi) foundHi |= bit;
+                            else foundLo |= bit;
                         }
                     }
+                }
 
-                    if (foundLo || foundHi) {
-                        foundEmpty.orBlock(blockIdx, foundLo >>> 0, foundHi >>> 0);
-                    }
+                if (foundLo || foundHi) {
+                    foundEmpty.orBlock(blockIdx, foundLo >>> 0, foundHi >>> 0);
                 }
             }
         }
-
-        if (r > 0) dilatedSolid.clear();
-        bar.tick();
-
-        const dilatedFound = r > 0 ? sparseDilate3(foundEmpty, r, 0) : foundEmpty;
-        if (r > 0) {
-            foundEmpty.clear();
-            bar.tick();
-        }
-
-        const combined = sparseOrGrids(grid, dilatedFound);
-        const result = combined.toBuffer(0, 0, 0, nbx, nby, nbz);
-
-        bar.tick();
-
-        return { buffer: result, gridBounds };
-    } finally {
-        bar.end();
     }
+
+    if (r > 0) dilatedSolid.clear();
+    bar.tick();
+
+    const dilatedFound = r > 0 ? sparseDilate3(foundEmpty, r, 0) : foundEmpty;
+    if (r > 0) {
+        foundEmpty.clear();
+        bar.tick();
+    }
+
+    const combined = sparseOrGrids(grid, dilatedFound);
+    const result = combined.toBuffer(0, 0, 0, nbx, nby, nbz);
+
+    bar.tick();
+    bar.end();
+
+    return { buffer: result, gridBounds };
 };
 
 export { fillFloor };

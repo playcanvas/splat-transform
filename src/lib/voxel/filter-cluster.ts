@@ -207,8 +207,6 @@ const filterCluster = async (
         gridBounds.min.set(cx.min, cy.min, cz.min);
         gridBounds.max.set(cx.max, cy.max, cz.max);
 
-        g.step('Voxelizing');
-
         const buffer = await voxelizeToBuffer(
             ctx.bvh, ctx.gpuVoxelization!, gridBounds, clampedResolution, opacityCutoff
         );

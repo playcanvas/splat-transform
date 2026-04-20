@@ -152,8 +152,7 @@ function buildSparseOctree(
     // grouping a simple linear scan (consecutive entries with the same
     // floor(morton/8) share a parent).
 
-    // Inner progress: 10 anonymous steps
-    const bar = logger.bar(10);
+    const bar = logger.bar('Building tree', 10);
     let octreeStep = 0;
 
     // Calculate tree depth based on grid size

@@ -1,6 +1,13 @@
 import process from 'node:process';
 
 import type { LogEvent, Renderer, Verbosity } from '../lib/index';
+import {
+    fmtTime,
+    indent,
+    isPhaseHeader,
+    messageVisible,
+    taskVisible
+} from '../lib/utils/logger';
 
 interface WriteStreamLike {
     write(chunk: string): unknown;
@@ -12,24 +19,11 @@ interface TtyRendererOptions {
     showMem?: boolean;
 }
 
-const verbosityRank: Record<Verbosity, number> = {
-    quiet: 0,
-    normal: 1,
-    verbose: 2
-};
-
-const fmtTime = (ms: number): string => {
-    if (ms >= 60_000) return `${(ms / 60_000).toFixed(2)}m`;
-    return `${(ms / 1000).toFixed(3)}s`;
-};
-
 const fmtMem = (): string => {
     const m = process.memoryUsage();
     const mb = (n: number) => `${(n / (1024 * 1024)).toFixed(0)}MB`;
     return `  [rss: ${mb(m.rss)}, heap: ${mb(m.heapUsed)}, ab: ${mb(m.arrayBuffers)}]`;
 };
-
-const indent = (depth: number): string => '  '.repeat(Math.max(0, depth));
 
 const BAR_WIDTH = 20;
 
@@ -44,9 +38,17 @@ const renderBar = (current: number, total: number): string => {
  * progress bars in place via carriage returns. Falls back to plain newline
  * output when stderr is not a TTY (e.g. when output is piped).
  *
- * Numbered groups at depth 0 render in the legacy `[N/T] name` flush-left
- * style; nested numbered groups use indented `[N/T] name`; un-numbered groups
- * use `\u25b8` / `\u25c2` glyphs indented by depth.
+ * Buffers `scopeStart` events so that scopes with no nested children
+ * collapse to a single `\u2713 name X.XXXs` line, while scopes with children
+ * print a header `\u25b8 name`, indented children, and an indented closer
+ * `done in X.XXXs` (or `failed in X.XXXs`).
+ *
+ * Bars render as a single line `\u25b8 name [bar] %` ticking in place,
+ * finalizing as `\u2713 name [bar] X.XXXs` (or `\u2717 name [bar] (failed) X.XXXs`).
+ *
+ * Numbered groups at depth 0 (phase headers) are not buffered - they print
+ * immediately as `[N/T] name` flush left, and on success their closer is
+ * suppressed so consecutive phases form a clean chapter sequence.
  */
 class TtyRenderer implements Renderer {
     private verbosity: Verbosity = 'normal';
@@ -59,6 +61,12 @@ class TtyRenderer implements Renderer {
 
     /** True if we have written a partial line (no trailing newline). */
     private barOpen = false;
+
+    /**
+     * Queue of `scopeStart` events whose header has not yet been written,
+     * ordered by depth ascending (shallowest first).
+     */
+    private pendingStarts: Array<Extract<LogEvent, { kind: 'scopeStart' }>> = [];
 
     /**
      * @param options - Configuration. Supports an optional output `stream` (defaults to
@@ -89,87 +97,78 @@ class TtyRenderer implements Renderer {
         return this.showMem ? fmtMem() : '';
     }
 
-    private taskVisible(): boolean {
-        return verbosityRank[this.verbosity] >= verbosityRank.normal;
-    }
-
-    private messageVisible(level: 'error' | 'warn' | 'info' | 'debug'): boolean {
-        if (level === 'error') return true;
-        if (level === 'debug') return verbosityRank[this.verbosity] >= verbosityRank.verbose;
-        return verbosityRank[this.verbosity] >= verbosityRank.normal;
-    }
-
     handle(event: LogEvent): void {
         switch (event.kind) {
-            case 'groupStart': {
+            case 'scopeStart': {
                 this.commitBar();
-                if (!this.taskVisible()) break;
-                const numbered = event.index !== undefined && event.total !== undefined;
-                if (numbered && event.depth === 0) {
-                    this.write(`\n[${event.index}/${event.total}] ${event.name}\n`);
-                } else if (numbered) {
-                    this.write(`${indent(event.depth)}[${event.index}/${event.total}] ${event.name}\n`);
-                } else {
-                    this.write(`${indent(event.depth)}\u25b8 ${event.name}\n`);
+                if (isPhaseHeader(event)) {
+                    this.flushPendingDownTo(0);
+                    if (taskVisible(this.verbosity)) {
+                        this.write(`\n[${event.index}/${event.total}] ${event.name}\n`);
+                    }
+                    return;
                 }
-                break;
+                this.flushPendingDownTo(event.depth);
+                this.pendingStarts.push(event);
+                return;
             }
-            case 'groupEnd': {
+            case 'scopeEnd': {
                 this.commitBar();
-                const numbered = event.index !== undefined && event.total !== undefined;
-                if (numbered && event.depth === 0) {
-                    if (!event.failed) break;
-                    this.write(`${indent(event.depth)}\u2717 ${event.name} (failed) ${fmtTime(event.durationMs)}${this.memSuffix()}\n`);
-                } else {
-                    if (!this.taskVisible()) break;
-                    const glyph = event.failed ? '\u2717' : '\u25c2';
-                    this.write(`${indent(event.depth)}${glyph} ${event.name} ${fmtTime(event.durationMs)}${this.memSuffix()}\n`);
+                if (isPhaseHeader(event)) {
+                    if (event.failed) {
+                        this.write(`\u2717 ${event.name} (failed) ${fmtTime(event.durationMs)}${this.memSuffix()}\n`);
+                    }
+                    return;
                 }
-                break;
-            }
-            case 'stepStart': {
-                this.commitBar();
-                if (!this.taskVisible()) break;
-                this.write(`${indent(event.depth)}\u25b8 ${event.name}\n`);
-                break;
-            }
-            case 'stepEnd': {
-                this.commitBar();
-                if (!this.taskVisible()) break;
-                const glyph = event.failed ? '\u2717' : '\u2713';
-                this.write(`${indent(event.depth)}${glyph} ${event.name} ${fmtTime(event.durationMs)}${this.memSuffix()}\n`);
-                break;
+                const top = this.pendingStarts[this.pendingStarts.length - 1];
+                if (top && top.depth === event.depth) {
+                    this.pendingStarts.pop();
+                    this.flushPendingDownTo(event.depth);
+                    if (!taskVisible(this.verbosity)) return;
+                    const glyph = event.failed ? '\u2717' : '\u2713';
+                    const suffix = event.failed ? ` (failed) ${fmtTime(event.durationMs)}` : ` ${fmtTime(event.durationMs)}`;
+                    this.write(`${indent(event.depth)}${glyph} ${event.name}${suffix}${this.memSuffix()}\n`);
+                    return;
+                }
+                if (!taskVisible(this.verbosity)) return;
+                const verb = event.failed ? 'failed in' : 'done in';
+                this.write(`${indent(event.depth + 1)}${verb} ${fmtTime(event.durationMs)}${this.memSuffix()}\n`);
+                return;
             }
             case 'barStart': {
                 this.commitBar();
-                if (!this.taskVisible()) break;
+                this.flushPendingDownTo(event.depth);
+                if (!taskVisible(this.verbosity)) return;
                 if (this.isTty) {
-                    this.write(`${indent(event.depth)}[${renderBar(0, event.total)}]   0%`);
+                    this.write(`${indent(event.depth)}\u25b8 ${event.name}  [${renderBar(0, event.total)}]   0%`);
                     this.barOpen = true;
                 }
-                break;
+                return;
             }
             case 'barTick': {
-                if (!this.taskVisible()) break;
+                if (!taskVisible(this.verbosity)) return;
                 if (this.isTty && this.barOpen) {
                     const pct = event.total <= 0 ? 0 : Math.min(100, Math.round((event.current / event.total) * 100));
-                    this.write(`\r${indent(event.depth)}[${renderBar(event.current, event.total)}] ${String(pct).padStart(3, ' ')}%`);
+                    this.write(`\r${indent(event.depth)}\u25b8 ${event.name}  [${renderBar(event.current, event.total)}] ${String(pct).padStart(3, ' ')}%`);
                 }
-                break;
+                return;
             }
             case 'barEnd': {
-                if (!this.taskVisible()) break;
+                if (!taskVisible(this.verbosity)) return;
+                const glyph = event.failed ? '\u2717' : '\u2713';
+                const suffix = event.failed ? ` (failed) ${fmtTime(event.durationMs)}` : ` ${fmtTime(event.durationMs)}`;
                 if (this.isTty && this.barOpen) {
-                    this.write(`\r${indent(event.depth)}[${renderBar(1, 1)}] ${fmtTime(event.durationMs)}${this.memSuffix()}\n`);
+                    this.write(`\r${indent(event.depth)}${glyph} ${event.name}  [${renderBar(1, 1)}]${suffix}${this.memSuffix()}\n`);
                     this.barOpen = false;
                 } else {
-                    this.write(`${indent(event.depth)}[${renderBar(1, 1)}] ${fmtTime(event.durationMs)}${this.memSuffix()}\n`);
+                    this.write(`${indent(event.depth)}${glyph} ${event.name}  [${renderBar(1, 1)}]${suffix}${this.memSuffix()}\n`);
                 }
-                break;
+                return;
             }
             case 'message': {
+                if (!messageVisible(event.level, this.verbosity)) return;
                 this.commitBar();
-                if (!this.messageVisible(event.level)) break;
+                this.flushPendingDownTo(event.depth);
                 // info/debug get a `\u00b7` glyph only when nested under a scope -
                 // at depth 0 they're framing lines (banners, summaries) and read
                 // cleaner without decoration. warn/error always carry their
@@ -179,13 +178,32 @@ class TtyRenderer implements Renderer {
                 else if (event.level === 'warn') prefix = '! ';
                 else if (event.depth > 0) prefix = '\u00b7 ';
                 this.write(`${indent(event.depth)}${prefix}${event.text}\n`);
-                break;
+                return;
             }
             case 'output': {
                 this.commitBar();
+                this.flushPendingDownTo(0);
                 process.stdout.write(`${event.text}\n`);
-                break;
             }
+        }
+    }
+
+    /**
+     * Flush any pending `scopeStart` headers whose depth is strictly less
+     * than `depth`. Walks shallowest-first so parent headers print before
+     * children. Flushed entries are removed from the queue; their presence
+     * in the queue WAS the "is empty" signal, so removing them implicitly
+     * marks them as non-empty.
+     *
+     * @param depth - The depth threshold.
+     */
+    private flushPendingDownTo(depth: number): void {
+        while (this.pendingStarts.length > 0 && this.pendingStarts[0].depth < depth) {
+            const entry = this.pendingStarts.shift()!;
+            if (!taskVisible(this.verbosity)) continue;
+            const numbered = entry.index !== undefined && entry.total !== undefined;
+            const headerName = numbered ? `[${entry.index}/${entry.total}] ${entry.name}` : entry.name;
+            this.write(`${indent(entry.depth)}\u25b8 ${headerName}\n`);
         }
     }
 }

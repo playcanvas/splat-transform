@@ -671,8 +671,6 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
         ]);
         const kdTree = new KdTree(posTable);
 
-        g.step('Finding nearest neighbors');
-
         let edgeCapacity = Math.ceil(n * kEff / 2);
         let edgeU = new Uint32Array(edgeCapacity);
         let edgeV = new Uint32Array(edgeCapacity);
@@ -681,7 +679,7 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
 
         const knnInterval = Math.max(1, Math.ceil(n / PROGRESS_TICKS));
         const knnTicks = Math.ceil(n / knnInterval);
-        const knnBar = logger.bar(knnTicks);
+        const knnBar = logger.bar('Finding nearest neighbors', knnTicks);
         for (let i = 0; i < n; i++) {
             queryPoint[0] = cx[i] as number;
             queryPoint[1] = cy[i] as number;
@@ -712,8 +710,6 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
             break;
         }
 
-        g.step('Computing edge costs');
-
         const appData: any[] = [];
         for (let ai = 0; ai < allAppearanceCols.length; ai++) {
             const col = current.getColumnByName(allAppearanceCols[ai]);
@@ -725,15 +721,13 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
 
         const costInterval = Math.max(1, Math.ceil(edgeCount / PROGRESS_TICKS));
         const costTicks = Math.ceil(edgeCount / costInterval);
-        const costBar = logger.bar(costTicks);
+        const costBar = logger.bar('Computing edge costs', costTicks);
         for (let e = 0; e < edgeCount; e++) {
             costs[e] = computeEdgeCost(edgeU[e], edgeV[e], cx, cy, cz,
                 cache, Z, appData, appData.length);
             if ((e + 1) % costInterval === 0) costBar.tick();
         }
         if (edgeCount % costInterval !== 0) costBar.tick();
-
-        g.step('Merging splats');
 
         // Sort and greedy disjoint pair selection
         const sorted = new Uint32Array(edgeCount);
@@ -819,7 +813,7 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
 
         const mergeInterval = Math.max(1, Math.ceil(pairs.length / PROGRESS_TICKS));
         const mergeTicks = Math.ceil(pairs.length / mergeInterval);
-        const mergeBar = logger.bar(mergeTicks);
+        const mergeBar = logger.bar('Merging splats', mergeTicks);
         for (let p = 0; p < pairs.length; p++, dst++) {
             const pi = pairs[p][0], pj = pairs[p][1];
 

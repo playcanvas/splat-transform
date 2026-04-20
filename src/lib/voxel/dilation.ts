@@ -361,21 +361,18 @@ function sparseDilate3(
 ): SparseVoxelGrid {
     const { nx, ny, nz } = src;
     const a = new SparseVoxelGrid(nx, ny, nz);
-    const bar = logger.bar(3);
-    try {
-        sparseDilateX(src, a, halfExtentXZ);
-        bar.tick();
-        const b = new SparseVoxelGrid(nx, ny, nz);
-        sparseDilateZ(a, b, halfExtentXZ);
-        a.clear();
-        bar.tick();
-        sparseDilateY(b, a, halfExtentY);
-        b.clear();
-        bar.tick();
-        return a;
-    } finally {
-        bar.end();
-    }
+    const bar = logger.bar('Dilating', 3);
+    sparseDilateX(src, a, halfExtentXZ);
+    bar.tick();
+    const b = new SparseVoxelGrid(nx, ny, nz);
+    sparseDilateZ(a, b, halfExtentXZ);
+    a.clear();
+    bar.tick();
+    sparseDilateY(b, a, halfExtentY);
+    b.clear();
+    bar.tick();
+    bar.end();
+    return a;
 }
 
 export { sparseDilate3 };
