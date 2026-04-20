@@ -49,8 +49,11 @@ type WriteVoxelOptions = {
     /** Seed position in world space for exterior fill and interior carve flood fill. */
     navSeed?: NavSeed;
 
-    /** Fill each voxel column upward from the bottom until hitting solid. If interior carve is enabled, this runs after that step. Default: false */
+    /** Fill each voxel column upward from the bottom until hitting solid. Runs before interior carve so the carve's BFS is confined to the actual interior bubble. Default: false */
     floorFill?: boolean;
+
+    /** When `floorFill` is enabled, dilation radius in world units used to identify "interior" XZ columns to patch. Empty XZ areas larger than `2 * floorFillDilation` from any solid column are treated as exterior and left empty. Default: 0 (patch every empty column). */
+    floorFillDilation?: number;
 
     /** Whether to generate a collision mesh (.collision.glb) alongside the voxel data. Default: false */
     collisionMesh?: boolean;
@@ -326,6 +329,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         createDevice,
         navExteriorRadius,
         floorFill = false,
+        floorFillDilation = 0,
         navCapsule,
         navSeed,
         collisionMesh = false,
@@ -414,6 +418,15 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             gridBounds = fillResult.gridBounds;
         }
 
+        if (hasFloorFill) {
+            logger.progress.step('Fill floor');
+            const floorResult = fillFloor(
+                buffer, gridBounds, voxelResolution, floorFillDilation
+            );
+            buffer = floorResult.buffer;
+            gridBounds = floorResult.gridBounds;
+        }
+
         if (hasNav) {
             logger.progress.step('Carve interior');
             const navResult = carveInterior(
@@ -423,15 +436,6 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             );
             buffer = navResult.buffer;
             gridBounds = navResult.gridBounds;
-        }
-
-        if (hasFloorFill) {
-            logger.progress.step('Fill floor');
-            const floorResult = fillFloor(
-                buffer, gridBounds, voxelResolution
-            );
-            buffer = floorResult.buffer;
-            gridBounds = floorResult.gridBounds;
         }
 
         const finalCrop = hasFillExterior || hasFloorFill ?
