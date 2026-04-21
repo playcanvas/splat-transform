@@ -24,6 +24,7 @@ import { alignGridBounds, voxelizeToBuffer } from './voxelize';
 import { DataTable } from '../data-table';
 import type { DeviceCreator } from '../types';
 import { logger } from '../utils';
+import { fmtCount, fmtDistance } from '../utils/logger';
 
 /**
  * Build an inverted SparseVoxelGrid from a BlockMaskBuffer for flood-filling
@@ -167,9 +168,20 @@ const filterCluster = async (
     if (numRows === 0) return dataTable;
 
     const g = logger.group('Filter cluster');
+
+    // Emit the action's gaussian delta inside its own group, then close it.
+    // The "filter-cluster:" prefix would just restate the group header.
+    const finish = (out: DataTable): DataTable => {
+        const removed = numRows - out.numRows;
+        if (removed > 0) {
+            logger.info(`removed ${removed} gaussians`);
+        }
+        g.end();
+        return out;
+    };
+
     let ctx: VoxelFilterContext | undefined;
     try {
-        const initSub = logger.group('Initializing voxel pipeline');
         ctx = await setupVoxelFilter(dataTable, createDevice);
 
         const clampedResolution = Math.max(0.01, voxelResolution);
@@ -178,13 +190,6 @@ const filterCluster = async (
         const sceneExtentX = ctx.sceneBounds.max.x - ctx.sceneBounds.min.x;
         const sceneExtentY = ctx.sceneBounds.max.y - ctx.sceneBounds.min.y;
         const sceneExtentZ = ctx.sceneBounds.max.z - ctx.sceneBounds.min.z;
-        const maxSceneExtent = Math.max(sceneExtentX, sceneExtentY, sceneExtentZ);
-
-        logger.info(`scene extent: ${maxSceneExtent.toFixed(2)}m`);
-        logger.info(`voxel resolution: ${clampedResolution.toFixed(4)}m`);
-        initSub.end();
-
-        const alignSub = logger.group('Aligning grid bounds');
 
         const gridBounds = alignGridBounds(
             ctx.sceneBounds.min.x, ctx.sceneBounds.min.y, ctx.sceneBounds.min.z,
@@ -208,26 +213,27 @@ const filterCluster = async (
         gridBounds.min.set(cx.min, cy.min, cz.min);
         gridBounds.max.set(cx.max, cy.max, cz.max);
 
+        const grid = buildBlockGridParams(gridBounds, clampedResolution);
+        const nbx = grid.numBlocksX;
+        const nby = grid.numBlocksY;
+        const nbz = grid.numBlocksZ;
+        const nx = nbx * 4;
+        const ny = nby * 4;
+        const nz = nbz * 4;
+
+        const totalVoxels = nx * ny * nz;
+        logger.info(`scene: ${fmtDistance(sceneExtentX)} x ${fmtDistance(sceneExtentY)} x ${fmtDistance(sceneExtentZ)}, grid: ${nx} x ${ny} x ${nz} voxels (${fmtCount(totalVoxels)}) @ ${fmtDistance(clampedResolution)}`);
+
         const buffer = await voxelizeToBuffer(
             ctx.bvh, ctx.gpuVoxelization!, gridBounds, clampedResolution, opacityCutoff
         );
 
         ctx.gpuVoxelization.destroy();
         ctx.gpuVoxelization = null;
-        alignSub.end();
-
-        const findSub = logger.group('Finding cluster');
-
-        const grid = buildBlockGridParams(gridBounds, clampedResolution);
-        const nx = grid.numBlocksX * 4;
-        const ny = grid.numBlocksY * 4;
-        const nz = grid.numBlocksZ * 4;
 
         if (buffer.count === 0) {
             logger.warn('no occupied blocks found, returning empty result');
-            findSub.end();
-            g.end();
-            return dataTable.clone({ rows: [] });
+            return finish(dataTable.clone({ rows: [] }));
         }
 
         const seedIx = Math.max(0, Math.min(Math.floor((seed.x - gridBounds.min.x) / clampedResolution), nx - 1));
@@ -237,9 +243,7 @@ const filterCluster = async (
         const floodResult = findClusterVoxelFlood(buffer, nx, ny, nz, seedIx, seedIy, seedIz);
         if (!floodResult) {
             logger.warn('no occupied voxel found near seed, returning empty result');
-            findSub.end();
-            g.end();
-            return dataTable.clone({ rows: [] });
+            return finish(dataTable.clone({ rows: [] }));
         }
 
         const { ccSet, visited: visitedGrid, resolvedSeed } = floodResult;
@@ -249,11 +253,8 @@ const filterCluster = async (
             const worldZ = gridBounds.min.z + (resolvedSeed.iz + 0.5) * clampedResolution;
             logger.warn(`seed (${seed.x.toFixed(2)}, ${seed.y.toFixed(2)}, ${seed.z.toFixed(2)}) unoccupied; resolved to nearest at (${worldX.toFixed(2)}, ${worldY.toFixed(2)}, ${worldZ.toFixed(2)})`);
         }
-        logger.info(`cluster blocks: ${ccSet.size} of ${buffer.count}`);
 
-        const nbx = grid.numBlocksX;
-        const nby = grid.numBlocksY;
-        const nbz = grid.numBlocksZ;
+        logger.info(`cluster is ${ccSet.size} of ${buffer.count} blocks`);
 
         // Build lookup from visited voxels only (not all original voxels in ccSet blocks).
         // Every visited voxel is originally-occupied (the BFS only traverses through them),
@@ -263,13 +264,8 @@ const filterCluster = async (
 
         if (ccSet.size === buffer.count) {
             logger.info('all blocks in one cluster, no filtering needed');
-            findSub.end();
-            g.end();
-            return dataTable;
+            return finish(dataTable);
         }
-        findSub.end();
-
-        const filterSub = logger.group('Filtering Gaussians');
 
         const gaussianCols = buildGaussianColumns(ctx);
         const keepIndices: number[] = [];
@@ -289,17 +285,13 @@ const filterCluster = async (
             }
         }
 
-        const removed = numRows - keepIndices.length;
-        logger.info(`kept gaussians: ${keepIndices.length} of ${numRows} (removed ${removed})`);
-        filterSub.end();
-
-        g.end();
-
-        if (removed === 0) return dataTable;
-
-        return dataTable.clone({ rows: keepIndices });
+        if (keepIndices.length === numRows) {
+            return finish(dataTable);
+        }
+        return finish(dataTable.clone({ rows: keepIndices }));
     } catch (e) {
         ctx?.gpuVoxelization?.destroy();
+        g.end();
         throw e;
     }
 };

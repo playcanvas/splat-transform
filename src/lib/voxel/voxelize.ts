@@ -48,9 +48,6 @@ const voxelizeToBuffer = async (
     const buffer = new BlockMaskBuffer();
     const batchSize = 16;
 
-    logger.debug(`blocks: ${numBlocksX} x ${numBlocksY} x ${numBlocksZ} (${(numBlocksX * numBlocksY * numBlocksZ / 1e6).toFixed(1)}M)`);
-    logger.debug(`voxels: ${numBlocksX * 4} x ${numBlocksY * 4} x ${numBlocksZ * 4} (${(numBlocksX * numBlocksY * numBlocksZ * 64 / 1e9).toFixed(2)}B)`);
-
     const MEGA_MAX_BATCHES = 512;
     const MEGA_MAX_INDICES = 4 * 1024 * 1024;
 

@@ -823,6 +823,7 @@ const main = async () => {
         if (!isNullOutput) {
             const phase = logger.group(`Output ${outputArg.filename}`, firstPhase ? { total: phaseTotal } : undefined);
             firstPhase = false;
+            logger.info(`gaussians: ${dataTable.numRows}, SH bands: ${getSHBands(dataTable)}, mem: ${fmtBytes(dataTable.byteLength)}`);
             await writeFile({
                 filename: outputFilename,
                 outputFormat: outputFormat!,

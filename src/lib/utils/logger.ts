@@ -138,6 +138,26 @@ const fmtBytes = (n: number): string => {
     return `${(n / (1024 * 1024 * 1024)).toFixed(2)}GB`;
 };
 
+const fmtDistance = (m: number): string => {
+    if (!Number.isFinite(m)) return `${m}m`;
+    const abs = Math.abs(m);
+    if (abs === 0) return '0m';
+    if (abs < 0.01) return `${+(m * 1000).toPrecision(3)}mm`;
+    if (abs < 1) return `${+(m * 100).toPrecision(3)}cm`;
+    if (abs < 1000) return `${+m.toPrecision(3)}m`;
+    return `${+(m / 1000).toPrecision(3)}km`;
+};
+
+const fmtCount = (n: number): string => {
+    if (!Number.isFinite(n)) return `${n}`;
+    const abs = Math.abs(n);
+    if (abs < 1000) return `${n}`;
+    if (abs < 1e6) return `${+(n / 1e3).toPrecision(3)}K`;
+    if (abs < 1e9) return `${+(n / 1e6).toPrecision(3)}M`;
+    if (abs < 1e12) return `${+(n / 1e9).toPrecision(3)}B`;
+    return `${+(n / 1e12).toPrecision(3)}T`;
+};
+
 const fmtArgs = (args: any[]): string => {
     return args.map((a) => {
         if (a instanceof Error) return a.stack ?? a.message;
@@ -620,6 +640,8 @@ type Logger = typeof logger;
 
 export {
     fmtBytes,
+    fmtCount,
+    fmtDistance,
     fmtTime,
     indent,
     isPhaseHeader,

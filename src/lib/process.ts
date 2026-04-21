@@ -1,9 +1,8 @@
 import { Vec3 } from 'playcanvas';
 
-import { Column, DataTable, getSHBands, simplifyGaussians, sortMortonOrder, computeSummary, type SummaryData, convertToSpace } from './data-table';
+import { Column, DataTable, simplifyGaussians, sortMortonOrder, computeSummary, type SummaryData, convertToSpace } from './data-table';
 import type { DeviceCreator } from './types';
 import { logger, Transform } from './utils';
-import { fmtBytes } from './utils/logger';
 import { filterCluster as filterClusterFn } from './voxel/filter-cluster';
 import { filterFloaters as filterFloatersFn } from './voxel/filter-floaters';
 
@@ -274,10 +273,27 @@ const isTransformColumn = (name: string): boolean => transformColumnNames.has(na
 // camelCase → kebab-case (e.g. 'filterByValue' → 'filter-by-value').
 const kebab = (s: string): string => s.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`);
 
-const logSummary = (label: string, dataTable: DataTable, prevRows: number) => {
-    const removed = prevRows - dataTable.numRows;
-    const delta = removed > 0 ? ` (-${removed})` : '';
-    logger.info(`${label}: gaussians: ${dataTable.numRows}${delta}, SH bands: ${getSHBands(dataTable)}, mem: ${fmtBytes(dataTable.byteLength)}`);
+// Actions that emit their own delta line inside their group; suppress the
+// generic post-action delta for these.
+const selfReportingActions = new Set<ProcessAction['kind']>(['filterCluster']);
+
+// Describe a delta as "removed N" / "added N" relative to the previous count.
+const describeDelta = (delta: number, noun: string): string => {
+    return delta > 0 ? `removed ${delta} ${noun}` : `added ${-delta} ${noun}`;
+};
+
+const logDelta = (label: string, dataTable: DataTable, prevRows: number, prevColumnSig: string) => {
+    const removedRows = prevRows - dataTable.numRows;
+    const prevCols = prevColumnSig ? prevColumnSig.split(',').length : 0;
+    const removedCols = prevCols - dataTable.columnNames.length;
+
+    const parts: string[] = [];
+    if (removedRows !== 0) parts.push(describeDelta(removedRows, 'gaussians'));
+    if (removedCols !== 0) parts.push(describeDelta(removedCols, 'columns'));
+
+    if (parts.length > 0) {
+        logger.info(`${label}: ${parts.join(', ')}`);
+    }
 };
 
 const formatMarkdown = (summary: SummaryData): string => {
@@ -602,8 +618,9 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
             }
         }
 
-        if (result.numRows !== prevRows || result.columnNames.join(',') !== prevColumnSig) {
-            logSummary(kebab(processAction.kind), result, prevRows);
+        if (!selfReportingActions.has(processAction.kind) &&
+            (result.numRows !== prevRows || result.columnNames.join(',') !== prevColumnSig)) {
+            logDelta(kebab(processAction.kind), result, prevRows, prevColumnSig);
         }
     }
 

@@ -1,4 +1,4 @@
-import { dirname, resolve } from 'pathe';
+import { basename, dirname, resolve } from 'pathe';
 import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { writeSog } from './write-sog.js';
@@ -172,8 +172,6 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
         // ensure output folder exists before any files are written
         await fs.mkdir(dirname(pathname));
 
-        logger.debug(`writing '${pathname}'`);
-
         await writeSog({
             filename: pathname,
             dataTable: envDataTable,
@@ -281,9 +279,15 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
     };
 
     // write lod-meta.json
-    const writer = await fs.createWriter(filename);
-    writer.write((new TextEncoder()).encode(JSON.stringify(meta, replacer)));
-    await writer.close();
+    const metaBar = logger.bar(basename(filename), 1);
+    try {
+        const writer = await fs.createWriter(filename);
+        writer.write((new TextEncoder()).encode(JSON.stringify(meta, replacer)));
+        await writer.close();
+        metaBar.tick(1);
+    } finally {
+        metaBar.end();
+    }
 
     // write file units
     for (const [lodValue, fileUnits] of lodFiles) {
@@ -314,8 +318,6 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
             for (let j = 0; j < indices.length; ++j) {
                 indices[j] = j;
             }
-
-            logger.debug(`writing '${pathname}'`);
 
             // write file unit to sog
             await writeSog({
