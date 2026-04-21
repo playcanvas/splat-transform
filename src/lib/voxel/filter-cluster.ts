@@ -24,7 +24,7 @@ import { alignGridBounds, voxelizeToBuffer } from './voxelize';
 import { DataTable } from '../data-table';
 import type { DeviceCreator } from '../types';
 import { logger } from '../utils';
-import { fmtCount, fmtDistance } from '../utils/logger';
+import { fmtCount, fmtDistance } from '../utils/fmt';
 
 /**
  * Build an inverted SparseVoxelGrid from a BlockMaskBuffer for flood-filling
@@ -174,7 +174,7 @@ const filterCluster = async (
     const finish = (out: DataTable): DataTable => {
         const removed = numRows - out.numRows;
         if (removed > 0) {
-            logger.info(`removed ${removed} gaussians`);
+            logger.info(`removed ${fmtCount(removed)} gaussians`);
         }
         g.end();
         return out;
@@ -254,7 +254,7 @@ const filterCluster = async (
             logger.warn(`seed (${seed.x.toFixed(2)}, ${seed.y.toFixed(2)}, ${seed.z.toFixed(2)}) unoccupied; resolved to nearest at (${worldX.toFixed(2)}, ${worldY.toFixed(2)}, ${worldZ.toFixed(2)})`);
         }
 
-        logger.info(`cluster is ${ccSet.size} of ${buffer.count} blocks`);
+        logger.info(`cluster is ${fmtCount(ccSet.size)} of ${fmtCount(buffer.count)} blocks`);
 
         // Build lookup from visited voxels only (not all original voxels in ccSet blocks).
         // Every visited voxel is originally-occupied (the BFS only traverses through them),

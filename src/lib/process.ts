@@ -2,7 +2,7 @@ import { Vec3 } from 'playcanvas';
 
 import { Column, DataTable, simplifyGaussians, sortMortonOrder, computeSummary, type SummaryData, convertToSpace } from './data-table';
 import type { DeviceCreator } from './types';
-import { logger, Transform } from './utils';
+import { fmtCount, logger, Transform } from './utils';
 import { filterCluster as filterClusterFn } from './voxel/filter-cluster';
 import { filterFloaters as filterFloatersFn } from './voxel/filter-floaters';
 
@@ -272,7 +272,7 @@ const isTransformColumn = (name: string): boolean => transformColumnNames.has(na
 
 // Describe a delta as "removed N" / "added N" relative to the previous count.
 const describeDelta = (delta: number, noun: string): string => {
-    return delta > 0 ? `removed ${delta} ${noun}` : `added ${-delta} ${noun}`;
+    return delta > 0 ? `removed ${fmtCount(delta)} ${noun}` : `added ${fmtCount(-delta)} ${noun}`;
 };
 
 type LogGroup = ReturnType<typeof logger.group>;

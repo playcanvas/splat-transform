@@ -3,7 +3,11 @@ export { Column, DataTable, combine, convertToSpace, computeSummary, sortMortonO
 export type { TypedArray, ColumnType, Row, ColumnStats, SummaryData } from './data-table';
 
 // Utils
-export { PlainRenderer, Transform, logger, WebPCodec } from './utils';
+export {
+    fmtBytes, fmtCount, fmtDistance, fmtTime,
+    indent, isPhaseHeader, messageVisible, taskVisible,
+    logger, PlainRenderer, Transform, WebPCodec
+} from './utils';
 export type { Bar, Group, LogEvent, Logger, Renderer, Verbosity } from './utils';
 
 // High-level read/write
@@ -36,7 +40,7 @@ export type {
 
 // File system abstractions
 export { ReadStream, BufferedReadStream, MemoryReadFileSystem, UrlReadFileSystem, ZipReadFileSystem } from './io/read';
-export type { ReadSource, ReadFileSystem, ProgressCallback, ZipEntry } from './io/read';
+export type { ReadSource, ReadFileSystem, ProgressCallback } from './io/read';
 export { MemoryFileSystem, ZipFileSystem } from './io/write';
 export type { FileSystem, Writer } from './io/write';
 

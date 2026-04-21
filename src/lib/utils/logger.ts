@@ -1,3 +1,5 @@
+import { fmtTime } from './fmt';
+
 /**
  * Verbosity level controlling which messages reach the renderer.
  *
@@ -118,45 +120,6 @@ const messageVisible = (kind: MessageKind, v: Verbosity): boolean => {
 };
 
 const taskVisible = (v: Verbosity): boolean => verbosityRank[v] >= verbosityRank.normal;
-
-const fmtTime = (ms: number): string => {
-    if (!Number.isFinite(ms) || ms < 0) return `${ms}ms`;
-    if (ms < 60_000) return `${(ms / 1000).toFixed(3)}s`;
-
-    const h = Math.floor(ms / 3_600_000);
-    const m = Math.floor((ms % 3_600_000) / 60_000);
-    const s = ((ms % 60_000) / 1000).toFixed(3);
-
-    return h > 0 ? `${h}h${m}m${s}s` : `${m}m${s}s`;
-};
-
-const fmtBytes = (n: number): string => {
-    if (!Number.isFinite(n) || n < 0) return `${n}B`;
-    if (n < 1024) return `${n}B`;
-    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
-    if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)}MB`;
-    return `${(n / (1024 * 1024 * 1024)).toFixed(2)}GB`;
-};
-
-const fmtDistance = (m: number): string => {
-    if (!Number.isFinite(m)) return `${m}m`;
-    const abs = Math.abs(m);
-    if (abs === 0) return '0m';
-    if (abs < 0.01) return `${+(m * 1000).toPrecision(3)}mm`;
-    if (abs < 1) return `${+(m * 100).toPrecision(3)}cm`;
-    if (abs < 1000) return `${+m.toPrecision(3)}m`;
-    return `${+(m / 1000).toPrecision(3)}km`;
-};
-
-const fmtCount = (n: number): string => {
-    if (!Number.isFinite(n)) return `${n}`;
-    const abs = Math.abs(n);
-    if (abs < 1000) return `${n}`;
-    if (abs < 1e6) return `${+(n / 1e3).toPrecision(3)}K`;
-    if (abs < 1e9) return `${+(n / 1e6).toPrecision(3)}M`;
-    if (abs < 1e12) return `${+(n / 1e9).toPrecision(3)}B`;
-    return `${+(n / 1e12).toPrecision(3)}T`;
-};
 
 const fmtArgs = (args: any[]): string => {
     return args.map((a) => {
@@ -639,10 +602,6 @@ const logger = {
 type Logger = typeof logger;
 
 export {
-    fmtBytes,
-    fmtCount,
-    fmtDistance,
-    fmtTime,
     indent,
     isPhaseHeader,
     logger,

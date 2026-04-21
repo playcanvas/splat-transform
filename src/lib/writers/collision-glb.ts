@@ -1,6 +1,6 @@
 import type { Bounds } from '../data-table';
 import { marchingCubes, simplifyMesh } from '../mesh';
-import { logger } from '../utils';
+import { fmtCount, logger } from '../utils';
 import { BlockMaskBuffer } from '../voxel/block-mask-buffer';
 
 /**
@@ -143,8 +143,8 @@ const buildCollisionMesh = async (
 
     const extractSub = logger.group('Extracting');
     const rawMesh = marchingCubes(blockBuffer, gridBounds, voxelResolution);
-    logger.info(`raw vertices: ${rawMesh.positions.length / 3}`);
-    logger.info(`raw triangles: ${rawMesh.indices.length / 3}`);
+    logger.info(`raw vertices: ${fmtCount(rawMesh.positions.length / 3)}`);
+    logger.info(`raw triangles: ${fmtCount(rawMesh.indices.length / 3)}`);
 
     if (rawMesh.indices.length < 3) {
         logger.warn('no triangles generated, skipping GLB output');
@@ -159,8 +159,8 @@ const buildCollisionMesh = async (
     const simplified = await simplifyMesh(rawMesh, errorFraction * voxelResolution);
 
     const reduction = (1 - simplified.indices.length / rawMesh.indices.length) * 100;
-    logger.info(`simplified vertices: ${simplified.positions.length / 3}`);
-    logger.info(`simplified triangles: ${simplified.indices.length / 3}`);
+    logger.info(`simplified vertices: ${fmtCount(simplified.positions.length / 3)}`);
+    logger.info(`simplified triangles: ${fmtCount(simplified.indices.length / 3)}`);
     logger.info(`reduction: ${reduction.toFixed(0)}%`);
     simplifySub.end();
 

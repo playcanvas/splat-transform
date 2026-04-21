@@ -1,7 +1,7 @@
 import { GraphicsDevice, WebgpuGraphicsDevice } from 'playcanvas';
 import { create, globals } from 'webgpu';
 
-import { logger } from '../lib/index';
+import { logger } from '../lib';
 
 const initializeGlobals = () => {
     Object.assign(globalThis, globals);

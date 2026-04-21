@@ -12,6 +12,9 @@ import { version } from '../../package.json';
 import {
     combine,
     DataTable,
+    fmtBytes,
+    fmtCount,
+    fmtTime,
     getInputFormat,
     getSHBands,
     readFile,
@@ -23,8 +26,7 @@ import {
     type FilterCluster,
     type Options as LibOptions,
     logger
-} from '../lib/index';
-import { fmtBytes, fmtTime } from '../lib/utils/logger';
+} from '../lib';
 
 /**
  * CLI-specific options extending library options.
@@ -789,7 +791,7 @@ const main = async () => {
                     throw new Error(`Unsupported data in file '${inputArg.filename}'`);
                 }
 
-                logger.info(`gaussians: ${dataTable.numRows}, SH bands: ${getSHBands(dataTable)}, mem: ${fmtBytes(dataTable.byteLength)}`);
+                logger.info(`gaussians: ${fmtCount(dataTable.numRows)}, SH bands: ${getSHBands(dataTable)}, mem: ${fmtBytes(dataTable.byteLength)}`);
 
                 const isEnv = dataTable.hasColumn('lod') && dataTable.getColumnByName('lod').data.every(v => v === -1);
                 if (!isEnv) {
@@ -826,7 +828,7 @@ const main = async () => {
         if (!isNullOutput) {
             const phase = logger.group(`Output ${outputArg.filename}`, firstPhase ? { total: phaseTotal } : undefined);
             firstPhase = false;
-            logger.info(`gaussians: ${dataTable.numRows}, SH bands: ${getSHBands(dataTable)}, mem: ${fmtBytes(dataTable.byteLength)}`);
+            logger.info(`gaussians: ${fmtCount(dataTable.numRows)}, SH bands: ${getSHBands(dataTable)}, mem: ${fmtBytes(dataTable.byteLength)}`);
             await writeFile({
                 filename: outputFilename,
                 outputFormat: outputFormat!,

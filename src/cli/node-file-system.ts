@@ -2,8 +2,15 @@ import { randomBytes } from 'crypto';
 import { FileHandle, mkdir, open, rename, stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 
-import { type ReadFileSystem, type ProgressCallback, type ReadSource, ReadStream, BufferedReadStream } from '../lib/io/read';
-import { type FileSystem, type Writer } from '../lib/io/write';
+import {
+    BufferedReadStream,
+    ReadStream,
+    type FileSystem,
+    type ProgressCallback,
+    type ReadFileSystem,
+    type ReadSource,
+    type Writer
+} from '../lib';
 
 // ============================================================================
 // Read implementations

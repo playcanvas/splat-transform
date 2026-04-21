@@ -13,7 +13,7 @@ import { alignGridBounds, voxelizeToBuffer } from './voxelize';
 import { DataTable } from '../data-table';
 import type { DeviceCreator } from '../types';
 import { logger } from '../utils';
-import { fmtCount, fmtDistance } from '../utils/logger';
+import { fmtCount, fmtDistance } from '../utils/fmt';
 
 /**
  * Remove Gaussians that don't meaningfully contribute to any solid voxel.
@@ -57,7 +57,7 @@ const filterFloaters = async (
     const finish = (out: DataTable): DataTable => {
         const removed = numRows - out.numRows;
         if (removed > 0) {
-            logger.info(`removed ${removed} gaussians`);
+            logger.info(`removed ${fmtCount(removed)} gaussians`);
         }
         g.end();
         return out;
@@ -94,7 +94,7 @@ const filterFloaters = async (
 
         const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
 
-        logger.info(`occupied blocks: ${lookup.solidSet.size + lookup.mixedMap.size} (${lookup.solidSet.size} solid, ${lookup.mixedMap.size} mixed)`);
+        logger.info(`occupied blocks: ${fmtCount(lookup.solidSet.size + lookup.mixedMap.size)} (${fmtCount(lookup.solidSet.size)} solid, ${fmtCount(lookup.mixedMap.size)} mixed)`);
 
         const gaussianCols = buildGaussianColumns(ctx);
         const keepIndices: number[] = [];

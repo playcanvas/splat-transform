@@ -6,7 +6,7 @@ import { GpuVoxelization } from '../gpu';
 import { type FileSystem, writeFile } from '../io/write';
 import { GaussianBVH } from '../spatial';
 import type { DeviceCreator } from '../types';
-import { logger, Transform } from '../utils';
+import { fmtBytes, fmtCount, logger, Transform } from '../utils';
 import { buildSparseOctree, type SparseOctree } from './sparse-octree';
 import {
     filterAndFillBlocks,
@@ -284,7 +284,7 @@ const writeOctreeFiles = async (
     view.set(octree.leafData, octree.nodes.length);
 
     await writeFile(fs, binFilename, new Uint8Array(buffer));
-    logger.info(`binary octree: ${binFilename} (${(binarySize / 1024).toFixed(1)} KB)`);
+    logger.info(`binary octree: ${binFilename} (${fmtBytes(binarySize)})`);
 };
 
 /**
@@ -457,8 +457,8 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         buffer.clear();
 
         logger.info(`octree depth: ${octree.treeDepth}`);
-        logger.info(`interior nodes: ${octree.numInteriorNodes}`);
-        logger.info(`mixed leaves: ${octree.numMixedLeaves}`);
+        logger.info(`interior nodes: ${fmtCount(octree.numInteriorNodes)}`);
+        logger.info(`mixed leaves: ${fmtCount(octree.numMixedLeaves)}`);
 
         const writingSub = logger.group('Writing');
         await writeOctreeFiles(fs, filename, octree);
@@ -466,11 +466,11 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         if (glbBytes) {
             const glbFilename = filename.replace('.voxel.json', '.collision.glb');
             await writeFile(fs, glbFilename, glbBytes);
-            logger.info(`collision mesh: ${glbFilename} (${(glbBytes.length / 1024).toFixed(1)} KB)`);
+            logger.info(`collision mesh: ${glbFilename} (${fmtBytes(glbBytes.length)})`);
         }
 
         const totalBytes = (octree.nodes.length + octree.leafData.length) * 4;
-        logger.info(`octree total size: ${(totalBytes / 1024).toFixed(1)} KB`);
+        logger.info(`octree total size: ${fmtBytes(totalBytes)}`);
         writingSub.end();
 
         g.end();

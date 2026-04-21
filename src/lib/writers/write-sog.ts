@@ -5,7 +5,7 @@ import { Column, DataTable, sortMortonOrder, convertToSpace, getSHBands, shRestN
 import { type FileSystem, writeFile, ZipFileSystem } from '../io/write';
 import { kmeans, quantize1d } from '../spatial';
 import type { DeviceCreator } from '../types';
-import { logger, sigmoid, Transform, WebPCodec } from '../utils';
+import { fmtBytes, logger, sigmoid, Transform, WebPCodec } from '../utils';
 
 const calcMinMax = (dataTable: DataTable, columnNames: string[], indices: Uint32Array) => {
     const columns = columnNames.map(name => dataTable.getColumnByName(name));
@@ -85,20 +85,16 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     const writeWebp = async (filename: string, data: Uint8Array, w = width, h = height) => {
         const pathname = zipFs ? filename : resolve(dirname(outputFilename), filename);
 
-        const bar = logger.bar(filename, 1);
-        try {
-            // construct the encoder on first use
-            if (!webPCodec) {
-                webPCodec = await WebPCodec.create();
-            }
-
-            const webp = await webPCodec.encodeLosslessRGBA(data, w, h);
-
-            await writeFile(outputFs, pathname, webp);
-            bar.tick(1);
-        } finally {
-            bar.end();
+        // construct the encoder on first use
+        if (!webPCodec) {
+            webPCodec = await WebPCodec.create();
         }
+
+        const webp = await webPCodec.encodeLosslessRGBA(data, w, h);
+
+        logger.info(`writing ${filename} (${w} x ${h}, ${fmtBytes(webp.byteLength)})`);
+
+        await writeFile(outputFs, pathname, webp);
     };
 
     const writeTableData = (filename: string, dataTable: DataTable, w = width, h = height) => {
@@ -343,13 +339,10 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     const metaJson = (new TextEncoder()).encode(JSON.stringify(meta));
 
     const metaFilename = zipFs ? 'meta.json' : outputFilename;
-    const metaBar = logger.bar('meta.json', 1);
-    try {
-        await writeFile(outputFs, metaFilename, metaJson);
-        metaBar.tick(1);
-    } finally {
-        metaBar.end();
-    }
+
+    logger.info(`writing ${metaFilename}`);
+
+    await writeFile(outputFs, metaFilename, metaJson);
 
     // Close zip archive if bundling
     if (zipFs) {

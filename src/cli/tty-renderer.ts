@@ -1,14 +1,16 @@
 import process from 'node:process';
 
-import type { LogEvent, Renderer, Verbosity } from '../lib/index';
 import {
     fmtBytes,
     fmtTime,
     indent,
     isPhaseHeader,
     messageVisible,
-    taskVisible
-} from '../lib/utils/logger';
+    taskVisible,
+    type LogEvent,
+    type Renderer,
+    type Verbosity
+} from '../lib';
 
 interface WriteStreamLike {
     write(chunk: string): unknown;
