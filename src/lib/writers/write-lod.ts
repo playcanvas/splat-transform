@@ -172,6 +172,7 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
         // ensure output folder exists before any files are written
         await fs.mkdir(dirname(pathname));
 
+        const g = logger.group('env/meta.json');
         await writeSog({
             filename: pathname,
             dataTable: envDataTable,
@@ -179,6 +180,7 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
             iterations,
             createDevice
         }, fs);
+        g.end();
     }
 
     // construct a kd-tree based on centroids from all lods
@@ -320,6 +322,7 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
             }
 
             // write file unit to sog
+            const g = logger.group(`${lodValue}_${i}/meta.json`);
             await writeSog({
                 filename: pathname,
                 dataTable: unitDataTable,
@@ -328,6 +331,7 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
                 iterations,
                 createDevice
             }, fs);
+            g.end();
         }
     }
 };
