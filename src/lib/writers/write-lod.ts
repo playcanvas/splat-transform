@@ -264,22 +264,39 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
 
     const writingGroup = logger.group('Writing');
 
+    // count the total number of sog units we'll write so the per-sog groups
+    // can render as a numbered series
+    let sogTotal = 0;
+    if (envDataTable?.numRows > 0) sogTotal += 1;
+    for (const [, fileUnits] of lodFiles) {
+        for (const fu of fileUnits) {
+            if (fu.length > 0) sogTotal += 1;
+        }
+    }
+
+    let firstGroup = true;
+
     // write the environment sog
     if (envDataTable?.numRows > 0) {
-        const envPathname = resolve(outputDir, 'env/meta.json');
+        const envGroup = logger.group('env', { total: sogTotal });
+        firstGroup = false;
+        try {
+            const envPathname = resolve(outputDir, 'env/meta.json');
 
-        // ensure output folder exists before any files are written
-        await fs.mkdir(dirname(envPathname));
+            // ensure output folder exists before any files are written
+            await fs.mkdir(dirname(envPathname));
 
-        await writeSog({
-            filename: envPathname,
-            dataTable: envDataTable,
-            bundle: false,
-            iterations,
-            createDevice,
-            omitWritingGroup: true,
-            pathContext: outputDir
-        }, fs);
+            await writeSog({
+                filename: envPathname,
+                dataTable: envDataTable,
+                bundle: false,
+                iterations,
+                createDevice,
+                omitWritingGroup: true
+            }, fs);
+        } finally {
+            envGroup.end();
+        }
     }
 
     // write lod-meta.json
@@ -298,38 +315,47 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
                 continue;
             }
 
-            // ensure output folder exists before any files are written
-            const pathname = resolve(outputDir, `${lodValue}_${i}/meta.json`);
-            await fs.mkdir(dirname(pathname));
+            const groupName = `${lodValue}_${i}`;
+            const unitGroup = firstGroup ?
+                logger.group(groupName, { total: sogTotal }) :
+                logger.group(groupName);
+            firstGroup = false;
 
-            // generate an ordering for each subunit and append it to the unit's indices
-            const totalIndices = fileUnit.reduce((acc, curr) => acc + curr.length, 0);
-            const indices = new Uint32Array(totalIndices);
-            for (let j = 0, offset = 0; j < fileUnit.length; ++j) {
-                indices.set(fileUnit[j], offset);
-                sortMortonOrder(dataTable, indices.subarray(offset, offset + fileUnit[j].length));
-                offset += fileUnit[j].length;
+            try {
+                // ensure output folder exists before any files are written
+                const pathname = resolve(outputDir, `${lodValue}_${i}/meta.json`);
+                await fs.mkdir(dirname(pathname));
+
+                // generate an ordering for each subunit and append it to the unit's indices
+                const totalIndices = fileUnit.reduce((acc, curr) => acc + curr.length, 0);
+                const indices = new Uint32Array(totalIndices);
+                for (let j = 0, offset = 0; j < fileUnit.length; ++j) {
+                    indices.set(fileUnit[j], offset);
+                    sortMortonOrder(dataTable, indices.subarray(offset, offset + fileUnit[j].length));
+                    offset += fileUnit[j].length;
+                }
+
+                // construct a new table from the ordered data
+                const unitDataTable = dataTable.clone({ rows: indices });
+
+                // reset indices since we've generated ordering on the individual subunits
+                for (let j = 0; j < indices.length; ++j) {
+                    indices[j] = j;
+                }
+
+                // write file unit to sog
+                await writeSog({
+                    filename: pathname,
+                    dataTable: unitDataTable,
+                    indices,
+                    bundle: false,
+                    iterations,
+                    createDevice,
+                    omitWritingGroup: true
+                }, fs);
+            } finally {
+                unitGroup.end();
             }
-
-            // construct a new table from the ordered data
-            const unitDataTable = dataTable.clone({ rows: indices });
-
-            // reset indices since we've generated ordering on the individual subunits
-            for (let j = 0; j < indices.length; ++j) {
-                indices[j] = j;
-            }
-
-            // write file unit to sog
-            await writeSog({
-                filename: pathname,
-                dataTable: unitDataTable,
-                indices,
-                bundle: false,
-                iterations,
-                createDevice,
-                omitWritingGroup: true,
-                pathContext: outputDir
-            }, fs);
         }
     }
 

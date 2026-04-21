@@ -1,4 +1,4 @@
-import { basename, dirname, relative, resolve } from 'pathe';
+import { basename, dirname, resolve } from 'pathe';
 
 import { version } from '../../../package.json';
 import { Column, DataTable, sortMortonOrder, convertToSpace, getSHBands, shRestNames } from '../data-table';
@@ -62,11 +62,6 @@ type WriteSogOptions = {
     // computation step whose outputs are intermediate (e.g. encoding into
     // memory for HTML bundling).
     silent?: boolean;
-    // Optional directory used as the root for displaying file paths in log
-    // entries. When set, written paths are logged relative to this directory
-    // so sub-SOG calls (e.g. from LOD) show useful prefixes like
-    // `0_0/means_l.webp` rather than colliding on basenames.
-    pathContext?: string;
 };
 
 /**
@@ -81,7 +76,7 @@ type WriteSogOptions = {
  * @ignore
  */
 const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
-    const { filename: outputFilename, bundle, iterations, createDevice, omitWritingGroup, silent, pathContext } = options;
+    const { filename: outputFilename, bundle, iterations, createDevice, omitWritingGroup, silent } = options;
     const dataTable = convertToSpace(options.dataTable, Transform.PLY);
 
     // initialize output stream - use ZipFileSystem for bundled output. The
@@ -116,8 +111,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
         // For bundled output the per-file sizes are an internal detail; we
         // report a single bundle size after the archive closes.
         if (!silent && !zipFs) {
-            const displayName = pathContext ? relative(pathContext, pathname) : filename;
-            logger.info(`${displayName} (${fmtBytes(webp.byteLength)})`);
+            logger.info(`${filename} (${fmtBytes(webp.byteLength)})`);
         }
     };
 
@@ -369,10 +363,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     await writeFile(outputFs, metaFilename, metaJson);
 
     if (!silent && !zipFs) {
-        const metaDisplayName = pathContext ?
-            relative(pathContext, outputFilename) :
-            basename(outputFilename);
-        logger.info(`${metaDisplayName} (${fmtBytes(metaJson.byteLength)})`);
+        logger.info(`${basename(outputFilename)} (${fmtBytes(metaJson.byteLength)})`);
     }
 
     // Close zip archive if bundling
@@ -381,10 +372,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     }
 
     if (!silent && bundleWriter) {
-        const bundleDisplayName = pathContext ?
-            relative(pathContext, outputFilename) :
-            basename(outputFilename);
-        logger.info(`${bundleDisplayName} (${fmtBytes(bundleWriter.bytesWritten)})`);
+        logger.info(`${basename(outputFilename)} (${fmtBytes(bundleWriter.bytesWritten)})`);
     }
 
     writingGroup?.end();
