@@ -270,30 +270,24 @@ const transformColumnNames = new Set([
 
 const isTransformColumn = (name: string): boolean => transformColumnNames.has(name) || /^f_rest_\d+$/.test(name);
 
-// camelCase → kebab-case (e.g. 'filterByValue' → 'filter-by-value').
-const kebab = (s: string): string => s.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`);
-
-// Actions that emit their own delta line inside their group; suppress the
-// generic post-action delta for these.
-const selfReportingActions = new Set<ProcessAction['kind']>(['filterCluster']);
-
 // Describe a delta as "removed N" / "added N" relative to the previous count.
 const describeDelta = (delta: number, noun: string): string => {
     return delta > 0 ? `removed ${delta} ${noun}` : `added ${-delta} ${noun}`;
 };
 
-const logDelta = (label: string, dataTable: DataTable, prevRows: number, prevColumnSig: string) => {
-    const removedRows = prevRows - dataTable.numRows;
-    const prevCols = prevColumnSig ? prevColumnSig.split(',').length : 0;
-    const removedCols = prevCols - dataTable.columnNames.length;
+type LogGroup = ReturnType<typeof logger.group>;
 
+// Close a filter's group, emitting a single result line that summarizes the
+// row/column delta. Each filter case opens its own group at the top; this is
+// the symmetric "finish" that runs at the bottom.
+const endFilterGroup = (g: LogGroup, prev: DataTable, next: DataTable) => {
+    const removedRows = prev.numRows - next.numRows;
+    const removedCols = prev.columnNames.length - next.columnNames.length;
     const parts: string[] = [];
     if (removedRows !== 0) parts.push(describeDelta(removedRows, 'gaussians'));
     if (removedCols !== 0) parts.push(describeDelta(removedCols, 'columns'));
-
-    if (parts.length > 0) {
-        logger.info(`${label}: ${parts.join(', ')}`);
-    }
+    logger.info(parts.length > 0 ? parts.join(', ') : 'no change');
+    g.end();
 };
 
 const formatMarkdown = (summary: SummaryData): string => {
@@ -389,8 +383,6 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
 
     for (let i = 0; i < processActions.length; i++) {
         const processAction = processActions[i];
-        const prevRows = result.numRows;
-        const prevColumnSig = result.columnNames.join(',');
 
         switch (processAction.kind) {
             case 'translate':
@@ -407,6 +399,8 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 result.transform = new Transform(undefined, undefined, processAction.value).mul(result.transform);
                 break;
             case 'filterNaN': {
+                const g = logger.group('Filter NaN');
+                const prev = result;
                 const infOk = new Set(['opacity']);
                 const negInfOk = new Set(['scale_0', 'scale_1', 'scale_2']);
                 const columnNames = result.columnNames;
@@ -423,9 +417,12 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                     return true;
                 };
                 result = filter(result, predicate);
+                endFilterGroup(g, prev, result);
                 break;
             }
             case 'filterByValue': {
+                const g = logger.group('Filter by value');
+                const prev = result;
                 const { comparator } = processAction;
                 let { columnName, value } = processAction;
 
@@ -459,9 +456,12 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                     throw new Error(`filterByValue: unknown comparator '${comparator}', expected one of: ${Object.keys(Predicates).join(', ')}`);
                 }
                 result = filter(result, predicate);
+                endFilterGroup(g, prev, result);
                 break;
             }
             case 'filterBands': {
+                const g = logger.group('Filter bands');
+                const prev = result;
                 const currentTable = result;
                 const inputBands = { '9': 1, '24': 2, '-1': 3 }[shNames.findIndex(v => !currentTable.hasColumn(v))] ?? 0;
                 const outputBands = processAction.value;
@@ -487,9 +487,12 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
 
                     }).filter(c => c !== null), result.transform);
                 }
+                endFilterGroup(g, prev, result);
                 break;
             }
             case 'filterBox': {
+                const g = logger.group('Filter box');
+                const prev = result;
                 const { min, max } = processAction;
 
                 if (result.transform.isIdentity()) {
@@ -534,9 +537,12 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                     };
                     result = filter(result, predicate);
                 }
+                endFilterGroup(g, prev, result);
                 break;
             }
             case 'filterSphere': {
+                const g = logger.group('Filter sphere');
+                const prev = result;
                 const rawCenter = processAction.center.clone();
                 let rawRadius = processAction.radius;
                 if (!result.transform.isIdentity()) {
@@ -549,6 +555,7 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                     return (x - rawCenter.x) ** 2 + (y - rawCenter.y) ** 2 + (z - rawCenter.z) ** 2 < radiusSq;
                 };
                 result = filter(result, predicate);
+                endFilterGroup(g, prev, result);
                 break;
             }
             case 'param': {
@@ -618,10 +625,6 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
             }
         }
 
-        if (!selfReportingActions.has(processAction.kind) &&
-            (result.numRows !== prevRows || result.columnNames.join(',') !== prevColumnSig)) {
-            logDelta(kebab(processAction.kind), result, prevRows, prevColumnSig);
-        }
     }
 
     return result;
