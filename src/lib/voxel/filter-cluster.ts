@@ -291,7 +291,6 @@ const filterCluster = async (
         return finish(dataTable.clone({ rows: keepIndices }));
     } catch (e) {
         ctx?.gpuVoxelization?.destroy();
-        g.end();
         throw e;
     }
 };

@@ -366,16 +366,19 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
 
     const g = logger.group('Build voxels');
 
-    const bvhSub = logger.group('Building BVH');
-    logger.debug(`scene extents: (${bounds.min.x.toFixed(2)},${bounds.min.y.toFixed(2)},${bounds.min.z.toFixed(2)}) - (${bounds.max.x.toFixed(2)},${bounds.max.y.toFixed(2)},${bounds.max.z.toFixed(2)})`);
-
-    const bvh = new GaussianBVH(pcDataTable, extentsResult.extents);
-    bvhSub.end();
-
-    const device = await createDevice();
-
-    let gpuVoxelization: GpuVoxelization | null = new GpuVoxelization(device);
+    // gpuVoxelization is the only resource not owned by a scope; its
+    // destruction is the sole job of the finally below. Open scopes on the
+    // error path are reaped by the embedder's logger.error() -> unwindAll.
+    let gpuVoxelization: GpuVoxelization | null = null;
     try {
+        const bvhSub = logger.group('Building BVH');
+        logger.debug(`scene extents: (${bounds.min.x.toFixed(2)},${bounds.min.y.toFixed(2)},${bounds.min.z.toFixed(2)}) - (${bounds.max.x.toFixed(2)},${bounds.max.y.toFixed(2)},${bounds.max.z.toFixed(2)})`);
+
+        const bvh = new GaussianBVH(pcDataTable, extentsResult.extents);
+        bvhSub.end();
+
+        const device = await createDevice();
+        gpuVoxelization = new GpuVoxelization(device);
         gpuVoxelization.uploadAllGaussians(pcDataTable, extentsResult.extents);
 
         // Align grid bounds to block boundaries BEFORE voxelization so the
@@ -469,12 +472,11 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         const totalBytes = (octree.nodes.length + octree.leafData.length) * 4;
         logger.info(`octree total size: ${(totalBytes / 1024).toFixed(1)} KB`);
         writingSub.end();
-    } catch (e) {
-        gpuVoxelization?.destroy();
-        throw e;
-    }
 
-    g.end();
+        g.end();
+    } finally {
+        gpuVoxelization?.destroy();
+    }
 };
 
 export { writeVoxel, type WriteVoxelOptions, type VoxelMetadata };
