@@ -123,7 +123,9 @@ class TtyRenderer implements Renderer {
                     if (!taskVisible(this.verbosity)) return;
                     const glyph = event.failed ? '\u2717' : '\u2713';
                     const suffix = event.failed ? ` (failed) ${fmtTime(event.durationMs)}` : ` ${fmtTime(event.durationMs)}`;
-                    this.write(`${indent(event.depth)}${glyph} ${event.name}${suffix}${this.memSuffix()}\n`);
+                    const numbered = event.index !== undefined && event.total !== undefined;
+                    const displayName = numbered ? `[${event.index}/${event.total}] ${event.name}` : event.name;
+                    this.write(`${indent(event.depth)}${glyph} ${displayName}${suffix}${this.memSuffix()}\n`);
                     return;
                 }
                 if (!taskVisible(this.verbosity)) return;

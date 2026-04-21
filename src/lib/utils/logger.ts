@@ -199,7 +199,9 @@ class PlainRenderer implements Renderer {
                     if (!taskVisible(this.verbosity)) return;
                     const glyph = event.failed ? '\u2717' : '\u2713';
                     const suffix = event.failed ? ` (failed) ${fmtTime(event.durationMs)}` : ` ${fmtTime(event.durationMs)}`;
-                    console.log(`${indent(event.depth)}${glyph} ${event.name}${suffix}`);
+                    const numbered = event.index !== undefined && event.total !== undefined;
+                    const displayName = numbered ? `[${event.index}/${event.total}] ${event.name}` : event.name;
+                    console.log(`${indent(event.depth)}${glyph} ${displayName}${suffix}`);
                     return;
                 }
                 if (!taskVisible(this.verbosity)) return;

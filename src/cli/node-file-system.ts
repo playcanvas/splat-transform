@@ -147,8 +147,15 @@ class FileWriter implements Writer {
 
     constructor(fileHandle: FileHandle, filename: string, tmpFilename: string) {
         this.write = async (data: Uint8Array) => {
-            await fileHandle.write(data);
-            this.bytesWritten += data.byteLength;
+            let offset = 0;
+            while (offset < data.byteLength) {
+                const { bytesWritten } = await fileHandle.write(data, offset, data.byteLength - offset);
+                if (bytesWritten === 0) {
+                    throw new Error('Failed to write all data to file.');
+                }
+                offset += bytesWritten;
+                this.bytesWritten += bytesWritten;
+            }
         };
 
         this.close = async () => {

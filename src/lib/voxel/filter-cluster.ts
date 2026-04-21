@@ -23,8 +23,7 @@ import {
 import { alignGridBounds, voxelizeToBuffer } from './voxelize';
 import { DataTable } from '../data-table';
 import type { DeviceCreator } from '../types';
-import { logger } from '../utils';
-import { fmtCount, fmtDistance } from '../utils/fmt';
+import { fmtCount, fmtDistance, logger } from '../utils';
 
 /**
  * Build an inverted SparseVoxelGrid from a BlockMaskBuffer for flood-filling
