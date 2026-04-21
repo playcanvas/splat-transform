@@ -769,8 +769,10 @@ const main = async () => {
             const readFilename = inputFormat === 'mjs' ? `file://${filename}` : filename;
 
             // Per-file progress bars are drawn by the readers themselves
-            // (see lib/read.ts and the SOG/LCC readers). The CLI just kicks
-            // off the read inside the Input phase scope.
+            // (see lib/read.ts and the SOG/LCC readers). The CLI wraps them
+            // in a "Reading" group so multi-file formats like SOG render as
+            // a coherent block under the Input phase.
+            const readingGroup = logger.group('Reading');
             const dataTables = await readFile({
                 filename: readFilename,
                 inputFormat,
@@ -778,6 +780,7 @@ const main = async () => {
                 params,
                 fileSystem: new NodeReadFileSystem()
             });
+            readingGroup.end();
 
             for (let i = 0; i < dataTables.length; ++i) {
                 const dataTable = dataTables[i];
