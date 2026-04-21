@@ -1,9 +1,9 @@
 import { Vec3 } from 'playcanvas';
 
 import { Column, DataTable } from '../data-table';
-import { dirname, join, ReadFileSystem, ReadSource, readFile } from '../io/read';
+import { CombineProgress, dirname, join, type ProgressCallback, ReadFileSystem, ReadSource, readFile } from '../io/read';
 import { Options } from '../types';
-import { Transform } from '../utils';
+import { logger, Transform } from '../utils';
 
 const kSH_C0 = 0.28209479177387814;
 const SQRT_2 = 1.414213562373095;
@@ -388,10 +388,13 @@ const deserializeEnvironment = (raw: Uint8Array, compressInfo: CompressInfo, has
  * @param fileSystem - File system for reading the LCC files.
  * @param filename - Path to the meta.lcc file.
  * @param options - Options including LOD selection via `lodSelect`.
+ * @param onProgress - Optional aggregate progress callback for the payload reads.
  * @returns Promise resolving to an array of DataTables (combined LODs + environment).
  * @ignore
  */
-const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Options): Promise<DataTable[]> => {
+const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Options, onProgress?: ProgressCallback): Promise<DataTable[]> => {
+    // meta.lcc is read off-bar (small JSON) so it does not contribute to the
+    // aggregate total.
     const lccData = await readFile(fileSystem, filename);
     const lccText = new TextDecoder().decode(lccData);
     const lccJson = JSON.parse(lccText);
@@ -420,9 +423,36 @@ const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Op
     const baseDir = dirname(filename);
     const relatedFilename = (name: string) => (baseDir ? join(baseDir, name) : name);
 
+    // index.bin is read off-bar (small) so it does not contribute to the
+    // aggregate total.
     const indexData = await readFile(fileSystem, relatedFilename('index.bin'));
-    const dataSource = await fileSystem.createSource(relatedFilename('data.bin'));
-    const shSource = hasSH ? await fileSystem.createSource(relatedFilename('shcoef.bin')) : null;
+
+    // Open the large payload sources, each driving its own per-file progress
+    // bar. The optional `onProgress` callback receives the combined stream.
+    const payloadCount = hasSH ? 2 : 1;
+    const combine = onProgress ? new CombineProgress(payloadCount, onProgress) : undefined;
+
+    const openWithBar = async (name: string): Promise<{ source: ReadSource; endBar: () => void }> => {
+        const bar = logger.bar(name, 100);
+        let prev = 0;
+        const aggCb = combine?.track(name);
+        const source = await fileSystem.createSource(relatedFilename(name), (loaded, total) => {
+            aggCb?.(loaded, total);
+            if (!total) return;
+            const ticks = Math.floor((loaded / total) * 100);
+            const delta = ticks - prev;
+            prev = ticks;
+            if (delta > 0) bar.tick(delta);
+        });
+        return { source, endBar: () => bar.end() };
+    };
+
+    const [dataOpened, shOpened] = await Promise.all([
+        openWithBar('data.bin'),
+        hasSH ? openWithBar('shcoef.bin') : Promise.resolve(null)
+    ]);
+    const dataSource = dataOpened.source;
+    const shSource = shOpened ? shOpened.source : null;
 
     const unitInfos: LccUnitInfo[] = parseIndexBin(indexData.buffer.slice(indexData.byteOffset, indexData.byteOffset + indexData.byteLength) as ArrayBuffer, lccJson);
 
@@ -460,8 +490,10 @@ const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Op
         }
     } finally {
         dataSource.close();
-        if (shSource) {
+        dataOpened.endBar();
+        if (shSource && shOpened) {
             shSource.close();
+            shOpened.endBar();
         }
     }
 

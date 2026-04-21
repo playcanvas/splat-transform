@@ -1,8 +1,37 @@
 import { DataTable } from './data-table';
-import { ReadFileSystem, ZipReadFileSystem } from './io/read';
+import { basename, type ProgressCallback, type ReadSource, ReadFileSystem, ZipReadFileSystem } from './io/read';
 import { readKsplat, readLcc, readMjs, readPly, readSog, readSplat, readSpz } from './readers';
 import { Options, Param } from './types';
 import { logger } from './utils';
+
+/**
+ * Open a single source while driving a per-file progress bar named after the
+ * file's basename. The optional `onProgress` callback is also forwarded so
+ * library consumers receive the same `(loaded, total)` stream.
+ *
+ * @param fileSystem - File system to open the source on.
+ * @param filename - Path to the file to open.
+ * @param onProgress - Optional callback invoked with `(loaded, total)` from
+ * the source's read events.
+ * @returns The opened source and a function to end the associated bar.
+ */
+const openWithBar = async (
+    fileSystem: ReadFileSystem,
+    filename: string,
+    onProgress?: ProgressCallback
+): Promise<{ source: ReadSource; endBar: () => void }> => {
+    const bar = logger.bar(basename(filename), 100);
+    let prev = 0;
+    const source = await fileSystem.createSource(filename, (loaded, total) => {
+        onProgress?.(loaded, total);
+        if (!total) return;
+        const ticks = Math.floor((loaded / total) * 100);
+        const delta = ticks - prev;
+        prev = ticks;
+        if (delta > 0) bar.tick(delta);
+    });
+    return { source, endBar: () => bar.end() };
+};
 
 /**
  * Supported input file formats for Gaussian splat data.
@@ -66,6 +95,8 @@ type ReadFileOptions = {
     params: Param[];
     /** File system abstraction for reading files. */
     fileSystem: ReadFileSystem;
+    /** Optional callback for read progress reporting. */
+    onProgress?: ProgressCallback;
 };
 
 /**
@@ -93,7 +124,7 @@ type ReadFileOptions = {
  * ```
  */
 const readFile = async (readFileOptions: ReadFileOptions): Promise<DataTable[]> => {
-    const { filename, inputFormat, options, params, fileSystem } = readFileOptions;
+    const { filename, inputFormat, options, params, fileSystem, onProgress } = readFileOptions;
 
     let result: DataTable[];
 
@@ -104,22 +135,27 @@ const readFile = async (readFileOptions: ReadFileOptions): Promise<DataTable[]> 
     } else if (inputFormat === 'sog') {
         const lowerFilename = filename.toLowerCase();
         if (lowerFilename.endsWith('.sog')) {
-            const source = await fileSystem.createSource(filename);
+            // Outer .sog ZIP read drives a single bar named after the archive;
+            // inner readSog runs against ZipReadFileSystem with per-file bars
+            // suppressed (the actual disk reads are tracked by the outer bar).
+            const { source, endBar } = await openWithBar(fileSystem, filename, onProgress);
             const zipFs = new ZipReadFileSystem(source);
             try {
-                result = [await readSog(zipFs, 'meta.json')];
+                result = [await readSog(zipFs, 'meta.json', undefined, false)];
             } finally {
                 zipFs.close();
+                endBar();
             }
         } else {
-            result = [await readSog(fileSystem, filename)];
+            // Loose SOG: reader draws one bar per payload file.
+            result = [await readSog(fileSystem, filename, onProgress)];
         }
     } else if (inputFormat === 'lcc') {
-        // LCC uses ReadFileSystem for multi-file access
-        result = await readLcc(fileSystem, filename, options);
+        // LCC reader draws bars for its large payload files (data.bin, shcoef.bin).
+        result = await readLcc(fileSystem, filename, options, onProgress);
     } else {
-        // All other formats use ReadSource
-        const source = await fileSystem.createSource(filename);
+        // Single-source formats: one bar named after the file.
+        const { source, endBar } = await openWithBar(fileSystem, filename, onProgress);
         try {
             if (inputFormat === 'ply') {
                 result = [await readPly(source)];
@@ -132,6 +168,7 @@ const readFile = async (readFileOptions: ReadFileOptions): Promise<DataTable[]> 
             }
         } finally {
             source.close();
+            endBar();
         }
     }
 

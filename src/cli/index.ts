@@ -746,9 +746,6 @@ const main = async () => {
 
         const processOptions = deviceCreator ? { createDevice: deviceCreator } : undefined;
 
-        // Create file system for reading (reused across all input files)
-        const nodeFs = new NodeReadFileSystem();
-
         // declare phase total: one Read phase per input + one Write phase
         const phaseTotal = inputArgs.length + (isNullOutput ? 0 : 1);
         let firstPhase = true;
@@ -756,7 +753,7 @@ const main = async () => {
         // read, filter, process input files
         const inputDataTables: DataTable[] = [];
         for (const inputArg of inputArgs) {
-            const phase = logger.group(`Read ${inputArg.filename}`, firstPhase ? { total: phaseTotal } : undefined);
+            const phase = logger.group(`Input ${inputArg.filename}`, firstPhase ? { total: phaseTotal } : undefined);
             firstPhase = false;
 
             // extract params
@@ -771,12 +768,15 @@ const main = async () => {
             // For mjs format, convert to file:// URL (Node.js-specific)
             const readFilename = inputFormat === 'mjs' ? `file://${filename}` : filename;
 
+            // Per-file progress bars are drawn by the readers themselves
+            // (see lib/read.ts and the SOG/LCC readers). The CLI just kicks
+            // off the read inside the Input phase scope.
             const dataTables = await readFile({
                 filename: readFilename,
                 inputFormat,
                 options,
                 params,
-                fileSystem: nodeFs
+                fileSystem: new NodeReadFileSystem()
             });
 
             for (let i = 0; i < dataTables.length; ++i) {
@@ -821,7 +821,7 @@ const main = async () => {
 
         // Skip file writing for null output
         if (!isNullOutput) {
-            const phase = logger.group(`Write ${outputArg.filename}`, firstPhase ? { total: phaseTotal } : undefined);
+            const phase = logger.group(`Output ${outputArg.filename}`, firstPhase ? { total: phaseTotal } : undefined);
             firstPhase = false;
             await writeFile({
                 filename: outputFilename,

@@ -1,6 +1,6 @@
 import { Column, DataTable } from '../data-table';
-import { dirname, join, ReadFileSystem, readFile } from '../io/read';
-import { Transform, WebPCodec } from '../utils';
+import { CombineProgress, dirname, join, type ProgressCallback, type ReadFileSystem, readFile } from '../io/read';
+import { logger, Transform, WebPCodec } from '../utils';
 
 type Meta = {
     version: number;
@@ -69,20 +69,61 @@ const sigmoidInv = (y: number) => {
  * Read a SOG file from a ReadFileSystem.
  * @param fileSystem - The file system to read from
  * @param filename - Path to meta.json (relative paths resolved from its directory)
+ * @param onProgress - Optional aggregate progress callback for the payload reads
  * @returns DataTable with Gaussian splat data
  * @ignore
  */
-const readSog = async (fileSystem: ReadFileSystem, filename: string): Promise<DataTable> => {
+const readSog = async (fileSystem: ReadFileSystem, filename: string, onProgress?: ProgressCallback, showBars: boolean = true): Promise<DataTable> => {
     const decoder = await WebPCodec.create();
 
     // Resolve paths relative to the meta.json directory
     const baseDir = dirname(filename);
-    const load = (name: string) => readFile(fileSystem, baseDir ? join(baseDir, name) : name);
+    const resolve = (name: string) => (baseDir ? join(baseDir, name) : name);
 
-    // meta.json
-    const metaBytes = await load('meta.json');
+    // meta.json is read off-bar (no progress callback) so it does not
+    // contribute to the aggregate total.
+    const metaBytes = await readFile(fileSystem, resolve('meta.json'));
     const meta = JSON.parse(new TextDecoder().decode(metaBytes)) as Meta;
     const count = meta.count;
+
+    // Enumerate payload files. Used both for aggregate-progress sizing and
+    // for per-file bar labelling.
+    const payloadFiles = [
+        ...meta.means.files,
+        ...meta.quats.files,
+        ...meta.scales.files,
+        ...meta.sh0.files,
+        ...(meta.shN?.files ?? [])
+    ];
+
+    // Optional combined-progress aggregation for library consumers that pass
+    // an `onProgress` callback. The per-file bars below are independent of
+    // this stream.
+    const combine = onProgress ? new CombineProgress(payloadFiles.length, onProgress) : undefined;
+
+    // load(name) lazily opens a payload source, optionally drives a per-file
+    // progress bar from its read events, and closes the bar + source on
+    // completion. Per-file bars are suppressed for callers that already track
+    // overall progress at a higher level (e.g. the outer .sog archive read).
+    const load = async (name: string): Promise<Uint8Array> => {
+        const bar = showBars ? logger.bar(name, 100) : null;
+        let prev = 0;
+        const aggCb = combine?.track(name);
+        const src = await fileSystem.createSource(resolve(name), (loaded, total) => {
+            aggCb?.(loaded, total);
+            if (!bar || !total) return;
+            const ticks = Math.floor((loaded / total) * 100);
+            const delta = ticks - prev;
+            prev = ticks;
+            if (delta > 0) bar.tick(delta);
+        });
+        try {
+            return await src.read().readAll();
+        } finally {
+            src.close();
+            bar?.end();
+        }
+    };
 
     // Prepare output columns
     const columns: Column[] = [
