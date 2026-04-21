@@ -2,7 +2,7 @@
 export { type FileSystem, type Writer } from './file-system';
 
 // Helper functions
-export { logWrittenFile, writeFile } from './write-helpers';
+export { writeFile } from './write-helpers';
 
 // Memory filesystem implementation
 export { MemoryFileSystem } from './memory-file-system';

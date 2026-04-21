@@ -70,6 +70,10 @@ const sigmoidInv = (y: number) => {
  * @param fileSystem - The file system to read from
  * @param filename - Path to meta.json (relative paths resolved from its directory)
  * @param onProgress - Optional aggregate progress callback for the payload reads
+ * @param showBars - When true (default) emits a per-payload progress bar via
+ * the logger. Set to false when an outer caller already drives progress UI for
+ * these reads (e.g. when `read.ts` reads a zipped `.sog` archive and tracks
+ * the archive bytes itself), to avoid duplicate or nested bars.
  * @returns DataTable with Gaussian splat data
  * @ignore
  */

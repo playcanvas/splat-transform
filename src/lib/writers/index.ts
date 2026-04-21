@@ -1,3 +1,4 @@
+export { logWrittenFile } from './utils';
 export { writeCompressedPly } from './write-compressed-ply';
 export { writeCsv } from './write-csv';
 export { writeGlb } from './write-glb';
