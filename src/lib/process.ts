@@ -1,6 +1,6 @@
 import { Vec3 } from 'playcanvas';
 
-import { Column, DataTable, simplifyGaussians, sortMortonOrder, computeSummary, type SummaryData, convertToSpace } from './data-table';
+import { Column, DataTable, simplifyGaussians, sortMortonOrder, computeSummary, type SummaryData, convertToSpace, getSHBands } from './data-table';
 import type { DeviceCreator } from './types';
 import { fmtCount, logger, Transform } from './utils';
 import { filterCluster as filterClusterFn } from './voxel/filter-cluster';
@@ -223,8 +223,6 @@ type ProcessOptions = {
  * - `decimate` - Simplify to target count via progressive pairwise merging
  */
 type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | FilterFloaters | FilterCluster | Param | Lod | Summary | MortonOrder | Decimate;
-
-const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
 const SH_C0 = 0.28209479177387814;
 
@@ -463,7 +461,7 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 const g = logger.group('Filter bands');
                 const prev = result;
                 const currentTable = result;
-                const inputBands = { '9': 1, '24': 2, '-1': 3 }[shNames.findIndex(v => !currentTable.hasColumn(v))] ?? 0;
+                const inputBands = getSHBands(currentTable);
                 const outputBands = processAction.value;
 
                 if (outputBands < inputBands) {

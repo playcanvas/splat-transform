@@ -20,9 +20,10 @@ type MessageKind = 'error' | 'warn' | 'info' | 'debug';
  * They carry optional `index` / `total` fields when the scope is part of a
  * numbered series, which renderers can use to switch to a `[N/T] name` style.
  *
- * `barStart` / `barTick` / `barEnd` represent an indeterminate progress bar.
+ * `barStart` / `barTick` / `barEnd` represent a determinate progress bar.
  * The bar's `name` is repeated on every event so the renderer can keep its
- * label stable across in-place tick updates.
+ * label stable across in-place updates while tracking progress via `current`
+ * and `total`.
  */
 type LogEvent =
     | { kind: 'scopeStart'; depth: number; name: string; index?: number; total?: number }

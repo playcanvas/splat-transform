@@ -180,6 +180,7 @@ const voxelizeToBuffer = async (
             }
         }
 
+        await flushPendingBatches();
         bar.tick();
     }
 
