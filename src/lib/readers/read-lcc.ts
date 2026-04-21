@@ -427,53 +427,58 @@ const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Op
     // aggregate total.
     const indexData = await readFile(fileSystem, relatedFilename('index.bin'));
 
-    // Open the large payload sources, each driving its own per-file progress
-    // bar. The optional `onProgress` callback receives the combined stream.
+    // The decode loop interleaves reads from data.bin and shcoef.bin (see
+    // decodeUnitsForLod / processUnit), so a per-file bar pair would tick
+    // concurrently and stomp on each other in the TTY. Aggregate both streams
+    // through a single CombineProgress and drive one bar from the combined
+    // result. The optional library-level `onProgress` callback also receives
+    // the combined stream.
     const payloadCount = hasSH ? 2 : 1;
-    const combine = onProgress ? new CombineProgress(payloadCount, onProgress) : undefined;
+    const payloadBar = logger.bar(hasSH ? 'data.bin + shcoef.bin' : 'data.bin', 100);
+    let payloadPrev = 0;
+    const combine = new CombineProgress(payloadCount, (loaded, total) => {
+        onProgress?.(loaded, total);
+        if (!total) return;
+        const ticks = Math.floor((loaded / total) * 100);
+        const delta = ticks - payloadPrev;
+        payloadPrev = ticks;
+        if (delta > 0) payloadBar.tick(delta);
+    });
 
-    const openWithBar = async (name: string): Promise<{ source: ReadSource; endBar: () => void }> => {
-        const bar = logger.bar(name, 100);
-        let prev = 0;
-        const aggCb = combine?.track(name);
-        const source = await fileSystem.createSource(relatedFilename(name), (loaded, total) => {
-            aggCb?.(loaded, total);
-            if (!total) return;
-            const ticks = Math.floor((loaded / total) * 100);
-            const delta = ticks - prev;
-            prev = ticks;
-            if (delta > 0) bar.tick(delta);
-        });
-        return { source, endBar: () => bar.end() };
+    const openSource = (name: string): Promise<ReadSource> => {
+        return fileSystem.createSource(relatedFilename(name), combine.track(name));
     };
 
-    const [dataOpened, shOpened] = await Promise.all([
-        openWithBar('data.bin'),
-        hasSH ? openWithBar('shcoef.bin') : Promise.resolve(null)
-    ]);
-    const dataSource = dataOpened.source;
-    const shSource = shOpened ? shOpened.source : null;
-
-    const unitInfos: LccUnitInfo[] = parseIndexBin(indexData.buffer.slice(indexData.byteOffset, indexData.byteOffset + indexData.byteLength) as ArrayBuffer, lccJson);
-
-    // build table of input -> output lods
-    const lods = options.lodSelect.length > 0 ?
-        options.lodSelect
-        .map(lod => (lod < 0 ? splats.length + lod : lod))    // negative indices map from the end of lod
-        .filter(lod => lod >= 0 && lod < splats.length) :
-        new Array(splats.length).fill(0).map((_, i) => i);
-
-    if (lods.length === 0) {
-        throw new Error(`No valid LODs selected for LCC input file: ${filename} lods: ${JSON.stringify(lods)}`);
-    }
-
-    // Pre-allocate a single set of arrays for all LODs combined
-    const grandTotal = lods.reduce((sum, lodIdx) => sum + splats[lodIdx], 0);
-    const properties: Record<string, Float32Array> = initProperties(grandTotal);
-    const properties_f_rest = shSource ? Array.from({ length: 45 }, () => new Float32Array(grandTotal)) : null;
-    const lodColumn = new Float32Array(grandTotal);
+    let dataSource: ReadSource | null = null;
+    let shSource: ReadSource | null = null;
+    let mainTable: DataTable;
 
     try {
+        // Open sequentially so a failure on the second open doesn't leak the
+        // first source. (The actual bulk reads still happen in parallel below
+        // via decodeUnitsForLod's IO_CONCURRENCY workers.)
+        dataSource = await openSource('data.bin');
+        if (hasSH) shSource = await openSource('shcoef.bin');
+
+        const unitInfos: LccUnitInfo[] = parseIndexBin(indexData.buffer.slice(indexData.byteOffset, indexData.byteOffset + indexData.byteLength) as ArrayBuffer, lccJson);
+
+        // build table of input -> output lods
+        const lods = options.lodSelect.length > 0 ?
+            options.lodSelect
+            .map(lod => (lod < 0 ? splats.length + lod : lod))    // negative indices map from the end of lod
+            .filter(lod => lod >= 0 && lod < splats.length) :
+            new Array(splats.length).fill(0).map((_, i) => i);
+
+        if (lods.length === 0) {
+            throw new Error(`No valid LODs selected for LCC input file: ${filename} lods: ${JSON.stringify(lods)}`);
+        }
+
+        // Pre-allocate a single set of arrays for all LODs combined
+        const grandTotal = lods.reduce((sum, lodIdx) => sum + splats[lodIdx], 0);
+        const properties: Record<string, Float32Array> = initProperties(grandTotal);
+        const properties_f_rest = shSource ? Array.from({ length: 45 }, () => new Float32Array(grandTotal)) : null;
+        const lodColumn = new Float32Array(grandTotal);
+
         let lodOffset = 0;
         for (let i = 0; i < lods.length; i++) {
             const inputLod = lods[i];
@@ -488,25 +493,23 @@ const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Op
             lodColumn.fill(outputLod, lodOffset, lodOffset + totalSplats);
             lodOffset += totalSplats;
         }
+
+        const columns = [
+            ...floatProps.map(name => new Column(name, properties[`property_${name}`])),
+            ...(properties_f_rest ? properties_f_rest.map((storage, i) => new Column(`f_rest_${i}`, storage)) : []),
+            new Column('lod', lodColumn)
+        ];
+
+        mainTable = new DataTable(columns, new Transform().fromEulers(90, 0, 180));
     } finally {
-        dataSource.close();
-        dataOpened.endBar();
-        if (shSource && shOpened) {
-            shSource.close();
-            shOpened.endBar();
-        }
+        dataSource?.close();
+        shSource?.close();
+        payloadBar.end();
     }
 
-    const columns = [
-        ...floatProps.map(name => new Column(name, properties[`property_${name}`])),
-        ...(properties_f_rest ? properties_f_rest.map((storage, i) => new Column(`f_rest_${i}`, storage)) : []),
-        new Column('lod', lodColumn)
-    ];
-
-    const mainTable = new DataTable(columns, new Transform().fromEulers(90, 0, 180));
     const result: DataTable[] = [mainTable];
 
-    // load environment and tag as lod -1
+    // environment.bin is optional - missing file is a normal case (no skybox).
     try {
         const envData = await readFile(fileSystem, relatedFilename('environment.bin'));
         const envDataTable = deserializeEnvironment(envData, compressInfo, hasSH);
@@ -514,7 +517,10 @@ const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Op
         envDataTable.transform = new Transform().fromEulers(90, 0, 180);
         result.push(envDataTable);
     } catch (err) {
-        console.warn('Failed to load environment.bin', err);
+        const code = (err as { code?: string })?.code;
+        if (code !== 'ENOENT') {
+            logger.warn(`failed to load environment.bin: ${(err as Error)?.message ?? err}`);
+        }
     }
 
     return result;

@@ -22,15 +22,20 @@ const openWithBar = async (
 ): Promise<{ source: ReadSource; endBar: () => void }> => {
     const bar = logger.bar(basename(filename), 100);
     let prev = 0;
-    const source = await fileSystem.createSource(filename, (loaded, total) => {
-        onProgress?.(loaded, total);
-        if (!total) return;
-        const ticks = Math.floor((loaded / total) * 100);
-        const delta = ticks - prev;
-        prev = ticks;
-        if (delta > 0) bar.tick(delta);
-    });
-    return { source, endBar: () => bar.end() };
+    try {
+        const source = await fileSystem.createSource(filename, (loaded, total) => {
+            onProgress?.(loaded, total);
+            if (!total) return;
+            const ticks = Math.floor((loaded / total) * 100);
+            const delta = ticks - prev;
+            prev = ticks;
+            if (delta > 0) bar.tick(delta);
+        });
+        return { source, endBar: () => bar.end() };
+    } catch (e) {
+        bar.end();
+        throw e;
+    }
 };
 
 /**

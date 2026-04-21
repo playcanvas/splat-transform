@@ -416,7 +416,7 @@ class LoggerCore {
                 closed = true;
                 const idx = this.stack.indexOf(scope);
                 if (idx === -1) return;
-                while (this.stack.length > idx + 1) this.popScope();
+                while (this.stack.length > idx + 1) this.popScope(true);
                 this.popScope();
             }
         };
@@ -431,7 +431,7 @@ class LoggerCore {
                 closed = true;
                 const idx = this.stack.indexOf(scope);
                 if (idx === -1) return;
-                while (this.stack.length > idx + 1) this.popScope();
+                while (this.stack.length > idx + 1) this.popScope(true);
                 this.popScope();
             }
         };
