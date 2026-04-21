@@ -543,7 +543,8 @@ ACTIONS (can be repeated, in any order)
     -r, --rotate           <x,y,z>          Rotate Gaussians by Euler angles (x, y, z), in degrees
     -s, --scale            <factor>         Uniformly scale Gaussians by factor
     -H, --filter-harmonics <0|1|2|3>        Remove spherical harmonic bands > n
-    -N, --filter-nan                        Remove Gaussians with NaN or Inf values
+    -N, --filter-nan                        Remove Gaussians with NaN values and most Inf values;
+                                              retains +Infinity in opacity and -Infinity in scale_*
     -B, --filter-box       <x,y,z,X,Y,Z>    Remove Gaussians outside box (min, max corners)
     -S, --filter-sphere    <x,y,z,radius>   Remove Gaussians outside sphere (center, radius)
     -V, --filter-value     <name,cmp,value> Keep Gaussians where <name> <cmp> <value>
