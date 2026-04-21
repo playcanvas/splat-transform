@@ -6,7 +6,7 @@ import { type TypedArray, DataTable, sortMortonOrder, convertToSpace } from '../
 import { type FileSystem } from '../io/write';
 import { BTreeNode, BTree } from '../spatial';
 import type { DeviceCreator } from '../types';
-import { logger, Transform } from '../utils';
+import { fmtBytes, logger, Transform } from '../utils';
 
 type Aabb = {
     min: number[],
@@ -165,24 +165,6 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
     // ensure top-level output folder exists
     await fs.mkdir(outputDir);
 
-    // write the environment sog
-    if (envDataTable?.numRows > 0) {
-        const pathname = resolve(outputDir, 'env/meta.json');
-
-        // ensure output folder exists before any files are written
-        await fs.mkdir(dirname(pathname));
-
-        const g = logger.group('env/meta.json');
-        await writeSog({
-            filename: pathname,
-            dataTable: envDataTable,
-            bundle: false,
-            iterations,
-            createDevice
-        }, fs);
-        g.end();
-    }
-
     // construct a kd-tree based on centroids from all lods
     const centroidsTable = new DataTable([
         dataTable.getColumnByName('x'),
@@ -280,16 +262,32 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
         return value;
     };
 
-    // write lod-meta.json
-    const metaBar = logger.bar(basename(filename), 1);
-    try {
-        const writer = await fs.createWriter(filename);
-        writer.write((new TextEncoder()).encode(JSON.stringify(meta, replacer)));
-        await writer.close();
-        metaBar.tick(1);
-    } finally {
-        metaBar.end();
+    const writingGroup = logger.group('Writing');
+
+    // write the environment sog
+    if (envDataTable?.numRows > 0) {
+        const envPathname = resolve(outputDir, 'env/meta.json');
+
+        // ensure output folder exists before any files are written
+        await fs.mkdir(dirname(envPathname));
+
+        await writeSog({
+            filename: envPathname,
+            dataTable: envDataTable,
+            bundle: false,
+            iterations,
+            createDevice,
+            omitWritingGroup: true,
+            pathContext: outputDir
+        }, fs);
     }
+
+    // write lod-meta.json
+    const metaJson = (new TextEncoder()).encode(JSON.stringify(meta, replacer));
+    const writer = await fs.createWriter(filename);
+    await writer.write(metaJson);
+    await writer.close();
+    logger.info(`${basename(filename)} (${fmtBytes(metaJson.byteLength)})`);
 
     // write file units
     for (const [lodValue, fileUnits] of lodFiles) {
@@ -322,18 +320,20 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
             }
 
             // write file unit to sog
-            const g = logger.group(`${lodValue}_${i}/meta.json`);
             await writeSog({
                 filename: pathname,
                 dataTable: unitDataTable,
                 indices,
                 bundle: false,
                 iterations,
-                createDevice
+                createDevice,
+                omitWritingGroup: true,
+                pathContext: outputDir
             }, fs);
-            g.end();
         }
     }
+
+    writingGroup.end();
 };
 
 export { writeLod };

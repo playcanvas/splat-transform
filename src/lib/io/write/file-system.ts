@@ -1,5 +1,8 @@
 // defines the interface for a stream writer class
 interface Writer {
+    // total bytes successfully passed to write() so far
+    readonly bytesWritten: number;
+
     // write data to the stream
     write(data: Uint8Array): void | Promise<void>;
 

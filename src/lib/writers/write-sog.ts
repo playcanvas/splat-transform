@@ -1,4 +1,4 @@
-import { dirname, resolve } from 'pathe';
+import { basename, dirname, relative, resolve } from 'pathe';
 
 import { version } from '../../../package.json';
 import { Column, DataTable, sortMortonOrder, convertToSpace, getSHBands, shRestNames } from '../data-table';
@@ -52,6 +52,21 @@ type WriteSogOptions = {
     bundle: boolean;
     iterations: number;
     createDevice?: DeviceCreator;
+    // When true, do not open an internal `Writing` log group; instead emit
+    // file-write info entries directly into the caller's existing scope.
+    // Used when this writer runs as a sub-step of another writer (e.g. LOD)
+    // so all written files appear flat under a single `Writing` group.
+    omitWritingGroup?: boolean;
+    // When true, suppress all per-file `logger.info` output and the `Writing`
+    // group entirely. Used when this writer is invoked purely as a
+    // computation step whose outputs are intermediate (e.g. encoding into
+    // memory for HTML bundling).
+    silent?: boolean;
+    // Optional directory used as the root for displaying file paths in log
+    // entries. When set, written paths are logged relative to this directory
+    // so sub-SOG calls (e.g. from LOD) show useful prefixes like
+    // `0_0/means_l.webp` rather than colliding on basenames.
+    pathContext?: string;
 };
 
 /**
@@ -66,11 +81,15 @@ type WriteSogOptions = {
  * @ignore
  */
 const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
-    const { filename: outputFilename, bundle, iterations, createDevice } = options;
+    const { filename: outputFilename, bundle, iterations, createDevice, omitWritingGroup, silent, pathContext } = options;
     const dataTable = convertToSpace(options.dataTable, Transform.PLY);
 
-    // initialize output stream - use ZipFileSystem for bundled output
-    const zipFs = bundle ? new ZipFileSystem(await fs.createWriter(outputFilename)) : null;
+    // initialize output stream - use ZipFileSystem for bundled output. The
+    // underlying writer's `bytesWritten` is read after close to report the
+    // final archive size as a single log entry instead of per-internal-file
+    // lines.
+    const bundleWriter = bundle ? await fs.createWriter(outputFilename) : null;
+    const zipFs = bundleWriter ? new ZipFileSystem(bundleWriter) : null;
     const outputFs = zipFs || fs;
 
     const indices = options.indices || generateIndices(dataTable);
@@ -92,9 +111,14 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
 
         const webp = await webPCodec.encodeLosslessRGBA(data, w, h);
 
-        logger.info(`writing ${filename} (${w} x ${h}, ${fmtBytes(webp.byteLength)})`);
-
         await writeFile(outputFs, pathname, webp);
+
+        // For bundled output the per-file sizes are an internal detail; we
+        // report a single bundle size after the archive closes.
+        if (!silent && !zipFs) {
+            const displayName = pathContext ? relative(pathContext, pathname) : filename;
+            logger.info(`${displayName} (${fmtBytes(webp.byteLength)})`);
+        }
     };
 
     const writeTableData = (filename: string, dataTable: DataTable, w = width, h = height) => {
@@ -297,6 +321,8 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
 
     const shBands = getSHBands(dataTable);
 
+    const writingGroup = (silent || omitWritingGroup) ? null : logger.group('Writing');
+
     const meansMinMax = await writeMeans();
     await writeQuaternions();
     const scalesCodebook = await writeScales();
@@ -340,14 +366,28 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
 
     const metaFilename = zipFs ? 'meta.json' : outputFilename;
 
-    logger.info(`writing ${metaFilename}`);
-
     await writeFile(outputFs, metaFilename, metaJson);
+
+    if (!silent && !zipFs) {
+        const metaDisplayName = pathContext ?
+            relative(pathContext, outputFilename) :
+            basename(outputFilename);
+        logger.info(`${metaDisplayName} (${fmtBytes(metaJson.byteLength)})`);
+    }
 
     // Close zip archive if bundling
     if (zipFs) {
         await zipFs.close();
     }
+
+    if (!silent && bundleWriter) {
+        const bundleDisplayName = pathContext ?
+            relative(pathContext, outputFilename) :
+            basename(outputFilename);
+        logger.info(`${bundleDisplayName} (${fmtBytes(bundleWriter.bytesWritten)})`);
+    }
+
+    writingGroup?.end();
 };
 
 export { writeSog };

@@ -1,31 +1,7 @@
-import { basename } from 'pathe';
-
 import { DataTable } from './data-table';
 import { type FileSystem } from './io/write';
 import { type DeviceCreator, type Options } from './types';
-import { logger } from './utils';
 import { writeCompressedPly, writeCsv, writeGlb, writeHtml, writeLod, writePly, writeSog, writeVoxel } from './writers';
-
-/**
- * Run a writer function while displaying a single per-file progress bar named
- * after the file's basename. The bar ticks once on successful completion,
- * giving an atomic 0->100% indicator for write paths that don't expose
- * incremental progress.
- *
- * @param filename - Path to the file being written.
- * @param fn - The async writer body to execute.
- * @returns Whatever `fn` returns.
- */
-const withFileBar = async <T>(filename: string, fn: () => Promise<T>): Promise<T> => {
-    const bar = logger.bar(basename(filename), 1);
-    try {
-        const result = await fn();
-        bar.tick(1);
-        return result;
-    } finally {
-        bar.end();
-    }
-};
 
 /**
  * Supported output file formats for Gaussian splat data.
@@ -125,11 +101,11 @@ const getOutputFormat = (filename: string, options: Options): OutputFormat => {
 const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
     const { filename, outputFormat, dataTable, envDataTable, options, createDevice } = writeOptions;
 
-    // Single-file writers get an atomic per-file bar wrapped here. Multi-file
-    // writers (sog, sog-bundle, lod) draw their own per-file bars internally.
+    // Each writer is responsible for opening its own `Writing` log group and
+    // emitting `filename (size)` info entries per output file.
     switch (outputFormat) {
         case 'csv':
-            await withFileBar(filename, () => writeCsv({ filename, dataTable }, fs));
+            await writeCsv({ filename, dataTable }, fs);
             break;
         case 'sog':
         case 'sog-bundle':
@@ -153,10 +129,10 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
             }, fs);
             break;
         case 'compressed-ply':
-            await withFileBar(filename, () => writeCompressedPly({ filename, dataTable }, fs));
+            await writeCompressedPly({ filename, dataTable }, fs);
             break;
         case 'ply':
-            await withFileBar(filename, () => writePly({
+            await writePly({
                 filename,
                 plyData: {
                     comments: [],
@@ -165,24 +141,24 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
                         dataTable
                     }]
                 }
-            }, fs));
+            }, fs);
             break;
         case 'glb':
-            await withFileBar(filename, () => writeGlb({ filename, dataTable }, fs));
+            await writeGlb({ filename, dataTable }, fs);
             break;
         case 'html':
         case 'html-bundle':
-            await withFileBar(filename, () => writeHtml({
+            await writeHtml({
                 filename,
                 dataTable,
                 viewerSettingsJson: options.viewerSettingsJson,
                 bundle: outputFormat === 'html-bundle',
                 iterations: options.iterations,
                 createDevice
-            }, fs));
+            }, fs);
             break;
         case 'voxel':
-            await withFileBar(filename, () => writeVoxel({
+            await writeVoxel({
                 filename,
                 dataTable,
                 voxelResolution: options.voxelResolution,
@@ -195,7 +171,7 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
                 collisionMesh: options.collisionMesh,
                 meshSimplifyError: options.meshSimplifyError,
                 createDevice
-            }, fs));
+            }, fs);
             break;
     }
 };

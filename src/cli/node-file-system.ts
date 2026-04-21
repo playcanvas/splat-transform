@@ -141,12 +141,14 @@ class NodeReadFileSystem implements ReadFileSystem {
  * Writer implementation for writing to Node.js file handles.
  */
 class FileWriter implements Writer {
+    bytesWritten = 0;
     write: (data: Uint8Array) => Promise<void>;
     close: () => Promise<void>;
 
     constructor(fileHandle: FileHandle, filename: string, tmpFilename: string) {
         this.write = async (data: Uint8Array) => {
             await fileHandle.write(data);
+            this.bytesWritten += data.byteLength;
         };
 
         this.close = async () => {

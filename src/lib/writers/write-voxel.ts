@@ -1,3 +1,4 @@
+import { basename } from 'pathe';
 import { Vec3 } from 'playcanvas';
 
 import { buildCollisionMesh } from './collision-glb';
@@ -272,8 +273,9 @@ const writeOctreeFiles = async (
         leafDataCount: octree.leafData.length
     };
 
-    await writeFile(fs, jsonFilename, JSON.stringify(metadata, null, 2));
-    logger.info(`json metadata: ${jsonFilename}`);
+    const jsonBytes = (new TextEncoder()).encode(JSON.stringify(metadata, null, 2));
+    await writeFile(fs, jsonFilename, jsonBytes);
+    logger.info(`${basename(jsonFilename)} (${fmtBytes(jsonBytes.byteLength)})`);
 
     const binFilename = jsonFilename.replace('.voxel.json', '.voxel.bin');
 
@@ -284,7 +286,7 @@ const writeOctreeFiles = async (
     view.set(octree.leafData, octree.nodes.length);
 
     await writeFile(fs, binFilename, new Uint8Array(buffer));
-    logger.info(`binary octree: ${binFilename} (${fmtBytes(binarySize)})`);
+    logger.info(`${basename(binFilename)} (${fmtBytes(binarySize)})`);
 };
 
 /**
@@ -466,11 +468,8 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         if (glbBytes) {
             const glbFilename = filename.replace('.voxel.json', '.collision.glb');
             await writeFile(fs, glbFilename, glbBytes);
-            logger.info(`collision mesh: ${glbFilename} (${fmtBytes(glbBytes.length)})`);
+            logger.info(`${basename(glbFilename)} (${fmtBytes(glbBytes.length)})`);
         }
-
-        const totalBytes = (octree.nodes.length + octree.leafData.length) * 4;
-        logger.info(`octree total size: ${fmtBytes(totalBytes)}`);
         writingSub.end();
 
         g.end();

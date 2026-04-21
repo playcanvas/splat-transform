@@ -1,7 +1,9 @@
+import { basename } from 'pathe';
+
 import { version } from '../../../package.json';
 import { DataTable, convertToSpace, getSHBands, shRestNames } from '../data-table';
 import { type FileSystem } from '../io/write';
-import { Transform, sigmoid } from '../utils';
+import { fmtBytes, logger, Transform, sigmoid } from '../utils';
 
 const SH_C0 = 0.2820947917738781;
 
@@ -371,10 +373,15 @@ const writeGlb = async (options: WriteGlbOptions, fs: FileSystem) => {
     // BIN chunk data (padded with zeros per spec)
     bytes.set(binBuffer, offset);
 
+    const writingGroup = logger.group('Writing');
+
     // Write the GLB file
     const writer = await fs.createWriter(filename);
     await writer.write(new Uint8Array(glb));
     await writer.close();
+
+    logger.info(`${basename(filename)} (${fmtBytes(writer.bytesWritten)})`);
+    writingGroup.end();
 };
 
 export { writeGlb };

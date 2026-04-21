@@ -13,8 +13,14 @@ type ZipEntry = {
 class ZipEntryWriter implements Writer {
     write: (data: Uint8Array) => Promise<void>;
     close: () => Promise<void>;
+    get bytesWritten(): number {
+        return this.entry.sizeBytes;
+    }
+    private entry: ZipEntry;
 
     constructor(outputWriter: Writer, entry: ZipEntry) {
+        this.entry = entry;
+
         this.write = async (data: Uint8Array) => {
             entry.sizeBytes += data.length;
             entry.crc.update(data);
