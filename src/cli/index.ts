@@ -678,9 +678,17 @@ const main = async () => {
 
     // invalid args or show help
     if (files.length < 2 || options.help) {
-        // help text goes to stdout via output, errors go to stderr
-        logger.output(usage);
-        exit(options.help ? 0 : 1);
+        // trim leading/trailing whitespace because the renderer appends its
+        // own trailing newline (and the literal already starts/ends with one)
+        const formattedUsage = usage.trim();
+        if (options.help) {
+            // help: route to stdout via the pipeable output channel
+            logger.output(formattedUsage);
+            exit(0);
+        }
+        // invalid invocation: route usage to stderr as an error
+        logger.error(formattedUsage);
+        exit(1);
     }
 
     const inputArgs = files.slice(0, -1);
