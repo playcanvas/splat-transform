@@ -302,6 +302,8 @@ class LoggerCore {
      *
      * @param name - The bar's label, displayed alongside the progress indicator.
      * @param total - Total number of ticks the bar will report before completing.
+     *   A `total` of 0 is allowed (e.g. processing an empty payload); both
+     *   `LoggerCore` and `TextRenderer` already handle non-positive totals.
      * @returns A handle for advancing and closing the bar.
      */
     pushBar(name: string, total: number): Bar {
@@ -310,7 +312,7 @@ class LoggerCore {
             name,
             depth: this.stack.length,
             start: now(),
-            total: Math.max(1, total),
+            total: Math.max(0, total),
             current: 0
         };
         this.stack.push(scope);

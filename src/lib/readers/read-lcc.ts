@@ -509,6 +509,11 @@ const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Op
     const result: DataTable[] = [mainTable];
 
     // environment.bin is optional - missing file is a normal case (no skybox).
+    // Different ReadFileSystem implementations signal "not found" differently:
+    //   - NodeReadFileSystem throws an Error with `code === 'ENOENT'`
+    //   - Memory/Zip backends throw `Error('Entry not found: ...')`
+    //   - UrlReadFileSystem throws `Error('HTTP error 404: ...')`
+    // Suppress warnings for any of these.
     try {
         const envData = await readFile(fileSystem, relatedFilename('environment.bin'));
         const envDataTable = deserializeEnvironment(envData, compressInfo, hasSH);
@@ -517,8 +522,12 @@ const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Op
         result.push(envDataTable);
     } catch (err) {
         const code = (err as { code?: string })?.code;
-        if (code !== 'ENOENT') {
-            logger.warn(`failed to load environment.bin: ${(err as Error)?.message ?? err}`);
+        const message = (err as Error)?.message ?? '';
+        const isMissing = code === 'ENOENT' ||
+            message.startsWith('Entry not found') ||
+            message.startsWith('HTTP error 404');
+        if (!isMissing) {
+            logger.warn(`failed to load environment.bin: ${message || err}`);
         }
     }
 
