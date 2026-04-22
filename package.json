@@ -45,8 +45,8 @@
     "lib/"
   ],
   "dependencies": {
-    "meshoptimizer": "^1.0.1",
-    "webgpu": "^0.3.8 || ^0.4.0"
+    "meshoptimizer": "1.0.1",
+    "webgpu": "0.4.0"
   },
   "devDependencies": {
     "@playcanvas/eslint-config": "2.1.0",
