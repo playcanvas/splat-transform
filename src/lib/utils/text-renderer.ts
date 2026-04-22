@@ -32,10 +32,12 @@ const BAR_WIDTH = 20;
 /**
  * Default human-readable text renderer. Emits one event per line - no
  * carriage-return rewriting, no TTY detection, no buffering. Scope starts
- * and ends each produce their own line, so even fast childless scopes
- * render as a header / footer pair. Bars render as `[#### ...... ] duration`,
- * with `#` appended incrementally on each `barTick` and the remainder padded
- * with `.` on `barEnd`.
+ * always emit a header line; successful `scopeEnd` footers are filtered
+ * out at `normal` verbosity by `LoggerCore` (kept at `verbose`, and always
+ * shown when `failed`), so default-mode runs see headers without timing
+ * footers and `--verbose` adds the matching `done in ...` lines. Bars
+ * render as `[#### ...... ] duration`, with `#` appended incrementally on
+ * each `barTick` and the remainder padded with `.` on `barEnd`.
  *
  * Verbosity filtering is handled centrally by `LoggerCore` - this renderer
  * receives only events that have already passed the visibility gate, so it
@@ -101,20 +103,23 @@ class TextRenderer implements Renderer {
                 return;
             }
             case 'barEnd': {
-                const remaining = Math.max(0, BAR_WIDTH - this.barFilled);
-                const tail = '.'.repeat(remaining);
                 const suffix = event.failed ?
                     `] (failed) ${fmtTime(event.durationMs)}` :
                     `] ${fmtTime(event.durationMs)}`;
                 if (this.lineDirty) {
-                    this.write(`${tail}${suffix}${this.memSuffix()}\n`);
+                    const remaining = Math.max(0, BAR_WIDTH - this.barFilled);
+                    this.write(`${'.'.repeat(remaining)}${suffix}${this.memSuffix()}\n`);
                     this.lineDirty = false;
                     this.barFilled = 0;
                 } else {
                     // bar's inline line was committed early by a nested
                     // event (e.g. a child group/message). Emit a recap
-                    // line so the bar still has a visible footer.
-                    this.write(`${indent(event.depth)}\u25b8 ${event.name} [${'#'.repeat(BAR_WIDTH)}${suffix}${this.memSuffix()}\n`);
+                    // line whose fill reflects actual progress, so bars
+                    // that ended early or failed don't read as complete.
+                    const filled = event.total <= 0 ? 0 :
+                        Math.min(BAR_WIDTH, Math.floor((event.current / event.total) * BAR_WIDTH));
+                    const bar = `${'#'.repeat(filled)}${'.'.repeat(BAR_WIDTH - filled)}`;
+                    this.write(`${indent(event.depth)}\u25b8 ${event.name} [${bar}${suffix}${this.memSuffix()}\n`);
                 }
                 return;
             }

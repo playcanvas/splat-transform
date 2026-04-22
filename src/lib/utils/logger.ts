@@ -51,10 +51,13 @@ interface Renderer {
  * implicitly when an enclosing {@link Group}'s `end()` (or a
  * {@link Logger.unwindAll}) pops it as part of cleanup.
  *
- * Implements {@link Disposable} so callers on TS 5.2+ / Node 20+ can adopt
- * `using bar = logger.bar(...)` for automatic close on scope exit.
+ * Carries a `[Symbol.dispose]` slot directly (rather than extending the
+ * built-in `Disposable` lib type) so the published `.d.ts` doesn't force
+ * downstream consumers onto `esnext.disposable` / TS 5.2+. Callers on
+ * TS 5.2+ / Node 20+ can still adopt `using bar = logger.bar(...)` because
+ * `using` only requires the `[Symbol.dispose]` shape structurally.
  */
-interface Bar extends Disposable {
+interface Bar {
     /**
      * Advance the bar by `n` ticks.
      * @param n - Number of ticks to advance (default 1).
@@ -70,6 +73,8 @@ interface Bar extends Disposable {
      * Close the bar and emit final timing.
      */
     end(): void;
+    /** Dispose hook so `using` syntax closes the bar on scope exit. */
+    [Symbol.dispose](): void;
 }
 
 /**
@@ -84,15 +89,20 @@ interface Bar extends Disposable {
  * {@link Logger.unwindAll} from their catch to close any scopes/bars left
  * dangling on the stack.
  *
- * Implements {@link Disposable} so callers on TS 5.2+ / Node 20+ can adopt
- * `using g = logger.group(...)` for automatic close on scope exit.
+ * Carries a `[Symbol.dispose]` slot directly (rather than extending the
+ * built-in `Disposable` lib type) so the published `.d.ts` doesn't force
+ * downstream consumers onto `esnext.disposable` / TS 5.2+. Callers on
+ * TS 5.2+ / Node 20+ can still adopt `using g = logger.group(...)` because
+ * `using` only requires the `[Symbol.dispose]` shape structurally.
  */
-interface Group extends Disposable {
+interface Group {
     /**
      * Close the group, popping anything still open above it on the stack
      * (defensively handles forgotten inner scopes) and emit the timing event.
      */
     end(): void;
+    /** Dispose hook so `using` syntax closes the group on scope exit. */
+    [Symbol.dispose](): void;
 }
 
 /**
