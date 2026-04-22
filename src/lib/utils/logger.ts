@@ -166,6 +166,12 @@ const eventVisible = (event: LogEvent, v: Verbosity): boolean => {
     if (event.kind === 'message') {
         return verbosityRank[v] >= verbosityRank[messageMinVerbosity[event.level]];
     }
+    // scopeEnd footers are noisy on the success path - hide them at normal,
+    // keep them at verbose. Failures always show so the "failed in Xs"
+    // cascade survives a logger.error / unwindAll(true).
+    if (event.kind === 'scopeEnd' && !event.failed) {
+        return verbosityRank[v] >= verbosityRank.verbose;
+    }
     return verbosityRank[v] >= verbosityRank.normal;
 };
 
