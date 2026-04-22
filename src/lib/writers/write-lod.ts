@@ -274,12 +274,12 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
         }
     }
 
-    let firstGroup = true;
+    let sogIndex = 0;
 
     // write the environment sog
     if (envDataTable?.numRows > 0) {
-        const envGroup = logger.group('env', { total: sogTotal });
-        firstGroup = false;
+        sogIndex++;
+        const envGroup = logger.group('env', { index: sogIndex, total: sogTotal });
         try {
             const envPathname = resolve(outputDir, 'env/meta.json');
 
@@ -316,10 +316,8 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
             }
 
             const groupName = `${lodValue}_${i}`;
-            const unitGroup = firstGroup ?
-                logger.group(groupName, { total: sogTotal }) :
-                logger.group(groupName);
-            firstGroup = false;
+            sogIndex++;
+            const unitGroup = logger.group(groupName, { index: sogIndex, total: sogTotal });
 
             try {
                 // ensure output folder exists before any files are written

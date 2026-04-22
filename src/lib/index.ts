@@ -5,10 +5,9 @@ export type { TypedArray, ColumnType, Row, ColumnStats, SummaryData } from './da
 // Utils
 export {
     fmtBytes, fmtCount, fmtDistance, fmtTime,
-    indent, isPhaseHeader, messageVisible, taskVisible,
-    logger, PlainRenderer, Transform, WebPCodec
+    LineRenderer, logger, Transform, WebPCodec
 } from './utils';
-export type { Bar, Group, LogEvent, Logger, Renderer, Verbosity } from './utils';
+export type { Bar, Group, LineRendererOptions, LogEvent, Logger, MessageKind, Renderer, Verbosity } from './utils';
 
 // High-level read/write
 export { readFile, getInputFormat } from './read';

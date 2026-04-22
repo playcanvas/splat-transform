@@ -1,5 +1,3 @@
-import { fmtTime } from './fmt';
-
 /**
  * Verbosity level controlling which messages reach the renderer.
  *
@@ -54,13 +52,22 @@ interface Renderer {
  * Determinate progress bar handle. Closed explicitly via `end()`, or
  * implicitly when an enclosing {@link Group}'s `end()` (or a
  * {@link Logger.unwindAll}) pops it as part of cleanup.
+ *
+ * Implements {@link Disposable} so callers on TS 5.2+ / Node 20+ can adopt
+ * `using bar = logger.bar(...)` for automatic close on scope exit.
  */
-interface Bar {
+interface Bar extends Disposable {
     /**
      * Advance the bar by `n` ticks.
      * @param n - Number of ticks to advance (default 1).
      */
     tick(n?: number): void;
+    /**
+     * Set the bar's absolute progress. Clamped to `[0, total]`. Suppresses
+     * a `barTick` event when the value is unchanged.
+     * @param current - Absolute progress value.
+     */
+    update(current: number): void;
     /**
      * Close the bar and emit final timing.
      */
@@ -78,8 +85,11 @@ interface Bar {
  * them propagate to a `logger.error()` call) should call
  * {@link Logger.unwindAll} from their catch to close any scopes/bars left
  * dangling on the stack.
+ *
+ * Implements {@link Disposable} so callers on TS 5.2+ / Node 20+ can adopt
+ * `using g = logger.group(...)` for automatic close on scope exit.
  */
-interface Group {
+interface Group extends Disposable {
     /**
      * Close the group, popping anything still open above it on the stack
      * (defensively handles forgotten inner scopes) and emit the timing event.
@@ -103,25 +113,6 @@ const now = (): number => {
     return Date.now();
 };
 
-const verbosityRank: Record<Verbosity, number> = {
-    quiet: 0,
-    normal: 1,
-    verbose: 2
-};
-
-const messageMinVerbosity: Record<MessageKind, Verbosity> = {
-    error: 'quiet',
-    warn: 'quiet',
-    info: 'normal',
-    debug: 'verbose'
-};
-
-const messageVisible = (kind: MessageKind, v: Verbosity): boolean => {
-    return verbosityRank[v] >= verbosityRank[messageMinVerbosity[kind]];
-};
-
-const taskVisible = (v: Verbosity): boolean => verbosityRank[v] >= verbosityRank.normal;
-
 const fmtArgs = (args: any[]): string => {
     return args.map((a) => {
         if (a instanceof Error) return a.stack ?? a.message;
@@ -135,126 +126,15 @@ const fmtArgs = (args: any[]): string => {
     }).join(' ');
 };
 
-const PLAIN_BAR_WIDTH = 20;
-
-const renderPlainBar = (current: number, total: number): string => {
-    const ratio = total <= 0 ? 0 : Math.min(1, Math.max(0, current / total));
-    const filled = Math.round(ratio * PLAIN_BAR_WIDTH);
-    return '#'.repeat(filled) + '.'.repeat(PLAIN_BAR_WIDTH - filled);
-};
-
-const indent = (depth: number): string => '  '.repeat(Math.max(0, depth));
-
-const isPhaseHeader = (event: { depth: number; index?: number; total?: number }): boolean => {
-    return event.depth === 0 && event.index !== undefined && event.total !== undefined;
-};
-
 /**
- * Default browser-safe renderer. Uses only `console.log/warn/error`. Bars
- * are not animated - only the bar's final state is printed when it closes.
- *
- * Buffers `scopeStart` events so that scopes with no nested children
- * collapse to a single `\u2713 name X.XXXs` line, while scopes with children
- * print a header `\u25b8 name`, indented children, and an indented closer
- * `done in X.XXXs` (or `failed in X.XXXs`).
- *
- * Numbered groups at depth 0 (phase headers) are not buffered - they print
- * immediately as `[N/T] name` flush left, and their closer renders like any
- * other group's (`done in X.XXXs` / `failed in X.XXXs` at content indent).
+ * Default no-op renderer. Used when no other renderer is installed (e.g. in
+ * library/embedded contexts where the host wants to consume `LogEvent`s
+ * directly via {@link Logger.setRenderer} but hasn't done so yet). Drops
+ * every event silently.
  */
-class PlainRenderer implements Renderer {
-    private verbosity: Verbosity = 'normal';
-
-    /**
-     * Queue of `scopeStart` events whose header has not yet been written,
-     * ordered by depth ascending (shallowest first). When a child event
-     * arrives at a deeper depth, the entries strictly shallower than the
-     * child are flushed (headers written, entries removed).
-     */
-    private pendingStarts: Array<Extract<LogEvent, { kind: 'scopeStart' }>> = [];
-
-    setVerbosity(v: Verbosity): void {
-        this.verbosity = v;
-    }
-
-    handle(event: LogEvent): void {
-        switch (event.kind) {
-            case 'scopeStart': {
-                if (isPhaseHeader(event)) {
-                    this.flushPendingDownTo(0);
-                    if (taskVisible(this.verbosity)) {
-                        console.log(`\n[${event.index}/${event.total}] ${event.name}`);
-                    }
-                    return;
-                }
-                this.flushPendingDownTo(event.depth);
-                this.pendingStarts.push(event);
-                return;
-            }
-            case 'scopeEnd': {
-                const top = this.pendingStarts[this.pendingStarts.length - 1];
-                if (top && top.depth === event.depth) {
-                    this.pendingStarts.pop();
-                    this.flushPendingDownTo(event.depth);
-                    if (!taskVisible(this.verbosity)) return;
-                    const glyph = event.failed ? '\u2717' : '\u2713';
-                    const suffix = event.failed ? ` (failed) ${fmtTime(event.durationMs)}` : ` ${fmtTime(event.durationMs)}`;
-                    const numbered = event.index !== undefined && event.total !== undefined;
-                    const displayName = numbered ? `[${event.index}/${event.total}] ${event.name}` : event.name;
-                    console.log(`${indent(event.depth)}${glyph} ${displayName}${suffix}`);
-                    return;
-                }
-                if (!taskVisible(this.verbosity)) return;
-                const verb = event.failed ? 'failed in' : 'done in';
-                console.log(`${indent(event.depth + 1)}${verb} ${fmtTime(event.durationMs)}`);
-                return;
-            }
-            case 'barStart': {
-                this.flushPendingDownTo(event.depth);
-                return;
-            }
-            case 'barTick':
-                return;
-            case 'barEnd': {
-                if (!taskVisible(this.verbosity)) return;
-                const glyph = event.failed ? '\u2717' : '\u2713';
-                const suffix = event.failed ? ` (failed) ${fmtTime(event.durationMs)}` : ` ${fmtTime(event.durationMs)}`;
-                const bar = renderPlainBar(event.current, event.total);
-                console.log(`${indent(event.depth)}${glyph} ${event.name} [${bar}]${suffix}`);
-                return;
-            }
-            case 'message': {
-                if (!messageVisible(event.level, this.verbosity)) return;
-                this.flushPendingDownTo(event.depth);
-                const prefix = event.level === 'warn' ? 'warn: ' : event.level === 'error' ? 'error: ' : '';
-                const fn = event.level === 'error' ? console.error : event.level === 'warn' ? console.warn : console.log;
-                fn(`${indent(event.depth)}${prefix}${event.text}`);
-                return;
-            }
-            case 'output':
-                this.flushPendingDownTo(0);
-                console.log(event.text);
-        }
-    }
-
-    /**
-     * Flush any pending `scopeStart` headers whose depth is strictly less
-     * than `depth`. Walks shallowest-first so parent headers print before
-     * children. Flushed entries are removed from the queue; their presence
-     * in the queue WAS the "is empty" signal, so removing them implicitly
-     * marks them as non-empty.
-     *
-     * @param depth - The depth threshold.
-     */
-    private flushPendingDownTo(depth: number): void {
-        while (this.pendingStarts.length > 0 && this.pendingStarts[0].depth < depth) {
-            const entry = this.pendingStarts.shift()!;
-            if (!taskVisible(this.verbosity)) continue;
-            const numbered = entry.index !== undefined && entry.total !== undefined;
-            const headerName = numbered ? `[${entry.index}/${entry.total}] ${entry.name}` : entry.name;
-            console.log(`${indent(entry.depth)}\u25b8 ${headerName}`);
-        }
-    }
+class NullRenderer implements Renderer {
+    setVerbosity(_v: Verbosity): void { /* no-op */ }
+    handle(_event: LogEvent): void { /* no-op */ }
 }
 
 /**
@@ -265,14 +145,7 @@ class LoggerCore {
     /** Stack of currently-open scopes (innermost last). */
     readonly stack: Scope[] = [];
 
-    /**
-     * Per-depth numbered-series counter. A counter exists at depth D between
-     * the moment `pushGroup(_, { total })` is called at depth D and the
-     * moment the parent scope (at depth D-1) closes.
-     */
-    private counters = new Map<number, { index: number; total: number }>();
-
-    private renderer: Renderer = new PlainRenderer();
+    private renderer: Renderer = new NullRenderer();
 
     private verbosity: Verbosity = 'normal';
 
@@ -295,23 +168,8 @@ class LoggerCore {
     }
 
     /**
-     * Drop any counters whose depth is strictly greater than `depth`. Called
-     * after popping a scope so children's series state doesn't leak across
-     * sibling scopes. Counters at `depth` itself survive so the popped
-     * scope's siblings (at the same depth) can continue counting.
-     *
-     * @param depth - The popped scope's own depth.
-     */
-    private clearDeeperCounters(depth: number): void {
-        for (const key of this.counters.keys()) {
-            if (key > depth) this.counters.delete(key);
-        }
-    }
-
-    /**
      * Pop the scope at the top of the stack (no-op if empty) and emit the
-     * matching `*End` event. Centralizes the "drop counters at deeper depths
-     * + emit end" sequence used by every close path.
+     * matching `*End` event.
      *
      * @param failed - When true, mark the closed scope as having failed.
      */
@@ -319,7 +177,6 @@ class LoggerCore {
         if (this.stack.length === 0) return;
         const top = this.stack[this.stack.length - 1];
         this.stack.pop();
-        this.clearDeeperCounters(top.depth);
         const durationMs = now() - top.start;
         if (top.kind === 'bar') {
             this.emit({
@@ -333,39 +190,30 @@ class LoggerCore {
             });
             return;
         }
-        const numbering = top.kind === 'group' && top.index !== undefined && top.total !== undefined ?
+        const numbering = top.index !== undefined && top.total !== undefined ?
             { index: top.index, total: top.total } :
             {};
         this.emit({ kind: 'scopeEnd', depth: top.depth, name: top.name, durationMs, failed, ...numbering });
     }
 
     /**
-     * Open a named, timed group at the current depth. Pass `{ total: N }` to
-     * start a fresh numbered series at this depth - this group renders as
-     * `[1/N]`. Subsequent `pushGroup(name)` calls (no options) at the same
-     * depth advance the active series until exhausted; once exhausted (or if
-     * no series is active), they render plain.
+     * Open a named, timed group at the current depth. Pass
+     * `{ index, total }` to render the group as part of a numbered series
+     * (e.g. `[2/5] name`); both must be present together.
      *
      * @param name - The group name.
      * @param options - Optional configuration.
-     * @param options.total - When set, opens (or restarts) a numbered series
-     * of `total` groups at the current depth. The first call renders as
-     * `[1/total]`; subsequent siblings auto-advance.
+     * @param options.index - 1-based position in the numbered series.
+     * @param options.total - Total length of the numbered series.
      * @returns A handle for closing the group and writing nested log entries.
      */
-    pushGroup(name: string, options: { total?: number } = {}): Group {
-        const depth = this.stack.length;
-        let numbering: { index: number; total: number } | undefined;
-        if (options.total !== undefined) {
-            numbering = { index: 1, total: options.total };
-            this.counters.set(depth, { index: 1, total: options.total });
-        } else {
-            const active = this.counters.get(depth);
-            if (active && active.index < active.total) {
-                active.index += 1;
-                numbering = { index: active.index, total: active.total };
-            }
+    pushGroup(name: string, options: { index?: number; total?: number } = {}): Group {
+        const { index, total } = options;
+        if ((index === undefined) !== (total === undefined)) {
+            throw new Error('logger.group: { index, total } must be passed together');
         }
+        const depth = this.stack.length;
+        const numbering = index !== undefined && total !== undefined ? { index, total } : undefined;
         const scope: Scope = numbering ?
             { kind: 'group', name, depth, start: now(), index: numbering.index, total: numbering.total } :
             { kind: 'group', name, depth, start: now() };
@@ -401,7 +249,7 @@ class LoggerCore {
 
     private makeBar(scope: Scope & { kind: 'bar' }): Bar {
         let closed = false;
-        return {
+        const handle: Bar = {
             tick: (n = 1) => {
                 if (closed) return;
                 if (this.stack.indexOf(scope) === -1) {
@@ -411,7 +259,20 @@ class LoggerCore {
                     closed = true;
                     return;
                 }
-                scope.current = Math.min(scope.total, scope.current + Math.max(0, n));
+                const next = Math.min(scope.total, scope.current + Math.max(0, n));
+                if (next === scope.current) return;
+                scope.current = next;
+                this.emit({ kind: 'barTick', depth: scope.depth, name: scope.name, current: scope.current, total: scope.total });
+            },
+            update: (current: number) => {
+                if (closed) return;
+                if (this.stack.indexOf(scope) === -1) {
+                    closed = true;
+                    return;
+                }
+                const next = Math.min(scope.total, Math.max(0, current));
+                if (next === scope.current) return;
+                scope.current = next;
                 this.emit({ kind: 'barTick', depth: scope.depth, name: scope.name, current: scope.current, total: scope.total });
             },
             end: () => {
@@ -421,14 +282,15 @@ class LoggerCore {
                 if (idx === -1) return;
                 while (this.stack.length > idx + 1) this.popScope(true);
                 this.popScope();
-            }
+            },
+            [Symbol.dispose]: () => handle.end()
         };
+        return handle;
     }
 
     private makeGroup(scope: Scope & { kind: 'group' }): Group {
         let closed = false;
-
-        return {
+        const handle: Group = {
             end: () => {
                 if (closed) return;
                 closed = true;
@@ -436,8 +298,10 @@ class LoggerCore {
                 if (idx === -1) return;
                 while (this.stack.length > idx + 1) this.popScope(true);
                 this.popScope();
-            }
+            },
+            [Symbol.dispose]: () => handle.end()
         };
+        return handle;
     }
 
     message(level: MessageKind, text: string): void {
@@ -454,7 +318,6 @@ class LoggerCore {
      */
     unwindAll(failed = false): void {
         while (this.stack.length > 0) this.popScope(failed);
-        this.counters.clear();
     }
 
     output(text: string): void {
@@ -467,11 +330,11 @@ const core = new LoggerCore();
 /**
  * Public logger surface.
  *
- * Open named, timed scopes with {@link Logger.group}. Pass `{ total: N }` to
- * the first call of a numbered series; subsequent siblings auto-advance.
- * Indeterminate progress is reported with {@link Logger.bar}. Free-form
- * messages route through `info` / `warn` / `error` / `debug`, indented under
- * whatever is on top of the active-scope stack.
+ * Open named, timed scopes with {@link Logger.group}. Pass `{ index, total }`
+ * to render the group as part of a numbered series. Indeterminate progress is
+ * reported with {@link Logger.bar}. Free-form messages route through `info` /
+ * `warn` / `error` / `debug`, indented under whatever is on top of the
+ * active-scope stack.
  *
  * Both `group` and `bar` are pure-push operations: opening a new scope simply
  * places it on top of the stack without auto-closing siblings, so call order
@@ -485,33 +348,31 @@ const logger = {
      * Open a named, timed scope. Returns a {@link Group} handle. Call `end()`
      * to close it. Group children indent automatically based on call depth.
      *
-     * Pass `{ total: N }` to start (or restart) a numbered series at the
-     * current depth: this call renders as `[1/N] name`, and the next N-1
-     * `group(name)` calls at the same depth auto-render as `[2/N]`, ...,
-     * `[N/N]`. Calls beyond that revert to plain rendering.
+     * Pass `{ index, total }` to render the group as part of a numbered
+     * series (e.g. `[2/5] name`). Both fields must be supplied together.
      *
      * @param name - The group name.
      * @param options - Optional configuration.
-     * @param options.total - When set, opens (or restarts) a numbered series
-     * of `total` groups at the current depth.
+     * @param options.index - 1-based position in the numbered series.
+     * @param options.total - Total length of the numbered series.
      * @returns A handle for closing the group and writing nested log entries.
      */
-    group(name: string, options?: { total?: number }): Group {
+    group(name: string, options?: { index?: number; total?: number }): Group {
         return core.pushGroup(name, options);
     },
 
     /**
      * Open a labelled progress bar nested directly under whatever scope is
      * currently on top of the active-scope stack. Renders as a single line
-     * at child indent: `\u25b8 name [bar] %` while ticking, finalizing as
-     * `\u2713 name [bar] X.XXXs` (or `\u2717 name [bar] (failed) X.XXXs`).
+     * at child indent.
      *
      * Like {@link Logger.group}, this is a pure-push operation: it does not
      * close any sibling already on the stack. Close with `bar.end()`, or let
      * an enclosing group's `end()` / {@link Logger.unwindAll} pop it.
      *
      * @param name - The bar's label.
-     * @param total - Expected number of ticks.
+     * @param total - Expected number of ticks (or absolute total when using
+     * {@link Bar.update}).
      * @returns A handle for advancing and closing the bar.
      */
     bar(name: string, total: number): Bar {
@@ -561,8 +422,8 @@ const logger = {
     },
 
     /**
-     * Replace the active renderer. Use this from the CLI to install a
-     * TTY-aware renderer; lib consumers get the default {@link PlainRenderer}.
+     * Replace the active renderer. Embedders install their own renderer here
+     * to consume `LogEvent`s; the default renderer is a no-op.
      * @param r - The renderer to install.
      */
     setRenderer(r: Renderer): void {
@@ -604,13 +465,5 @@ const logger = {
  */
 type Logger = typeof logger;
 
-export {
-    indent,
-    isPhaseHeader,
-    logger,
-    messageVisible,
-    PlainRenderer,
-    taskVisible,
-    verbosityRank
-};
+export { logger };
 export type { Bar, Group, LogEvent, Logger, MessageKind, Renderer, Verbosity };

@@ -2,7 +2,7 @@ import { DataTable } from './data-table';
 import { basename, type ProgressCallback, type ReadSource, ReadFileSystem, ZipReadFileSystem } from './io/read';
 import { readKsplat, readLcc, readMjs, readPly, readSog, readSplat, readSpz } from './readers';
 import { Options, Param } from './types';
-import { logger } from './utils';
+import { type Bar, logger } from './utils';
 
 /**
  * Open a single source while driving a per-file progress bar named after the
@@ -20,20 +20,20 @@ const openWithBar = async (
     filename: string,
     onProgress?: ProgressCallback
 ): Promise<{ source: ReadSource; endBar: () => void }> => {
-    const bar = logger.bar(basename(filename), 100);
-    let prev = 0;
+    // Defer bar creation until the first progress event so the bar can be
+    // sized to the real byte total. If the source never reports a total
+    // (unknown-length stream), the bar simply never opens.
+    let bar: Bar | undefined;
     // Don't close the bar on a createSource() failure: leaving it open
     // lets `logger.error() -> unwindAll(true)` mark it as failed instead
     // of finalizing it as a successful bar first.
     const source = await fileSystem.createSource(filename, (loaded, total) => {
         onProgress?.(loaded, total);
         if (!total) return;
-        const ticks = Math.floor((loaded / total) * 100);
-        const delta = ticks - prev;
-        prev = ticks;
-        if (delta > 0) bar.tick(delta);
+        bar ??= logger.bar(basename(filename), total);
+        bar.update(loaded);
     });
-    return { source, endBar: () => bar.end() };
+    return { source, endBar: () => bar?.end() };
 };
 
 /**

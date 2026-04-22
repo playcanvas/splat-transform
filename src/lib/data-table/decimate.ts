@@ -647,14 +647,17 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
     // upper bound for the [N/T] series numbering. Iterations beyond the
     // estimate render unnumbered, which is fine.
     const estIterations = Math.max(1, Math.ceil(Math.log2(current.numRows / targetCount)));
-    let firstIteration = true;
+    let iterationIndex = 0;
 
     while (current.numRows > targetCount) {
         const n = current.numRows;
         const kEff = Math.min(Math.max(1, KNN_K), Math.max(1, n - 1));
 
-        const g = logger.group('Decimate iteration', firstIteration ? { total: estIterations } : undefined);
-        firstIteration = false;
+        iterationIndex++;
+        const g = logger.group('Decimate iteration', {
+            index: iterationIndex,
+            total: Math.max(iterationIndex, estIterations)
+        });
 
         const kdSub = logger.group('Building KD-tree');
 

@@ -3,7 +3,7 @@ import { Vec3 } from 'playcanvas';
 import { Column, DataTable } from '../data-table';
 import { CombineProgress, dirname, join, type ProgressCallback, ReadFileSystem, ReadSource, readFile } from '../io/read';
 import { Options } from '../types';
-import { logger, Transform } from '../utils';
+import { type Bar, logger, Transform } from '../utils';
 
 const kSH_C0 = 0.28209479177387814;
 const SQRT_2 = 1.414213562373095;
@@ -434,15 +434,15 @@ const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Op
     // result. The optional library-level `onProgress` callback also receives
     // the combined stream.
     const payloadCount = hasSH ? 2 : 1;
-    const payloadBar = logger.bar(hasSH ? 'data.bin + shcoef.bin' : 'data.bin', 100);
-    let payloadPrev = 0;
+    // Defer bar creation until the first aggregate progress event so it can
+    // be sized to the real combined byte total.
+    let payloadBar: Bar | undefined;
+    const payloadName = hasSH ? 'data.bin + shcoef.bin' : 'data.bin';
     const combine = new CombineProgress(payloadCount, (loaded, total) => {
         onProgress?.(loaded, total);
         if (!total) return;
-        const ticks = Math.floor((loaded / total) * 100);
-        const delta = ticks - payloadPrev;
-        payloadPrev = ticks;
-        if (delta > 0) payloadBar.tick(delta);
+        payloadBar ??= logger.bar(payloadName, total);
+        payloadBar.update(loaded);
     });
 
     const openSource = (name: string): Promise<ReadSource> => {
@@ -504,7 +504,7 @@ const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Op
         // Close the bar only on success: leaving it open on the error path
         // lets `logger.error() -> unwindAll(true)` mark it as failed
         // instead of finalizing it as a successful bar first.
-        payloadBar.end();
+        payloadBar?.end();
     } finally {
         dataSource?.close();
         shSource?.close();

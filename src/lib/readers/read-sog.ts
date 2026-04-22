@@ -1,6 +1,6 @@
 import { Column, DataTable } from '../data-table';
 import { CombineProgress, dirname, join, type ProgressCallback, type ReadFileSystem, readFile } from '../io/read';
-import { logger, Transform, WebPCodec } from '../utils';
+import { type Bar, logger, Transform, WebPCodec } from '../utils';
 
 type Meta = {
     version: number;
@@ -110,16 +110,15 @@ const readSog = async (fileSystem: ReadFileSystem, filename: string, onProgress?
     // completion. Per-file bars are suppressed for callers that already track
     // overall progress at a higher level (e.g. the outer .sog archive read).
     const load = async (name: string): Promise<Uint8Array> => {
-        const bar = showBars ? logger.bar(name, 100) : null;
-        let prev = 0;
+        // Defer bar creation until the first progress event so we can size
+        // the bar to the real byte total reported by the source.
+        let bar: Bar | undefined;
         const aggCb = combine?.track(name);
         const src = await fileSystem.createSource(resolve(name), (loaded, total) => {
             aggCb?.(loaded, total);
-            if (!bar || !total) return;
-            const ticks = Math.floor((loaded / total) * 100);
-            const delta = ticks - prev;
-            prev = ticks;
-            if (delta > 0) bar.tick(delta);
+            if (!showBars || !total) return;
+            bar ??= logger.bar(name, total);
+            bar.update(loaded);
         });
         try {
             const buf = await src.read().readAll();

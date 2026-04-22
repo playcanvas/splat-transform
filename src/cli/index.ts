@@ -7,7 +7,6 @@ import { GraphicsDevice, Vec3 } from 'playcanvas';
 
 import { createDevice, enumerateAdapters } from './node-device';
 import { NodeFileSystem, NodeReadFileSystem } from './node-file-system';
-import { TtyRenderer } from './tty-renderer';
 import { version } from '../../package.json';
 import {
     combine,
@@ -17,6 +16,7 @@ import {
     fmtTime,
     getInputFormat,
     getSHBands,
+    LineRenderer,
     readFile,
     getOutputFormat,
     writeFile,
@@ -632,8 +632,12 @@ const main = async () => {
     // read args
     const { files, options } = await parseArguments();
 
-    // install TTY-aware renderer and configure verbosity
-    logger.setRenderer(new TtyRenderer({ showMem: options.mem }));
+    // install line-based renderer and configure verbosity
+    logger.setRenderer(new LineRenderer({
+        write: chunk => process.stderr.write(chunk),
+        output: chunk => process.stdout.write(chunk),
+        getMemoryUsage: options.mem ? () => process.memoryUsage() : undefined
+    }));
     if (options.quiet) {
         logger.setVerbosity('quiet');
     } else if (options.verbose) {
@@ -751,13 +755,15 @@ const main = async () => {
 
         // declare phase total: one Read phase per input + one Write phase
         const phaseTotal = inputArgs.length + (isNullOutput ? 0 : 1);
-        let firstPhase = true;
 
         // read, filter, process input files
         const inputDataTables: DataTable[] = [];
-        for (const inputArg of inputArgs) {
-            const phase = logger.group(`Input ${inputArg.filename}`, firstPhase ? { total: phaseTotal } : undefined);
-            firstPhase = false;
+        for (let inputIdx = 0; inputIdx < inputArgs.length; inputIdx++) {
+            const inputArg = inputArgs[inputIdx];
+            const phase = logger.group(`Input ${inputArg.filename}`, {
+                index: inputIdx + 1,
+                total: phaseTotal
+            });
 
             // extract params
             const params = inputArg.processActions.filter(a => a.kind === 'param').map((p) => {
@@ -827,8 +833,10 @@ const main = async () => {
 
         // Skip file writing for null output
         if (!isNullOutput) {
-            const phase = logger.group(`Output ${outputArg.filename}`, firstPhase ? { total: phaseTotal } : undefined);
-            firstPhase = false;
+            const phase = logger.group(`Output ${outputArg.filename}`, {
+                index: phaseTotal,
+                total: phaseTotal
+            });
             logger.info(`gaussians: ${fmtCount(dataTable.numRows)}, SH bands: ${getSHBands(dataTable)}, mem: ${fmtBytes(dataTable.byteLength)}`);
             await writeFile({
                 filename: outputFilename,
