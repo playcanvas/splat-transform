@@ -1,3 +1,4 @@
+import { basename } from 'pathe';
 import { Vec3 } from 'playcanvas';
 
 import { buildCollisionMesh } from './collision-glb';
@@ -6,7 +7,7 @@ import { GpuVoxelization } from '../gpu';
 import { type FileSystem, writeFile } from '../io/write';
 import { GaussianBVH } from '../spatial';
 import type { DeviceCreator } from '../types';
-import { logger, Transform } from '../utils';
+import { fmtBytes, fmtCount, logger, Transform } from '../utils';
 import { buildSparseOctree, type SparseOctree } from './sparse-octree';
 import {
     filterAndFillBlocks,
@@ -272,13 +273,11 @@ const writeOctreeFiles = async (
         leafDataCount: octree.leafData.length
     };
 
-    // Write JSON metadata
-    logger.log(`writing '${jsonFilename}'...`);
-    await writeFile(fs, jsonFilename, JSON.stringify(metadata, null, 2));
+    const jsonBytes = (new TextEncoder()).encode(JSON.stringify(metadata, null, 2));
+    await writeFile(fs, jsonFilename, jsonBytes);
+    logger.info(`${basename(jsonFilename)} (${fmtBytes(jsonBytes.byteLength)})`);
 
-    // Write binary data (nodes + leafData concatenated)
     const binFilename = jsonFilename.replace('.voxel.json', '.voxel.bin');
-    logger.log(`writing '${binFilename}'...`);
 
     const binarySize = (octree.nodes.length + octree.leafData.length) * 4;
     const buffer = new ArrayBuffer(binarySize);
@@ -287,6 +286,7 @@ const writeOctreeFiles = async (
     view.set(octree.leafData, octree.nodes.length);
 
     await writeFile(fs, binFilename, new Uint8Array(buffer));
+    logger.info(`${basename(binFilename)} (${fmtBytes(binarySize)})`);
 };
 
 /**
@@ -341,17 +341,11 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     }
 
     if (navCapsule && !navSeed) {
-        logger.warn('writeVoxel: navCapsule requires navSeed for nav carving, skipping nav carving');
+        logger.warn('navCapsule requires navSeed for nav carving, skipping nav carving');
     }
     const hasNav = !!(navCapsule && navSeed && navCapsule.height > 0);
     const hasFillExterior = !!(navExteriorRadius && navSeed);
     const hasFloorFill = floorFill;
-    let stepCount = 5;
-    if (collisionMesh) stepCount += 2;
-    if (hasFillExterior) stepCount += 1;
-    if (hasFloorFill) stepCount += 1;
-    if (hasNav) stepCount += 1;
-    logger.progress.begin(stepCount);
 
     // Build a DataTable in engine space containing only the columns needed
     // for voxelization (no SH, so SH rotation cost is never paid).
@@ -372,15 +366,21 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     const extentsResult = computeGaussianExtents(pcDataTable);
     const bounds = extentsResult.sceneBounds;
 
-    logger.progress.step('Building BVH');
-    logger.debug(`scene extents: (${bounds.min.x.toFixed(2)},${bounds.min.y.toFixed(2)},${bounds.min.z.toFixed(2)}) - (${bounds.max.x.toFixed(2)},${bounds.max.y.toFixed(2)},${bounds.max.z.toFixed(2)})`);
+    const g = logger.group('Build voxels');
 
-    const bvh = new GaussianBVH(pcDataTable, extentsResult.extents);
-    const device = await createDevice();
-
-    let gpuVoxelization: GpuVoxelization | null = new GpuVoxelization(device);
-    let progressComplete = false;
+    // gpuVoxelization is the only resource not owned by a scope; its
+    // destruction is the sole job of the finally below. Open scopes on the
+    // error path are reaped by the embedder's logger.error() -> unwindAll.
+    let gpuVoxelization: GpuVoxelization | null = null;
     try {
+        const bvhSub = logger.group('Building BVH');
+        logger.debug(`scene extents: (${bounds.min.x.toFixed(2)},${bounds.min.y.toFixed(2)},${bounds.min.z.toFixed(2)}) - (${bounds.max.x.toFixed(2)},${bounds.max.y.toFixed(2)},${bounds.max.z.toFixed(2)})`);
+
+        const bvh = new GaussianBVH(pcDataTable, extentsResult.extents);
+        bvhSub.end();
+
+        const device = await createDevice();
+        gpuVoxelization = new GpuVoxelization(device);
         gpuVoxelization.uploadAllGaussians(pcDataTable, extentsResult.extents);
 
         // Align grid bounds to block boundaries BEFORE voxelization so the
@@ -396,8 +396,6 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             voxelResolution
         );
 
-        logger.progress.step('Voxelizing');
-
         let buffer = await voxelizeToBuffer(
             bvh, gpuVoxelization, gridBounds, voxelResolution, opacityCutoff
         );
@@ -405,30 +403,33 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         gpuVoxelization.destroy();
         gpuVoxelization = null;
 
-        logger.progress.step('Filtering');
+        const filterSub = logger.group('Filtering');
         buffer = filterAndFillBlocks(buffer);
+        filterSub.end();
 
         if (hasFillExterior) {
-            logger.progress.step('Fill exterior');
+            const sub = logger.group('Fill exterior');
             const fillResult = fillExterior(
                 buffer, gridBounds, voxelResolution,
                 navExteriorRadius!, navSeed!
             );
             buffer = fillResult.buffer;
             gridBounds = fillResult.gridBounds;
+            sub.end();
         }
 
         if (hasFloorFill) {
-            logger.progress.step('Fill floor');
+            const sub = logger.group('Fill floor');
             const floorResult = fillFloor(
                 buffer, gridBounds, voxelResolution, floorFillDilation
             );
             buffer = floorResult.buffer;
             gridBounds = floorResult.gridBounds;
+            sub.end();
         }
 
         if (hasNav) {
-            logger.progress.step('Carve');
+            const sub = logger.group('Carve');
             const navResult = carve(
                 buffer, gridBounds, voxelResolution,
                 navCapsule!.height, navCapsule!.radius,
@@ -436,6 +437,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             );
             buffer = navResult.buffer;
             gridBounds = navResult.gridBounds;
+            sub.end();
         }
 
         const finalCrop = hasFillExterior || hasFloorFill ?
@@ -448,7 +450,6 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             await buildCollisionMesh(buffer, gridBounds, voxelResolution, meshSimplifyError) :
             null;
 
-        logger.progress.step('Building octree');
         const octree = buildSparseOctree(
             buffer,
             gridBounds,
@@ -457,32 +458,23 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         );
         buffer.clear();
 
-        logger.log(`octree: depth=${octree.treeDepth}, interior=${octree.numInteriorNodes}, mixed=${octree.numMixedLeaves}`);
+        logger.info(`octree depth: ${octree.treeDepth}`);
+        logger.info(`interior nodes: ${fmtCount(octree.numInteriorNodes)}`);
+        logger.info(`mixed leaves: ${fmtCount(octree.numMixedLeaves)}`);
 
-        logger.progress.step('Writing');
+        const writingSub = logger.group('Writing');
         await writeOctreeFiles(fs, filename, octree);
 
         if (glbBytes) {
             const glbFilename = filename.replace('.voxel.json', '.collision.glb');
-            logger.log(`writing '${glbFilename}'...`);
             await writeFile(fs, glbFilename, glbBytes);
+            logger.info(`${basename(glbFilename)} (${fmtBytes(glbBytes.length)})`);
         }
+        writingSub.end();
 
-        const totalBytes = (octree.nodes.length + octree.leafData.length) * 4;
-        if (glbBytes) {
-            logger.log(`total size: octree ${(totalBytes / 1024).toFixed(1)} KB, collision mesh ${(glbBytes.length / 1024).toFixed(1)} KB`);
-        } else {
-            logger.log(`total size: ${(totalBytes / 1024).toFixed(1)} KB`);
-        }
-
-        progressComplete = true;
-    } catch (e) {
-        gpuVoxelization?.destroy();
-        throw e;
+        g.end();
     } finally {
-        if (!progressComplete) {
-            logger.progress.cancel();
-        }
+        gpuVoxelization?.destroy();
     }
 };
 

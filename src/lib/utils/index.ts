@@ -1,7 +1,10 @@
 export { toBase64 } from './base64';
+export { fmtBytes, fmtCount, fmtDistance, fmtTime } from './fmt';
 export { logger } from './logger';
-export type { Logger, ProgressNode } from './logger';
+export type { Bar, Group, LogEvent, Logger, MessageKind, Renderer, Verbosity } from './logger';
 export { sigmoid, Transform } from './math';
 export { quickselect } from './quickselect';
 export { RotateSH } from './rotate-sh';
+export { TextRenderer } from './text-renderer';
+export type { TextRendererOptions } from './text-renderer';
 export { WebPCodec } from './webp-codec';

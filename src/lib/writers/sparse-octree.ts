@@ -152,8 +152,7 @@ function buildSparseOctree(
     // grouping a simple linear scan (consecutive entries with the same
     // floor(morton/8) share a parent).
 
-    // Inner progress: 10 anonymous steps
-    logger.progress.begin(10);
+    const bar = logger.bar('Building tree', 10);
     let octreeStep = 0;
 
     // Calculate tree depth based on grid size
@@ -180,7 +179,7 @@ function buildSparseOctree(
     let curChildMasks: number[] | null = null;
 
     // 1 step for init
-    logger.progress.step();
+    bar.tick();
     octreeStep++;
 
     // Build up level by level
@@ -191,7 +190,7 @@ function buildSparseOctree(
         // Report inner progress scaled to levelSteps
         const targetStep = 1 + Math.min(levelSteps, Math.floor((level + 1) / treeDepth * levelSteps));
         while (octreeStep < targetStep) {
-            logger.progress.step();
+            bar.tick();
             octreeStep++;
         }
 
@@ -270,7 +269,7 @@ function buildSparseOctree(
 
     // Flush remaining level steps
     while (octreeStep < 9) {
-        logger.progress.step();
+        bar.tick();
         octreeStep++;
     }
 
@@ -286,7 +285,8 @@ function buildSparseOctree(
     const tFlatten = performance.now();
 
     // Final step (10th)
-    logger.progress.step();
+    bar.tick();
+    bar.end();
 
     return result;
 }

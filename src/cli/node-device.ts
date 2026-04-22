@@ -1,7 +1,7 @@
 import { GraphicsDevice, WebgpuGraphicsDevice } from 'playcanvas';
 import { create, globals } from 'webgpu';
 
-import { logger } from '../lib/index';
+import { logger } from '../lib';
 
 const initializeGlobals = () => {
     Object.assign(globalThis, globals);
@@ -77,7 +77,7 @@ const enumerateAdapters = async () => {
     }
 
     try {
-        logger.log('Detecting GPU adapters...');
+        logger.info('Detecting GPU adapters...');
 
         // Get the actual adapter names directly from Dawn
         const dawnAdapterNames = await getDawnAdapterNames();

@@ -48,9 +48,6 @@ const voxelizeToBuffer = async (
     const buffer = new BlockMaskBuffer();
     const batchSize = 16;
 
-    logger.debug(`blocks: ${numBlocksX} x ${numBlocksY} x ${numBlocksZ} (${(numBlocksX * numBlocksY * numBlocksZ / 1e6).toFixed(1)}M)`);
-    logger.debug(`voxels: ${numBlocksX * 4} x ${numBlocksY * 4} x ${numBlocksZ * 4} (${(numBlocksX * numBlocksY * numBlocksZ * 64 / 1e9).toFixed(2)}B)`);
-
     const MEGA_MAX_BATCHES = 512;
     const MEGA_MAX_INDICES = 4 * 1024 * 1024;
 
@@ -129,87 +126,73 @@ const voxelizeToBuffer = async (
     };
 
     const numZBatches = Math.max(1, Math.ceil(numBlocksZ / batchSize));
-    logger.progress.begin(10);
-    let lastVoxelStep = 0;
+    const bar = logger.bar('Voxelizing', numZBatches);
+    for (let bz = 0; bz < numBlocksZ; bz += batchSize) {
+        for (let by = 0; by < numBlocksY; by += batchSize) {
+            for (let bx = 0; bx < numBlocksX; bx += batchSize) {
+                const currBatchX = Math.min(batchSize, numBlocksX - bx);
+                const currBatchY = Math.min(batchSize, numBlocksY - by);
+                const currBatchZ = Math.min(batchSize, numBlocksZ - bz);
 
-    try {
-        for (let bz = 0; bz < numBlocksZ; bz += batchSize) {
-            for (let by = 0; by < numBlocksY; by += batchSize) {
-                for (let bx = 0; bx < numBlocksX; bx += batchSize) {
-                    const currBatchX = Math.min(batchSize, numBlocksX - bx);
-                    const currBatchY = Math.min(batchSize, numBlocksY - by);
-                    const currBatchZ = Math.min(batchSize, numBlocksZ - bz);
+                const blockMinX = gridBounds.min.x + bx * blockSize;
+                const blockMinY = gridBounds.min.y + by * blockSize;
+                const blockMinZ = gridBounds.min.z + bz * blockSize;
+                const blockMaxX = blockMinX + currBatchX * blockSize;
+                const blockMaxY = blockMinY + currBatchY * blockSize;
+                const blockMaxZ = blockMinZ + currBatchZ * blockSize;
 
-                    const blockMinX = gridBounds.min.x + bx * blockSize;
-                    const blockMinY = gridBounds.min.y + by * blockSize;
-                    const blockMinZ = gridBounds.min.z + bz * blockSize;
-                    const blockMaxX = blockMinX + currBatchX * blockSize;
-                    const blockMaxY = blockMinY + currBatchY * blockSize;
-                    const blockMaxZ = blockMinZ + currBatchZ * blockSize;
+                const overlapping = bvh.queryOverlappingRaw(
+                    blockMinX, blockMinY, blockMinZ,
+                    blockMaxX, blockMaxY, blockMaxZ
+                );
 
-                    const overlapping = bvh.queryOverlappingRaw(
-                        blockMinX, blockMinY, blockMinZ,
-                        blockMaxX, blockMaxY, blockMaxZ
-                    );
-
-                    if (overlapping.length === 0) {
-                        continue;
-                    }
-
-                    const needed = indexOffset + overlapping.length;
-                    if (needed > slotCapacities[currentSlot]) {
-                        slotCapacities[currentSlot] = Math.max(slotCapacities[currentSlot] * 2, needed);
-                        const newArray = new Uint32Array(slotCapacities[currentSlot]);
-                        newArray.set(slotIndexArrays[currentSlot].subarray(0, indexOffset));
-                        slotIndexArrays[currentSlot] = newArray;
-                    }
-
-                    slotIndexArrays[currentSlot].set(overlapping, indexOffset);
-
-                    pendingBatches.push({
-                        indexOffset,
-                        indexCount: overlapping.length,
-                        blockMin: { x: blockMinX, y: blockMinY, z: blockMinZ },
-                        numBlocksX: currBatchX,
-                        numBlocksY: currBatchY,
-                        numBlocksZ: currBatchZ,
-                        bx,
-                        by,
-                        bz
-                    });
-
-                    indexOffset += overlapping.length;
-
-                    if (pendingBatches.length >= MEGA_MAX_BATCHES || indexOffset >= MEGA_MAX_INDICES) {
-                        await flushPendingBatches();
-                    }
+                if (overlapping.length === 0) {
+                    continue;
                 }
-            }
 
-            const currentVoxelStep = Math.min(10, Math.floor(((bz / batchSize) + 1) / numZBatches * 10));
-            while (lastVoxelStep < currentVoxelStep) {
-                logger.progress.step();
-                lastVoxelStep++;
+                const needed = indexOffset + overlapping.length;
+                if (needed > slotCapacities[currentSlot]) {
+                    slotCapacities[currentSlot] = Math.max(slotCapacities[currentSlot] * 2, needed);
+                    const newArray = new Uint32Array(slotCapacities[currentSlot]);
+                    newArray.set(slotIndexArrays[currentSlot].subarray(0, indexOffset));
+                    slotIndexArrays[currentSlot] = newArray;
+                }
+
+                slotIndexArrays[currentSlot].set(overlapping, indexOffset);
+
+                pendingBatches.push({
+                    indexOffset,
+                    indexCount: overlapping.length,
+                    blockMin: { x: blockMinX, y: blockMinY, z: blockMinZ },
+                    numBlocksX: currBatchX,
+                    numBlocksY: currBatchY,
+                    numBlocksZ: currBatchZ,
+                    bx,
+                    by,
+                    bz
+                });
+
+                indexOffset += overlapping.length;
+
+                if (pendingBatches.length >= MEGA_MAX_BATCHES || indexOffset >= MEGA_MAX_INDICES) {
+                    await flushPendingBatches();
+                }
             }
         }
 
         await flushPendingBatches();
-
-        if (inflight) {
-            const result = await inflight.resultPromise;
-            processResults(result.masks, inflight.batches);
-            inflight = null;
-        }
-
-        while (lastVoxelStep < 10) {
-            logger.progress.step();
-            lastVoxelStep++;
-        }
-    } catch (e) {
-        logger.progress.cancel();
-        throw e;
+        bar.tick();
     }
 
+    await flushPendingBatches();
+
+    if (inflight) {
+        const result = await inflight.resultPromise;
+        processResults(result.masks, inflight.batches);
+        inflight = null;
+    }
+
+    bar.end();
     return buffer;
 };
 

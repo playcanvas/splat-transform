@@ -2,7 +2,6 @@ import { DataTable } from './data-table';
 import { ReadFileSystem, ZipReadFileSystem } from './io/read';
 import { readKsplat, readLcc, readMjs, readPly, readSog, readSplat, readSpz } from './readers';
 import { Options, Param } from './types';
-import { logger } from './utils';
 
 /**
  * Supported input file formats for Gaussian splat data.
@@ -74,6 +73,10 @@ type ReadFileOptions = {
  * Supports multiple input formats including PLY, splat, ksplat, spz, SOG, and LCC.
  * Some formats (like LCC) may return multiple DataTables for different LOD levels.
  *
+ * Per-format progress (decoding bars, multi-payload bars) is emitted directly
+ * by each reader through the global {@link logger}; install a renderer via
+ * `logger.setRenderer(...)` to consume those events.
+ *
  * @param readFileOptions - Options specifying the file to read and how to read it.
  * @returns Promise resolving to an array of DataTables containing the splat data.
  *
@@ -97,13 +100,13 @@ const readFile = async (readFileOptions: ReadFileOptions): Promise<DataTable[]> 
 
     let result: DataTable[];
 
-    logger.log(`reading '${filename}'...`);
-
     if (inputFormat === 'mjs') {
         result = [await readMjs(filename, params)];
     } else if (inputFormat === 'sog') {
         const lowerFilename = filename.toLowerCase();
         if (lowerFilename.endsWith('.sog')) {
+            // Outer .sog is a ZIP container - mount it and let the inner SOG
+            // reader drive its own decode bar against the zipped payloads.
             const source = await fileSystem.createSource(filename);
             const zipFs = new ZipReadFileSystem(source);
             try {
@@ -115,10 +118,8 @@ const readFile = async (readFileOptions: ReadFileOptions): Promise<DataTable[]> 
             result = [await readSog(fileSystem, filename)];
         }
     } else if (inputFormat === 'lcc') {
-        // LCC uses ReadFileSystem for multi-file access
         result = await readLcc(fileSystem, filename, options);
     } else {
-        // All other formats use ReadSource
         const source = await fileSystem.createSource(filename);
         try {
             if (inputFormat === 'ply') {

@@ -2,8 +2,15 @@ import { randomBytes } from 'crypto';
 import { FileHandle, mkdir, open, rename, stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 
-import { type ReadFileSystem, type ProgressCallback, type ReadSource, ReadStream, BufferedReadStream } from '../lib/io/read';
-import { type FileSystem, type Writer } from '../lib/io/write';
+import {
+    BufferedReadStream,
+    ReadStream,
+    type FileSystem,
+    type ProgressCallback,
+    type ReadFileSystem,
+    type ReadSource,
+    type Writer
+} from '../lib';
 
 // ============================================================================
 // Read implementations
@@ -115,12 +122,7 @@ class NodeReadFileSystem implements ReadFileSystem {
     async createSource(filename: string, progress?: ProgressCallback): Promise<ReadSource> {
         const fileStats = await stat(filename);
         const fileHandle = await open(filename, 'r');
-
-        // Report initial progress
-        if (progress) {
-            progress(0, fileStats.size);
-        }
-
+        progress?.(0, fileStats.size);
         return new NodeReadSource(fileHandle, fileStats.size, progress);
     }
 }
@@ -133,12 +135,21 @@ class NodeReadFileSystem implements ReadFileSystem {
  * Writer implementation for writing to Node.js file handles.
  */
 class FileWriter implements Writer {
+    bytesWritten = 0;
     write: (data: Uint8Array) => Promise<void>;
     close: () => Promise<void>;
 
     constructor(fileHandle: FileHandle, filename: string, tmpFilename: string) {
         this.write = async (data: Uint8Array) => {
-            await fileHandle.write(data);
+            let offset = 0;
+            while (offset < data.byteLength) {
+                const { bytesWritten } = await fileHandle.write(data, offset, data.byteLength - offset);
+                if (bytesWritten === 0) {
+                    throw new Error('Failed to write all data to file.');
+                }
+                offset += bytesWritten;
+                this.bytesWritten += bytesWritten;
+            }
         };
 
         this.close = async () => {

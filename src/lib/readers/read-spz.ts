@@ -1,6 +1,8 @@
 import { Column, DataTable } from '../data-table';
 import { ReadSource } from '../io/read';
-import { Transform } from '../utils';
+import { logger, Transform } from '../utils';
+
+const TICK_BATCH = 1 << 16;
 
 // See https://github.com/nianticlabs/spz for reference implementation
 
@@ -138,6 +140,8 @@ const readSpz = async (source: ReadSource): Promise<DataTable> => {
         columns.push(new Column(`f_rest_${i}`, new Float32Array(numSplats)));
     }
 
+    const bar = logger.bar('decoding', numSplats);
+
     const scale = 1.0 / (1 << fractionalBits);
     for (let splatIndex = 0; splatIndex < numSplats; splatIndex++) {
         // Read position (3 × uint24)
@@ -225,7 +229,14 @@ const readSpz = async (source: ReadSource): Promise<DataTable> => {
             const shCoef = shView.getUint8(splatIndex * harmonicsComponentCount + i);
             (columns[14 + col].data as Float32Array)[splatIndex] = (shCoef - 128) / 128;
         }
+
+        if ((splatIndex & (TICK_BATCH - 1)) === (TICK_BATCH - 1)) {
+            bar.update(splatIndex + 1);
+        }
     }
+
+    bar.update(numSplats);
+    bar.end();
 
     return new DataTable(columns, Transform.PLY);
 };

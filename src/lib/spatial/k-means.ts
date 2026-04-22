@@ -165,45 +165,46 @@ const kmeans = async (points: DataTable, k: number, iterations: number, device?:
     let converged = false;
     let steps = 0;
 
-    logger.debug(`running k-means clustering: dims=${points.numColumns} points=${points.numRows} clusters=${k} iterations=${iterations}...`);
+    logger.debug(`running k-means clustering: dims=${points.numColumns} points=${points.numRows} clusters=${k} iterations=${iterations}`);
 
-    // Report iterations as anonymous nested steps
-    logger.progress.begin(iterations);
-
-    while (!converged) {
-        if (gpuClustering) {
-            await gpuClustering.execute(points, centroids, labels);
-        } else {
-            clusterKdTreeCpu(points, centroids, labels);
-        }
-
-        // calculate the new centroid positions
-        const groups = groupLabels(labels, k);
-        for (let i = 0; i < centroids.numRows; ++i) {
-            if (groups[i].length === 0) {
-                // re-seed this centroid to a random point to avoid zero vector
-                const idx = Math.floor(Math.random() * points.numRows);
-                points.getRow(idx, row);
-                centroids.setRow(i, row);
+    const bar = logger.bar('k-means', iterations);
+    try {
+        while (!converged) {
+            if (gpuClustering) {
+                await gpuClustering.execute(points, centroids, labels);
             } else {
-                calcAverage(points, groups[i], row);
-                centroids.setRow(i, row);
+                clusterKdTreeCpu(points, centroids, labels);
             }
+
+            // calculate the new centroid positions
+            const groups = groupLabels(labels, k);
+            for (let i = 0; i < centroids.numRows; ++i) {
+                if (groups[i].length === 0) {
+                    // re-seed this centroid to a random point to avoid zero vector
+                    const idx = Math.floor(Math.random() * points.numRows);
+                    points.getRow(idx, row);
+                    centroids.setRow(i, row);
+                } else {
+                    calcAverage(points, groups[i], row);
+                    centroids.setRow(i, row);
+                }
+            }
+
+            steps++;
+
+            if (steps >= iterations) {
+                converged = true;
+            }
+
+            bar.tick();
         }
-
-        steps++;
-
-        if (steps >= iterations) {
-            converged = true;
-        }
-
-        // Report iteration as anonymous step
-        logger.progress.step();
+    } catch (e) {
+        gpuClustering?.destroy();
+        throw e;
     }
 
-    if (gpuClustering) {
-        gpuClustering.destroy();
-    }
+    bar.end();
+    gpuClustering?.destroy();
 
     return { centroids, labels };
 };

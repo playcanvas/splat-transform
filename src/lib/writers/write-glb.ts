@@ -1,11 +1,11 @@
+import { basename } from 'pathe';
+
 import { version } from '../../../package.json';
-import { DataTable, convertToSpace } from '../data-table';
+import { DataTable, convertToSpace, getSHBands, shRestNames } from '../data-table';
 import { type FileSystem } from '../io/write';
-import { Transform, sigmoid } from '../utils';
+import { fmtBytes, logger, Transform, sigmoid } from '../utils';
 
 const SH_C0 = 0.2820947917738781;
-
-const shRestNames = new Array(45).fill('').map((_: string, i: number) => `f_rest_${i}`);
 
 type WriteGlbOptions = {
     filename: string;
@@ -24,19 +24,6 @@ const GLB_MAGIC = 0x46546C67;
 const GLB_VERSION = 2;
 const JSON_CHUNK_TYPE = 0x4E4F534A;
 const BIN_CHUNK_TYPE = 0x004E4942;
-
-/**
- * Determines how many SH bands (0-3) the DataTable contains beyond the DC term.
- * Band detection uses the same channel-major layout as the rest of the codebase:
- * N coefficients per channel, 3 channels, stored as f_rest_0..f_rest_(3N-1).
- *
- * @param dataTable - The DataTable to inspect.
- * @returns The number of SH bands (0-3).
- */
-const getSHBands = (dataTable: DataTable): number => {
-    const idx = shRestNames.findIndex(v => !dataTable.hasColumn(v));
-    return ({ '9': 1, '24': 2, '-1': 3 } as Record<string, number>)[String(idx)] ?? 0;
-};
 
 /**
  * Computes POSITION accessor min/max bounds required by the glTF spec.
@@ -386,10 +373,15 @@ const writeGlb = async (options: WriteGlbOptions, fs: FileSystem) => {
     // BIN chunk data (padded with zeros per spec)
     bytes.set(binBuffer, offset);
 
+    const writingGroup = logger.group('Writing');
+
     // Write the GLB file
     const writer = await fs.createWriter(filename);
     await writer.write(new Uint8Array(glb));
     await writer.close();
+
+    logger.info(`${basename(filename)} (${fmtBytes(writer.bytesWritten)})`);
+    writingGroup.end();
 };
 
 export { writeGlb };

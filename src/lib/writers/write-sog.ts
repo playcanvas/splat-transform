@@ -1,13 +1,11 @@
-import { dirname, resolve } from 'pathe';
+import { basename, dirname, resolve } from 'pathe';
 
 import { version } from '../../../package.json';
-import { Column, DataTable, sortMortonOrder, convertToSpace } from '../data-table';
+import { Column, DataTable, sortMortonOrder, convertToSpace, getSHBands, shRestNames } from '../data-table';
 import { type FileSystem, writeFile, ZipFileSystem } from '../io/write';
 import { kmeans, quantize1d } from '../spatial';
 import type { DeviceCreator } from '../types';
-import { logger, sigmoid, Transform, WebPCodec } from '../utils';
-
-const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
+import { fmtBytes, logger, sigmoid, Transform, WebPCodec } from '../utils';
 
 const calcMinMax = (dataTable: DataTable, columnNames: string[], indices: Uint32Array) => {
     const columns = columnNames.map(name => dataTable.getColumnByName(name));
@@ -54,6 +52,16 @@ type WriteSogOptions = {
     bundle: boolean;
     iterations: number;
     createDevice?: DeviceCreator;
+    // When true, do not open an internal `Writing` log group; instead emit
+    // file-write info entries directly into the caller's existing scope.
+    // Used when this writer runs as a sub-step of another writer (e.g. LOD)
+    // so all written files appear flat under a single `Writing` group.
+    omitWritingGroup?: boolean;
+    // When true, suppress all per-file `logger.info` output and the `Writing`
+    // group entirely. Used when this writer is invoked purely as a
+    // computation step whose outputs are intermediate (e.g. encoding into
+    // memory for HTML bundling).
+    silent?: boolean;
 };
 
 /**
@@ -68,11 +76,15 @@ type WriteSogOptions = {
  * @ignore
  */
 const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
-    const { filename: outputFilename, bundle, iterations, createDevice } = options;
+    const { filename: outputFilename, bundle, iterations, createDevice, omitWritingGroup, silent } = options;
     const dataTable = convertToSpace(options.dataTable, Transform.PLY);
 
-    // initialize output stream - use ZipFileSystem for bundled output
-    const zipFs = bundle ? new ZipFileSystem(await fs.createWriter(outputFilename)) : null;
+    // initialize output stream - use ZipFileSystem for bundled output. The
+    // underlying writer's `bytesWritten` is read after close to report the
+    // final archive size as a single log entry instead of per-internal-file
+    // lines.
+    const bundleWriter = bundle ? await fs.createWriter(outputFilename) : null;
+    const zipFs = bundleWriter ? new ZipFileSystem(bundleWriter) : null;
     const outputFs = zipFs || fs;
 
     const indices = options.indices || generateIndices(dataTable);
@@ -86,7 +98,6 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
 
     const writeWebp = async (filename: string, data: Uint8Array, w = width, h = height) => {
         const pathname = zipFs ? filename : resolve(dirname(outputFilename), filename);
-        logger.log(`writing '${pathname}'...`);
 
         // construct the encoder on first use
         if (!webPCodec) {
@@ -96,6 +107,12 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
         const webp = await webPCodec.encodeLosslessRGBA(data, w, h);
 
         await writeFile(outputFs, pathname, webp);
+
+        // For bundled output the per-file sizes are an internal detail; we
+        // report a single bundle size after the archive closes.
+        if (!silent && !zipFs) {
+            logger.info(`${filename} (${fmtBytes(webp.byteLength)})`);
+        }
     };
 
     const writeTableData = (filename: string, dataTable: DataTable, w = width, h = height) => {
@@ -234,7 +251,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
 
     const writeSH = async (shBands: number) => {
         const shCoeffs = [0, 3, 8, 15][shBands];
-        const shColumnNames = shNames.slice(0, shCoeffs * 3);
+        const shColumnNames = shRestNames.slice(0, shCoeffs * 3);
         const shColumns = shColumnNames.map(name => dataTable.getColumnByName(name));
 
         // create a table with just spherical harmonics data
@@ -249,10 +266,8 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
         // Create GPU device lazily — only needed for SH k-means clustering
         const gpuDevice = createDevice ? await createDevice() : undefined;
 
-        logger.progress.step('Compressing spherical harmonics');
         const { centroids, labels } = await kmeans(shDataTable, paletteSize, iterations, gpuDevice);
 
-        logger.progress.step('Quantizing spherical harmonics');
         const codebook = quantize1d(centroids);
 
         // write centroids
@@ -298,33 +313,19 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
         };
     };
 
-    const shBands = { '9': 1, '24': 2, '-1': 3 }[shNames.findIndex(v => !dataTable.hasColumn(v))] ?? 0;
-    const totalSteps = shBands > 0 ? 8 : 6;
+    const shBands = getSHBands(dataTable);
 
-    // convert and write attributes
-    logger.progress.begin(totalSteps);
+    const writingGroup = (silent || omitWritingGroup) ? null : logger.group('Writing');
 
-    logger.progress.step('Generating morton order');
-    // indices already generated above
-
-    logger.progress.step('Writing positions');
     const meansMinMax = await writeMeans();
-
-    logger.progress.step('Writing quaternions');
     await writeQuaternions();
-
-    logger.progress.step('Compressing scales');
     const scalesCodebook = await writeScales();
-
-    logger.progress.step('Compressing colors');
     const colorsCodebook = await writeColors();
 
     let shN = null;
     if (shBands > 0) {
         shN = await writeSH(shBands);
     }
-
-    logger.progress.step('Finalizing');
 
     // construct meta.json
     const meta: any = {
@@ -358,12 +359,23 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     const metaJson = (new TextEncoder()).encode(JSON.stringify(meta));
 
     const metaFilename = zipFs ? 'meta.json' : outputFilename;
+
     await writeFile(outputFs, metaFilename, metaJson);
+
+    if (!silent && !zipFs) {
+        logger.info(`${basename(outputFilename)} (${fmtBytes(metaJson.byteLength)})`);
+    }
 
     // Close zip archive if bundling
     if (zipFs) {
         await zipFs.close();
     }
+
+    if (!silent && bundleWriter) {
+        logger.info(`${basename(outputFilename)} (${fmtBytes(bundleWriter.bytesWritten)})`);
+    }
+
+    writingGroup?.end();
 };
 
 export { writeSog };

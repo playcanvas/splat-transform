@@ -57,7 +57,7 @@ const carve = (
     let seedIz = Math.floor((seed.z - gridBounds.min.z) / voxelResolution);
 
     if (seedIx < 0 || seedIx >= nx || seedIy < 0 || seedIy >= ny || seedIz < 0 || seedIz >= nz) {
-        logger.warn(`carve: seed (${seed.x}, ${seed.y}, ${seed.z}) outside grid, skipping`);
+        logger.warn(`seed (${seed.x}, ${seed.y}, ${seed.z}) outside grid, skipping carve`);
         return { buffer, gridBounds };
     }
 
@@ -65,7 +65,7 @@ const carve = (
         const maxRadius = Math.max(kernelR, yHalfExtent) * 2;
         const found = SparseVoxelGrid.findNearestFreeCell(blocked, seedIx, seedIy, seedIz, maxRadius);
         if (!found) {
-            logger.warn(`carve: seed (${seed.x}, ${seed.y}, ${seed.z}) blocked after dilation, no free cell within ${maxRadius} voxels, skipping`);
+            logger.warn(`seed (${seed.x}, ${seed.y}, ${seed.z}) blocked after dilation, no free cell within ${maxRadius} voxels, skipping carve`);
             return { buffer, gridBounds };
         }
         seedIx = found.ix;
@@ -86,7 +86,7 @@ const carve = (
     const navBounds = navRegion.getOccupiedBlockBounds();
 
     if (!navBounds) {
-        logger.warn('carve: no navigable cells remain, returning empty result');
+        logger.warn('no navigable cells remain after carve, returning empty result');
         return {
             buffer: new BlockMaskBuffer(),
             gridBounds: { min: gridBounds.min.clone(), max: gridBounds.min.clone() }

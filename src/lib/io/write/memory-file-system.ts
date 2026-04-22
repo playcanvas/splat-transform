@@ -2,6 +2,7 @@ import { type FileSystem, type Writer } from './file-system';
 
 // write data to a memory buffer
 class MemoryWriter implements Writer {
+    bytesWritten = 0;
     write: (data: Uint8Array) => void;
     close: () => void;
 
@@ -35,6 +36,8 @@ class MemoryWriter implements Writer {
                     cursor = 0;
                 }
             }
+
+            this.bytesWritten += data.byteLength;
         };
 
         this.close = () => {
