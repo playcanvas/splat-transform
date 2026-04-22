@@ -186,6 +186,9 @@ class LoggerCore {
      * verbosity. Primary use: the `logger` façade calls this before
      * formatting arguments so filtered `info`/`warn`/`debug` calls don't
      * allocate the joined string that {@link emit} would only throw away.
+     *
+     * @param level - The message level to test.
+     * @returns `true` if a message at `level` would reach the renderer.
      */
     isLevelVisible(level: MessageKind): boolean {
         return verbosityRank[this.verbosity] >= verbosityRank[messageMinVerbosity[level]];
@@ -209,6 +212,8 @@ class LoggerCore {
      *   output is visible at all.
      * - All other scope/bar events (`scopeStart`, `barStart`, `barTick`,
      *   `barEnd`) are gated at `normal`.
+     *
+     * @param event - The candidate event.
      */
     emit(event: LogEvent): void {
         if (event.kind !== 'output' && event.kind !== 'message') {
