@@ -320,6 +320,13 @@ class LoggerCore {
 
     private makeBar(scope: Scope & { kind: 'bar' }): Bar {
         let closed = false;
+        // Bars are strictly LIFO from a renderer's perspective: a `TextRenderer`
+        // (or any other line-based renderer) only tracks one active bar line,
+        // so ticking a bar that isn't currently on top of the stack would
+        // corrupt whatever inner bar is. We still update `scope.current`
+        // internally so the recap line at `barEnd` is accurate, but we
+        // suppress `barTick` emission unless this bar is actually on top.
+        const isTopOfStack = () => this.stack[this.stack.length - 1] === scope;
         const handle: Bar = {
             tick: (n = 1) => {
                 if (closed) return;
@@ -333,6 +340,7 @@ class LoggerCore {
                 const next = Math.min(scope.total, scope.current + Math.max(0, n));
                 if (next === scope.current) return;
                 scope.current = next;
+                if (!isTopOfStack()) return;
                 this.emit({ kind: 'barTick', depth: scope.depth, name: scope.name, current: scope.current, total: scope.total });
             },
             update: (current: number) => {
@@ -344,6 +352,7 @@ class LoggerCore {
                 const next = Math.min(scope.total, Math.max(0, current));
                 if (next === scope.current) return;
                 scope.current = next;
+                if (!isTopOfStack()) return;
                 this.emit({ kind: 'barTick', depth: scope.depth, name: scope.name, current: scope.current, total: scope.total });
             },
             end: () => {

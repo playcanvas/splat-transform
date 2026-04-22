@@ -305,7 +305,7 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
     const writer = await fs.createWriter(filename);
     await writer.write(metaJson);
     await writer.close();
-    logWrittenFile(basename(filename), metaJson.byteLength);
+    logWrittenFile(basename(filename), writer.bytesWritten);
 
     // write file units
     for (const [lodValue, fileUnits] of lodFiles) {
