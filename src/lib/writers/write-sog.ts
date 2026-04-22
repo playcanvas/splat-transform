@@ -1,11 +1,12 @@
 import { basename, dirname, resolve } from 'pathe';
 
+import { logWrittenFile } from './utils';
 import { version } from '../../../package.json';
 import { Column, DataTable, sortMortonOrder, convertToSpace, getSHBands, shRestNames } from '../data-table';
 import { type FileSystem, writeFile, ZipFileSystem } from '../io/write';
 import { kmeans, quantize1d } from '../spatial';
 import type { DeviceCreator } from '../types';
-import { fmtBytes, logger, sigmoid, Transform, WebPCodec } from '../utils';
+import { logger, sigmoid, Transform, WebPCodec } from '../utils';
 
 const calcMinMax = (dataTable: DataTable, columnNames: string[], indices: Uint32Array) => {
     const columns = columnNames.map(name => dataTable.getColumnByName(name));
@@ -109,7 +110,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
         // For bundled output the per-file sizes are an internal detail; we
         // report a single bundle size after the archive closes.
         if (emitInfo && !zipFs) {
-            logger.info(`${filename} (${fmtBytes(webp.byteLength)})`);
+            logWrittenFile(filename, webp.byteLength);
         }
     };
 
@@ -361,7 +362,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     await writeFile(outputFs, metaFilename, metaJson);
 
     if (emitInfo && !zipFs) {
-        logger.info(`${basename(outputFilename)} (${fmtBytes(metaJson.byteLength)})`);
+        logWrittenFile(basename(outputFilename), metaJson.byteLength);
     }
 
     // Close zip archive if bundling
@@ -370,7 +371,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     }
 
     if (emitInfo && bundleWriter) {
-        logger.info(`${basename(outputFilename)} (${fmtBytes(bundleWriter.bytesWritten)})`);
+        logWrittenFile(basename(outputFilename), bundleWriter.bytesWritten);
     }
 
     writingGroup?.end();

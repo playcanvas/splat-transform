@@ -1,12 +1,13 @@
 import { basename, dirname, resolve } from 'pathe';
 import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
+import { logWrittenFile } from './utils';
 import { writeSog } from './write-sog.js';
 import { type TypedArray, DataTable, sortMortonOrder, convertToSpace } from '../data-table';
 import { type FileSystem } from '../io/write';
 import { BTreeNode, BTree } from '../spatial';
 import type { DeviceCreator } from '../types';
-import { fmtBytes, logger, Transform } from '../utils';
+import { logger, Transform } from '../utils';
 
 type Aabb = {
     min: number[],
@@ -304,7 +305,7 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
     const writer = await fs.createWriter(filename);
     await writer.write(metaJson);
     await writer.close();
-    logger.info(`${basename(filename)} (${fmtBytes(metaJson.byteLength)})`);
+    logWrittenFile(basename(filename), metaJson.byteLength);
 
     // write file units
     for (const [lodValue, fileUnits] of lodFiles) {

@@ -2,12 +2,13 @@ import { basename } from 'pathe';
 import { Vec3 } from 'playcanvas';
 
 import { buildCollisionMesh } from './collision-glb';
+import { logWrittenFile } from './utils';
 import { Column, DataTable, computeGaussianExtents, computeWriteTransform, transformColumns, type Bounds } from '../data-table';
 import { GpuVoxelization } from '../gpu';
 import { type FileSystem, writeFile } from '../io/write';
 import { GaussianBVH } from '../spatial';
 import type { DeviceCreator } from '../types';
-import { fmtBytes, fmtCount, logger, Transform } from '../utils';
+import { fmtCount, logger, Transform } from '../utils';
 import { buildSparseOctree, type SparseOctree } from './sparse-octree';
 import {
     filterAndFillBlocks,
@@ -275,7 +276,7 @@ const writeOctreeFiles = async (
 
     const jsonBytes = (new TextEncoder()).encode(JSON.stringify(metadata, null, 2));
     await writeFile(fs, jsonFilename, jsonBytes);
-    logger.info(`${basename(jsonFilename)} (${fmtBytes(jsonBytes.byteLength)})`);
+    logWrittenFile(basename(jsonFilename), jsonBytes.byteLength);
 
     const binFilename = jsonFilename.replace('.voxel.json', '.voxel.bin');
 
@@ -286,7 +287,7 @@ const writeOctreeFiles = async (
     view.set(octree.leafData, octree.nodes.length);
 
     await writeFile(fs, binFilename, new Uint8Array(buffer));
-    logger.info(`${basename(binFilename)} (${fmtBytes(binarySize)})`);
+    logWrittenFile(basename(binFilename), binarySize);
 };
 
 /**
@@ -468,7 +469,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         if (glbBytes) {
             const glbFilename = filename.replace('.voxel.json', '.collision.glb');
             await writeFile(fs, glbFilename, glbBytes);
-            logger.info(`${basename(glbFilename)} (${fmtBytes(glbBytes.length)})`);
+            logWrittenFile(basename(glbFilename), glbBytes.length);
         }
         writingSub.end();
 

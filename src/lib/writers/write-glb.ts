@@ -1,9 +1,10 @@
 import { basename } from 'pathe';
 
+import { logWrittenFile } from './utils';
 import { version } from '../../../package.json';
 import { DataTable, convertToSpace, getSHBands, shRestNames } from '../data-table';
 import { type FileSystem } from '../io/write';
-import { fmtBytes, logger, Transform, sigmoid } from '../utils';
+import { logger, Transform, sigmoid } from '../utils';
 
 const SH_C0 = 0.2820947917738781;
 
@@ -380,7 +381,7 @@ const writeGlb = async (options: WriteGlbOptions, fs: FileSystem) => {
     await writer.write(new Uint8Array(glb));
     await writer.close();
 
-    logger.info(`${basename(filename)} (${fmtBytes(writer.bytesWritten)})`);
+    logWrittenFile(basename(filename), writer.bytesWritten);
     writingGroup.end();
 };
 

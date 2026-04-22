@@ -1,11 +1,12 @@
 import { html, css, js } from '@playcanvas/supersplat-viewer';
 import { basename, dirname, join } from 'pathe';
 
+import { logWrittenFile } from './utils';
 import { writeSog } from './write-sog';
 import { DataTable } from '../data-table';
 import { type FileSystem, MemoryFileSystem, writeFile } from '../io/write';
 import type { DeviceCreator } from '../types';
-import { fmtBytes, logger, toBase64 } from '../utils';
+import { logger, toBase64 } from '../utils';
 
 const defaultSettings = {
     version: 2,
@@ -94,7 +95,7 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
 
         const writingGroup = logger.group('Writing');
         await writeFile(fs, filename, htmlBytes);
-        logger.info(`${basename(filename)} (${fmtBytes(htmlBytes.byteLength)})`);
+        logWrittenFile(basename(filename), htmlBytes.byteLength);
         writingGroup.end();
     } else {
         // Unbundled mode: write separate files
@@ -119,19 +120,19 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
         const cssPath = join(outputDir, 'index.css');
         const cssBytes = encoder.encode(css);
         await writeFile(fs, cssPath, cssBytes);
-        logger.info(`${basename(cssPath)} (${fmtBytes(cssBytes.byteLength)})`);
+        logWrittenFile(basename(cssPath), cssBytes.byteLength);
 
         // Write JS file
         const jsPath = join(outputDir, 'index.js');
         const jsBytes = encoder.encode(js);
         await writeFile(fs, jsPath, jsBytes);
-        logger.info(`${basename(jsPath)} (${fmtBytes(jsBytes.byteLength)})`);
+        logWrittenFile(basename(jsPath), jsBytes.byteLength);
 
         // Write settings file
         const settingsPath = join(outputDir, 'settings.json');
         const settingsBytes = encoder.encode(JSON.stringify(viewerSettings, null, 4));
         await writeFile(fs, settingsPath, settingsBytes);
-        logger.info(`${basename(settingsPath)} (${fmtBytes(settingsBytes.byteLength)})`);
+        logWrittenFile(basename(settingsPath), settingsBytes.byteLength);
 
         // Generate HTML with external references
         const content = 'fetch(contentUrl)';
@@ -142,7 +143,7 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
 
         const htmlBytes = encoder.encode(resultHtml);
         await writeFile(fs, filename, htmlBytes);
-        logger.info(`${basename(filename)} (${fmtBytes(htmlBytes.byteLength)})`);
+        logWrittenFile(basename(filename), htmlBytes.byteLength);
 
         writingGroup.end();
     }

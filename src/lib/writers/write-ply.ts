@@ -1,9 +1,10 @@
 import { basename } from 'pathe';
 
+import { logWrittenFile } from './utils';
 import { convertToSpace } from '../data-table';
 import { type FileSystem } from '../io/write';
 import { PlyData } from '../readers';
-import { fmtBytes, logger, Transform } from '../utils';
+import { logger, Transform } from '../utils';
 
 const columnTypeToPlyType = (type: string): string => {
     switch (type) {
@@ -99,7 +100,7 @@ const writePly = async (options: WritePlyOptions, fs: FileSystem) => {
 
     await writer.close();
 
-    logger.info(`${basename(filename)} (${fmtBytes(writer.bytesWritten)})`);
+    logWrittenFile(basename(filename), writer.bytesWritten);
     writingGroup.end();
 };
 

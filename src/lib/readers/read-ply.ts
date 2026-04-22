@@ -296,11 +296,6 @@ const readPly = async (source: ReadSource): Promise<DataTable> => {
         });
     }
 
-    // Close the bar only on success: leaving it open on the error path lets
-    // `logger.error() -> unwindAll(true)` mark it as failed instead of
-    // finalizing it as a successful bar first.
-    bar.end();
-
     const plyData = {
         comments: header.comments,
         elements
@@ -319,6 +314,13 @@ const readPly = async (source: ReadSource): Promise<DataTable> => {
     }
 
     result.transform = Transform.PLY.clone();
+
+    // Close the bar only on success: leaving it open on any earlier error
+    // path (missing `vertex` element, `decompressPly` failure, etc.) lets
+    // `logger.error() -> unwindAll(true)` mark it as failed instead of
+    // finalizing it as a successful bar first.
+    bar.end();
+
     return result;
 };
 

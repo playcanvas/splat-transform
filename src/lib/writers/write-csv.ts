@@ -1,8 +1,9 @@
 import { basename } from 'pathe';
 
+import { logWrittenFile } from './utils';
 import { DataTable } from '../data-table';
 import { type FileSystem } from '../io/write';
-import { fmtBytes, logger } from '../utils';
+import { logger } from '../utils';
 
 type WriteCSVOptions = {
     filename: string;
@@ -47,7 +48,7 @@ const writeCsv = async (options: WriteCSVOptions, fs: FileSystem) => {
 
     await writer.close();
 
-    logger.info(`${basename(filename)} (${fmtBytes(writer.bytesWritten)})`);
+    logWrittenFile(basename(filename), writer.bytesWritten);
     writingGroup.end();
 };
 
