@@ -1,5 +1,5 @@
 import { fmtBytes, fmtTime } from './fmt';
-import type { LogEvent, MessageKind, Renderer, Verbosity } from './logger';
+import type { LogEvent, Renderer } from './logger';
 
 /**
  * Output streams and optional memory-usage probe for {@link TextRenderer}.
@@ -25,25 +25,6 @@ interface TextRendererOptions {
     getMemoryUsage?: () => { rss: number; heapUsed: number; arrayBuffers: number };
 }
 
-const verbosityRank: Record<Verbosity, number> = {
-    quiet: 0,
-    normal: 1,
-    verbose: 2
-};
-
-const messageMinVerbosity: Record<MessageKind, Verbosity> = {
-    error: 'quiet',
-    warn: 'quiet',
-    info: 'normal',
-    debug: 'verbose'
-};
-
-const messageVisible = (kind: MessageKind, v: Verbosity): boolean => {
-    return verbosityRank[v] >= verbosityRank[messageMinVerbosity[kind]];
-};
-
-const taskVisible = (v: Verbosity): boolean => verbosityRank[v] >= verbosityRank.normal;
-
 const indent = (depth: number): string => '  '.repeat(Math.max(0, depth));
 
 const BAR_WIDTH = 20;
@@ -56,14 +37,16 @@ const BAR_WIDTH = 20;
  * with `#` appended incrementally on each `barTick` and the remainder padded
  * with `.` on `barEnd`.
  *
+ * Verbosity filtering is handled centrally by `LoggerCore` - this renderer
+ * receives only events that have already passed the visibility gate, so it
+ * is pure presentation.
+ *
  * Sinks are injected (no `process` reference here) so the renderer works in
  * both Node CLI and browser/bundle contexts: the CLI passes
  * `process.stderr.write` for status and `process.stdout.write` for raw
  * output; library/browser consumers can pass a `console.log` line buffer.
  */
 class TextRenderer implements Renderer {
-    private verbosity: Verbosity = 'normal';
-
     private readonly write: (chunk: string) => void;
 
     private readonly output: (chunk: string) => void;
@@ -85,15 +68,10 @@ class TextRenderer implements Renderer {
         this.getMemoryUsage = options.getMemoryUsage;
     }
 
-    setVerbosity(v: Verbosity): void {
-        this.verbosity = v;
-    }
-
     handle(event: LogEvent): void {
         switch (event.kind) {
             case 'scopeStart': {
                 this.commitDirty();
-                if (!taskVisible(this.verbosity)) return;
                 const numbered = event.index !== undefined && event.total !== undefined ?
                     `[${event.index}/${event.total}] ` : '';
                 this.write(`${indent(event.depth)}\u25b8 ${numbered}${event.name}\n`);
@@ -101,21 +79,18 @@ class TextRenderer implements Renderer {
             }
             case 'scopeEnd': {
                 this.commitDirty();
-                if (!taskVisible(this.verbosity)) return;
                 const verb = event.failed ? 'failed in' : 'done in';
                 this.write(`${indent(event.depth + 1)}${verb} ${fmtTime(event.durationMs)}${this.memSuffix()}\n`);
                 return;
             }
             case 'barStart': {
                 this.commitDirty();
-                if (!taskVisible(this.verbosity)) return;
                 this.write(`${indent(event.depth)}\u25b8 ${event.name} [`);
                 this.lineDirty = true;
                 this.barFilled = 0;
                 return;
             }
             case 'barTick': {
-                if (!taskVisible(this.verbosity)) return;
                 if (!this.lineDirty) return;
                 const target = event.total <= 0 ? 0 :
                     Math.min(BAR_WIDTH, Math.floor((event.current / event.total) * BAR_WIDTH));
@@ -126,7 +101,6 @@ class TextRenderer implements Renderer {
                 return;
             }
             case 'barEnd': {
-                if (!taskVisible(this.verbosity)) return;
                 const remaining = Math.max(0, BAR_WIDTH - this.barFilled);
                 const tail = '.'.repeat(remaining);
                 const suffix = event.failed ?
@@ -137,15 +111,14 @@ class TextRenderer implements Renderer {
                     this.lineDirty = false;
                     this.barFilled = 0;
                 } else {
-                    // bar header was suppressed (e.g. quiet) but end is still
-                    // inside taskVisible - emit a synthetic full line for
-                    // consistency.
+                    // bar's inline line was committed early by a nested
+                    // event (e.g. a child group/message). Emit a recap
+                    // line so the bar still has a visible footer.
                     this.write(`${indent(event.depth)}\u25b8 ${event.name} [${'#'.repeat(BAR_WIDTH)}${suffix}${this.memSuffix()}\n`);
                 }
                 return;
             }
             case 'message': {
-                if (!messageVisible(event.level, this.verbosity)) return;
                 this.commitDirty();
                 // info/debug get a `\u00b7` glyph only when nested under a
                 // scope - at depth 0 they're framing lines (banners,

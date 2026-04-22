@@ -33,7 +33,10 @@ type LogEvent =
     | { kind: 'output'; text: string };
 
 /**
- * Renderer interface. Receives semantic events and decides how to display them.
+ * Renderer interface. Receives semantic events (already filtered by the
+ * active verbosity inside {@link LoggerCore}) and decides how to display
+ * them. Renderers are pure presentation - they never need to consult or
+ * track verbosity themselves.
  */
 interface Renderer {
     /**
@@ -41,11 +44,6 @@ interface Renderer {
      * @param event - The event to render.
      */
     handle(event: LogEvent): void;
-    /**
-     * Set the active verbosity level.
-     * @param v - The new verbosity level.
-     */
-    setVerbosity(v: Verbosity): void;
 }
 
 /**
@@ -133,9 +131,43 @@ const fmtArgs = (args: any[]): string => {
  * every event silently.
  */
 class NullRenderer implements Renderer {
-    setVerbosity(_v: Verbosity): void { /* no-op */ }
     handle(_event: LogEvent): void { /* no-op */ }
 }
+
+const verbosityRank: Record<Verbosity, number> = {
+    quiet: 0,
+    normal: 1,
+    verbose: 2
+};
+
+const messageMinVerbosity: Record<MessageKind, Verbosity> = {
+    error: 'quiet',
+    warn: 'quiet',
+    info: 'normal',
+    debug: 'verbose'
+};
+
+/**
+ * Visibility predicate applied centrally inside {@link LoggerCore.emit}.
+ * Renderers see only events that pass this gate, so they never need to
+ * know about verbosity themselves.
+ *
+ * - `output` is always shown (it's the pipeable channel).
+ * - `message` is gated by its `level` against {@link messageMinVerbosity}.
+ * - All scope/bar events are gated as a single class so `*Start` / `*End`
+ *   are dropped together and never split across the visibility threshold.
+ *
+ * @param event - The candidate event.
+ * @param v - The active verbosity level.
+ * @returns `true` if the event should reach the renderer.
+ */
+const eventVisible = (event: LogEvent, v: Verbosity): boolean => {
+    if (event.kind === 'output') return true;
+    if (event.kind === 'message') {
+        return verbosityRank[v] >= verbosityRank[messageMinVerbosity[event.level]];
+    }
+    return verbosityRank[v] >= verbosityRank.normal;
+};
 
 /**
  * Active-scope manager and message router. The single shared instance lives
@@ -151,12 +183,10 @@ class LoggerCore {
 
     setRenderer(r: Renderer): void {
         this.renderer = r;
-        this.renderer.setVerbosity(this.verbosity);
     }
 
     setVerbosity(v: Verbosity): void {
         this.verbosity = v;
-        this.renderer.setVerbosity(v);
     }
 
     getVerbosity(): Verbosity {
@@ -164,6 +194,7 @@ class LoggerCore {
     }
 
     emit(event: LogEvent): void {
+        if (!eventVisible(event, this.verbosity)) return;
         this.renderer.handle(event);
     }
 
