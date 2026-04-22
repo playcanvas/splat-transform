@@ -158,34 +158,6 @@ const messageMinVerbosity: Record<MessageKind, Verbosity> = {
 };
 
 /**
- * Visibility predicate applied centrally inside {@link LoggerCore.emit}.
- * Renderers see only events that pass this gate, so they never need to
- * know about verbosity themselves.
- *
- * - `output` is always shown (it's the pipeable channel).
- * - `message` is gated by its `level` against {@link messageMinVerbosity}.
- * - All scope/bar events are gated as a single class so `*Start` / `*End`
- *   are dropped together and never split across the visibility threshold.
- *
- * @param event - The candidate event.
- * @param v - The active verbosity level.
- * @returns `true` if the event should reach the renderer.
- */
-const eventVisible = (event: LogEvent, v: Verbosity): boolean => {
-    if (event.kind === 'output') return true;
-    if (event.kind === 'message') {
-        return verbosityRank[v] >= verbosityRank[messageMinVerbosity[event.level]];
-    }
-    // scopeEnd footers are noisy on the success path - hide them at normal,
-    // keep them at verbose. Failures always show so the "failed in Xs"
-    // cascade survives a logger.error / unwindAll(true).
-    if (event.kind === 'scopeEnd' && !event.failed) {
-        return verbosityRank[v] >= verbosityRank.verbose;
-    }
-    return verbosityRank[v] >= verbosityRank.normal;
-};
-
-/**
  * Active-scope manager and message router. The single shared instance lives
  * inside this module; the public `logger` surface is a thin façade over it.
  */
@@ -209,8 +181,44 @@ class LoggerCore {
         return this.verbosity;
     }
 
+    /**
+     * Whether a message at `level` would be emitted at the current
+     * verbosity. Primary use: the `logger` façade calls this before
+     * formatting arguments so filtered `info`/`warn`/`debug` calls don't
+     * allocate the joined string that {@link emit} would only throw away.
+     */
+    isLevelVisible(level: MessageKind): boolean {
+        return verbosityRank[this.verbosity] >= verbosityRank[messageMinVerbosity[level]];
+    }
+
+    /**
+     * Gate events by the current verbosity, then hand survivors to the
+     * renderer. Renderers see only visible events and never need to know
+     * about verbosity themselves.
+     *
+     * - `output` is always shown (it's the pipeable channel).
+     * - `message` is assumed already gated at the façade via
+     *   {@link LoggerCore.isLevelVisible} (so callers can skip formatting
+     *   args for filtered levels); anything that reaches here is passed
+     *   through.
+     * - `scopeEnd` footers are noisy on the success path, so success-ends
+     *   are gated one rank higher than their matching start: visible only
+     *   at `verbose`, while `scopeStart` shows at `normal`. Failed ends
+     *   stay at the `normal` gate so the "failed in Xs" cascade from
+     *   `logger.error` / `unwindAll(true)` survives whenever scope
+     *   output is visible at all.
+     * - All other scope/bar events (`scopeStart`, `barStart`, `barTick`,
+     *   `barEnd`) are gated at `normal`.
+     */
     emit(event: LogEvent): void {
-        if (!eventVisible(event, this.verbosity)) return;
+        if (event.kind !== 'output' && event.kind !== 'message') {
+            const rank = verbosityRank[this.verbosity];
+            if (event.kind === 'scopeEnd' && !event.failed) {
+                if (rank < verbosityRank.verbose) return;
+            } else if (rank < verbosityRank.normal) {
+                return;
+            }
+        }
         this.renderer.handle(event);
     }
 
@@ -431,6 +439,7 @@ const logger = {
      * @param args - Message parts (joined with a space).
      */
     info(...args: any[]): void {
+        if (!core.isLevelVisible('info')) return;
         core.message('info', fmtArgs(args));
     },
 
@@ -439,6 +448,7 @@ const logger = {
      * @param args - Message parts.
      */
     warn(...args: any[]): void {
+        if (!core.isLevelVisible('warn')) return;
         core.message('warn', fmtArgs(args));
     },
 
@@ -456,6 +466,7 @@ const logger = {
      * @param args - Message parts.
      */
     debug(...args: any[]): void {
+        if (!core.isLevelVisible('debug')) return;
         core.message('debug', fmtArgs(args));
     },
 

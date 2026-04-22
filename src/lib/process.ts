@@ -2,7 +2,7 @@ import { Vec3 } from 'playcanvas';
 
 import { Column, DataTable, simplifyGaussians, sortMortonOrder, computeSummary, type SummaryData, convertToSpace, getSHBands } from './data-table';
 import type { DeviceCreator } from './types';
-import { fmtCount, logger, Transform } from './utils';
+import { fmtCount, type Group, logger, Transform } from './utils';
 import { filterCluster as filterClusterFn } from './voxel/filter-cluster';
 import { filterFloaters as filterFloatersFn } from './voxel/filter-floaters';
 
@@ -273,12 +273,10 @@ const describeDelta = (delta: number, noun: string): string => {
     return delta > 0 ? `removed ${fmtCount(delta)} ${noun}` : `added ${fmtCount(-delta)} ${noun}`;
 };
 
-type LogGroup = ReturnType<typeof logger.group>;
-
 // Close a filter's group, emitting a single result line that summarizes the
 // row/column delta. Each filter case opens its own group at the top; this is
 // the symmetric "finish" that runs at the bottom.
-const endFilterGroup = (g: LogGroup, prev: DataTable, next: DataTable) => {
+const endFilterGroup = (g: Group, prev: DataTable, next: DataTable) => {
     const removedRows = prev.numRows - next.numRows;
     const removedCols = prev.columnNames.length - next.columnNames.length;
     const parts: string[] = [];
