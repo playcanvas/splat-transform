@@ -680,7 +680,7 @@ const main = async () => {
     if (files.length < 2 || options.help) {
         // help text goes to stdout via output, errors go to stderr
         logger.output(usage);
-        exit(files.length < 2 ? 1 : 0);
+        exit(options.help ? 0 : 1);
     }
 
     const inputArgs = files.slice(0, -1);

@@ -184,8 +184,6 @@ const voxelizeToBuffer = async (
         bar.tick();
     }
 
-    await flushPendingBatches();
-
     if (inflight) {
         const result = await inflight.resultPromise;
         processResults(result.masks, inflight.batches);
