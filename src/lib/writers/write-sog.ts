@@ -52,16 +52,11 @@ type WriteSogOptions = {
     bundle: boolean;
     iterations: number;
     createDevice?: DeviceCreator;
-    // When true, do not open an internal `Writing` log group; instead emit
-    // file-write info entries directly into the caller's existing scope.
-    // Used when this writer runs as a sub-step of another writer (e.g. LOD)
-    // so all written files appear flat under a single `Writing` group.
-    omitWritingGroup?: boolean;
-    // When true, suppress all per-file `logger.info` output and the `Writing`
-    // group entirely. Used when this writer is invoked purely as a
-    // computation step whose outputs are intermediate (e.g. encoding into
-    // memory for HTML bundling).
-    silent?: boolean;
+    // Controls how writeSog reports progress.
+    //   'own'    — open a `Writing` group and emit per-file info lines (default)
+    //   'flat'   — no group; emit per-file info lines into caller's scope
+    //   'silent' — suppress all logging (use when writing to an in-memory fs)
+    logging?: 'own' | 'flat' | 'silent';
 };
 
 /**
@@ -76,7 +71,10 @@ type WriteSogOptions = {
  * @ignore
  */
 const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
-    const { filename: outputFilename, bundle, iterations, createDevice, omitWritingGroup, silent } = options;
+    const { filename: outputFilename, bundle, iterations, createDevice } = options;
+    const logging = options.logging ?? 'own';
+    const emitInfo = logging !== 'silent';
+    const openGroup = logging === 'own';
     const dataTable = convertToSpace(options.dataTable, Transform.PLY);
 
     // initialize output stream - use ZipFileSystem for bundled output. The
@@ -110,7 +108,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
 
         // For bundled output the per-file sizes are an internal detail; we
         // report a single bundle size after the archive closes.
-        if (!silent && !zipFs) {
+        if (emitInfo && !zipFs) {
             logger.info(`${filename} (${fmtBytes(webp.byteLength)})`);
         }
     };
@@ -315,7 +313,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
 
     const shBands = getSHBands(dataTable);
 
-    const writingGroup = (silent || omitWritingGroup) ? null : logger.group('Writing');
+    const writingGroup = openGroup ? logger.group('Writing') : null;
 
     const meansMinMax = await writeMeans();
     await writeQuaternions();
@@ -362,7 +360,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
 
     await writeFile(outputFs, metaFilename, metaJson);
 
-    if (!silent && !zipFs) {
+    if (emitInfo && !zipFs) {
         logger.info(`${basename(outputFilename)} (${fmtBytes(metaJson.byteLength)})`);
     }
 
@@ -371,7 +369,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
         await zipFs.close();
     }
 
-    if (!silent && bundleWriter) {
+    if (emitInfo && bundleWriter) {
         logger.info(`${basename(outputFilename)} (${fmtBytes(bundleWriter.bytesWritten)})`);
     }
 

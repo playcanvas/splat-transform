@@ -72,7 +72,7 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
             bundle: true,
             iterations,
             createDevice,
-            silent: true
+            logging: 'silent'
         }, memoryFs);
 
         // get the memory buffer
@@ -112,7 +112,7 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
             bundle: true,
             iterations,
             createDevice,
-            omitWritingGroup: true
+            logging: 'flat'
         }, fs);
 
         // Write CSS file

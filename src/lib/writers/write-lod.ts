@@ -292,7 +292,7 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
                 bundle: false,
                 iterations,
                 createDevice,
-                omitWritingGroup: true
+                logging: 'flat'
             }, fs);
         } finally {
             envGroup.end();
@@ -349,7 +349,7 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
                     bundle: false,
                     iterations,
                     createDevice,
-                    omitWritingGroup: true
+                    logging: 'flat'
                 }, fs);
             } finally {
                 unitGroup.end();
