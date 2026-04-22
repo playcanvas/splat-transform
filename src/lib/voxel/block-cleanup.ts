@@ -175,7 +175,7 @@ function filterAndFillBlocks(buffer: BlockMaskBuffer): BlockMaskBuffer {
         result.addBlock(solid[i], SOLID_MASK, SOLID_MASK);
     }
 
-    logger.debug(`voxel filter: ${voxelsRemoved} voxels removed, ${voxelsFilled} voxels filled`);
+    logger.debug(`block cleanup: ${voxelsRemoved} voxels removed, ${voxelsFilled} voxels filled`);
 
     return result;
 }

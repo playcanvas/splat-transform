@@ -131,6 +131,14 @@ class DataTable {
         return this.columns.length;
     }
 
+    get byteLength(): number {
+        let total = 0;
+        for (const column of this.columns) {
+            total += column.data.byteLength;
+        }
+        return total;
+    }
+
     get columnNames() {
         return this.columns.map(column => column.name);
     }

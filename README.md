@@ -64,6 +64,8 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 | `.csv` | ❌ | ✅ | Comma-separated values spreadsheet |
 | `.html` | ❌ | ✅ | HTML viewer app (single-page or unbundled) based on SOG |
 | `.voxel.json` | ❌ | ✅ | Sparse voxel octree for collision detection |
+| `lod-meta.json` | ❌ | ✅ | Multi-level-of-detail SOG bundle (accompanied by per-LOD `.sog` chunks) |
+| `null` | ❌ | ✅ | Discard output (useful with `--summary` for analysis-only runs) |
 
 ## Actions
 
@@ -103,6 +105,7 @@ Actions can be repeated and applied in any order:
 -h, --help                              Show this help and exit
 -v, --version                           Show version and exit
 -q, --quiet                             Suppress non-error output
+    --verbose                           Show debug-level diagnostics
     --mem                               Show memory usage in progress output
 -w, --overwrite                         Overwrite output file if it exists
 -i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10

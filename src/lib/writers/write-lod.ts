@@ -1,6 +1,7 @@
-import { dirname, resolve } from 'pathe';
+import { basename, dirname, resolve } from 'pathe';
 import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
+import { logWrittenFile } from './utils';
 import { writeSog } from './write-sog.js';
 import { type TypedArray, DataTable, sortMortonOrder, convertToSpace } from '../data-table';
 import { type FileSystem } from '../io/write';
@@ -86,7 +87,7 @@ const calcBound = (dataTable: DataTable, indices: number[]): Aabb => {
         const M = b.getMax();
 
         if (!isFinite(m.x) || !isFinite(m.y) || !isFinite(m.z) || !isFinite(M.x) || !isFinite(M.y) || !isFinite(M.z)) {
-            logger.warn('Skipping invalid bounding box:', { m, M, index });
+            logger.warn(`skipping invalid bounding box at index ${index}: min=(${m.x}, ${m.y}, ${m.z}) max=(${M.x}, ${M.y}, ${M.z})`);
             continue;
         }
 
@@ -164,24 +165,6 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
 
     // ensure top-level output folder exists
     await fs.mkdir(outputDir);
-
-    // write the environment sog
-    if (envDataTable?.numRows > 0) {
-        const pathname = resolve(outputDir, 'env/meta.json');
-
-        // ensure output folder exists before any files are written
-        await fs.mkdir(dirname(pathname));
-
-        logger.log(`writing ${pathname}...`);
-
-        await writeSog({
-            filename: pathname,
-            dataTable: envDataTable,
-            bundle: false,
-            iterations,
-            createDevice
-        }, fs);
-    }
 
     // construct a kd-tree based on centroids from all lods
     const centroidsTable = new DataTable([
@@ -280,10 +263,49 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
         return value;
     };
 
+    const writingGroup = logger.group('Writing');
+
+    // count the total number of sog units we'll write so the per-sog groups
+    // can render as a numbered series
+    let sogTotal = 0;
+    if (envDataTable?.numRows > 0) sogTotal += 1;
+    for (const [, fileUnits] of lodFiles) {
+        for (const fu of fileUnits) {
+            if (fu.length > 0) sogTotal += 1;
+        }
+    }
+
+    let sogIndex = 0;
+
+    // write the environment sog
+    if (envDataTable?.numRows > 0) {
+        sogIndex++;
+        const envGroup = logger.group('env', { index: sogIndex, total: sogTotal });
+        try {
+            const envPathname = resolve(outputDir, 'env/meta.json');
+
+            // ensure output folder exists before any files are written
+            await fs.mkdir(dirname(envPathname));
+
+            await writeSog({
+                filename: envPathname,
+                dataTable: envDataTable,
+                bundle: false,
+                iterations,
+                createDevice,
+                logging: 'flat'
+            }, fs);
+        } finally {
+            envGroup.end();
+        }
+    }
+
     // write lod-meta.json
+    const metaJson = (new TextEncoder()).encode(JSON.stringify(meta, replacer));
     const writer = await fs.createWriter(filename);
-    writer.write((new TextEncoder()).encode(JSON.stringify(meta, replacer)));
+    await writer.write(metaJson);
     await writer.close();
+    logWrittenFile(basename(filename), writer.bytesWritten);
 
     // write file units
     for (const [lodValue, fileUnits] of lodFiles) {
@@ -294,40 +316,49 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
                 continue;
             }
 
-            // ensure output folder exists before any files are written
-            const pathname = resolve(outputDir, `${lodValue}_${i}/meta.json`);
-            await fs.mkdir(dirname(pathname));
+            const groupName = `${lodValue}_${i}`;
+            sogIndex++;
+            const unitGroup = logger.group(groupName, { index: sogIndex, total: sogTotal });
 
-            // generate an ordering for each subunit and append it to the unit's indices
-            const totalIndices = fileUnit.reduce((acc, curr) => acc + curr.length, 0);
-            const indices = new Uint32Array(totalIndices);
-            for (let j = 0, offset = 0; j < fileUnit.length; ++j) {
-                indices.set(fileUnit[j], offset);
-                sortMortonOrder(dataTable, indices.subarray(offset, offset + fileUnit[j].length));
-                offset += fileUnit[j].length;
+            try {
+                // ensure output folder exists before any files are written
+                const pathname = resolve(outputDir, `${lodValue}_${i}/meta.json`);
+                await fs.mkdir(dirname(pathname));
+
+                // generate an ordering for each subunit and append it to the unit's indices
+                const totalIndices = fileUnit.reduce((acc, curr) => acc + curr.length, 0);
+                const indices = new Uint32Array(totalIndices);
+                for (let j = 0, offset = 0; j < fileUnit.length; ++j) {
+                    indices.set(fileUnit[j], offset);
+                    sortMortonOrder(dataTable, indices.subarray(offset, offset + fileUnit[j].length));
+                    offset += fileUnit[j].length;
+                }
+
+                // construct a new table from the ordered data
+                const unitDataTable = dataTable.clone({ rows: indices });
+
+                // reset indices since we've generated ordering on the individual subunits
+                for (let j = 0; j < indices.length; ++j) {
+                    indices[j] = j;
+                }
+
+                // write file unit to sog
+                await writeSog({
+                    filename: pathname,
+                    dataTable: unitDataTable,
+                    indices,
+                    bundle: false,
+                    iterations,
+                    createDevice,
+                    logging: 'flat'
+                }, fs);
+            } finally {
+                unitGroup.end();
             }
-
-            // construct a new table from the ordered data
-            const unitDataTable = dataTable.clone({ rows: indices });
-
-            // reset indices since we've generated ordering on the individual subunits
-            for (let j = 0; j < indices.length; ++j) {
-                indices[j] = j;
-            }
-
-            // write file unit to sog
-            logger.log(`writing ${pathname}...`);
-
-            await writeSog({
-                filename: pathname,
-                dataTable: unitDataTable,
-                indices,
-                bundle: false,
-                iterations,
-                createDevice
-            }, fs);
         }
     }
+
+    writingGroup.end();
 };
 
 export { writeLod };

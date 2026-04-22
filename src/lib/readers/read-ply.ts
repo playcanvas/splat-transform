@@ -1,7 +1,7 @@
 import { isCompressedPly, decompressPly } from './decompress-ply';
 import { Column, DataTable } from '../data-table';
 import { ReadSource, ReadStream } from '../io/read';
-import { Transform } from '../utils';
+import { logger, Transform } from '../utils';
 
 type PlyProperty = {
     name: string;               // 'x', f_dc_0', etc
@@ -197,6 +197,13 @@ const readPly = async (source: ReadSource): Promise<DataTable> => {
     // parse the header
     const header = parseHeader(headerBuf.subarray(0, headerSize));
 
+    // Single decode bar across all elements: sized by total rows so that
+    // multi-element PLYs (e.g. compressed PLY: chunk + vertex) render as one
+    // smooth progression rather than two disjoint segments.
+    const totalRows = header.elements.reduce((sum, e) => sum + e.count, 0);
+    const bar = logger.bar('decoding', totalRows);
+    let rowsDecoded = 0;
+
     // create a data table for each ply element
     const elements = [];
     for (let i = 0; i < header.elements.length; ++i) {
@@ -235,6 +242,9 @@ const readPly = async (source: ReadSource): Promise<DataTable> => {
                         s[baseRowIndex + r] = floatData[r * numProperties + p];
                     }
                 }
+
+                rowsDecoded += chunkRows;
+                bar.update(rowsDecoded);
             }
         } else {
             // General path: mixed types, use DataView with reader functions
@@ -274,6 +284,9 @@ const readPly = async (source: ReadSource): Promise<DataTable> => {
                         info.data[rowIndex] = info.reader(view, rowByteOffset + info.byteOffset);
                     }
                 }
+
+                rowsDecoded += chunkRows;
+                bar.update(rowsDecoded);
             }
         }
 
@@ -301,6 +314,13 @@ const readPly = async (source: ReadSource): Promise<DataTable> => {
     }
 
     result.transform = Transform.PLY.clone();
+
+    // Close the bar only on success: leaving it open on any earlier error
+    // path (missing `vertex` element, `decompressPly` failure, etc.) lets
+    // `logger.error() -> unwindAll(true)` mark it as failed instead of
+    // finalizing it as a successful bar first.
+    bar.end();
+
     return result;
 };
 

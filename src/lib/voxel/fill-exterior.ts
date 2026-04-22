@@ -139,11 +139,11 @@ const fillExterior = (
 
     if (seedIx >= 0 && seedIx < nx && seedIy >= 0 && seedIy < ny && seedIz >= 0 && seedIz < nz) {
         if (visited.getVoxel(seedIx, seedIy, seedIz)) {
-            logger.log('fillExterior: seed reachable from outside, skipping');
+            logger.info('seed reachable from outside, skipping exterior fill');
             return { buffer, gridBounds };
         }
     } else {
-        logger.log('fillExterior: seed outside grid bounds, skipping exterior fill');
+        logger.info('seed outside grid bounds, skipping exterior fill');
         return { buffer, gridBounds };
     }
 
@@ -178,7 +178,7 @@ const fillExterior = (
     }
 
     if (minIx > maxIx) {
-        logger.warn('fillExterior: no navigable cells remain, returning empty result');
+        logger.warn('no navigable cells remain, returning empty result');
         return {
             buffer: new BlockMaskBuffer(),
             gridBounds: { min: gridBounds.min.clone(), max: gridBounds.min.clone() }

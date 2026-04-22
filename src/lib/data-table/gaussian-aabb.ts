@@ -1,7 +1,7 @@
 import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { Column, DataTable } from './data-table';
-import { logger } from '../utils';
+import { fmtCount, logger } from '../utils';
 
 /**
  * Bounds specification with min/max Vec3.
@@ -131,7 +131,7 @@ const computeGaussianExtents = (dataTable: DataTable): GaussianExtentsResult => 
     }
 
     if (invalidCount > 0) {
-        logger.warn(`Skipped ${invalidCount} Gaussians with invalid scale/rotation values`);
+        logger.warn(`Skipped ${fmtCount(invalidCount)} Gaussians with invalid scale/rotation values`);
     }
 
     // Create DataTable with extent columns

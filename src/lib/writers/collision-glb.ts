@@ -1,6 +1,6 @@
 import type { Bounds } from '../data-table';
 import { marchingCubes, simplifyMesh } from '../mesh';
-import { logger } from '../utils';
+import { fmtCount, logger } from '../utils';
 import { BlockMaskBuffer } from '../voxel/block-mask-buffer';
 
 /**
@@ -139,24 +139,32 @@ const buildCollisionMesh = async (
     voxelResolution: number,
     meshSimplifyError?: number
 ): Promise<Uint8Array | null> => {
-    logger.progress.step('Extracting collision mesh');
+    const g = logger.group('Collision mesh');
+
+    const extractSub = logger.group('Extracting');
     const rawMesh = marchingCubes(blockBuffer, gridBounds, voxelResolution);
-    logger.log(`collision mesh (raw): ${rawMesh.positions.length / 3} vertices, ${rawMesh.indices.length / 3} triangles`);
+    logger.info(`raw vertices: ${fmtCount(rawMesh.positions.length / 3)}`);
+    logger.info(`raw triangles: ${fmtCount(rawMesh.indices.length / 3)}`);
 
     if (rawMesh.indices.length < 3) {
-        logger.progress.step('Skipping collision mesh');
-        logger.log('collision mesh: no triangles generated, skipping GLB output');
+        logger.warn('no triangles generated, skipping GLB output');
+        extractSub.end();
+        g.end();
         return null;
     }
+    extractSub.end();
 
-    logger.progress.step('Simplifying collision mesh');
-
+    const simplifySub = logger.group('Simplifying');
     const errorFraction = Number.isFinite(meshSimplifyError) && meshSimplifyError! >= 0 ? meshSimplifyError! : 0.08;
     const simplified = await simplifyMesh(rawMesh, errorFraction * voxelResolution);
 
     const reduction = (1 - simplified.indices.length / rawMesh.indices.length) * 100;
-    logger.log(`collision mesh (simplified): ${simplified.positions.length / 3} vertices, ${simplified.indices.length / 3} triangles (${reduction.toFixed(0)}% reduction)`);
+    logger.info(`simplified vertices: ${fmtCount(simplified.positions.length / 3)}`);
+    logger.info(`simplified triangles: ${fmtCount(simplified.indices.length / 3)}`);
+    logger.info(`reduction: ${reduction.toFixed(0)}%`);
+    simplifySub.end();
 
+    g.end();
     return encodeGlb(simplified.positions, simplified.indices);
 };
 

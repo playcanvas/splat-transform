@@ -1,7 +1,6 @@
 import { DataTable } from './data-table';
 import { type FileSystem } from './io/write';
 import { type DeviceCreator, type Options } from './types';
-import { logger } from './utils';
 import { writeCompressedPly, writeCsv, writeGlb, writeHtml, writeLod, writePly, writeSog, writeVoxel } from './writers';
 
 /**
@@ -102,9 +101,8 @@ const getOutputFormat = (filename: string, options: Options): OutputFormat => {
 const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
     const { filename, outputFormat, dataTable, envDataTable, options, createDevice } = writeOptions;
 
-    logger.log(`writing '${filename}'...`);
-
-    // write the file data
+    // Each writer is responsible for opening its own `Writing` log group and
+    // emitting `filename (size)` info entries per output file.
     switch (outputFormat) {
         case 'csv':
             await writeCsv({ filename, dataTable }, fs);

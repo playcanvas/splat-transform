@@ -1,5 +1,9 @@
+import { basename } from 'pathe';
+
+import { logWrittenFile } from './utils';
 import { DataTable } from '../data-table';
 import { type FileSystem } from '../io/write';
+import { logger } from '../utils';
 
 type WriteCSVOptions = {
     filename: string;
@@ -23,6 +27,8 @@ const writeCsv = async (options: WriteCSVOptions, fs: FileSystem) => {
 
     const textEncoder = new TextEncoder();
 
+    const writingGroup = logger.group('Writing');
+
     const writer = await fs.createWriter(filename);
 
     // write header
@@ -41,6 +47,9 @@ const writeCsv = async (options: WriteCSVOptions, fs: FileSystem) => {
     }
 
     await writer.close();
+
+    logWrittenFile(basename(filename), writer.bytesWritten);
+    writingGroup.end();
 };
 
 export { writeCsv };

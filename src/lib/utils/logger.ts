@@ -1,182 +1,556 @@
 /**
- * Progress node representing a step in a nested progress tree.
- * Walk up via `parent` to access enclosing steps.
+ * Verbosity level controlling which messages reach the renderer.
+ *
+ * - `quiet`   - errors and warnings only.
+ * - `normal`  - tasks, bars, info, warn, error (default).
+ * - `verbose` - normal + debug messages.
  */
-interface ProgressNode {
-    /** Current step number at this level. */
-    step: number;
-    /** Total number of steps at this level. */
-    totalSteps: number;
-    /** Name of the current step (undefined for anonymous steps). */
-    stepName?: string;
-    /** Parent node (undefined for root level). */
-    parent?: ProgressNode;
-    /** Nesting depth (0 for root level). */
-    depth: number;
+type Verbosity = 'quiet' | 'normal' | 'verbose';
+
+/** Severity tag for free-form messages (ordered descending by severity). */
+type MessageKind = 'error' | 'warn' | 'info' | 'debug';
+
+/**
+ * Semantic event delivered to a {@link Renderer}. Renderers can filter, format
+ * and display these as they wish.
+ *
+ * `scopeStart` / `scopeEnd` represent the open/close of a {@link Group}.
+ * They carry optional `index` / `total` fields when the scope is part of a
+ * numbered series, which renderers can use to switch to a `[N/T] name` style.
+ *
+ * `barStart` / `barTick` / `barEnd` represent a determinate progress bar.
+ * The bar's `name` is repeated on every event so the renderer can keep its
+ * label stable across in-place updates while tracking progress via `current`
+ * and `total`.
+ *
+ * `output` is the pipeable channel: each event represents a single logical
+ * unit of output (typically one line - or a multi-line block treated as a
+ * unit) that the renderer is expected to terminate with a newline. Callers
+ * should not include a trailing `\n` themselves.
+ */
+type LogEvent =
+    | { kind: 'scopeStart'; depth: number; name: string; index?: number; total?: number }
+    | { kind: 'scopeEnd'; depth: number; name: string; durationMs: number; failed?: boolean; index?: number; total?: number }
+    | { kind: 'barStart'; depth: number; name: string; total: number }
+    | { kind: 'barTick'; depth: number; name: string; current: number; total: number }
+    | { kind: 'barEnd'; depth: number; name: string; durationMs: number; current: number; total: number; failed?: boolean }
+    | { kind: 'message'; depth: number; level: MessageKind; text: string }
+    | { kind: 'output'; text: string };
+
+/**
+ * Renderer interface. Receives semantic events (already filtered by the
+ * active verbosity inside {@link LoggerCore}) and decides how to display
+ * them. Renderers are pure presentation - they never need to consult or
+ * track verbosity themselves.
+ */
+interface Renderer {
+    /**
+     * Handle a log event.
+     * @param event - The event to render.
+     */
+    handle(event: LogEvent): void;
 }
 
 /**
- * Logger interface for injectable logging implementation.
+ * Determinate progress bar handle. Closed explicitly via `end()`, or
+ * implicitly when an enclosing {@link Group}'s `end()` (or a
+ * {@link Logger.unwindAll}) pops it as part of cleanup.
+ *
+ * Carries a `[Symbol.dispose]` slot directly (rather than extending the
+ * built-in `Disposable` lib type) so the published `.d.ts` stays free of
+ * any reference to the `Disposable` interface. `Symbol.dispose` itself is
+ * still a TS 5.2+ / `esnext.disposable` (or `es2024.disposable`) lib
+ * symbol, so consumers compiling against these declarations need that
+ * lib enabled (or `skipLibCheck: true`). Callers on TS 5.2+ / Node 20+
+ * can adopt `using bar = logger.bar(...)` because `using` only requires
+ * the `[Symbol.dispose]` shape structurally.
  */
-interface Logger {
-    /** Log normal messages. */
-    log(...args: any[]): void;
-    /** Log warning messages. */
-    warn(...args: any[]): void;
-    /** Log error messages. */
-    error(...args: any[]): void;
-    /** Log debug/verbose messages. */
-    debug(...args: any[]): void;
-    /** Output data to stdout (for piping). */
-    output(text: string): void;
-    /** Called on progress step updates with the current node. */
-    onProgress(node: ProgressNode): void;
+interface Bar {
+    /**
+     * Advance the bar by `n` ticks.
+     * @param n - Number of ticks to advance (default 1).
+     */
+    tick(n?: number): void;
+    /**
+     * Set the bar's absolute progress. Clamped to `[0, total]`. Suppresses
+     * a `barTick` event when the value is unchanged.
+     * @param current - Absolute progress value.
+     */
+    update(current: number): void;
+    /**
+     * Close the bar and emit final timing.
+     */
+    end(): void;
+    /** Dispose hook so `using` syntax closes the bar on scope exit. */
+    [Symbol.dispose](): void;
 }
 
 /**
- * Default logger implementation (browser-safe).
+ * Named, timed scope returned from {@link Logger.group}. Manages the scope's
+ * lifecycle only - free-form messages, nested groups and bars are emitted via
+ * the global `logger` (they auto-indent under whatever is on top of the
+ * active-scope stack).
+ *
+ * Open scopes with `logger.group(name)` and close them with `sub.end()` after
+ * the body. Embedders that catch their own exceptions (rather than letting
+ * them propagate to a `logger.error()` call) should call
+ * {@link Logger.unwindAll} from their catch to close any scopes/bars left
+ * dangling on the stack.
+ *
+ * Carries a `[Symbol.dispose]` slot directly (rather than extending the
+ * built-in `Disposable` lib type) so the published `.d.ts` stays free of
+ * any reference to the `Disposable` interface. `Symbol.dispose` itself is
+ * still a TS 5.2+ / `esnext.disposable` (or `es2024.disposable`) lib
+ * symbol, so consumers compiling against these declarations need that
+ * lib enabled (or `skipLibCheck: true`). Callers on TS 5.2+ / Node 20+
+ * can adopt `using g = logger.group(...)` because `using` only requires
+ * the `[Symbol.dispose]` shape structurally.
  */
-const defaultLogger: Logger = {
-    log: (...args) => console.log(...args),
-    warn: (...args) => console.warn(...args),
-    error: (...args) => console.error(...args),
-    debug: (...args) => console.log(...args),
-    output: text => console.log(text),
-    onProgress: (node) => {
-        // step 0 is the begin notification - nothing to print
-        if (node.step === 0) return;
+interface Group {
+    /**
+     * Close the group, popping anything still open above it on the stack
+     * (defensively handles forgotten inner scopes) and emit the timing event.
+     */
+    end(): void;
+    /** Dispose hook so `using` syntax closes the group on scope exit. */
+    [Symbol.dispose](): void;
+}
 
-        const indent = '  '.repeat(node.depth);
-        const name = node.stepName ?? '';
-        console.log(`${indent}[${node.step}/${node.totalSteps}] ${name}`);
+/**
+ * Internal node tracked on the active-scope stack. Both kinds carry their own
+ * depth and start time; `group` may additionally carry `index` / `total` so a
+ * numbered series can re-emit the same numbering on close.
+ */
+type Scope =
+    | { kind: 'group'; name: string; depth: number; start: number; index?: number; total?: number }
+    | { kind: 'bar'; name: string; depth: number; start: number; total: number; current: number };
+
+const now = (): number => {
+    if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+        return performance.now();
     }
+    return Date.now();
 };
 
-let impl: Logger = defaultLogger;
-let quiet = false;
+const fmtArgs = (args: any[]): string => {
+    return args.map((a) => {
+        if (a instanceof Error) return a.stack ?? a.message;
+        if (typeof a === 'string') return a;
+        if (typeof a === 'number' || typeof a === 'boolean' || a == null) return String(a);
+        try {
+            return JSON.stringify(a);
+        } catch {
+            return String(a);
+        }
+    }).join(' ');
+};
 
 /**
- * Progress tracking with nested step support.
- * Access via logger.progress.begin(), logger.progress.step()
+ * Default no-op renderer. Used when no other renderer is installed (e.g. in
+ * library/embedded contexts where the host wants to consume `LogEvent`s
+ * directly via {@link Logger.setRenderer} but hasn't done so yet). Drops
+ * every event silently.
  */
-class Progress {
-    private currentNode: ProgressNode | undefined;
+class NullRenderer implements Renderer {
+    handle(_event: LogEvent): void { /* no-op */ }
+}
 
-    /**
-     * Start a multi-step progress operation. Creates a new node with current as parent.
-     * Calls onProgress with step: 0 to notify consumers of the new progress block.
-     * @param totalSteps - Total number of steps in the operation.
-     */
-    begin(totalSteps: number) {
-        this.currentNode = {
-            step: 0,
-            totalSteps,
-            stepName: undefined,
-            parent: this.currentNode,
-            depth: (this.currentNode?.depth ?? -1) + 1
-        };
+const verbosityRank: Record<Verbosity, number> = {
+    quiet: 0,
+    normal: 1,
+    verbose: 2
+};
 
-        if (!quiet) impl.onProgress(this.currentNode);
+const messageMinVerbosity: Record<MessageKind, Verbosity> = {
+    error: 'quiet',
+    warn: 'quiet',
+    info: 'normal',
+    debug: 'verbose'
+};
+
+/**
+ * Active-scope manager and message router. The single shared instance lives
+ * inside this module; the public `logger` surface is a thin façade over it.
+ */
+class LoggerCore {
+    /** Stack of currently-open scopes (innermost last). */
+    readonly stack: Scope[] = [];
+
+    private renderer: Renderer = new NullRenderer();
+
+    private verbosity: Verbosity = 'normal';
+
+    setRenderer(r: Renderer): void {
+        this.renderer = r;
+    }
+
+    setVerbosity(v: Verbosity): void {
+        this.verbosity = v;
+    }
+
+    getVerbosity(): Verbosity {
+        return this.verbosity;
     }
 
     /**
-     * Cancel the current progress node, popping it from the stack without
-     * completing remaining steps. Use this before early exits (e.g. break)
-     * to keep the progress stack balanced.
+     * Whether a message at `level` would be emitted at the current
+     * verbosity. Primary use: the `logger` façade calls this before
+     * formatting arguments so filtered `info`/`warn`/`debug` calls don't
+     * allocate the joined string that {@link emit} would only throw away.
+     *
+     * @param level - The message level to test.
+     * @returns `true` if a message at `level` would reach the renderer.
      */
-    cancel() {
-        if (!this.currentNode) return;
-        this.currentNode = this.currentNode.parent;
+    isLevelVisible(level: MessageKind): boolean {
+        return verbosityRank[this.verbosity] >= verbosityRank[messageMinVerbosity[level]];
     }
 
     /**
-     * Advance to the next step. Auto-increments the step counter.
-     * Auto-ends when all steps are complete.
-     * @param name - Optional name of the step.
+     * Gate events by the current verbosity, then hand survivors to the
+     * renderer. Renderers see only visible events and never need to know
+     * about verbosity themselves.
+     *
+     * - `output` is always shown (it's the pipeable channel).
+     * - `message` is assumed already gated at the façade via
+     *   {@link LoggerCore.isLevelVisible} (so callers can skip formatting
+     *   args for filtered levels); anything that reaches here is passed
+     *   through.
+     * - `scopeEnd` footers are noisy on the success path, so success-ends
+     *   are gated one rank higher than their matching start: visible only
+     *   at `verbose`, while `scopeStart` shows at `normal`. Failed ends
+     *   stay at the `normal` gate so the "failed in Xs" cascade from
+     *   `logger.error` / `unwindAll(true)` survives whenever scope
+     *   output is visible at all.
+     * - All other scope/bar events (`scopeStart`, `barStart`, `barTick`,
+     *   `barEnd`) are gated at `normal`.
+     *
+     * @param event - The candidate event.
      */
-    step(name?: string) {
-        if (!this.currentNode) return;
-
-        this.currentNode.step++;
-        this.currentNode.stepName = name;
-
-        if (!quiet) impl.onProgress(this.currentNode);
-
-        // Auto-end when all steps complete
-        if (this.currentNode.step === this.currentNode.totalSteps) {
-            this.currentNode = this.currentNode.parent;
+    emit(event: LogEvent): void {
+        if (event.kind !== 'output' && event.kind !== 'message') {
+            const rank = verbosityRank[this.verbosity];
+            if (event.kind === 'scopeEnd' && !event.failed) {
+                if (rank < verbosityRank.verbose) return;
+            } else if (rank < verbosityRank.normal) {
+                return;
+            }
         }
+        this.renderer.handle(event);
+    }
+
+    /**
+     * Pop the scope at the top of the stack (no-op if empty) and emit the
+     * matching `*End` event.
+     *
+     * @param failed - When true, mark the closed scope as having failed.
+     */
+    private popScope(failed = false): void {
+        if (this.stack.length === 0) return;
+        const top = this.stack[this.stack.length - 1];
+        this.stack.pop();
+        const durationMs = now() - top.start;
+        if (top.kind === 'bar') {
+            this.emit({
+                kind: 'barEnd',
+                depth: top.depth,
+                name: top.name,
+                durationMs,
+                current: top.current,
+                total: top.total,
+                failed
+            });
+            return;
+        }
+        const numbering = top.index !== undefined && top.total !== undefined ?
+            { index: top.index, total: top.total } :
+            {};
+        this.emit({ kind: 'scopeEnd', depth: top.depth, name: top.name, durationMs, failed, ...numbering });
+    }
+
+    /**
+     * Open a named, timed group at the current depth. Pass
+     * `{ index, total }` to render the group as part of a numbered series
+     * (e.g. `[2/5] name`); both must be present together.
+     *
+     * @param name - The group name.
+     * @param options - Optional configuration.
+     * @param options.index - 1-based position in the numbered series.
+     * @param options.total - Total length of the numbered series.
+     * @returns A handle for closing the group and writing nested log entries.
+     */
+    pushGroup(name: string, options: { index?: number; total?: number } = {}): Group {
+        const { index, total } = options;
+        if ((index === undefined) !== (total === undefined)) {
+            throw new Error('logger.group: { index, total } must be passed together');
+        }
+        const depth = this.stack.length;
+        const numbering = index !== undefined && total !== undefined ? { index, total } : undefined;
+        const scope: Scope = numbering ?
+            { kind: 'group', name, depth, start: now(), index: numbering.index, total: numbering.total } :
+            { kind: 'group', name, depth, start: now() };
+        this.stack.push(scope);
+        this.emit({ kind: 'scopeStart', depth, name, ...(numbering ?? {}) });
+        return this.makeGroup(scope);
+    }
+
+    /**
+     * Open a labelled progress bar at the current stack depth (i.e. nested
+     * directly under whatever scope is currently on top of the stack). This
+     * is a pure-push operation: it does not pop or auto-close anything.
+     * Callers control nesting purely by the order in which they open and
+     * close scopes.
+     *
+     * @param name - The bar's label, displayed alongside the progress indicator.
+     * @param total - Total number of ticks the bar will report before completing.
+     * A `total` of 0 is allowed (e.g. processing an empty payload); both
+     * `LoggerCore` and `TextRenderer` already handle non-positive totals.
+     * @returns A handle for advancing and closing the bar.
+     */
+    pushBar(name: string, total: number): Bar {
+        const scope: Scope = {
+            kind: 'bar',
+            name,
+            depth: this.stack.length,
+            start: now(),
+            total: Math.max(0, total),
+            current: 0
+        };
+        this.stack.push(scope);
+        this.emit({ kind: 'barStart', depth: scope.depth, name: scope.name, total: scope.total });
+        return this.makeBar(scope);
+    }
+
+    private makeBar(scope: Scope & { kind: 'bar' }): Bar {
+        let closed = false;
+        // Bars are strictly LIFO from a renderer's perspective: a `TextRenderer`
+        // (or any other line-based renderer) only tracks one active bar line,
+        // so ticking a bar that isn't currently on top of the stack would
+        // corrupt whatever inner bar is. We still update `scope.current`
+        // internally so the recap line at `barEnd` is accurate, but we
+        // suppress `barTick` emission unless this bar is actually on top.
+        const isTopOfStack = () => this.stack[this.stack.length - 1] === scope;
+        const handle: Bar = {
+            tick: (n = 1) => {
+                if (closed) return;
+                if (this.stack.indexOf(scope) === -1) {
+                    // scope was popped from underneath us (e.g. a sibling
+                    // bar opened inside a function call). Silently retire
+                    // the handle so further ticks are no-ops.
+                    closed = true;
+                    return;
+                }
+                const next = Math.min(scope.total, scope.current + Math.max(0, n));
+                if (next === scope.current) return;
+                scope.current = next;
+                if (!isTopOfStack()) return;
+                this.emit({ kind: 'barTick', depth: scope.depth, name: scope.name, current: scope.current, total: scope.total });
+            },
+            update: (current: number) => {
+                if (closed) return;
+                if (this.stack.indexOf(scope) === -1) {
+                    closed = true;
+                    return;
+                }
+                const next = Math.min(scope.total, Math.max(0, current));
+                if (next === scope.current) return;
+                scope.current = next;
+                if (!isTopOfStack()) return;
+                this.emit({ kind: 'barTick', depth: scope.depth, name: scope.name, current: scope.current, total: scope.total });
+            },
+            end: () => {
+                if (closed) return;
+                closed = true;
+                const idx = this.stack.indexOf(scope);
+                if (idx === -1) return;
+                while (this.stack.length > idx + 1) this.popScope(true);
+                this.popScope();
+            },
+            [Symbol.dispose]: () => handle.end()
+        };
+        return handle;
+    }
+
+    private makeGroup(scope: Scope & { kind: 'group' }): Group {
+        let closed = false;
+        const handle: Group = {
+            end: () => {
+                if (closed) return;
+                closed = true;
+                const idx = this.stack.indexOf(scope);
+                if (idx === -1) return;
+                while (this.stack.length > idx + 1) this.popScope(true);
+                this.popScope();
+            },
+            [Symbol.dispose]: () => handle.end()
+        };
+        return handle;
+    }
+
+    message(level: MessageKind, text: string): void {
+        this.emit({ kind: 'message', depth: this.stack.length, level, text });
+        if (level === 'error') this.unwindAll(true);
+    }
+
+    /**
+     * Pop every open scope, emitting end-events with optional `failed` flag.
+     * Called automatically on `logger.error(...)` so that aborted work renders
+     * a clean trail of `(failed)` markers without callers needing try/finally.
+     *
+     * @param failed - When true, mark every closed scope as having failed.
+     */
+    unwindAll(failed = false): void {
+        while (this.stack.length > 0) this.popScope(failed);
+    }
+
+    output(text: string): void {
+        this.emit({ kind: 'output', text });
     }
 }
 
+const core = new LoggerCore();
+
 /**
- * Global logger instance with injectable implementation.
- * Use setLogger() to provide a custom implementation (e.g., Node.js with process.stdout).
- * Use setQuiet() to suppress log/warn/progress output.
+ * Public logger surface.
+ *
+ * Open named, timed scopes with {@link Logger.group}. Pass `{ index, total }`
+ * to render the group as part of a numbered series. Indeterminate progress is
+ * reported with {@link Logger.bar}. Free-form messages route through `info` /
+ * `warn` / `error` / `debug`, indented under whatever is on top of the
+ * active-scope stack.
+ *
+ * Both `group` and `bar` are pure-push operations: opening a new scope simply
+ * places it on top of the stack without auto-closing siblings, so call order
+ * directly determines nesting. Close scopes with `handle.end()` after the
+ * body. Callers that route failures through {@link Logger.error} get scope
+ * cleanup for free; embedders that swallow exceptions should call
+ * {@link Logger.unwindAll} from their catch to close every still-open scope.
  */
 const logger = {
     /**
-     * Progress tracking with nested step support.
-     * Call begin(n) to start, then step() n times. Auto-ends when complete.
+     * Open a named, timed scope. Returns a {@link Group} handle. Call `end()`
+     * to close it. Group children indent automatically based on call depth.
+     *
+     * Pass `{ index, total }` to render the group as part of a numbered
+     * series (e.g. `[2/5] name`). Both fields must be supplied together.
+     *
+     * @param name - The group name.
+     * @param options - Optional configuration.
+     * @param options.index - 1-based position in the numbered series.
+     * @param options.total - Total length of the numbered series.
+     * @returns A handle for closing the group and writing nested log entries.
      */
-    progress: new Progress(),
-
-    /**
-     * Set a custom logger implementation.
-     * @param l - The logger implementation to use.
-     */
-    setLogger(l: Logger) {
-        impl = l;
+    group(name: string, options?: { index?: number; total?: number }): Group {
+        return core.pushGroup(name, options);
     },
 
     /**
-     * Set quiet mode. When quiet, log/warn/progress are suppressed. Errors always show.
-     * @param q - Whether to enable quiet mode.
+     * Open a labelled progress bar nested directly under whatever scope is
+     * currently on top of the active-scope stack. Renders as a single line
+     * at child indent.
+     *
+     * Like {@link Logger.group}, this is a pure-push operation: it does not
+     * close any sibling already on the stack. Close with `bar.end()`, or let
+     * an enclosing group's `end()` / {@link Logger.unwindAll} pop it.
+     *
+     * @param name - The bar's label.
+     * @param total - Expected number of ticks (or absolute total when using
+     * {@link Bar.update}).
+     * @returns A handle for advancing and closing the bar.
      */
-    setQuiet(q: boolean) {
-        quiet = q;
+    bar(name: string, total: number): Bar {
+        return core.pushBar(name, total);
     },
 
     /**
-     * Log normal messages. Suppressed in quiet mode.
-     * @param args - The arguments to log.
+     * Emit an info message indented under the innermost active scope.
+     * @param args - Message parts (joined with a space).
      */
-    log(...args: any[]) {
-        if (!quiet) impl.log(...args);
+    info(...args: any[]): void {
+        if (!core.isLevelVisible('info')) return;
+        core.message('info', fmtArgs(args));
     },
 
     /**
-     * Log warning messages. Suppressed in quiet mode.
-     * @param args - The arguments to log.
+     * Emit a warning indented under the innermost active scope.
+     * @param args - Message parts.
      */
-    warn(...args: any[]) {
-        if (!quiet) impl.warn(...args);
+    warn(...args: any[]): void {
+        if (!core.isLevelVisible('warn')) return;
+        core.message('warn', fmtArgs(args));
     },
 
     /**
-     * Log error messages. Always shown, even in quiet mode.
-     * @param args - The arguments to log.
+     * Emit an error message. Always shown, regardless of verbosity. Triggers
+     * an automatic unwind of all open scopes, marking each as failed.
+     * @param args - Message parts.
      */
-    error(...args: any[]) {
-        impl.error(...args);
+    error(...args: any[]): void {
+        core.message('error', fmtArgs(args));
     },
 
     /**
-     * Log debug/verbose messages. Suppressed in quiet mode.
-     * @param args - The arguments to log.
+     * Emit a debug message. Shown only at `verbose` verbosity.
+     * @param args - Message parts.
      */
-    debug(...args: any[]) {
-        if (!quiet) impl.debug(...args);
+    debug(...args: any[]): void {
+        if (!core.isLevelVisible('debug')) return;
+        core.message('debug', fmtArgs(args));
     },
 
     /**
-     * Output data to stdout (for piping). Always shown, even in quiet mode.
-     * @param text - The text to output.
+     * Emit a logical unit of pipeable output (typically one line, or a
+     * multi-line block treated as a single unit). The renderer terminates
+     * each unit with a newline, so callers should not include a trailing
+     * `\n`. Always shown, regardless of verbosity.
+     * @param text - The text to emit (without a trailing newline).
      */
-    output(text: string) {
-        impl.output(text);
+    output(text: string): void {
+        core.output(text);
+    },
+
+    /**
+     * Replace the active renderer. Embedders install their own renderer here
+     * to consume `LogEvent`s; the default renderer is a no-op.
+     * @param r - The renderer to install.
+     */
+    setRenderer(r: Renderer): void {
+        core.setRenderer(r);
+    },
+
+    /**
+     * Set verbosity: `quiet` (errors and warnings), `normal` (default),
+     * `verbose` (includes debug).
+     * @param v - The verbosity level.
+     */
+    setVerbosity(v: Verbosity): void {
+        core.setVerbosity(v);
+    },
+
+    /**
+     * Close every open scope and bar, optionally marking them as failed.
+     * Use this from an embedder's catch when an exception is being swallowed
+     * (rather than rethrown into a `logger.error()` call), to prevent
+     * dangling scopes from corrupting subsequent output.
+     * @param failed - When true, mark every closed scope as having failed.
+     */
+    unwindAll(failed = false): void {
+        core.unwindAll(failed);
+    },
+
+    /**
+     * Get the current verbosity level.
+     * @returns The active verbosity level.
+     */
+    getVerbosity(): Verbosity {
+        return core.getVerbosity();
     }
 };
 
+/**
+ * Public type alias for the logger object. Embedders can type-hint against
+ * this to inject a configured logger.
+ */
+type Logger = typeof logger;
+
 export { logger };
-export type { Logger, ProgressNode };
+export type { Bar, Group, LogEvent, Logger, MessageKind, Renderer, Verbosity };

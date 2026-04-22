@@ -1,11 +1,12 @@
 import { html, css, js } from '@playcanvas/supersplat-viewer';
 import { basename, dirname, join } from 'pathe';
 
+import { logWrittenFile } from './utils';
 import { writeSog } from './write-sog';
 import { DataTable } from '../data-table';
 import { type FileSystem, MemoryFileSystem, writeFile } from '../io/write';
 import type { DeviceCreator } from '../types';
-import { toBase64 } from '../utils';
+import { logger, toBase64 } from '../utils';
 
 const defaultSettings = {
     version: 2,
@@ -59,6 +60,7 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
     };
 
     const viewerSettings = viewerSettingsJson || defaultSettings;
+    const encoder = new TextEncoder();
 
     if (bundle) {
         // Bundled mode: embed everything in the HTML
@@ -70,7 +72,8 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
             dataTable,
             bundle: true,
             iterations,
-            createDevice
+            createDevice,
+            logging: 'silent'
         }, memoryFs);
 
         // get the memory buffer
@@ -88,7 +91,12 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
         .replace(content, `fetch("data:application/octet-stream;base64,${sogData}")`)
         .replace('.compressed.ply', '.sog');
 
-        await writeFile(fs, filename, resultHtml);
+        const htmlBytes = encoder.encode(resultHtml);
+
+        const writingGroup = logger.group('Writing');
+        await writeFile(fs, filename, htmlBytes);
+        logWrittenFile(basename(filename), htmlBytes.byteLength);
+        writingGroup.end();
     } else {
         // Unbundled mode: write separate files
         const outputDir = dirname(filename);
@@ -96,26 +104,35 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
         const sogFilename = `${baseFilename}.sog`;
         const sogPath = join(outputDir, sogFilename);
 
-        // Write .sog file
+        const writingGroup = logger.group('Writing');
+
+        // Write .sog file (its files are emitted flat into our Writing group)
         await writeSog({
             filename: sogPath,
             dataTable,
             bundle: true,
             iterations,
-            createDevice
+            createDevice,
+            logging: 'flat'
         }, fs);
 
         // Write CSS file
         const cssPath = join(outputDir, 'index.css');
-        await writeFile(fs, cssPath, css);
+        const cssBytes = encoder.encode(css);
+        await writeFile(fs, cssPath, cssBytes);
+        logWrittenFile(basename(cssPath), cssBytes.byteLength);
 
         // Write JS file
         const jsPath = join(outputDir, 'index.js');
-        await writeFile(fs, jsPath, js);
+        const jsBytes = encoder.encode(js);
+        await writeFile(fs, jsPath, jsBytes);
+        logWrittenFile(basename(jsPath), jsBytes.byteLength);
 
         // Write settings file
         const settingsPath = join(outputDir, 'settings.json');
-        await writeFile(fs, settingsPath, JSON.stringify(viewerSettings, null, 4));
+        const settingsBytes = encoder.encode(JSON.stringify(viewerSettings, null, 4));
+        await writeFile(fs, settingsPath, settingsBytes);
+        logWrittenFile(basename(settingsPath), settingsBytes.byteLength);
 
         // Generate HTML with external references
         const content = 'fetch(contentUrl)';
@@ -124,7 +141,11 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
         .replace(content, `fetch("${sogFilename}")`)
         .replace('.compressed.ply', '.sog');
 
-        await writeFile(fs, filename, resultHtml);
+        const htmlBytes = encoder.encode(resultHtml);
+        await writeFile(fs, filename, htmlBytes);
+        logWrittenFile(basename(filename), htmlBytes.byteLength);
+
+        writingGroup.end();
     }
 };
 

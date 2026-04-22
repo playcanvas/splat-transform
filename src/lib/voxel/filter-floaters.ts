@@ -12,7 +12,7 @@ import {
 import { alignGridBounds, voxelizeToBuffer } from './voxelize';
 import { DataTable } from '../data-table';
 import type { DeviceCreator } from '../types';
-import { logger } from '../utils';
+import { fmtCount, fmtDistance, logger } from '../utils';
 
 /**
  * Remove Gaussians that don't meaningfully contribute to any solid voxel.
@@ -49,20 +49,26 @@ const filterFloaters = async (
     const numRows = dataTable.numRows;
     if (numRows === 0) return dataTable;
 
-    logger.progress.begin(5);
+    const g = logger.group('Filter floaters');
+
+    // Emit the action's gaussian delta inside its own group, then close it.
+    // The "filter-floaters:" prefix would just restate the group header.
+    const finish = (out: DataTable): DataTable => {
+        const removed = numRows - out.numRows;
+        if (removed > 0) {
+            logger.info(`removed ${fmtCount(removed)} gaussians`);
+        }
+        g.end();
+        return out;
+    };
 
     let ctx: VoxelFilterContext | undefined;
-    let progressComplete = false;
     try {
-        logger.progress.step('Initializing voxel pipeline');
-
         ctx = await setupVoxelFilter(dataTable, createDevice);
 
-        const blockSize = 4 * voxelResolution;
-
-        logger.log(`filterFloaters: voxel size ${voxelResolution}m, block size ${blockSize}m, minContribution ${minContribution.toFixed(6)}`);
-
-        logger.progress.step('Aligning grid bounds');
+        const sceneExtentX = ctx.sceneBounds.max.x - ctx.sceneBounds.min.x;
+        const sceneExtentY = ctx.sceneBounds.max.y - ctx.sceneBounds.min.y;
+        const sceneExtentZ = ctx.sceneBounds.max.z - ctx.sceneBounds.min.z;
 
         const gridBounds = alignGridBounds(
             ctx.sceneBounds.min.x, ctx.sceneBounds.min.y, ctx.sceneBounds.min.z,
@@ -70,7 +76,13 @@ const filterFloaters = async (
             voxelResolution
         );
 
-        logger.progress.step('Voxelizing');
+        const grid = buildBlockGridParams(gridBounds, voxelResolution);
+        const nx = grid.numBlocksX * 4;
+        const ny = grid.numBlocksY * 4;
+        const nz = grid.numBlocksZ * 4;
+        const totalVoxels = nx * ny * nz;
+
+        logger.info(`scene: ${fmtDistance(sceneExtentX)} x ${fmtDistance(sceneExtentY)} x ${fmtDistance(sceneExtentZ)}, grid: ${nx} x ${ny} x ${nz} voxels (${fmtCount(totalVoxels)}) @ ${fmtDistance(voxelResolution)}`);
 
         const buffer = await voxelizeToBuffer(
             ctx.bvh, ctx.gpuVoxelization!, gridBounds, voxelResolution, opacityCutoff
@@ -79,12 +91,9 @@ const filterFloaters = async (
         ctx.gpuVoxelization.destroy();
         ctx.gpuVoxelization = null;
 
-        const grid = buildBlockGridParams(gridBounds, voxelResolution);
         const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
 
-        logger.log(`filterFloaters: ${lookup.solidSet.size + lookup.mixedMap.size} occupied blocks (${lookup.solidSet.size} solid, ${lookup.mixedMap.size} mixed)`);
-
-        logger.progress.step('Filtering Gaussians');
+        logger.info(`occupied blocks: ${fmtCount(lookup.solidSet.size + lookup.mixedMap.size)} (${fmtCount(lookup.solidSet.size)} solid, ${fmtCount(lookup.mixedMap.size)} mixed)`);
 
         const gaussianCols = buildGaussianColumns(ctx);
         const keepIndices: number[] = [];
@@ -104,22 +113,13 @@ const filterFloaters = async (
             }
         }
 
-        const removed = numRows - keepIndices.length;
-        logger.log(`filterFloaters: keeping ${keepIndices.length} of ${numRows} Gaussians (removed ${removed})`);
-
-        progressComplete = true;
-        logger.progress.step();
-
-        if (removed === 0) return dataTable;
-
-        return dataTable.clone({ rows: keepIndices });
+        if (keepIndices.length === numRows) {
+            return finish(dataTable);
+        }
+        return finish(dataTable.clone({ rows: keepIndices }));
     } catch (e) {
         ctx?.gpuVoxelization?.destroy();
         throw e;
-    } finally {
-        if (!progressComplete) {
-            logger.progress.cancel();
-        }
     }
 };
 

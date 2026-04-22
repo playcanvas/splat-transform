@@ -3,7 +3,7 @@ import { Vec3 } from 'playcanvas';
 import { Column, DataTable } from '../data-table';
 import { dirname, join, ReadFileSystem, ReadSource, readFile } from '../io/read';
 import { Options } from '../types';
-import { Transform } from '../utils';
+import { logger, Transform } from '../utils';
 
 const kSH_C0 = 0.28209479177387814;
 const SQRT_2 = 1.414213562373095;
@@ -176,11 +176,15 @@ const processUnit = async (
     compressInfo: CompressInfo,
     propertyOffset: number,
     properties: Record<string, Float32Array>,
-    properties_f_rest: Float32Array[] | null
+    properties_f_rest: Float32Array[] | null,
+    onUnitDone: () => void
 ) => {
     const lod = info.lods[targetLod];
     const unitSplats = lod.points;
-    if (unitSplats === 0) return;
+    if (unitSplats === 0) {
+        onUnitDone();
+        return;
+    }
 
     const offset = Number(lod.offset);
     const size = lod.size;
@@ -274,6 +278,8 @@ const processUnit = async (
             }
         }
     }
+
+    onUnitDone();
 };
 
 // Decode all units for a given LOD into shared global arrays with bounded concurrency.
@@ -285,7 +291,8 @@ const decodeUnitsForLod = async (
     compressInfo: CompressInfo,
     lodOffset: number,
     properties: Record<string, Float32Array>,
-    properties_f_rest: Float32Array[] | null
+    properties_f_rest: Float32Array[] | null,
+    onUnitDone: () => void
 ) => {
     // Pre-compute write offsets so units can be processed concurrently without data races
     const offsets = new Array<number>(unitInfos.length);
@@ -302,7 +309,8 @@ const decodeUnitsForLod = async (
             if (idx >= unitInfos.length) break;
             await processUnit(
                 unitInfos[idx], targetLod, dataSource, shSource,
-                compressInfo, offsets[idx], properties, properties_f_rest
+                compressInfo, offsets[idx], properties, properties_f_rest,
+                onUnitDone
             );
         }
     };
@@ -421,29 +429,51 @@ const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Op
     const relatedFilename = (name: string) => (baseDir ? join(baseDir, name) : name);
 
     const indexData = await readFile(fileSystem, relatedFilename('index.bin'));
-    const dataSource = await fileSystem.createSource(relatedFilename('data.bin'));
-    const shSource = hasSH ? await fileSystem.createSource(relatedFilename('shcoef.bin')) : null;
 
-    const unitInfos: LccUnitInfo[] = parseIndexBin(indexData.buffer.slice(indexData.byteOffset, indexData.byteOffset + indexData.byteLength) as ArrayBuffer, lccJson);
+    const openSource = (name: string): Promise<ReadSource> => {
+        return fileSystem.createSource(relatedFilename(name));
+    };
 
-    // build table of input -> output lods
-    const lods = options.lodSelect.length > 0 ?
-        options.lodSelect
-        .map(lod => (lod < 0 ? splats.length + lod : lod))    // negative indices map from the end of lod
-        .filter(lod => lod >= 0 && lod < splats.length) :
-        new Array(splats.length).fill(0).map((_, i) => i);
-
-    if (lods.length === 0) {
-        throw new Error(`No valid LODs selected for LCC input file: ${filename} lods: ${JSON.stringify(lods)}`);
-    }
-
-    // Pre-allocate a single set of arrays for all LODs combined
-    const grandTotal = lods.reduce((sum, lodIdx) => sum + splats[lodIdx], 0);
-    const properties: Record<string, Float32Array> = initProperties(grandTotal);
-    const properties_f_rest = shSource ? Array.from({ length: 45 }, () => new Float32Array(grandTotal)) : null;
-    const lodColumn = new Float32Array(grandTotal);
+    let dataSource: ReadSource | null = null;
+    let shSource: ReadSource | null = null;
+    let mainTable: DataTable;
 
     try {
+        // Open sequentially so a failure on the second open doesn't leak the
+        // first source. (The actual bulk reads still happen in parallel below
+        // via decodeUnitsForLod's IO_CONCURRENCY workers.)
+        dataSource = await openSource('data.bin');
+        if (hasSH) shSource = await openSource('shcoef.bin');
+
+        const unitInfos: LccUnitInfo[] = parseIndexBin(indexData.buffer.slice(indexData.byteOffset, indexData.byteOffset + indexData.byteLength) as ArrayBuffer, lccJson);
+
+        // build table of input -> output lods
+        const lods = options.lodSelect.length > 0 ?
+            options.lodSelect
+            .map(lod => (lod < 0 ? splats.length + lod : lod))    // negative indices map from the end of lod
+            .filter(lod => lod >= 0 && lod < splats.length) :
+            new Array(splats.length).fill(0).map((_, i) => i);
+
+        if (lods.length === 0) {
+            throw new Error(`No valid LODs selected for LCC input file: ${filename} lods: ${JSON.stringify(lods)}`);
+        }
+
+        // Pre-allocate a single set of arrays for all LODs combined
+        const grandTotal = lods.reduce((sum, lodIdx) => sum + splats[lodIdx], 0);
+        const properties: Record<string, Float32Array> = initProperties(grandTotal);
+        const properties_f_rest = shSource ? Array.from({ length: 45 }, () => new Float32Array(grandTotal)) : null;
+        const lodColumn = new Float32Array(grandTotal);
+
+        // One bar across all LOD passes: total = (units per LOD) * (LOD count).
+        // Bounded concurrency means ticks come in bursts; that's fine for the
+        // bar's monotonic update().
+        const totalUnits = unitInfos.length * lods.length;
+        const bar = logger.bar('decoding', totalUnits);
+        let unitsDone = 0;
+        const tick = () => {
+            bar.update(++unitsDone);
+        };
+
         let lodOffset = 0;
         for (let i = 0; i < lods.length; i++) {
             const inputLod = lods[i];
@@ -452,29 +482,38 @@ const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Op
 
             await decodeUnitsForLod(
                 unitInfos, inputLod, dataSource, shSource ?? undefined,
-                compressInfo, lodOffset, properties, properties_f_rest
+                compressInfo, lodOffset, properties, properties_f_rest,
+                tick
             );
 
             lodColumn.fill(outputLod, lodOffset, lodOffset + totalSplats);
             lodOffset += totalSplats;
         }
+
+        const columns = [
+            ...floatProps.map(name => new Column(name, properties[`property_${name}`])),
+            ...(properties_f_rest ? properties_f_rest.map((storage, i) => new Column(`f_rest_${i}`, storage)) : []),
+            new Column('lod', lodColumn)
+        ];
+
+        mainTable = new DataTable(columns, new Transform().fromEulers(90, 0, 180));
+        // Close the bar only on success: leaving it open on the error path
+        // lets `logger.error() -> unwindAll(true)` mark it as failed
+        // instead of finalizing it as a successful bar first.
+        bar.end();
     } finally {
-        dataSource.close();
-        if (shSource) {
-            shSource.close();
-        }
+        dataSource?.close();
+        shSource?.close();
     }
 
-    const columns = [
-        ...floatProps.map(name => new Column(name, properties[`property_${name}`])),
-        ...(properties_f_rest ? properties_f_rest.map((storage, i) => new Column(`f_rest_${i}`, storage)) : []),
-        new Column('lod', lodColumn)
-    ];
-
-    const mainTable = new DataTable(columns, new Transform().fromEulers(90, 0, 180));
     const result: DataTable[] = [mainTable];
 
-    // load environment and tag as lod -1
+    // environment.bin is optional - missing file is a normal case (no skybox).
+    // Different ReadFileSystem implementations signal "not found" differently:
+    //   - NodeReadFileSystem throws an Error with `code === 'ENOENT'`
+    //   - Memory/Zip backends throw `Error('Entry not found: ...')`
+    //   - UrlReadFileSystem throws `Error('HTTP error 404: ...')`
+    // Suppress warnings for any of these.
     try {
         const envData = await readFile(fileSystem, relatedFilename('environment.bin'));
         const envDataTable = deserializeEnvironment(envData, compressInfo, hasSH);
@@ -482,7 +521,14 @@ const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Op
         envDataTable.transform = new Transform().fromEulers(90, 0, 180);
         result.push(envDataTable);
     } catch (err) {
-        console.warn('Failed to load environment.bin', err);
+        const code = (err as { code?: string })?.code;
+        const message = (err as Error)?.message ?? '';
+        const isMissing = code === 'ENOENT' ||
+            message.startsWith('Entry not found') ||
+            message.startsWith('HTTP error 404');
+        if (!isMissing) {
+            logger.warn(`failed to load environment.bin: ${message || err}`);
+        }
     }
 
     return result;

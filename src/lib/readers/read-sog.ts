@@ -1,6 +1,6 @@
 import { Column, DataTable } from '../data-table';
-import { dirname, join, ReadFileSystem, readFile } from '../io/read';
-import { Transform, WebPCodec } from '../utils';
+import { dirname, join, type ReadFileSystem, readFile } from '../io/read';
+import { logger, Transform, WebPCodec } from '../utils';
 
 type Meta = {
     version: number;
@@ -75,14 +75,21 @@ const sigmoidInv = (y: number) => {
 const readSog = async (fileSystem: ReadFileSystem, filename: string): Promise<DataTable> => {
     const decoder = await WebPCodec.create();
 
-    // Resolve paths relative to the meta.json directory
     const baseDir = dirname(filename);
-    const load = (name: string) => readFile(fileSystem, baseDir ? join(baseDir, name) : name);
+    const resolve = (name: string) => (baseDir ? join(baseDir, name) : name);
 
-    // meta.json
-    const metaBytes = await load('meta.json');
+    const metaBytes = await readFile(fileSystem, resolve('meta.json'));
     const meta = JSON.parse(new TextDecoder().decode(metaBytes)) as Meta;
     const count = meta.count;
+
+    const load = async (name: string): Promise<Uint8Array> => {
+        const src = await fileSystem.createSource(resolve(name));
+        try {
+            return await src.read().readAll();
+        } finally {
+            src.close();
+        }
+    };
 
     // Prepare output columns
     const columns: Column[] = [
@@ -101,6 +108,16 @@ const readSog = async (fileSystem: ReadFileSystem, filename: string): Promise<Da
         new Column('rot_2', new Float32Array(count)),
         new Column('rot_3', new Float32Array(count))
     ];
+
+    // One bar across all per-gaussian decode passes. Total = passes * count
+    // (means, quats, scales, sh0, plus an optional shN pass). Each pass ticks
+    // with `count` once it has finished writing into the output columns.
+    const numPasses = 4 + (meta.shN ? 1 : 0);
+    const bar = logger.bar('decoding', numPasses * count);
+    let passesDone = 0;
+    const tickPass = () => {
+        bar.update(++passesDone * count);
+    };
 
     // means: two textures means_l and means_u
     const meansLoWebp = await load(meta.means.files[0]);
@@ -125,6 +142,7 @@ const readSog = async (fileSystem: ReadFileSystem, filename: string): Promise<Da
         yCol[i] = invLogTransform(ly);
         zCol[i] = invLogTransform(lz);
     }
+    tickPass();
 
     // quats
     const quatsWebp = await load(meta.quats.files[0]);
@@ -144,6 +162,7 @@ const readSog = async (fileSystem: ReadFileSystem, filename: string): Promise<Da
         const [x, y, z, wq] = unpackQuat(qr[o], qr[o + 1], qr[o + 2], tag);
         r0[i] = x; r1[i] = y; r2[i] = z; r3[i] = wq;
     }
+    tickPass();
 
     // scales: labels + codebook
     const scalesWebp = await load(meta.scales.files[0]);
@@ -156,6 +175,7 @@ const readSog = async (fileSystem: ReadFileSystem, filename: string): Promise<Da
         (columns[4].data as Float32Array)[i] = sCode[sl[o + 1]];
         (columns[5].data as Float32Array)[i] = sCode[sl[o + 2]];
     }
+    tickPass();
 
     // colors + opacity: sh0.webp encodes 3 labels + opacity byte
     const sh0Webp = await load(meta.sh0.files[0]);
@@ -173,6 +193,7 @@ const readSog = async (fileSystem: ReadFileSystem, filename: string): Promise<Da
         dc2[i] = cCode[c0[o + 2]];
         opCol[i] = sigmoidInv(c0[o + 3] / 255);
     }
+    tickPass();
 
     // Note: If present, SH higher bands (shN) are reconstructed into columns below.
     // Higher-order SH (optional)
@@ -213,7 +234,13 @@ const readSog = async (fileSystem: ReadFileSystem, filename: string): Promise<Da
                 }
             }
         }
+        tickPass();
     }
+
+    // Close the bar only on success: leaving it open on the error path lets
+    // `logger.error() -> unwindAll(true)` mark it as failed instead of
+    // finalizing it as a successful bar first.
+    bar.end();
 
     return new DataTable(columns, Transform.PLY);
 };
