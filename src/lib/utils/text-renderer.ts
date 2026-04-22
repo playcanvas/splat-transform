@@ -12,9 +12,10 @@ interface TextRendererOptions {
      */
     write: (chunk: string) => void;
     /**
-     * Receives raw `output` events. Hand this to the pipeable channel
-     * (typically `process.stdout.write.bind(process.stdout)`). Defaults to
-     * the same sink as `write` when omitted.
+     * Receives `output` events, one logical unit per call, each already
+     * terminated with `\n` by the renderer. Hand this to the pipeable
+     * channel (typically `process.stdout.write.bind(process.stdout)`).
+     * Defaults to the same sink as `write` when omitted.
      */
     output?: (chunk: string) => void;
     /**
@@ -37,7 +38,10 @@ const BAR_WIDTH = 20;
  * shown when `failed`), so default-mode runs see headers without timing
  * footers and `--verbose` adds the matching `done in ...` lines. Bars
  * render as `[#### ...... ] duration`, with `#` appended incrementally on
- * each `barTick` and the remainder padded with `.` on `barEnd`.
+ * each `barTick` and the remainder padded with `.` on `barEnd`. `output`
+ * events are treated as line-oriented: their text is written to the
+ * pipeable sink with a trailing `\n` appended (callers should not include
+ * one themselves).
  *
  * Verbosity filtering is handled centrally by `LoggerCore` - this renderer
  * receives only events that have already passed the visibility gate, so it

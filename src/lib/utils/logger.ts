@@ -22,6 +22,11 @@ type MessageKind = 'error' | 'warn' | 'info' | 'debug';
  * The bar's `name` is repeated on every event so the renderer can keep its
  * label stable across in-place updates while tracking progress via `current`
  * and `total`.
+ *
+ * `output` is the pipeable channel: each event represents a single logical
+ * unit of output (typically one line - or a multi-line block treated as a
+ * unit) that the renderer is expected to terminate with a newline. Callers
+ * should not include a trailing `\n` themselves.
  */
 type LogEvent =
     | { kind: 'scopeStart'; depth: number; name: string; index?: number; total?: number }
@@ -52,10 +57,13 @@ interface Renderer {
  * {@link Logger.unwindAll}) pops it as part of cleanup.
  *
  * Carries a `[Symbol.dispose]` slot directly (rather than extending the
- * built-in `Disposable` lib type) so the published `.d.ts` doesn't force
- * downstream consumers onto `esnext.disposable` / TS 5.2+. Callers on
- * TS 5.2+ / Node 20+ can still adopt `using bar = logger.bar(...)` because
- * `using` only requires the `[Symbol.dispose]` shape structurally.
+ * built-in `Disposable` lib type) so the published `.d.ts` stays free of
+ * any reference to the `Disposable` interface. `Symbol.dispose` itself is
+ * still a TS 5.2+ / `esnext.disposable` (or `es2024.disposable`) lib
+ * symbol, so consumers compiling against these declarations need that
+ * lib enabled (or `skipLibCheck: true`). Callers on TS 5.2+ / Node 20+
+ * can adopt `using bar = logger.bar(...)` because `using` only requires
+ * the `[Symbol.dispose]` shape structurally.
  */
 interface Bar {
     /**
@@ -90,10 +98,13 @@ interface Bar {
  * dangling on the stack.
  *
  * Carries a `[Symbol.dispose]` slot directly (rather than extending the
- * built-in `Disposable` lib type) so the published `.d.ts` doesn't force
- * downstream consumers onto `esnext.disposable` / TS 5.2+. Callers on
- * TS 5.2+ / Node 20+ can still adopt `using g = logger.group(...)` because
- * `using` only requires the `[Symbol.dispose]` shape structurally.
+ * built-in `Disposable` lib type) so the published `.d.ts` stays free of
+ * any reference to the `Disposable` interface. `Symbol.dispose` itself is
+ * still a TS 5.2+ / `esnext.disposable` (or `es2024.disposable`) lib
+ * symbol, so consumers compiling against these declarations need that
+ * lib enabled (or `skipLibCheck: true`). Callers on TS 5.2+ / Node 20+
+ * can adopt `using g = logger.group(...)` because `using` only requires
+ * the `[Symbol.dispose]` shape structurally.
  */
 interface Group {
     /**
@@ -476,9 +487,11 @@ const logger = {
     },
 
     /**
-     * Emit raw text to stdout (for piping). Always shown, regardless of
-     * verbosity.
-     * @param text - The text to emit.
+     * Emit a logical unit of pipeable output (typically one line, or a
+     * multi-line block treated as a single unit). The renderer terminates
+     * each unit with a newline, so callers should not include a trailing
+     * `\n`. Always shown, regardless of verbosity.
+     * @param text - The text to emit (without a trailing newline).
      */
     output(text: string): void {
         core.output(text);
