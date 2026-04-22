@@ -168,8 +168,9 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
                 floorFillDilation: options.floorFillDilation,
                 navCapsule: options.navCapsule,
                 navSeed: options.navSeed,
-                collisionMesh: options.collisionMesh,
+                meshType: options.meshType,
                 meshSimplifyError: options.meshSimplifyError,
+                meshSimplifySloppy: options.meshSimplifySloppy,
                 createDevice
             }, fs);
             break;

@@ -184,4 +184,83 @@ describe('simplifyMesh', () => {
         assert.ok(simplified.positions.length > 0);
         assert.ok(simplified.indices.length > 0);
     });
+
+    it('should preserve a feature bump while collapsing flat slab regions', async () => {
+        // Build a 2x2 grid of blocks (8x4x8 voxels) whose ly=0 layer is a
+        // fully solid 8x8 slab one voxel thick - this gives the simplifier a
+        // large flat area to flush. Then add a 3-voxel-tall "bump" column
+        // protruding from the slab to act as a feature with unique side and
+        // top normals. Normal-weighted simplification should aggressively
+        // collapse the slab while leaving the bump column intact.
+        //
+        // ly=0 slab voxel bits, derived from `bitIdx = lx + ly*4 + lz*16`:
+        //   lz=0: bits  0..3   → lo 0x0000_000F
+        //   lz=1: bits 16..19  → lo 0x000F_0000
+        //   lz=2: bits 32..35  → hi 0x0000_000F
+        //   lz=3: bits 48..51  → hi 0x000F_0000
+        const slabLo = 0x000F_000F >>> 0;
+        const slabHi = 0x000F_000F >>> 0;
+
+        // Bump column inside block (1,0,1) at (lx=0, lz=0), ly = 1..3:
+        //   ly=1: bitIdx =  4 → lo bit 4
+        //   ly=2: bitIdx =  8 → lo bit 8
+        //   ly=3: bitIdx = 12 → lo bit 12
+        const bumpLo = ((1 << 4) | (1 << 8) | (1 << 12)) >>> 0;
+
+        const buffer = new BlockMaskBuffer();
+        buffer.addBlock(xyzToMorton(0, 0, 0), slabLo, slabHi);
+        buffer.addBlock(xyzToMorton(1, 0, 0), slabLo, slabHi);
+        buffer.addBlock(xyzToMorton(0, 0, 1), slabLo, slabHi);
+        buffer.addBlock(xyzToMorton(1, 0, 1), (slabLo | bumpLo) >>> 0, slabHi);
+
+        const bounds = makeGridBounds(0, 0, 0, 8, 4, 8);
+        const mesh = marchingCubes(buffer, bounds, 1.0);
+        const originalTriangles = mesh.indices.length / 3;
+
+        // Generous budget so the simplifier can fully flush the coplanar
+        // slab triangles. A naive (position-only) simplifier with this
+        // budget happily collapses the bump column down into the slab
+        // plane, since the per-edge QEM along the bump's vertical edges is
+        // small. Normal-weighted simplification should refuse those
+        // collapses because the bump's side and top normals diverge sharply
+        // from the slab's.
+        const simplified = await simplifyMesh(mesh, 0.5);
+        const simplifiedTriangles = simplified.indices.length / 3;
+
+        assert.ok(simplifiedTriangles <= originalTriangles * 0.5,
+            `expected >=50% triangle reduction; got ${simplifiedTriangles} of ${originalTriangles}`);
+
+        let maxY = -Infinity;
+        for (let i = 1; i < simplified.positions.length; i += 3) {
+            if (simplified.positions[i] > maxY) maxY = simplified.positions[i];
+        }
+        // Bump apex was at y = 4. Allow ~1 voxel of accumulated error
+        // (meshopt's per-collapse budget compounds across the column), but
+        // demand the bulk of the bump survives.
+        assert.ok(maxY >= 3.0,
+            `bump apex should survive normal-weighted simplification: maxY=${maxY}, expected >= 3.0`);
+    });
+
+    it('should produce a valid mesh in sloppy mode', async () => {
+        const buffer = new BlockMaskBuffer();
+        buffer.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
+        buffer.addBlock(xyzToMorton(1, 0, 0), SOLID_LO, SOLID_HI);
+        buffer.addBlock(xyzToMorton(0, 1, 0), SOLID_LO, SOLID_HI);
+
+        const bounds = makeGridBounds(0, 0, 0, 8, 8, 4);
+        const mesh = marchingCubes(buffer, bounds, 1.0);
+
+        const simplified = await simplifyMesh(mesh, 0.5, { sloppy: true });
+
+        assert.ok(simplified.positions.length > 0, 'sloppy mesh should have vertices');
+        assert.ok(simplified.indices.length > 0, 'sloppy mesh should have indices');
+        assert.strictEqual(simplified.indices.length % 3, 0, 'indices should be multiple of 3');
+        assert.strictEqual(simplified.positions.length % 3, 0, 'positions should be multiple of 3');
+
+        const numVertices = simplified.positions.length / 3;
+        for (let i = 0; i < simplified.indices.length; i++) {
+            assert.ok(simplified.indices[i] < numVertices,
+                `index ${simplified.indices[i]} out of bounds (${numVertices} vertices)`);
+        }
+    });
 });

@@ -1,5 +1,5 @@
 import type { Bounds } from '../data-table';
-import { marchingCubes, simplifyMesh } from '../mesh';
+import { greedyVoxelMesh, marchingCubes, simplifyMesh } from '../mesh';
 import { fmtCount, logger } from '../utils';
 import { BlockMaskBuffer } from '../voxel/block-mask-buffer';
 
@@ -124,25 +124,40 @@ function encodeGlb(positions: Float32Array, indices: Uint32Array): Uint8Array {
 }
 
 /**
- * Extract a collision mesh from voxel data via marching cubes, simplify it,
- * and encode it as a GLB file.
+ * Extract a collision mesh from voxel data and encode it as a GLB file.
+ *
+ * Two extractors are supported:
+ * - `'mc'` (default): marching cubes. Produces a smoother surface that follows
+ *   voxel boundaries; runs the meshopt simplify pass by default to collapse
+ *   the inevitable coplanar redundancy.
+ * - `'voxels'`: greedy voxel meshing. Emits one quad per maximal coplanar
+ *   rectangle of exposed voxel faces with shared (welded) corner vertices,
+ *   yielding an axis-aligned mesh that is connected for downstream
+ *   optimization. The simplify pass is skipped by default; pass an explicit
+ *   `meshSimplifyError > 0` or `sloppy === true` to opt in.
  *
  * @param blockBuffer - Voxel block data after filtering
  * @param gridBounds - Grid bounds aligned to block boundaries
  * @param voxelResolution - Size of each voxel in world units
- * @param meshSimplifyError - Maximum geometric error as a fraction of voxelResolution (default 0.08)
+ * @param meshType - Extractor to use (`'mc'` or `'voxels'`)
+ * @param meshSimplifyError - Maximum geometric error for simplification, expressed as a fraction of voxelResolution. Defaults to 0.08 on the `mc` path; defaults to skipping simplification on the `voxels` path
+ * @param sloppy - If true, run the meshopt sloppy simplifier (also opts the `voxels` path in to simplification with a default error of 0.08)
  * @returns GLB bytes, or null if no triangles were generated
  */
 const buildCollisionMesh = async (
     blockBuffer: BlockMaskBuffer,
     gridBounds: Bounds,
     voxelResolution: number,
-    meshSimplifyError?: number
+    meshType: 'mc' | 'voxels' = 'mc',
+    meshSimplifyError?: number,
+    sloppy?: boolean
 ): Promise<Uint8Array | null> => {
     const g = logger.group('Collision mesh');
 
-    const extractSub = logger.group('Extracting');
-    const rawMesh = marchingCubes(blockBuffer, gridBounds, voxelResolution);
+    const extractSub = logger.group(`Extracting (${meshType})`);
+    const rawMesh = meshType === 'voxels' ?
+        greedyVoxelMesh(blockBuffer, gridBounds, voxelResolution) :
+        marchingCubes(blockBuffer, gridBounds, voxelResolution);
     logger.info(`raw vertices: ${fmtCount(rawMesh.positions.length / 3)}`);
     logger.info(`raw triangles: ${fmtCount(rawMesh.indices.length / 3)}`);
 
@@ -154,18 +169,27 @@ const buildCollisionMesh = async (
     }
     extractSub.end();
 
-    const simplifySub = logger.group('Simplifying');
-    const errorFraction = Number.isFinite(meshSimplifyError) && meshSimplifyError! >= 0 ? meshSimplifyError! : 0.08;
-    const simplified = await simplifyMesh(rawMesh, errorFraction * voxelResolution);
+    // mc: simplify by default; voxels: only when explicitly requested.
+    const explicitError = Number.isFinite(meshSimplifyError) && (meshSimplifyError as number) > 0;
+    const wantSimplify = meshType === 'mc' ?
+        explicitError || sloppy === true || meshSimplifyError === undefined :
+        explicitError || sloppy === true;
 
-    const reduction = (1 - simplified.indices.length / rawMesh.indices.length) * 100;
-    logger.info(`simplified vertices: ${fmtCount(simplified.positions.length / 3)}`);
-    logger.info(`simplified triangles: ${fmtCount(simplified.indices.length / 3)}`);
-    logger.info(`reduction: ${reduction.toFixed(0)}%`);
-    simplifySub.end();
+    let finalMesh = rawMesh;
+    if (wantSimplify) {
+        const simplifySub = logger.group(sloppy ? 'Simplifying (sloppy)' : 'Simplifying');
+        const errorFraction = explicitError ? (meshSimplifyError as number) : 0.08;
+        finalMesh = await simplifyMesh(rawMesh, errorFraction * voxelResolution, { sloppy });
+
+        const reduction = (1 - finalMesh.indices.length / rawMesh.indices.length) * 100;
+        logger.info(`simplified vertices: ${fmtCount(finalMesh.positions.length / 3)}`);
+        logger.info(`simplified triangles: ${fmtCount(finalMesh.indices.length / 3)}`);
+        logger.info(`reduction: ${reduction.toFixed(0)}%`);
+        simplifySub.end();
+    }
 
     g.end();
-    return encodeGlb(simplified.positions, simplified.indices);
+    return encodeGlb(finalMesh.positions, finalMesh.indices);
 };
 
 export { buildCollisionMesh };
