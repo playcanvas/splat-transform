@@ -2,9 +2,9 @@ import { fmtBytes, fmtTime } from './fmt';
 import type { LogEvent, MessageKind, Renderer, Verbosity } from './logger';
 
 /**
- * Output streams and optional memory-usage probe for {@link LineRenderer}.
+ * Output streams and optional memory-usage probe for {@link TextRenderer}.
  */
-interface LineRendererOptions {
+interface TextRendererOptions {
     /**
      * Receives all status chunks (scopes, bars, messages). May contain
      * partial-line writes - hand this to a stream that flushes on partials
@@ -49,19 +49,19 @@ const indent = (depth: number): string => '  '.repeat(Math.max(0, depth));
 const BAR_WIDTH = 20;
 
 /**
- * Single line-based renderer. Emits one event per line - no carriage-return
- * rewriting, no TTY detection, no buffering. Scope starts and ends each
- * produce their own line, so even fast childless scopes render as a header /
- * footer pair. Bars render as `[#### ...... ] duration`, with `#` appended
- * incrementally on each `barTick` and the remainder padded with `.` on
- * `barEnd`.
+ * Default human-readable text renderer. Emits one event per line - no
+ * carriage-return rewriting, no TTY detection, no buffering. Scope starts
+ * and ends each produce their own line, so even fast childless scopes
+ * render as a header / footer pair. Bars render as `[#### ...... ] duration`,
+ * with `#` appended incrementally on each `barTick` and the remainder padded
+ * with `.` on `barEnd`.
  *
  * Sinks are injected (no `process` reference here) so the renderer works in
  * both Node CLI and browser/bundle contexts: the CLI passes
  * `process.stderr.write` for status and `process.stdout.write` for raw
  * output; library/browser consumers can pass a `console.log` line buffer.
  */
-class LineRenderer implements Renderer {
+class TextRenderer implements Renderer {
     private verbosity: Verbosity = 'normal';
 
     private readonly write: (chunk: string) => void;
@@ -79,7 +79,7 @@ class LineRenderer implements Renderer {
      */
     private barFilled = 0;
 
-    constructor(options: LineRendererOptions) {
+    constructor(options: TextRendererOptions) {
         this.write = options.write;
         this.output = options.output ?? options.write;
         this.getMemoryUsage = options.getMemoryUsage;
@@ -184,5 +184,5 @@ class LineRenderer implements Renderer {
     }
 }
 
-export { LineRenderer };
-export type { LineRendererOptions };
+export { TextRenderer };
+export type { TextRendererOptions };

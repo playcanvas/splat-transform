@@ -16,11 +16,11 @@ import {
     fmtTime,
     getInputFormat,
     getSHBands,
-    LineRenderer,
     readFile,
     getOutputFormat,
     writeFile,
     processDataTable,
+    TextRenderer,
     type ProcessAction,
     type FilterFloaters,
     type FilterCluster,
@@ -632,8 +632,8 @@ const main = async () => {
     // read args
     const { files, options } = await parseArguments();
 
-    // install line-based renderer and configure verbosity
-    logger.setRenderer(new LineRenderer({
+    // install text renderer and configure verbosity
+    logger.setRenderer(new TextRenderer({
         write: chunk => process.stderr.write(chunk),
         output: chunk => process.stdout.write(chunk),
         getMemoryUsage: options.mem ? () => process.memoryUsage() : undefined
