@@ -45,8 +45,8 @@
     "lib/"
   ],
   "dependencies": {
-    "meshoptimizer": "^1.0.1",
-    "webgpu": "^0.3.8 || ^0.4.0"
+    "meshoptimizer": "1.0.1",
+    "webgpu": "0.4.0"
   },
   "devDependencies": {
     "@playcanvas/eslint-config": "2.1.0",
@@ -70,7 +70,7 @@
     "typescript": "5.9.3"
   },
   "peerDependencies": {
-    "playcanvas": ">=2.0.0"
+    "playcanvas": "^2.0.0"
   },
   "scripts": {
     "build": "rollup -c && node -e \"fs=require('fs');fs.copyFileSync('dist/lib/index.d.ts','dist/lib/index.d.cts')\"",
