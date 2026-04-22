@@ -316,65 +316,80 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
 
     const writingGroup = openGroup ? logger.group('Writing') : null;
 
-    const meansMinMax = await writeMeans();
-    await writeQuaternions();
-    const scalesCodebook = await writeScales();
-    const colorsCodebook = await writeColors();
+    try {
+        const meansMinMax = await writeMeans();
+        await writeQuaternions();
+        const scalesCodebook = await writeScales();
+        const colorsCodebook = await writeColors();
 
-    let shN = null;
-    if (shBands > 0) {
-        shN = await writeSH(shBands);
+        let shN = null;
+        if (shBands > 0) {
+            shN = await writeSH(shBands);
+        }
+
+        // construct meta.json
+        const meta: any = {
+            version: 2,
+            asset: {
+                generator: `splat-transform v${version}`
+            },
+            count: numRows,
+            means: {
+                mins: meansMinMax.mins,
+                maxs: meansMinMax.maxs,
+                files: [
+                    'means_l.webp',
+                    'means_u.webp'
+                ]
+            },
+            scales: {
+                codebook: scalesCodebook,
+                files: ['scales.webp']
+            },
+            quats: {
+                files: ['quats.webp']
+            },
+            sh0: {
+                codebook: colorsCodebook,
+                files: ['sh0.webp']
+            },
+            ...(shN ? { shN } : {})
+        };
+
+        const metaJson = (new TextEncoder()).encode(JSON.stringify(meta));
+
+        const metaFilename = zipFs ? 'meta.json' : outputFilename;
+
+        await writeFile(outputFs, metaFilename, metaJson);
+
+        if (emitInfo && !zipFs) {
+            logWrittenFile(basename(outputFilename), metaJson.byteLength);
+        }
+
+        // Close zip archive if bundling
+        if (zipFs) {
+            await zipFs.close();
+        }
+
+        if (emitInfo && bundleWriter) {
+            logWrittenFile(basename(outputFilename), bundleWriter.bytesWritten);
+        }
+
+        writingGroup?.end();
+    } catch (err) {
+        // Best-effort close of the underlying bundle writer to avoid a file
+        // handle leak / partially-written zip on failure. Leave `writingGroup`
+        // open so the caller's `logger.error()` -> `unwindAll(true)` marks it
+        // as failed.
+        if (bundleWriter) {
+            try {
+                await bundleWriter.close();
+            } catch {
+                // already failing — swallow secondary close errors
+            }
+        }
+        throw err;
     }
-
-    // construct meta.json
-    const meta: any = {
-        version: 2,
-        asset: {
-            generator: `splat-transform v${version}`
-        },
-        count: numRows,
-        means: {
-            mins: meansMinMax.mins,
-            maxs: meansMinMax.maxs,
-            files: [
-                'means_l.webp',
-                'means_u.webp'
-            ]
-        },
-        scales: {
-            codebook: scalesCodebook,
-            files: ['scales.webp']
-        },
-        quats: {
-            files: ['quats.webp']
-        },
-        sh0: {
-            codebook: colorsCodebook,
-            files: ['sh0.webp']
-        },
-        ...(shN ? { shN } : {})
-    };
-
-    const metaJson = (new TextEncoder()).encode(JSON.stringify(meta));
-
-    const metaFilename = zipFs ? 'meta.json' : outputFilename;
-
-    await writeFile(outputFs, metaFilename, metaJson);
-
-    if (emitInfo && !zipFs) {
-        logWrittenFile(basename(outputFilename), metaJson.byteLength);
-    }
-
-    // Close zip archive if bundling
-    if (zipFs) {
-        await zipFs.close();
-    }
-
-    if (emitInfo && bundleWriter) {
-        logWrittenFile(basename(outputFilename), bundleWriter.bytesWritten);
-    }
-
-    writingGroup?.end();
 };
 
 export { writeSog };
