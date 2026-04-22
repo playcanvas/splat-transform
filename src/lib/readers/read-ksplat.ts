@@ -1,6 +1,8 @@
 import { Column, DataTable } from '../data-table';
 import { ReadSource } from '../io/read';
-import { Transform } from '../utils';
+import { logger, Transform } from '../utils';
+
+const TICK_BATCH = 1 << 16;
 
 // Format configuration for different compression modes
 interface CompressionConfig {
@@ -188,6 +190,8 @@ const readKsplat = async (source: ReadSource): Promise<DataTable> => {
         scaleQuantRange
     } = COMPRESSION_MODES[compressionMode];
 
+    const bar = logger.bar('decoding', numSplats);
+
     let currentSectionDataOffset = MAIN_HEADER_SIZE + maxSections * SECTION_HEADER_SIZE;
     let splatIndex = 0;
 
@@ -362,6 +366,10 @@ const readKsplat = async (source: ReadSource): Promise<DataTable> => {
             }
 
             splatIndex++;
+
+            if ((splatIndex & (TICK_BATCH - 1)) === 0) {
+                bar.update(splatIndex);
+            }
         }
 
         currentSectionDataOffset += sectionDataSize + totalBucketStorageSize;
@@ -370,6 +378,9 @@ const readKsplat = async (source: ReadSource): Promise<DataTable> => {
     if (splatIndex !== numSplats) {
         throw new Error(`Splat count mismatch: expected ${numSplats}, processed ${splatIndex}`);
     }
+
+    bar.update(numSplats);
+    bar.end();
 
     return new DataTable(columns, Transform.PLY);
 };

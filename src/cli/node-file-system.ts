@@ -117,12 +117,6 @@ class NodeReadSource implements ReadSource {
 
 /**
  * ReadFileSystem for reading from the local filesystem using Node.js fs module.
- *
- * Per-source progress reporting is forwarded directly: `createSource` fires
- * the supplied `progress` callback once on open with `(0, size)`, then on
- * every `pull` with the current `(bytesRead, size)`. Aggregation across
- * multiple sources is the responsibility of the reader (see
- * `CombineProgress`).
  */
 class NodeReadFileSystem implements ReadFileSystem {
     async createSource(filename: string, progress?: ProgressCallback): Promise<ReadSource> {

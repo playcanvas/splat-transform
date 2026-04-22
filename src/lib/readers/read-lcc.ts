@@ -1,9 +1,9 @@
 import { Vec3 } from 'playcanvas';
 
 import { Column, DataTable } from '../data-table';
-import { CombineProgress, dirname, join, type ProgressCallback, ReadFileSystem, ReadSource, readFile } from '../io/read';
+import { dirname, join, ReadFileSystem, ReadSource, readFile } from '../io/read';
 import { Options } from '../types';
-import { type Bar, logger, Transform } from '../utils';
+import { logger, Transform } from '../utils';
 
 const kSH_C0 = 0.28209479177387814;
 const SQRT_2 = 1.414213562373095;
@@ -176,11 +176,15 @@ const processUnit = async (
     compressInfo: CompressInfo,
     propertyOffset: number,
     properties: Record<string, Float32Array>,
-    properties_f_rest: Float32Array[] | null
+    properties_f_rest: Float32Array[] | null,
+    onUnitDone: () => void
 ) => {
     const lod = info.lods[targetLod];
     const unitSplats = lod.points;
-    if (unitSplats === 0) return;
+    if (unitSplats === 0) {
+        onUnitDone();
+        return;
+    }
 
     const offset = Number(lod.offset);
     const size = lod.size;
@@ -274,6 +278,8 @@ const processUnit = async (
             }
         }
     }
+
+    onUnitDone();
 };
 
 // Decode all units for a given LOD into shared global arrays with bounded concurrency.
@@ -285,7 +291,8 @@ const decodeUnitsForLod = async (
     compressInfo: CompressInfo,
     lodOffset: number,
     properties: Record<string, Float32Array>,
-    properties_f_rest: Float32Array[] | null
+    properties_f_rest: Float32Array[] | null,
+    onUnitDone: () => void
 ) => {
     // Pre-compute write offsets so units can be processed concurrently without data races
     const offsets = new Array<number>(unitInfos.length);
@@ -302,7 +309,8 @@ const decodeUnitsForLod = async (
             if (idx >= unitInfos.length) break;
             await processUnit(
                 unitInfos[idx], targetLod, dataSource, shSource,
-                compressInfo, offsets[idx], properties, properties_f_rest
+                compressInfo, offsets[idx], properties, properties_f_rest,
+                onUnitDone
             );
         }
     };
@@ -388,13 +396,10 @@ const deserializeEnvironment = (raw: Uint8Array, compressInfo: CompressInfo, has
  * @param fileSystem - File system for reading the LCC files.
  * @param filename - Path to the meta.lcc file.
  * @param options - Options including LOD selection via `lodSelect`.
- * @param onProgress - Optional aggregate progress callback for the payload reads.
  * @returns Promise resolving to an array of DataTables (combined LODs + environment).
  * @ignore
  */
-const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Options, onProgress?: ProgressCallback): Promise<DataTable[]> => {
-    // meta.lcc is read off-bar (small JSON) so it does not contribute to the
-    // aggregate total.
+const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Options): Promise<DataTable[]> => {
     const lccData = await readFile(fileSystem, filename);
     const lccText = new TextDecoder().decode(lccData);
     const lccJson = JSON.parse(lccText);
@@ -423,30 +428,10 @@ const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Op
     const baseDir = dirname(filename);
     const relatedFilename = (name: string) => (baseDir ? join(baseDir, name) : name);
 
-    // index.bin is read off-bar (small) so it does not contribute to the
-    // aggregate total.
     const indexData = await readFile(fileSystem, relatedFilename('index.bin'));
 
-    // The decode loop interleaves reads from data.bin and shcoef.bin (see
-    // decodeUnitsForLod / processUnit), so a per-file bar pair would tick
-    // concurrently and stomp on each other in the TTY. Aggregate both streams
-    // through a single CombineProgress and drive one bar from the combined
-    // result. The optional library-level `onProgress` callback also receives
-    // the combined stream.
-    const payloadCount = hasSH ? 2 : 1;
-    // Defer bar creation until the first aggregate progress event so it can
-    // be sized to the real combined byte total.
-    let payloadBar: Bar | undefined;
-    const payloadName = hasSH ? 'data.bin + shcoef.bin' : 'data.bin';
-    const combine = new CombineProgress(payloadCount, (loaded, total) => {
-        onProgress?.(loaded, total);
-        if (!total) return;
-        payloadBar ??= logger.bar(payloadName, total);
-        payloadBar.update(loaded);
-    });
-
     const openSource = (name: string): Promise<ReadSource> => {
-        return fileSystem.createSource(relatedFilename(name), combine.track(name));
+        return fileSystem.createSource(relatedFilename(name));
     };
 
     let dataSource: ReadSource | null = null;
@@ -479,6 +464,16 @@ const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Op
         const properties_f_rest = shSource ? Array.from({ length: 45 }, () => new Float32Array(grandTotal)) : null;
         const lodColumn = new Float32Array(grandTotal);
 
+        // One bar across all LOD passes: total = (units per LOD) * (LOD count).
+        // Bounded concurrency means ticks come in bursts; that's fine for the
+        // bar's monotonic update().
+        const totalUnits = unitInfos.length * lods.length;
+        const bar = logger.bar('decoding', totalUnits);
+        let unitsDone = 0;
+        const tick = () => {
+            bar.update(++unitsDone);
+        };
+
         let lodOffset = 0;
         for (let i = 0; i < lods.length; i++) {
             const inputLod = lods[i];
@@ -487,7 +482,8 @@ const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Op
 
             await decodeUnitsForLod(
                 unitInfos, inputLod, dataSource, shSource ?? undefined,
-                compressInfo, lodOffset, properties, properties_f_rest
+                compressInfo, lodOffset, properties, properties_f_rest,
+                tick
             );
 
             lodColumn.fill(outputLod, lodOffset, lodOffset + totalSplats);
@@ -504,7 +500,7 @@ const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Op
         // Close the bar only on success: leaving it open on the error path
         // lets `logger.error() -> unwindAll(true)` mark it as failed
         // instead of finalizing it as a successful bar first.
-        payloadBar?.end();
+        bar.end();
     } finally {
         dataSource?.close();
         shSource?.close();
