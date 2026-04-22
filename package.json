@@ -70,7 +70,7 @@
     "typescript": "5.9.3"
   },
   "peerDependencies": {
-    "playcanvas": ">=2.0.0"
+    "playcanvas": "^2.0.0"
   },
   "scripts": {
     "build": "rollup -c && node -e \"fs=require('fs');fs.copyFileSync('dist/lib/index.d.ts','dist/lib/index.d.cts')\"",
