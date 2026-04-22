@@ -22,20 +22,18 @@ const openWithBar = async (
 ): Promise<{ source: ReadSource; endBar: () => void }> => {
     const bar = logger.bar(basename(filename), 100);
     let prev = 0;
-    try {
-        const source = await fileSystem.createSource(filename, (loaded, total) => {
-            onProgress?.(loaded, total);
-            if (!total) return;
-            const ticks = Math.floor((loaded / total) * 100);
-            const delta = ticks - prev;
-            prev = ticks;
-            if (delta > 0) bar.tick(delta);
-        });
-        return { source, endBar: () => bar.end() };
-    } catch (e) {
-        bar.end();
-        throw e;
-    }
+    // Don't close the bar on a createSource() failure: leaving it open
+    // lets `logger.error() -> unwindAll(true)` mark it as failed instead
+    // of finalizing it as a successful bar first.
+    const source = await fileSystem.createSource(filename, (loaded, total) => {
+        onProgress?.(loaded, total);
+        if (!total) return;
+        const ticks = Math.floor((loaded / total) * 100);
+        const delta = ticks - prev;
+        prev = ticks;
+        if (delta > 0) bar.tick(delta);
+    });
+    return { source, endBar: () => bar.end() };
 };
 
 /**
@@ -145,9 +143,12 @@ const readFile = async (readFileOptions: ReadFileOptions): Promise<DataTable[]> 
             const zipFs = new ZipReadFileSystem(source);
             try {
                 result = [await readSog(zipFs, 'meta.json', undefined, false)];
+                // Close the bar only on success: on error paths we let
+                // `logger.error() -> unwindAll(true)` mark it as failed
+                // rather than finalizing it as a successful bar here.
+                endBar();
             } finally {
                 zipFs.close();
-                endBar();
             }
         } else {
             // Loose SOG: reader draws one bar per payload file.
@@ -169,9 +170,12 @@ const readFile = async (readFileOptions: ReadFileOptions): Promise<DataTable[]> 
             } else if (inputFormat === 'spz') {
                 result = [await readSpz(source)];
             }
+            // Close the bar only on success: on error paths we let
+            // `logger.error() -> unwindAll(true)` mark it as failed rather
+            // than finalizing it as a successful bar here.
+            endBar();
         } finally {
             source.close();
-            endBar();
         }
     }
 

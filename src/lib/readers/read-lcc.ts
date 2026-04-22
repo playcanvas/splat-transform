@@ -501,10 +501,13 @@ const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Op
         ];
 
         mainTable = new DataTable(columns, new Transform().fromEulers(90, 0, 180));
+        // Close the bar only on success: leaving it open on the error path
+        // lets `logger.error() -> unwindAll(true)` mark it as failed
+        // instead of finalizing it as a successful bar first.
+        payloadBar.end();
     } finally {
         dataSource?.close();
         shSource?.close();
-        payloadBar.end();
     }
 
     const result: DataTable[] = [mainTable];

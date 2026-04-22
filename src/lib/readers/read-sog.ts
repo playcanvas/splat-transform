@@ -122,10 +122,14 @@ const readSog = async (fileSystem: ReadFileSystem, filename: string, onProgress?
             if (delta > 0) bar.tick(delta);
         });
         try {
-            return await src.read().readAll();
+            const buf = await src.read().readAll();
+            // Close the bar only on success: leaving it open on the error
+            // path lets `logger.error() -> unwindAll(true)` mark it as
+            // failed instead of finalizing it as a successful bar first.
+            bar?.end();
+            return buf;
         } finally {
             src.close();
-            bar?.end();
         }
     };
 
