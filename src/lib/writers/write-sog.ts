@@ -53,10 +53,15 @@ type WriteSogOptions = {
     bundle: boolean;
     iterations: number;
     createDevice?: DeviceCreator;
-    // Controls how writeSog reports progress.
+    // Controls how writeSog reports its own progress. This only affects
+    // writeSog's `Writing` group and per-file size lines; nested algorithm
+    // logging (e.g. `kmeans()` SH compression progress bars) still goes to
+    // the global logger and is not suppressed by 'silent'.
     //   'own'    — open a `Writing` group and emit per-file info lines (default)
     //   'flat'   — no group; emit per-file info lines into caller's scope
-    //   'silent' — suppress all logging (use when writing to an in-memory fs)
+    //   'silent' — suppress writeSog's own group/per-file info lines (use
+    //              when writing to an in-memory fs and the caller will log
+    //              the final bundled size itself)
     logging?: 'own' | 'flat' | 'silent';
 };
 

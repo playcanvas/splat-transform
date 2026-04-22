@@ -654,10 +654,12 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
         const kEff = Math.min(Math.max(1, KNN_K), Math.max(1, n - 1));
 
         iterationIndex++;
-        const g = logger.group('Decimate iteration', {
-            index: iterationIndex,
-            total: Math.max(iterationIndex, estIterations)
-        });
+        const g = iterationIndex <= estIterations
+            ? logger.group('Decimate iteration', {
+                index: iterationIndex,
+                total: estIterations
+            })
+            : logger.group('Decimate iteration');
 
         const kdSub = logger.group('Building KD-tree');
 
