@@ -636,15 +636,78 @@ EXAMPLES
 const main = async () => {
     const startTime = performance.now();
 
-    // read args
-    const { files, options } = await parseArguments();
+    // Emit the final timing line plus the kernel-tracked peak resident set
+    // size. `process.resourceUsage().maxRSS` is reported in kilobytes on
+    // Linux/macOS and bytes on Windows; normalize to bytes for fmtBytes.
+    // Note: V8 fatal OOM (`FATAL ERROR: Reached heap limit`) and external
+    // SIGKILL bypass all JS handlers (uncaughtException, beforeExit, exit),
+    // so peak rss cannot be reported in those cases - use an external wrapper
+    // such as `/usr/bin/time -l` (macOS) or `/usr/bin/time -v` (Linux).
+    const reportDone = () => {
+        const elapsedMs = performance.now() - startTime;
+        const rawMaxRss = process.resourceUsage().maxRSS;
+        const maxRssBytes = process.platform === 'win32' ? rawMaxRss : rawMaxRss * 1024;
+        logger.info(`done in ${fmtTime(elapsedMs)}  [peak mem: ${fmtBytes(maxRssBytes)}]`);
+    };
 
-    // install text renderer and configure verbosity
+    const logDataTableInfo = (dataTable: DataTable) => {
+        logger.info(`${fmtCount(dataTable.numRows)} gaussians \u00b7 ${getSHBands(dataTable)} SH bands \u00b7 ${fmtBytes(dataTable.byteLength)}`);
+    };
+
+    // Centralised failure exit: emits the error, the final timing/peak-mem
+    // line, and terminates with status 1. Used by every non-success exit
+    // path (early arg/overwrite checks, the main try/catch, and the
+    // top-level uncaught{Exception,Rejection} handlers) so peak rss is
+    // always reported on failure - matching the success path. The optional
+    // `label` preserves the failure kind/context (e.g. uncaughtException
+    // origin) that Node's default crash reporter would have surfaced, since
+    // installing the handlers below suppresses it.
+    const failExit = (err: unknown, label?: string): never => {
+        if (label) {
+            logger.error(`${label}:`, err);
+        } else {
+            logger.error(err);
+        }
+        reportDone();
+        exit(1);
+    };
+
+    // Install a baseline text renderer immediately so any error emitted
+    // before parseArguments() completes (including from the top-level
+    // exception handlers below, or from parseArguments() itself) is
+    // actually visible. The default logger renderer is a NullRenderer
+    // that drops every event silently. The `--mem` overlay is layered
+    // on later once we've parsed the flag.
     logger.setRenderer(new TextRenderer({
         write: chunk => process.stderr.write(chunk),
-        output: chunk => process.stdout.write(chunk),
-        getMemoryUsage: options.mem ? () => process.memoryUsage() : undefined
+        output: chunk => process.stdout.write(chunk)
     }));
+
+    process.on('uncaughtException', (err, origin) => {
+        failExit(err, `uncaughtException (${origin})`);
+    });
+    process.on('unhandledRejection', (reason) => {
+        failExit(reason, 'unhandledRejection');
+    });
+
+    // read args
+    let files: File[];
+    let options: CliOptions;
+    try {
+        ({ files, options } = await parseArguments());
+    } catch (err) {
+        failExit(err);
+    }
+
+    // re-install the text renderer with the memory-usage overlay if the
+    // user requested it via --mem; otherwise keep the baseline renderer.
+    if (options.mem) {
+        logger.setRenderer(new TextRenderer({
+            write: chunk => process.stderr.write(chunk),
+            output: chunk => process.stdout.write(chunk),
+            getMemoryUsage: () => process.memoryUsage()
+        }));
+    }
     if (options.quiet) {
         logger.setVerbosity('quiet');
     } else if (options.verbose) {
@@ -694,8 +757,7 @@ const main = async () => {
             exit(0);
         }
         // invalid invocation: route usage to stderr as an error
-        logger.error(formattedUsage);
-        exit(1);
+        failExit(formattedUsage);
     }
 
     const inputArgs = files.slice(0, -1);
@@ -717,8 +779,7 @@ const main = async () => {
         } else {
             // check overwrite before doing any work
             if (await fileExists(outputFilename)) {
-                logger.error(`File '${outputFilename}' already exists. Use -w option to overwrite.`);
-                exit(1);
+                failExit(`File '${outputFilename}' already exists. Use -w option to overwrite.`);
             }
 
             // for unbundled HTML, also check for additional files
@@ -734,8 +795,7 @@ const main = async () => {
 
                 for (const file of filesToCheck) {
                     if (await fileExists(file)) {
-                        logger.error(`File '${file}' already exists. Use -w option to overwrite.`);
-                        exit(1);
+                        failExit(`File '${file}' already exists. Use -w option to overwrite.`);
                     }
                 }
             }
@@ -813,7 +873,7 @@ const main = async () => {
                     throw new Error(`Unsupported data in file '${inputArg.filename}'`);
                 }
 
-                logger.info(`gaussians: ${fmtCount(dataTable.numRows)}, SH bands: ${getSHBands(dataTable)}, mem: ${fmtBytes(dataTable.byteLength)}`);
+                logDataTableInfo(dataTable);
 
                 const isEnv = dataTable.hasColumn('lod') && dataTable.getColumnByName('lod').data.every(v => v === -1);
                 if (!isEnv) {
@@ -852,7 +912,7 @@ const main = async () => {
                 index: phaseTotal,
                 total: phaseTotal
             });
-            logger.info(`gaussians: ${fmtCount(dataTable.numRows)}, SH bands: ${getSHBands(dataTable)}, mem: ${fmtBytes(dataTable.byteLength)}`);
+            logDataTableInfo(dataTable);
             await writeFile({
                 filename: outputFilename,
                 outputFormat: outputFormat!,
@@ -864,13 +924,10 @@ const main = async () => {
             phase.end();
         }
     } catch (err) {
-        // handle errors
-        logger.error(err);
-        exit(1);
+        failExit(err);
     }
 
-    const elapsedMs = performance.now() - startTime;
-    logger.info(`done in ${fmtTime(elapsedMs)}`);
+    reportDone();
 
     // something in webgpu seems to keep the process alive after returning
     // from main so force exit
