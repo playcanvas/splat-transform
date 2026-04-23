@@ -93,7 +93,7 @@ const cliOptionsConfig = {
     'voxel-floor-fill': { type: 'string' },
     'voxel-carve': { type: 'string' },
     'seed-pos': { type: 'string', default: '' },
-    'collision-mesh': { type: 'string', short: 'K' },
+    'collision-mesh': { type: 'boolean', short: 'K' },
 
     // per-file options
     translate: { type: 'string', short: 't', multiple: true },
@@ -120,8 +120,6 @@ const stringOptionNames = new Set(Object.entries(cliOptionsConfig)
 
 const isNumericValue = (s: string) => /^-?\d[\d.,e+-]*$/.test(s);
 
-const isCollisionMeshValue = (s: string) => s === 'edge' || s === 'smooth';
-
 // Options that may appear without a value. The predicate gates whether the
 // next argv token is consumed as the value; when omitted (or rejected) the
 // option is normalized to an empty `--option=` form.
@@ -134,9 +132,7 @@ const optionalValueOptions: Map<string, OptionalValueValidator> = new Map([
     ['--voxel-external-fill', isNumericValue],
     ['--voxel-floor-fill', isNumericValue],
     ['--voxel-carve', isNumericValue],
-    ['--voxel-params', isNumericValue],
-    ['--collision-mesh', isCollisionMeshValue],
-    ['-K', isCollisionMeshValue]
+    ['--voxel-params', isNumericValue]
 ]);
 
 const shortToLong = new Map<string, string>(
@@ -306,14 +302,7 @@ const parseArguments = async () => {
         navSeed = { x: 0, y: 0, z: 0 };
     }
 
-    // Collision mesh: presence of the value (even empty) means generate;
-    // absent means skip. The optional `[shape]` payload selects the
-    // extractor; defaults to `edge`.
-    const collisionMeshStr = v['collision-mesh'];
-    let meshType: 'edge' | 'smooth' | undefined;
-    if (collisionMeshStr !== undefined) {
-        meshType = collisionMeshStr === 'smooth' ? 'smooth' : 'edge';
-    }
+    const collisionMesh = v['collision-mesh'];
 
     const options: CliOptions = {
         overwrite: v.overwrite,
@@ -337,7 +326,7 @@ const parseArguments = async () => {
         floorFillDilation,
         navCapsule,
         navSeed,
-        meshType
+        collisionMesh
     };
 
     for (const t of tokens) {
@@ -604,9 +593,7 @@ GLOBAL OPTIONS
         --voxel-floor-fill [size]           Fill below-floor voxels by upward column walk from bottom. Default size: 1.6
         --voxel-carve [h,r]                 Carve navigable space using capsule flood fill from seed. Default: 1.6,0.2
         --seed-pos         <x,y,z>          Seed position for voxel processing and --filter-cluster. Default: 0,0,0
-    -K, --collision-mesh   [edge|smooth]    Generate collision mesh (.collision.glb).
-                                              edge (default): greedy voxel quads.
-                                              smooth: marching cubes + lossless coplanar merge.
+    -K, --collision-mesh                    Generate collision mesh (.collision.glb) from the voxel output
 
 EXAMPLES
     # Scale then translate

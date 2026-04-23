@@ -57,8 +57,8 @@ type WriteVoxelOptions = {
     /** When `floorFill` is enabled, dilation radius in world units used to identify "interior" XZ columns to patch. Empty XZ areas larger than `2 * floorFillDilation` from any solid column are treated as exterior and left empty. Default: 0 (patch every empty column). */
     floorFillDilation?: number;
 
-    /** Shape of the collision mesh (.collision.glb). When set, a collision mesh is generated. `edge` = axis-aligned greedy voxel surface, `smooth` = marching cubes followed by lossless coplanar merge. */
-    meshType?: 'edge' | 'smooth';
+    /** When `true`, a collision mesh (.collision.glb) is generated alongside the voxel output, using marching cubes followed by lossless coplanar merge. */
+    collisionMesh?: boolean;
 };
 
 /**
@@ -330,7 +330,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         floorFillDilation = 0,
         navCapsule,
         navSeed,
-        meshType
+        collisionMesh = false
     } = options;
 
     if (!createDevice) {
@@ -443,8 +443,8 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         buffer = finalCrop.buffer;
         gridBounds = finalCrop.gridBounds;
 
-        const glbBytes = meshType ?
-            buildCollisionMesh(buffer, gridBounds, voxelResolution, meshType) :
+        const glbBytes = collisionMesh ?
+            buildCollisionMesh(buffer, gridBounds, voxelResolution) :
             null;
 
         const octree = buildSparseOctree(

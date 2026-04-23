@@ -41,8 +41,8 @@ type Options = {
     /** Seed position in world space for exterior fill and carve flood fill. */
     navSeed?: { x: number; y: number; z: number };
 
-    /** Shape of the collision mesh (.collision.glb). When set, a collision mesh is generated. `edge` = axis-aligned greedy voxel surface, `smooth` = marching cubes followed by lossless coplanar merge. */
-    meshType?: 'edge' | 'smooth';
+    /** When `true`, a collision mesh (.collision.glb) is generated alongside the voxel output, using marching cubes followed by lossless coplanar merge. */
+    collisionMesh?: boolean;
 };
 
 /**
