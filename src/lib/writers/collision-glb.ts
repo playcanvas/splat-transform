@@ -1,3 +1,6 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+
 import type { Bounds } from '../data-table';
 import { coplanarMerge, greedyVoxelMesh, marchingCubes } from '../mesh';
 import { fmtCount, logger } from '../utils';
@@ -175,6 +178,51 @@ const buildCollisionMesh = (
         logger.info(`merged triangles: ${fmtCount(finalMesh.indices.length / 3)}`);
         logger.info(`reduction: ${reduction.toFixed(0)}%`);
         mergeSub.end();
+
+        if (typeof process !== 'undefined' && process.env && process.env.COPLANAR_DUMP_RAW === '1') {
+            // Emit raw MC mesh side-by-side for diff inspection. Half-voxel
+            // welder applied so positional comparisons match the merged stream.
+            const r = voxelResolution;
+            const inv = 2 / r;
+            const map = new Map<string, number>();
+            const newIdx = new Uint32Array(rawMesh.indices.length);
+            const newPosTmp: number[] = [];
+            for (let i = 0; i < rawMesh.indices.length; i++) {
+                const o = rawMesh.indices[i] * 3;
+                const x = rawMesh.positions[o];
+                const y = rawMesh.positions[o + 1];
+                const z = rawMesh.positions[o + 2];
+                const key = `${Math.round(x * inv)}_${Math.round(y * inv)}_${Math.round(z * inv)}`;
+                let idx = map.get(key);
+                if (idx === undefined) {
+                    idx = newPosTmp.length / 3;
+                    newPosTmp.push(x, y, z);
+                    map.set(key, idx);
+                }
+                newIdx[i] = idx;
+            }
+            const newPos = new Float32Array(newPosTmp);
+            const base = process.env.COPLANAR_DUMP_DIR || '/tmp';
+            fs.writeFileSync(path.join(base, 'coplanar-raw.glb'), encodeGlb(newPos, newIdx));
+            fs.writeFileSync(path.join(base, 'coplanar-merged.glb'), encodeGlb(finalMesh.positions, finalMesh.indices));
+            console.error(`[coplanar-dump] wrote raw=${newPos.length / 3} verts, merged=${finalMesh.positions.length / 3} verts`);
+            const rawSet = new Set<string>();
+            for (let i = 0; i < newPos.length; i += 3) {
+                rawSet.add(`${Math.round(newPos[i] * inv)}_${Math.round(newPos[i + 1] * inv)}_${Math.round(newPos[i + 2] * inv)}`);
+            }
+            const phantoms: number[][] = [];
+            for (let i = 0; i < finalMesh.positions.length; i += 3) {
+                const x = finalMesh.positions[i];
+                const y = finalMesh.positions[i + 1];
+                const z = finalMesh.positions[i + 2];
+                const key = `${Math.round(x * inv)}_${Math.round(y * inv)}_${Math.round(z * inv)}`;
+                if (!rawSet.has(key)) phantoms.push([x, y, z]);
+            }
+            console.error(`[coplanar-dump] phantom verts in merged but NOT in raw: ${phantoms.length}`);
+            for (const p of phantoms.slice(0, 20)) {
+                console.error(`  ${p[0].toFixed(4)}, ${p[1].toFixed(4)}, ${p[2].toFixed(4)}`);
+            }
+        }
     }
 
     g.end();
