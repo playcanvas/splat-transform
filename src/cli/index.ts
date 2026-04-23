@@ -658,8 +658,14 @@ const main = async () => {
     // line, and terminates with status 1. Used by every non-success exit
     // path (early arg/overwrite checks, the main try/catch, and the
     // top-level uncaught{Exception,Rejection} handlers) so peak rss is
-    // always reported on failure - matching the success path.
-    const failExit = (err: unknown): never => {
+    // always reported on failure - matching the success path. The optional
+    // `label` preserves the failure kind/context (e.g. uncaughtException
+    // origin) that Node's default crash reporter would have surfaced, since
+    // installing the handlers below suppresses it.
+    const failExit = (err: unknown, label?: string): never => {
+        if (label) {
+            logger.error(`${label}:`);
+        }
         logger.error(err);
         reportDone();
         exit(1);
@@ -676,8 +682,12 @@ const main = async () => {
         output: chunk => process.stdout.write(chunk)
     }));
 
-    process.on('uncaughtException', failExit);
-    process.on('unhandledRejection', failExit);
+    process.on('uncaughtException', (err, origin) => {
+        failExit(err, `uncaughtException (${origin})`);
+    });
+    process.on('unhandledRejection', (reason) => {
+        failExit(reason, 'unhandledRejection');
+    });
 
     // read args
     let files: File[];
