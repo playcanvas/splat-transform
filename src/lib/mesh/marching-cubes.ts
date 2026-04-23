@@ -298,8 +298,8 @@ function marchingCubes(
     }
 
     return {
-        positions: positions.subarray(0, posLen),
-        indices: indices.subarray(0, idxLen)
+        positions: positions.slice(0, posLen),
+        indices: indices.slice(0, idxLen)
     };
 }
 
