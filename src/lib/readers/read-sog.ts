@@ -69,9 +69,9 @@ const sigmoidInv = (y: number) => {
  * Read a SOG file from a ReadFileSystem.
  * @param fileSystem - The file system to read from
  * @param filename - Path to meta.json (relative paths resolved from its directory).
- *                   The basename is used verbatim for the initial meta fetch so
- *                   any URL querystring/fragment (e.g. presigned `?token=...`)
- *                   is preserved.
+ * The basename is used verbatim for the initial meta fetch so
+ * any URL querystring/fragment (e.g. presigned `?token=...`)
+ * is preserved.
  * @returns DataTable with Gaussian splat data
  * @ignore
  */
