@@ -29,8 +29,24 @@ type InputFormat = 'mjs' | 'ksplat' | 'splat' | 'sog' | 'ply' | 'spz' | 'lcc';
  * const format2 = getInputFormat('scene.splat');  // returns 'splat'
  * ```
  */
+// Strip a trailing `?...` querystring and/or `#...` fragment from the
+// *basename* so that extension sniffing works for URL-shaped inputs:
+//   - full URLs:   `https://host/scene.sog?token=...`
+//   - CLI splits:  `scene.sog?token=...` (resolveInput passes the bare leaf
+//                  + query down to readFile so the initial fetch carries it)
+// Only the basename (text after the last `/` or `\`) is considered, so
+// POSIX paths containing `?` or `#` in *directory* segments are left
+// untouched. Local files literally named with `?`/`#` in the basename are
+// an unsupported edge case (the extension would be ambiguous anyway).
+const stripQueryAndHash = (filename: string): string => {
+    const lastSep = Math.max(filename.lastIndexOf('/'), filename.lastIndexOf('\\'));
+    const basenameStart = lastSep + 1;
+    const q = filename.slice(basenameStart).search(/[?#]/);
+    return q < 0 ? filename : filename.slice(0, basenameStart + q);
+};
+
 const getInputFormat = (filename: string): InputFormat => {
-    const lowerFilename = filename.toLowerCase();
+    const lowerFilename = stripQueryAndHash(filename).toLowerCase();
 
     if (lowerFilename.endsWith('.mjs')) {
         return 'mjs';
@@ -103,7 +119,7 @@ const readFile = async (readFileOptions: ReadFileOptions): Promise<DataTable[]> 
     if (inputFormat === 'mjs') {
         result = [await readMjs(filename, params)];
     } else if (inputFormat === 'sog') {
-        const lowerFilename = filename.toLowerCase();
+        const lowerFilename = stripQueryAndHash(filename).toLowerCase();
         if (lowerFilename.endsWith('.sog')) {
             // Outer .sog is a ZIP container - mount it and let the inner SOG
             // reader drive its own decode bar against the zipped payloads.

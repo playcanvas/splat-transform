@@ -1,5 +1,5 @@
 import { Column, DataTable } from '../data-table';
-import { dirname, join, type ReadFileSystem, readFile } from '../io/read';
+import { basename, dirname, join, type ReadFileSystem, readFile } from '../io/read';
 import { logger, Transform, WebPCodec } from '../utils';
 
 type Meta = {
@@ -68,7 +68,10 @@ const sigmoidInv = (y: number) => {
 /**
  * Read a SOG file from a ReadFileSystem.
  * @param fileSystem - The file system to read from
- * @param filename - Path to meta.json (relative paths resolved from its directory)
+ * @param filename - Path to meta.json (relative paths resolved from its directory).
+ * The basename is used verbatim for the initial meta fetch so
+ * any URL querystring/fragment (e.g. presigned `?token=...`)
+ * is preserved.
  * @returns DataTable with Gaussian splat data
  * @ignore
  */
@@ -76,9 +79,10 @@ const readSog = async (fileSystem: ReadFileSystem, filename: string): Promise<Da
     const decoder = await WebPCodec.create();
 
     const baseDir = dirname(filename);
+    const metaName = basename(filename);
     const resolve = (name: string) => (baseDir ? join(baseDir, name) : name);
 
-    const metaBytes = await readFile(fileSystem, resolve('meta.json'));
+    const metaBytes = await readFile(fileSystem, resolve(metaName));
     const meta = JSON.parse(new TextDecoder().decode(metaBytes)) as Meta;
     const count = meta.count;
 
