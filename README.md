@@ -125,8 +125,7 @@ Actions can be repeated and applied in any order:
     --voxel-carve [h,r]                 Carve navigable space using capsule flood fill from seed.
                                           Default: height=1.6, radius=0.2
     --seed-pos         <x,y,z>          Seed position for voxel processing and --filter-cluster. Default: 0,0,0
--K, --collision-mesh                    Generate collision mesh (.collision.glb) with voxel output
-    --mesh-simplify-error <n>           Max geometric error for collision mesh simplification as a fraction of voxelResolution. Default: 0.08
+-K, --collision-mesh                    Generate collision mesh (.collision.glb) from the voxel output.
 ```
 
 > [!NOTE]

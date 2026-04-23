@@ -41,11 +41,8 @@ type Options = {
     /** Seed position in world space for exterior fill and carve flood fill. */
     navSeed?: { x: number; y: number; z: number };
 
-    /** Whether to generate a collision mesh (.collision.glb) alongside voxel output. Default: false */
+    /** When `true`, a collision mesh (.collision.glb) is generated alongside the voxel output, using marching cubes followed by lossless coplanar merge. */
     collisionMesh?: boolean;
-
-    /** Maximum geometric error for collision mesh simplification as a fraction of voxelResolution. Default: 0.08 */
-    meshSimplifyError?: number;
 };
 
 /**

@@ -93,8 +93,7 @@ const cliOptionsConfig = {
     'voxel-floor-fill': { type: 'string' },
     'voxel-carve': { type: 'string' },
     'seed-pos': { type: 'string', default: '' },
-    'collision-mesh': { type: 'boolean', short: 'K', default: false },
-    'mesh-simplify-error': { type: 'string', default: '' },
+    'collision-mesh': { type: 'boolean', short: 'K' },
 
     // per-file options
     translate: { type: 'string', short: 't', multiple: true },
@@ -119,13 +118,22 @@ const stringOptionNames = new Set(Object.entries(cliOptionsConfig)
 .flatMap(([name, v]) => [`--${name}`, ...('short' in v ? [`-${v.short}`] : [])])
 );
 
-const optionalValueOptions = new Set([
-    '--filter-cluster', '-D', '--filter-floaters', '-G',
-    '--voxel-external-fill', '--voxel-floor-fill', '--voxel-carve',
-    '--voxel-params'
-]);
-
 const isNumericValue = (s: string) => /^-?\d[\d.,e+-]*$/.test(s);
+
+// Options that may appear without a value. The predicate gates whether the
+// next argv token is consumed as the value; when omitted (or rejected) the
+// option is normalized to an empty `--option=` form.
+type OptionalValueValidator = (next: string) => boolean;
+const optionalValueOptions: Map<string, OptionalValueValidator> = new Map([
+    ['--filter-cluster', isNumericValue],
+    ['-D', isNumericValue],
+    ['--filter-floaters', isNumericValue],
+    ['-G', isNumericValue],
+    ['--voxel-external-fill', isNumericValue],
+    ['--voxel-floor-fill', isNumericValue],
+    ['--voxel-carve', isNumericValue],
+    ['--voxel-params', isNumericValue]
+]);
 
 const shortToLong = new Map<string, string>(
     Object.entries(cliOptionsConfig)
@@ -150,8 +158,9 @@ const normalizeArgv = (args: string[]): string[] => {
         const arg = args[i];
         const next = args[i + 1];
         const longArg = shortToLong.get(arg) ?? arg;
-        if (optionalValueOptions.has(arg)) {
-            if (next !== undefined && isNumericValue(next)) {
+        const accept = optionalValueOptions.get(arg);
+        if (accept) {
+            if (next !== undefined && accept(next)) {
                 result.push(`${longArg}=${next}`);
                 i++;
             } else {
@@ -293,7 +302,7 @@ const parseArguments = async () => {
         navSeed = { x: 0, y: 0, z: 0 };
     }
 
-    const meshSimplifyError = v['mesh-simplify-error'] ? parseNumber(v['mesh-simplify-error'], 0) : undefined;
+    const collisionMesh = v['collision-mesh'];
 
     const options: CliOptions = {
         overwrite: v.overwrite,
@@ -317,8 +326,7 @@ const parseArguments = async () => {
         floorFillDilation,
         navCapsule,
         navSeed,
-        collisionMesh: v['collision-mesh'],
-        meshSimplifyError
+        collisionMesh
     };
 
     for (const t of tokens) {
@@ -585,8 +593,7 @@ GLOBAL OPTIONS
         --voxel-floor-fill [size]           Fill below-floor voxels by upward column walk from bottom. Default size: 1.6
         --voxel-carve [h,r]                 Carve navigable space using capsule flood fill from seed. Default: 1.6,0.2
         --seed-pos         <x,y,z>          Seed position for voxel processing and --filter-cluster. Default: 0,0,0
-    -K, --collision-mesh                    Generate collision mesh (.collision.glb) with voxel output
-        --mesh-simplify-error <n>           Max geometric error for collision mesh simplification as a fraction of voxelResolution. Default: 0.08
+    -K, --collision-mesh                    Generate collision mesh (.collision.glb) from the voxel output
 
 EXAMPLES
     # Scale then translate

@@ -1,5 +1,5 @@
 import type { Bounds } from '../data-table';
-import { marchingCubes, simplifyMesh } from '../mesh';
+import { coplanarMerge, marchingCubes } from '../mesh';
 import { fmtCount, logger } from '../utils';
 import { BlockMaskBuffer } from '../voxel/block-mask-buffer';
 
@@ -124,21 +124,24 @@ function encodeGlb(positions: Float32Array, indices: Uint32Array): Uint8Array {
 }
 
 /**
- * Extract a collision mesh from voxel data via marching cubes, simplify it,
- * and encode it as a GLB file.
+ * Extract a collision mesh from voxel data and encode it as a GLB file.
+ *
+ * Runs marching cubes on the voxel surface, then a lossless coplanar-merge
+ * pass that fuses the redundant axis-aligned triangles inside each
+ * voxel-face plane into greedy-style quads while leaving the corner-cutting
+ * bevel triangles untouched. The output surface is identical to the raw MC
+ * surface but typically has 1-2 orders of magnitude fewer triangles.
  *
  * @param blockBuffer - Voxel block data after filtering
  * @param gridBounds - Grid bounds aligned to block boundaries
  * @param voxelResolution - Size of each voxel in world units
- * @param meshSimplifyError - Maximum geometric error as a fraction of voxelResolution (default 0.08)
  * @returns GLB bytes, or null if no triangles were generated
  */
-const buildCollisionMesh = async (
+const buildCollisionMesh = (
     blockBuffer: BlockMaskBuffer,
     gridBounds: Bounds,
-    voxelResolution: number,
-    meshSimplifyError?: number
-): Promise<Uint8Array | null> => {
+    voxelResolution: number
+): Uint8Array | null => {
     const g = logger.group('Collision mesh');
 
     const extractSub = logger.group('Extracting');
@@ -154,18 +157,17 @@ const buildCollisionMesh = async (
     }
     extractSub.end();
 
-    const simplifySub = logger.group('Simplifying');
-    const errorFraction = Number.isFinite(meshSimplifyError) && meshSimplifyError! >= 0 ? meshSimplifyError! : 0.08;
-    const simplified = await simplifyMesh(rawMesh, errorFraction * voxelResolution);
+    const mergeSub = logger.group('Merging coplanar faces');
+    const finalMesh = coplanarMerge(rawMesh, voxelResolution);
 
-    const reduction = (1 - simplified.indices.length / rawMesh.indices.length) * 100;
-    logger.info(`simplified vertices: ${fmtCount(simplified.positions.length / 3)}`);
-    logger.info(`simplified triangles: ${fmtCount(simplified.indices.length / 3)}`);
+    const reduction = (1 - finalMesh.indices.length / rawMesh.indices.length) * 100;
+    logger.info(`merged vertices: ${fmtCount(finalMesh.positions.length / 3)}`);
+    logger.info(`merged triangles: ${fmtCount(finalMesh.indices.length / 3)}`);
     logger.info(`reduction: ${reduction.toFixed(0)}%`);
-    simplifySub.end();
+    mergeSub.end();
 
     g.end();
-    return encodeGlb(simplified.positions, simplified.indices);
+    return encodeGlb(finalMesh.positions, finalMesh.indices);
 };
 
 export { buildCollisionMesh };

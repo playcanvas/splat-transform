@@ -44,56 +44,12 @@ function isVoxelSet(lo: number, hi: number, lx: number, ly: number, lz: number):
 }
 
 // ============================================================================
-// Occupancy grid from BlockMaskBuffer
-// ============================================================================
-
-/**
- * Build a fast-lookup occupancy structure from a BlockMaskBuffer.
- * Returns a function that queries whether a voxel at global coordinates
- * (vx, vy, vz) is occupied.
- *
- * @param buffer - Block data
- * @returns Lookup function (vx, vy, vz) => boolean
- */
-function buildOccupancyLookup(buffer: BlockMaskBuffer): (vx: number, vy: number, vz: number) => boolean {
-    // Map from "bx,by,bz" encoded as single number to {lo,hi} or solid flag
-    // Block key = bx + by * stride + bz * stride^2 where stride is large enough
-    const mixed = buffer.getMixedBlocks();
-    const solid = buffer.getSolidBlocks();
-
-    // Use a Map<number, number> where value encodes index into mask arrays.
-    // For solid blocks, store -1 as sentinel.
-    const blockMap = new Map<number, number>();
-
-    for (let i = 0; i < mixed.morton.length; i++) {
-        blockMap.set(mixed.morton[i], i);
-    }
-    for (let i = 0; i < solid.length; i++) {
-        blockMap.set(solid[i], -1);
-    }
-
-    const masks = mixed.masks;
-
-    return (vx: number, vy: number, vz: number): boolean => {
-        if (vx < 0 || vy < 0 || vz < 0) return false;
-
-        const bx = vx >> 2;
-        const by = vy >> 2;
-        const bz = vz >> 2;
-
-        const entry = blockMap.get(xyzToMorton(bx, by, bz));
-        if (entry === undefined) return false;
-        if (entry === -1) return true; // solid block
-
-        const lo = masks[entry * 2];
-        const hi = masks[entry * 2 + 1];
-        return isVoxelSet(lo, hi, vx & 3, vy & 3, vz & 3);
-    };
-}
-
-// ============================================================================
 // Marching Cubes
 // ============================================================================
+
+// Sentinel values for the per-block 3x3x3 neighbor table.
+const NEIGHBOR_EMPTY = -2;
+const NEIGHBOR_SOLID = -1;
 
 /**
  * Extract a triangle mesh from a BlockMaskBuffer using marching cubes.
@@ -112,33 +68,31 @@ function marchingCubes(
     gridBounds: Bounds,
     voxelResolution: number
 ): MarchingCubesMesh {
-    const isOccupied = buildOccupancyLookup(buffer);
-
-    // Collect all voxel coordinates that need processing.
-    // We need to check every cell where at least one corner differs from
-    // the others, which means we need to check occupied voxels and their
-    // immediate neighbors.
     const mixed = buffer.getMixedBlocks();
     const solid = buffer.getSolidBlocks();
+    const masks = mixed.masks;
 
-    // Collect set of all block coordinates that exist
-    const blockSet = new Set<number>();
+    // Build the global block lookup. Value encodes index into the mask array,
+    // or -1 as a sentinel for solid blocks.
+    const blockMap = new Map<number, number>();
     for (let i = 0; i < mixed.morton.length; i++) {
-        blockSet.add(mixed.morton[i]);
+        blockMap.set(mixed.morton[i], i);
     }
     for (let i = 0; i < solid.length; i++) {
-        blockSet.add(solid[i]);
+        blockMap.set(solid[i], -1);
     }
 
-    // For each block, we process a 4x4x4 region of marching cubes cells.
-    // Each cell at (vx, vy, vz) has corners at (vx..vx+1, vy..vy+1, vz..vz+1).
-    // We only generate triangles for cells that have mixed corners (not all same).
-
     // Vertex deduplication: edge ID -> vertex index
-    // Edge ID encodes the voxel coordinate and edge direction
     const vertexMap = new Map<number, number>();
-    const positions: number[] = [];
-    const indices: number[] = [];
+
+    // Growable typed-array buffers. Capacity doubles on demand to avoid
+    // the GC churn of pushing into JS number[] for huge meshes.
+    let posCap = 1024;
+    let posLen = 0;
+    let positions = new Float32Array(posCap);
+    let idxCap = 1024;
+    let idxLen = 0;
+    let indices = new Uint32Array(idxCap);
 
     const originX = gridBounds.min.x;
     const originY = gridBounds.min.y;
@@ -149,16 +103,49 @@ function marchingCubes(
     const strideX = Math.round((gridBounds.max.x - gridBounds.min.x) / voxelResolution) + 3;
     const strideXY = strideX * (Math.round((gridBounds.max.y - gridBounds.min.y) / voxelResolution) + 3);
 
+    // Per-block 3x3x3 neighbor lookup table populated once per processed block.
+    // Index = (dx+1) + (dy+1)*3 + (dz+1)*9, dx/dy/dz in {-1, 0, 1}.
+    // neighborEntry: NEIGHBOR_EMPTY, NEIGHBOR_SOLID, or >=0 mixed-block index.
+    // neighborMasks: lo, hi pair per slot (only valid for mixed blocks).
+    const neighborEntry = new Int32Array(27);
+    const neighborMasks = new Uint32Array(54);
+
+    // Reused scratch for emitted edge vertex indices.
+    const edgeVerts = new Int32Array(12);
+
+    // Block coordinate of the block currently being processed. Captured by
+    // isOccupiedLocal so it can fold the per-corner block lookup into a
+    // direct typed-array index instead of hashing a Morton code.
+    let bx = 0, by = 0, bz = 0;
+
+    const isOccupiedLocal = (cx: number, cy: number, cz: number): boolean => {
+        if (cx < 0 || cy < 0 || cz < 0) return false;
+        const idx = ((cx >> 2) - bx + 1) + ((cy >> 2) - by + 1) * 3 + ((cz >> 2) - bz + 1) * 9;
+        const entry = neighborEntry[idx];
+        if (entry === NEIGHBOR_EMPTY) return false;
+        if (entry === NEIGHBOR_SOLID) return true;
+        const lo = neighborMasks[idx * 2];
+        const hi = neighborMasks[idx * 2 + 1];
+        return isVoxelSet(lo, hi, cx & 3, cy & 3, cz & 3);
+    };
+
     // Get or create a vertex at the midpoint of an edge.
     // Edge is identified by the lower corner voxel coordinate and axis (0=x, 1=y, 2=z).
     const getVertex = (vx: number, vy: number, vz: number, axis: number): number => {
         // Pack (vx, vy, vz, axis) into a single key. Offset by 1 so that
         // vx = -1 (from the boundary extension) maps to 0, keeping keys non-negative.
         const key = ((vx + 1) + (vy + 1) * strideX + (vz + 1) * strideXY) * 3 + axis;
-        let idx = vertexMap.get(key);
-        if (idx !== undefined) return idx;
+        const existing = vertexMap.get(key);
+        if (existing !== undefined) return existing;
 
-        idx = positions.length / 3;
+        if (posLen + 3 > posCap) {
+            posCap *= 2;
+            const grown = new Float32Array(posCap);
+            grown.set(positions);
+            positions = grown;
+        }
+
+        const idx = posLen / 3;
         let px = originX + vx * voxelResolution;
         let py = originY + vy * voxelResolution;
         let pz = originZ + vz * voxelResolution;
@@ -168,7 +155,9 @@ function marchingCubes(
         else if (axis === 1) py += voxelResolution * 0.5;
         else pz += voxelResolution * 0.5;
 
-        positions.push(px, py, pz);
+        positions[posLen++] = px;
+        positions[posLen++] = py;
+        positions[posLen++] = pz;
         vertexMap.set(key, idx);
         return idx;
     };
@@ -181,18 +170,55 @@ function marchingCubes(
 
     // Process all blocks and their boundary neighbors
     const allMortons: number[] = [];
-    blockSet.forEach(m => allMortons.push(m));
+    blockMap.forEach((_, m) => allMortons.push(m));
 
     for (let bi = 0; bi < allMortons.length; bi++) {
         const morton = allMortons[bi];
-        const [bx, by, bz] = mortonToXYZ(morton);
+        const [cbx, cby, cbz] = mortonToXYZ(morton);
+        bx = cbx; by = cby; bz = cbz;
+
+        // Populate the 3x3x3 neighbor table for this block. After this loop,
+        // every per-cell occupancy query is a direct typed-array index.
+        let currentBlockIsSolid = false;
+        for (let dz = -1; dz <= 1; dz++) {
+            const nbz = bz + dz;
+            for (let dy = -1; dy <= 1; dy++) {
+                const nby = by + dy;
+                for (let dx = -1; dx <= 1; dx++) {
+                    const nbx = bx + dx;
+                    const slot = (dx + 1) + (dy + 1) * 3 + (dz + 1) * 9;
+                    if (nbx < 0 || nby < 0 || nbz < 0) {
+                        neighborEntry[slot] = NEIGHBOR_EMPTY;
+                        continue;
+                    }
+                    const e = blockMap.get(xyzToMorton(nbx, nby, nbz));
+                    if (e === undefined) {
+                        neighborEntry[slot] = NEIGHBOR_EMPTY;
+                    } else if (e === -1) {
+                        neighborEntry[slot] = NEIGHBOR_SOLID;
+                        if (dx === 0 && dy === 0 && dz === 0) currentBlockIsSolid = true;
+                    } else {
+                        neighborEntry[slot] = e;
+                        neighborMasks[slot * 2] = masks[e * 2];
+                        neighborMasks[slot * 2 + 1] = masks[e * 2 + 1];
+                    }
+                }
+            }
+        }
 
         // Iterate -1..3 to include the boundary layer in the negative
         // direction. Cells at lx/ly/lz = -1 straddle the block edge and
         // are needed to close the surface where no neighboring block exists.
         for (let lz = -1; lz < 4; lz++) {
+            const lzInside = lz >= 0 && lz <= 2;
             for (let ly = -1; ly < 4; ly++) {
+                const lyInside = ly >= 0 && ly <= 2;
                 for (let lx = -1; lx < 4; lx++) {
+                    // For solid blocks, the 27 cells with all axes in 0..2
+                    // are fully inside the block. All 8 corners are 1 so
+                    // cubeIndex == 255 and no triangles are emitted -- skip.
+                    if (currentBlockIsSolid && lzInside && lyInside && lx >= 0 && lx <= 2) continue;
+
                     const vx = bx * 4 + lx;
                     const vy = by * 4 + ly;
                     const vz = bz * 4 + lz;
@@ -207,7 +233,7 @@ function marchingCubes(
                         // block exists (it will process the cell itself).
                         // Guard negative coords: xyzToMorton assumes non-negative inputs.
                         if (ownerBx >= 0 && ownerBy >= 0 && ownerBz >= 0 &&
-                            blockSet.has(xyzToMorton(ownerBx, ownerBy, ownerBz))) continue;
+                            blockMap.has(xyzToMorton(ownerBx, ownerBy, ownerBz))) continue;
 
                         // Owner block doesn't exist — deduplicate so only the
                         // first neighboring block to reach this cell emits triangles.
@@ -219,14 +245,14 @@ function marchingCubes(
                     // Get corner values for this cell (8 corners)
                     // Corners: (vx,vy,vz), (vx+1,vy,vz), (vx+1,vy+1,vz), (vx,vy+1,vz),
                     //          (vx,vy,vz+1), (vx+1,vy,vz+1), (vx+1,vy+1,vz+1), (vx,vy+1,vz+1)
-                    const c0 = isOccupied(vx, vy, vz) ? 1 : 0;
-                    const c1 = isOccupied(vx + 1, vy, vz) ? 1 : 0;
-                    const c2 = isOccupied(vx + 1, vy + 1, vz) ? 1 : 0;
-                    const c3 = isOccupied(vx, vy + 1, vz) ? 1 : 0;
-                    const c4 = isOccupied(vx, vy, vz + 1) ? 1 : 0;
-                    const c5 = isOccupied(vx + 1, vy, vz + 1) ? 1 : 0;
-                    const c6 = isOccupied(vx + 1, vy + 1, vz + 1) ? 1 : 0;
-                    const c7 = isOccupied(vx, vy + 1, vz + 1) ? 1 : 0;
+                    const c0 = isOccupiedLocal(vx, vy, vz) ? 1 : 0;
+                    const c1 = isOccupiedLocal(vx + 1, vy, vz) ? 1 : 0;
+                    const c2 = isOccupiedLocal(vx + 1, vy + 1, vz) ? 1 : 0;
+                    const c3 = isOccupiedLocal(vx, vy + 1, vz) ? 1 : 0;
+                    const c4 = isOccupiedLocal(vx, vy, vz + 1) ? 1 : 0;
+                    const c5 = isOccupiedLocal(vx + 1, vy, vz + 1) ? 1 : 0;
+                    const c6 = isOccupiedLocal(vx + 1, vy + 1, vz + 1) ? 1 : 0;
+                    const c7 = isOccupiedLocal(vx, vy + 1, vz + 1) ? 1 : 0;
 
                     const cubeIndex = c0 | (c1 << 1) | (c2 << 2) | (c3 << 3) |
                                       (c4 << 4) | (c5 << 5) | (c6 << 6) | (c7 << 7);
@@ -237,9 +263,6 @@ function marchingCubes(
                     if (edges === 0) continue;
 
                     // Compute vertices on active edges
-                    // Edge -> vertex mapping using getVertex with (corner voxel coord, axis)
-                    const edgeVerts: number[] = new Array(12);
-
                     if (edges & 1)    edgeVerts[0]  = getVertex(vx, vy, vz, 0);       // edge 0: x-axis at (vx, vy, vz)
                     if (edges & 2)    edgeVerts[1]  = getVertex(vx + 1, vy, vz, 1);   // edge 1: y-axis at (vx+1, vy, vz)
                     if (edges & 4)    edgeVerts[2]  = getVertex(vx, vy + 1, vz, 0);   // edge 2: x-axis at (vx, vy+1, vz)
@@ -255,12 +278,19 @@ function marchingCubes(
 
                     // Emit triangles (reversed winding to face outward)
                     const triRow = TRI_TABLE[cubeIndex]; // eslint-disable-line no-use-before-define
-                    for (let t = 0; t < triRow.length; t += 3) {
-                        indices.push(
-                            edgeVerts[triRow[t]],
-                            edgeVerts[triRow[t + 2]],
-                            edgeVerts[triRow[t + 1]]
-                        );
+                    const triLen = triRow.length;
+                    if (idxLen + triLen > idxCap) {
+                        while (idxLen + triLen > idxCap) {
+                            idxCap *= 2;
+                        }
+                        const grown = new Uint32Array(idxCap);
+                        grown.set(indices);
+                        indices = grown;
+                    }
+                    for (let t = 0; t < triLen; t += 3) {
+                        indices[idxLen++] = edgeVerts[triRow[t]];
+                        indices[idxLen++] = edgeVerts[triRow[t + 2]];
+                        indices[idxLen++] = edgeVerts[triRow[t + 1]];
                     }
                 }
             }
@@ -268,8 +298,8 @@ function marchingCubes(
     }
 
     return {
-        positions: new Float32Array(positions),
-        indices: new Uint32Array(indices)
+        positions: positions.slice(0, posLen),
+        indices: indices.slice(0, idxLen)
     };
 }
 
