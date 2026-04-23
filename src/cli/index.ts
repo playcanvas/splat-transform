@@ -21,10 +21,12 @@ import {
     writeFile,
     processDataTable,
     TextRenderer,
+    UrlReadFileSystem,
     type ProcessAction,
     type FilterFloaters,
     type FilterCluster,
     type Options as LibOptions,
+    type ReadFileSystem,
     logger
 } from '../lib';
 
@@ -52,6 +54,38 @@ const fileExists = async (filename: string) => {
         }
         throw e; // real error (permissions, etc)
     }
+};
+
+const isHttpUrl = (s: string) => /^https?:\/\//i.test(s);
+
+type ResolvedInput = {
+    filename: string;
+    fileSystem: ReadFileSystem;
+    classifyName: string;
+};
+
+// Resolve a CLI input arg into a (filename, fileSystem) pair. http(s):// URLs
+// are split into a baseUrl (directory) + leaf filename so multi-file formats
+// (SOG meta.json, LCC) can fetch siblings via UrlReadFileSystem's
+// `new URL(filename, baseUrl)` resolution.
+const resolveInput = (arg: string): ResolvedInput => {
+    if (isHttpUrl(arg)) {
+        const url = new URL(arg);
+        const lastSlash = url.pathname.lastIndexOf('/');
+        const leaf = url.pathname.slice(lastSlash + 1) || 'index';
+        const baseUrl = new URL('./', url).href;
+        return {
+            filename: leaf,
+            fileSystem: new UrlReadFileSystem(baseUrl),
+            classifyName: leaf
+        };
+    }
+    const resolved = resolve(arg);
+    return {
+        filename: resolved,
+        fileSystem: new NodeReadFileSystem(),
+        classifyName: resolved
+    };
 };
 
 const isGSDataTable = (dataTable: DataTable) => {
@@ -543,6 +577,9 @@ USAGE
 SUPPORTED INPUTS
     .ply   .compressed.ply   .sog   meta.json   .ksplat   .splat   .spz   .mjs   .lcc
 
+    Input filenames may also be http(s):// URLs (downloaded on demand;
+    .mjs generators are local-only).
+
 SUPPORTED OUTPUTS
     .ply   .compressed.ply   .sog   meta.json   lod-meta.json   .glb   .csv   .html   .voxel.json   null
 
@@ -631,6 +668,9 @@ EXAMPLES
 
     # Print summary without writing a file (discard output)
     splat-transform bunny.ply -m null
+
+    # Read input from a URL and write to a local file
+    splat-transform https://example.com/scene.ply scene.sog
 `;
 
 const main = async () => {
@@ -643,11 +683,17 @@ const main = async () => {
     // SIGKILL bypass all JS handlers (uncaughtException, beforeExit, exit),
     // so peak rss cannot be reported in those cases - use an external wrapper
     // such as `/usr/bin/time -l` (macOS) or `/usr/bin/time -v` (Linux).
-    const reportDone = () => {
+    const reportDone = (failed = false) => {
         const elapsedMs = performance.now() - startTime;
         const rawMaxRss = process.resourceUsage().maxRSS;
         const maxRssBytes = process.platform === 'win32' ? rawMaxRss : rawMaxRss * 1024;
-        logger.info(`done in ${fmtTime(elapsedMs)}  [peak mem: ${fmtBytes(maxRssBytes)}]`);
+        const verb = failed ? 'failed in' : 'done in';
+        const line = `${verb} ${fmtTime(elapsedMs)}  [peak mem: ${fmtBytes(maxRssBytes)}]`;
+        if (failed) {
+            logger.error(line);
+        } else {
+            logger.info(line);
+        }
     };
 
     const logDataTableInfo = (dataTable: DataTable) => {
@@ -668,7 +714,7 @@ const main = async () => {
         } else {
             logger.error(err);
         }
-        reportDone();
+        reportDone(true);
         exit(1);
     };
 
@@ -763,6 +809,11 @@ const main = async () => {
     const inputArgs = files.slice(0, -1);
     const outputArg = files[files.length - 1];
 
+    if (isHttpUrl(outputArg.filename)) {
+        logger.error(`Output to a URL is not supported: ${outputArg.filename}`);
+        exit(1);
+    }
+
     const outputFilename = resolve(outputArg.filename);
 
     // Check for null output (discard file writing)
@@ -845,9 +896,14 @@ const main = async () => {
                 return { name: p.name, value: p.value };
             });
 
-            // read input
-            const filename = resolve(inputArg.filename);
-            const inputFormat = getInputFormat(filename);
+            // read input - supports both local paths and http(s):// URLs
+            const { filename, fileSystem, classifyName } = resolveInput(inputArg.filename);
+            const inputFormat = getInputFormat(classifyName);
+
+            // mjs generators require local filesystem access (dynamic import)
+            if (inputFormat === 'mjs' && isHttpUrl(inputArg.filename)) {
+                throw new Error(`.mjs generator inputs cannot be loaded from a URL: ${inputArg.filename}`);
+            }
 
             // For mjs format, convert to file:// URL (Node.js-specific)
             const readFilename = inputFormat === 'mjs' ? `file://${filename}` : filename;
@@ -862,7 +918,7 @@ const main = async () => {
                 inputFormat,
                 options,
                 params,
-                fileSystem: new NodeReadFileSystem()
+                fileSystem
             });
             readingGroup.end();
 
