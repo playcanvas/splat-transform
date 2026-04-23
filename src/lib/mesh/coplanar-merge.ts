@@ -73,7 +73,17 @@ const coplanarMerge = (mesh: Mesh, voxelResolution: number): Mesh => {
         return { positions: new Float32Array(0), indices: new Uint32Array(0) };
     }
 
-    const planeAbsEps = voxelResolution * PLANE_REL_EPS;
+    // Plane-offset tolerance for the coplanarity test. An absolute floor
+    // (voxelResolution * PLANE_REL_EPS) handles near-origin planes, while
+    // a relative term scaled by max(|da|, |db|) handles large-offset
+    // planes where Float32 position precision in d = n . p causes
+    // relative error proportional to |d|. Without the relative term,
+    // coplanar fans far from the origin would be seen as distinct planes.
+    const planeEps = (da: number, db: number): number => {
+        const absA = da < 0 ? -da : da;
+        const absB = db < 0 ? -db : db;
+        return PLANE_REL_EPS * (voxelResolution + (absA > absB ? absA : absB));
+    };
 
     // Mutable triangle table. Flat typed arrays so we can append new tris
     // (from ear-clipping) without per-tri allocations and without hitting
@@ -262,20 +272,50 @@ const coplanarMerge = (mesh: Mesh, voxelResolution: number): Mesh => {
         return [tx, ty, tz, bx, by, bz];
     };
 
+    // Reusable scratch buffers for extractFan. With typical MC fan sizes
+    // (k <= ~12), a linear scan over parallel typed arrays is cheaper than
+    // the Map-of-Map-of-Set allocations the previous version paid per
+    // vertex, and saves ~3 allocations per worklist iteration on meshes
+    // with tens of millions of vertices.
+    let fanScratchCap = 16;
+    let fanFromScratch = new Int32Array(fanScratchCap);
+    let fanToScratch = new Int32Array(fanScratchCap);
+    let fanTriScratch = new Int32Array(fanScratchCap);
+    let fanRingScratch = new Int32Array(fanScratchCap);
+    let fanTrisScratch = new Int32Array(fanScratchCap);
+    const growFanScratch = (need: number) => {
+        if (need <= fanScratchCap) return;
+        let c = fanScratchCap;
+        while (c < need) c *= 2;
+        fanFromScratch = new Int32Array(c);
+        fanToScratch = new Int32Array(c);
+        fanTriScratch = new Int32Array(c);
+        fanRingScratch = new Int32Array(c);
+        fanTrisScratch = new Int32Array(c);
+        fanScratchCap = c;
+    };
+
     // Walk v's fan to extract its cyclic boundary polygon AND the matching
     // cyclic ordered tris. ring[i] is the "from" vertex of the i-th tri
     // (in fan order), and tris[i] = (v, ring[i], ring[(i+1) % k]) is the
     // tri whose two non-v vertices are ring[i] and ring[(i+1) % k].
     // Returns null when the fan is non-manifold (duplicate from-vertex,
-    // visits the same vertex twice, or fails to close).
-    const extractFan = (v: number): { ring: Int32Array; tris: Int32Array } | null => {
-        // Count incident tris (k) by walking v's linked list.
+    // closes prematurely, or fails to close).
+    //
+    // Output aliases the module-level `fanRingScratch` / `fanTrisScratch`
+    // buffers; the caller must consume them before the next extractFan
+    // call. `k` is returned explicitly since the scratch buffers may be
+    // oversized.
+    const extractFan = (v: number): number => {
         let k = 0;
         for (let n = vertHead[v]; n !== -1; n = poolNext[n]) k++;
-        if (k < 3) return null;
+        if (k < 3) return -1;
+        growFanScratch(k);
 
-        const fromTo = new Map<number, number>();
-        const fromTri = new Map<number, number>();
+        // Collect (from, to, tri) triples into parallel scratch arrays.
+        // The O(k^2) duplicate-from scan here and the O(k^2) cyclic walk
+        // below are cheap for small k and avoid per-vertex Map allocs.
+        let i = 0;
         for (let n = vertHead[v]; n !== -1; n = poolNext[n]) {
             const t = poolTri[n];
             const a = triVertsArr[t * 3];
@@ -289,27 +329,35 @@ const coplanarMerge = (mesh: Mesh, voxelResolution: number): Mesh => {
             } else {
                 from = a; to = b;
             }
-            if (fromTo.has(from)) return null;
-            fromTo.set(from, to);
-            fromTri.set(from, t);
+            for (let j = 0; j < i; j++) {
+                if (fanFromScratch[j] === from) return -1;
+            }
+            fanFromScratch[i] = from;
+            fanToScratch[i] = to;
+            fanTriScratch[i] = t;
+            i++;
         }
 
-        const start = fromTo.keys().next().value as number;
-        const ring = new Int32Array(k);
-        const tris = new Int32Array(k);
-        const visited = new Set<number>();
+        const start = fanFromScratch[0];
         let cur = start;
-        for (let i = 0; i < k; i++) {
-            if (visited.has(cur)) return null;
-            visited.add(cur);
-            ring[i] = cur;
-            tris[i] = fromTri.get(cur)!;
-            const next = fromTo.get(cur);
-            if (next === undefined) return null;
+        for (let step = 0; step < k; step++) {
+            fanRingScratch[step] = cur;
+            let found = -1;
+            for (let j = 0; j < k; j++) {
+                if (fanFromScratch[j] === cur) {
+                    found = j;
+                    break;
+                }
+            }
+            if (found === -1) return -1;
+            fanTrisScratch[step] = fanTriScratch[found];
+            const next = fanToScratch[found];
+            // Premature cycle close => fan is non-manifold (multi-component).
+            if (next === start && step < k - 1) return -1;
             cur = next;
         }
-        if (cur !== start) return null;
-        return { ring, tris };
+        if (cur !== start) return -1;
+        return k;
     };
 
     // Ear-clip a planar simple polygon. `px, py` are the projected 2D
@@ -461,11 +509,10 @@ const coplanarMerge = (mesh: Mesh, voxelResolution: number): Mesh => {
         if (h1 === -1) continue;
         if (poolNext[h1] === -1) continue;
 
-        const fan = extractFan(v);
-        if (fan === null) continue;
-        const ring = fan.ring;
-        const fanTris = fan.tris;
-        const k = ring.length;
+        const k = extractFan(v);
+        if (k === -1) continue;
+        const ring = fanRingScratch;
+        const fanTris = fanTrisScratch;
 
         // Decide K. First check if all tris are coplanar with fanTris[0]
         // (K=1 fast path).
@@ -477,8 +524,9 @@ const coplanarMerge = (mesh: Mesh, voxelResolution: number): Mesh => {
         let allCoplanar = true;
         for (let i = 1; i < k; i++) {
             const t = fanTris[i];
+            const dT = triDArr[t];
             const dotN = triNxArr[t] * n0x + triNyArr[t] * n0y + triNzArr[t] * n0z;
-            if (dotN < 1 - NORMAL_EPS || Math.abs(triDArr[t] - d0) > planeAbsEps) {
+            if (dotN < 1 - NORMAL_EPS || Math.abs(dT - d0) > planeEps(dT, d0)) {
                 allCoplanar = false;
                 break;
             }
@@ -510,7 +558,7 @@ const coplanarMerge = (mesh: Mesh, voxelResolution: number): Mesh => {
                 const nz0 = triNzArr[prevT];
                 const dPrev = triDArr[prevT];
                 const dotN = nx1 * nx0 + ny1 * ny0 + nz1 * nz0;
-                if (dotN < 1 - NORMAL_EPS || Math.abs(d1 - dPrev) > planeAbsEps) {
+                if (dotN < 1 - NORMAL_EPS || Math.abs(d1 - dPrev) > planeEps(d1, dPrev)) {
                     nTransitions++;
                     if (nTransitions === 1) i1 = i;
                     else if (nTransitions === 2) i2 = i;
