@@ -29,8 +29,16 @@ type InputFormat = 'mjs' | 'ksplat' | 'splat' | 'sog' | 'ply' | 'spz' | 'lcc';
  * const format2 = getInputFormat('scene.splat');  // returns 'splat'
  * ```
  */
+// Strip a trailing `?...` querystring and/or `#...` fragment so that
+// extension sniffing works for http(s):// URL inputs (e.g. presigned
+// URLs like `scene.sog?token=...`).
+const stripQueryAndHash = (filename: string): string => {
+    const q = filename.search(/[?#]/);
+    return q < 0 ? filename : filename.slice(0, q);
+};
+
 const getInputFormat = (filename: string): InputFormat => {
-    const lowerFilename = filename.toLowerCase();
+    const lowerFilename = stripQueryAndHash(filename).toLowerCase();
 
     if (lowerFilename.endsWith('.mjs')) {
         return 'mjs';
@@ -103,7 +111,7 @@ const readFile = async (readFileOptions: ReadFileOptions): Promise<DataTable[]> 
     if (inputFormat === 'mjs') {
         result = [await readMjs(filename, params)];
     } else if (inputFormat === 'sog') {
-        const lowerFilename = filename.toLowerCase();
+        const lowerFilename = stripQueryAndHash(filename).toLowerCase();
         if (lowerFilename.endsWith('.sog')) {
             // Outer .sog is a ZIP container - mount it and let the inner SOG
             // reader drive its own decode bar against the zipped payloads.
