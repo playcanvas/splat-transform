@@ -1,743 +1,685 @@
 import type { Mesh } from './marching-cubes';
 
 const NORMAL_EPS = 1e-3;
-const DIAG_COMP = Math.SQRT1_2;
-const ENCODING_STRIDE = 1 << 21;
-const ENCODING_BIAS = 1 << 20;
-const ENCODING_MASK = ENCODING_STRIDE - 1;
-
-interface AxisCellTri {
-    tri: number;      // triangle index in the input mesh
-    mask: number;     // 4-bit corner-coverage mask (bit 0=u_lo,v_lo, 1=u_hi,v_lo,
-                      // 2=u_lo,v_hi, 3=u_hi,v_hi)
-}
-
-interface AxisCellEntry {
-    tris: AxisCellTri[]; // per-tri records contributed to this (bucket, cell)
-}
-
-interface AxisBucket {
-    cells: Map<number, AxisCellEntry>; // encoded cell -> per-tri records
-    fusedCells: Set<number>;           // populated post-validation
-    minU: number;
-    maxU: number;
-    minV: number;
-    maxV: number;
-}
-
-interface DiagCellTri {
-    tri: number;      // triangle index in the input mesh
-    mask: number;     // 4-bit corner-coverage mask for this tri (A_lo|A_hi|B_lo|B_hi)
-}
-
-interface DiagCellEntry {
-    tris: DiagCellTri[]; // per-tri records contributed to this (bucket, cellE)
-}
-
-interface DiagBucket {
-    pair: number;     // 0 = XY (edge Z), 1 = YZ (edge X), 2 = XZ (edge Y)
-    su: number;       // -1 or +1, sign along the bucket's first in-plane axis
-    sv: number;       // -1 or +1, sign along the bucket's second in-plane axis
-    cellU: number;    // cell index along the first in-plane cardinal axis
-    cellV: number;    // cell index along the second in-plane cardinal axis
-    cells: Map<number, DiagCellEntry>; // cellE -> tri indices and corner coverage
-    edgeCells: Set<number>; // populated post-validation; cells with all 4 corners covered
-}
+const PLANE_REL_EPS = 1e-3;
+const COLLINEAR_REL_EPS = 1e-3;
 
 /**
- * Pack two signed cell coordinates into a single non-negative number suitable
- * for storage in a {@link Set}. Each axis is biased and packed into 21 bits,
- * so the addressable cell range is +/-1M cells per axis.
+ * Losslessly reduce coplanar regions of a marching-cubes mesh by
+ * topology-preserving vertex removal.
  *
- * @param cu - Signed cell coordinate along the bucket's first in-plane axis.
- * @param cv - Signed cell coordinate along the bucket's second in-plane axis.
- * @returns A non-negative number uniquely identifying the (cu, cv) cell.
- */
-const encodeCell = (cu: number, cv: number): number => {
-    return (cu + ENCODING_BIAS) * ENCODING_STRIDE + (cv + ENCODING_BIAS);
-};
-
-const decodeU = (e: number): number => Math.floor(e / ENCODING_STRIDE) - ENCODING_BIAS;
-const decodeV = (e: number): number => (e % ENCODING_STRIDE) - ENCODING_BIAS;
-
-/**
- * Losslessly fuse coplanar marching-cubes triangle islands into greedy-style
- * quads. Two families are merged:
+ * For a closed manifold MC mesh, a vertex `v` is "lossless-removable" iff
+ * its incident-tri fan, walked in cyclic order, falls into one of:
  *
- * 1. Axis-aligned face triangles (normal +/-X, +/-Y, +/-Z): bucketed by
- *    `(axis, sign, planeIndex)`, then meshed with a 2D row-then-column
- *    greedy rectangle pass over the per-bucket occupancy mask.
- * 2. Axis-diagonal "edge bevel" triangles whose normal lies in one of the 12
- *    families `(s_u, 0, s_v)`, `(s_u, s_v, 0)` or `(0, s_u, s_v)` with
- *    `s_u, s_v in {-1, +1}`: bucketed by `(pair, signPair, cellU, cellV)`,
- *    then run-length compressed along the edge axis (the cardinal axis with
- *    zero normal component).
+ * 1. K=1 coplanar fan. Every triangle in v's fan lies on the same plane
+ *    (same unit normal and same plane offset, within tolerance). Removing
+ *    v is the inverse of vertex split: re-triangulate the boundary
+ *    polygon in the same plane.
  *
- * Anything else (corner-cap bevels with normals `(+/-1, +/-1, +/-1)/sqrt(3)`
- * or non-canonical inputs) falls through to a verbatim emission queue.
+ * 2. K=2 collinear seam. The fan splits into exactly two contiguous
+ *    coplanar arcs (different planes). The two crease vertices `a` and
+ *    `b` (the boundary points where the plane changes around v) are
+ *    collinear with v in 3D, with v between them. Removing v collapses
+ *    the two crease edges (v-a, v-b) into a single straight edge (a-b)
+ *    that lies in both planes; each arc's polygon re-triangulates
+ *    without v.
  *
- * Crack analysis:
+ * Vertices with K >= 3 (multi-way corners) are kept.
  *
- * - Axis-aligned quad corners live on the integer voxel grid.
- * - Diagonal quad corners and bevel-triangle vertices live on a half-voxel
- *   grid (edge midpoints).
- * - The two grids never collide under the welder's `round(coord * 2 / r)`
- *   key, so axis-aligned quads cannot accidentally weld with bevel/diagonal
- *   vertices, and the surface stays watertight.
- * - Diagonal runs only fuse along a single cardinal axis (the third axis is
- *   per-bucket constant). MC bevel cells on the same plane but in different
- *   `(cellU, cellV)` columns are geometrically disconnected, so they end up
- *   in different buckets and are never merged across a gap.
- * - A few MC cube configurations (e.g. cubeIndex 29) emit triangles whose
- *   normal is axis-diagonal but whose vertices do NOT match the canonical
- *   2-tri wedge layout `{A_lo, A_hi, B_lo, B_hi}` for any cell, or supply
- *   only one half of the expected 2-tri wedge (the other half is suppressed
- *   by the cube's other corners), or supply two tris that collectively
- *   cover all 4 corners but share a SIDE of the wedge parallelogram rather
- *   than a diagonal (a "butterfly" arrangement that covers a different
- *   planar region than the canonical wedge). To prevent the fuser from
- *   emitting a quad shifted by half a voxel from the original surface,
- *   each diagonal-classified triangle is validated in two stages:
- *     1. Per-tri: all 3 vertices must lie on the bucket+cell's expected
- *        4-corner set (within a 0.25*r tolerance). Rogue tris fail here.
- *     2. Per-cell: the cell must contain exactly 2 tris whose corner
- *        masks union to 0xF and intersect in 0x9 (A_lo|B_hi) or 0x6
- *        (A_hi|B_lo) - i.e. share a wedge diagonal. Half-wedges and
- *        butterflies fail here.
- *   Anything that fails either check is routed to the verbatim queue.
- * - The exact same hazard exists for axis-aligned face triangles: configs
- *   like cubeIndex 31 emit a single triangle covering 3 of the 4 cell
- *   corners on a half-voxel plane (the surface bends into an adjacent
- *   axis-diagonal wedge over the missing corner). Naively marking the cell
- *   occupied would emit a full 1x1 quad - fabricating the missing corner
- *   vertex and doubling the surface area. Axis-aligned tris therefore go
- *   through the same two-stage validation as diagonals: per-tri vertex
- *   check against the cell's 4 corners (bits 0=u_lo,v_lo, 1=u_hi,v_lo,
- *   2=u_lo,v_hi, 3=u_hi,v_hi), and per-cell requirement of exactly 2 tris
- *   with combined mask 0xF and intersection 0x9 or 0x6 (shared cell
- *   diagonal). Half-cell tris and same-side pairs fall through to the
- *   verbatim queue.
+ * Removing a removable v is exact-lossless: the surface footprint is
+ * identical, no vertex moves and none are created. The transformation
+ * is the inverse of vertex split, so it is topology-preserving by
+ * construction:
+ *
+ * - No T-junctions. Every old vertex on the polygon boundary remains a
+ *   vertex of every triangle that previously touched it. Adjacent fused
+ *   regions and verbatim regions stay coupled at every shared vertex.
+ * - Watertight. The closed manifold structure is preserved across
+ *   removal. Both the K=1 and K=2 cases preserve the K=2 seam edge as
+ *   a single shared edge between the two plane groups.
+ * - Bit-exact. Every output position is a verbatim copy of an input
+ *   position; no vertex is fabricated.
+ *
+ * Algorithm:
+ *
+ * 1. Build per-vertex incident-tri lists and per-tri normalized normals
+ *    and plane offsets.
+ * 2. Process vertices via a dirty-flag worklist. Initially queue every
+ *    vertex; after a successful removal, re-queue the ring neighbours
+ *    so chains of K=1 / K=2 vertices collapse in one run.
+ * 3. For each dequeued vertex `v`:
+ *      a. Walk the fan to extract the cyclic ring vertices and the
+ *         cyclic ordered tris (each tri (v, ring[i], ring[(i+1)%k]) is
+ *         the i-th tri in fan order).
+ *      b. Decide K. If all tris share a plane: K=1. Otherwise count
+ *         transitions in cyclic order; K=2 if exactly two arcs.
+ *      c. K>=3: skip. K=2: verify ring[i1], v, ring[i2] are collinear.
+ *      d. For each arc, project its polygon to 2D using the arc's
+ *         plane basis, ear-clip, and append the new tris.
+ *      e. Mark v's old tris dead, register the new tris in each polygon
+ *         vertex's incident list, and re-queue the ring.
+ * 4. Compact: drop dead tris and unused vertices, remap indices.
  *
  * @param mesh - Input triangle mesh from {@link marchingCubes}.
- * @param voxelResolution - Size of one voxel in world units. Used as the cell stride for plane bucketing and vertex welding.
- * @returns A new mesh with the same surface geometry and far fewer triangles.
+ * @param voxelResolution - Size of one voxel in world units. Used to scale the plane-offset and collinearity tolerances.
+ * @returns A new mesh with the same surface geometry, no T-junctions, and far fewer triangles.
  */
 const coplanarMerge = (mesh: Mesh, voxelResolution: number): Mesh => {
     const { positions, indices } = mesh;
-    const triCount = (indices.length / 3) | 0;
+    const inputTriCount = (indices.length / 3) | 0;
+    const vertCount = (positions.length / 3) | 0;
 
-    if (triCount === 0) {
+    if (inputTriCount === 0) {
         return { positions: new Float32Array(0), indices: new Uint32Array(0) };
     }
 
-    const r = voxelResolution;
-    const planeStep = r * 0.5;
-    const invPlaneStep = 1 / planeStep;
-    const invVoxelRes = 1 / r;
-    const cellEps = 1e-6;
+    const planeAbsEps = voxelResolution * PLANE_REL_EPS;
 
-    const axisBuckets = new Map<string, AxisBucket>();
-    const diagBuckets = new Map<string, DiagBucket>();
-    const passThroughTris: number[] = [];
+    // Mutable triangle table. Flat typed arrays so we can append new tris
+    // (from ear-clipping) without per-tri allocations and without hitting
+    // V8's regular-Array backing-store size cap on large meshes.
+    // `triVertsArr` indexes are 3*t, everything else is t.
+    //
+    // Normals are stored as Float32 (unit vectors; ample precision for the
+    // dot-product coplanarity test against `1 - NORMAL_EPS`). The plane
+    // offset stays Float64 since it's an absolute world-space scalar that
+    // can be large for distant scenes.
+    let triCap = inputTriCount;
+    let triVertsArr: Uint32Array = new Uint32Array(triCap * 3);
+    let triNxArr: Float32Array = new Float32Array(triCap);
+    let triNyArr: Float32Array = new Float32Array(triCap);
+    let triNzArr: Float32Array = new Float32Array(triCap);
+    let triDArr: Float64Array = new Float64Array(triCap);
+    let triAliveArr: Uint8Array = new Uint8Array(triCap);
+    let triCount = inputTriCount;
 
-    // Pass 1: classify triangles, bucket axis-aligned and axis-diagonal cells,
-    // queue everything else for verbatim emission.
-    for (let t = 0; t < triCount; t++) {
-        const ia = indices[t * 3] * 3;
-        const ib = indices[t * 3 + 1] * 3;
-        const ic = indices[t * 3 + 2] * 3;
+    // Capacity-doubling appenders for new tris generated by ear-clipping.
+    const ensureTriCap = () => {
+        if (triCount < triCap) return;
+        const newCap = triCap * 2;
+        const growF32 = (src: Float32Array): Float32Array => {
+            const out = new Float32Array(newCap);
+            out.set(src);
+            return out;
+        };
+        const growF64 = (src: Float64Array): Float64Array => {
+            const out = new Float64Array(newCap);
+            out.set(src);
+            return out;
+        };
+        const newVerts = new Uint32Array(newCap * 3);
+        newVerts.set(triVertsArr);
+        triVertsArr = newVerts;
+        triNxArr = growF32(triNxArr);
+        triNyArr = growF32(triNyArr);
+        triNzArr = growF32(triNzArr);
+        triDArr = growF64(triDArr);
+        const aliveOut = new Uint8Array(newCap);
+        aliveOut.set(triAliveArr);
+        triAliveArr = aliveOut;
+        triCap = newCap;
+    };
 
-        const ax = positions[ia], ay = positions[ia + 1], az = positions[ia + 2];
-        const bx = positions[ib], by = positions[ib + 1], bz = positions[ib + 2];
-        const cx = positions[ic], cy = positions[ic + 1], cz = positions[ic + 2];
+    // Pass 0: compute per-tri normalized normal and plane offset.
+    for (let t = 0; t < inputTriCount; t++) {
+        const ia = indices[t * 3];
+        const ib = indices[t * 3 + 1];
+        const ic = indices[t * 3 + 2];
+        triVertsArr[t * 3] = ia;
+        triVertsArr[t * 3 + 1] = ib;
+        triVertsArr[t * 3 + 2] = ic;
+
+        const ax = positions[ia * 3];
+        const ay = positions[ia * 3 + 1];
+        const az = positions[ia * 3 + 2];
+        const bx = positions[ib * 3];
+        const by = positions[ib * 3 + 1];
+        const bz = positions[ib * 3 + 2];
+        const cx = positions[ic * 3];
+        const cy = positions[ic * 3 + 1];
+        const cz = positions[ic * 3 + 2];
 
         const ex = bx - ax, ey = by - ay, ez = bz - az;
         const fx = cx - ax, fy = cy - ay, fz = cz - az;
-        const nx = ey * fz - ez * fy;
-        const ny = ez * fx - ex * fz;
-        const nz = ex * fy - ey * fx;
+        let nx = ey * fz - ez * fy;
+        let ny = ez * fx - ex * fz;
+        let nz = ex * fy - ey * fx;
         const nLen = Math.sqrt(nx * nx + ny * ny + nz * nz);
-        if (nLen < NORMAL_EPS) continue;
-
-        const inx = nx / nLen;
-        const iny = ny / nLen;
-        const inz = nz / nLen;
-
-        const aax = Math.abs(inx);
-        const aay = Math.abs(iny);
-        const aaz = Math.abs(inz);
-
-        // Axis-aligned classification.
-        let axis = -1;
-        let sign = 0;
-        if (aax > 1 - NORMAL_EPS) {
-            axis = 0;
-            sign = inx > 0 ? 1 : 0;
-        } else if (aay > 1 - NORMAL_EPS) {
-            axis = 1;
-            sign = iny > 0 ? 1 : 0;
-        } else if (aaz > 1 - NORMAL_EPS) {
-            axis = 2;
-            sign = inz > 0 ? 1 : 0;
-        }
-
-        if (axis !== -1) {
-            const planeCoord = axis === 0 ? ax : axis === 1 ? ay : az;
-            const planeIdx = Math.round(planeCoord * invPlaneStep);
-
-            let u0: number, v0: number, u1: number, v1: number, u2: number, v2: number;
-            if (axis === 0) {
-                u0 = ay; v0 = az; u1 = by; v1 = bz; u2 = cy; v2 = cz;
-            } else if (axis === 1) {
-                u0 = ax; v0 = az; u1 = bx; v1 = bz; u2 = cx; v2 = cz;
-            } else {
-                u0 = ax; v0 = ay; u1 = bx; v1 = by; u2 = cx; v2 = cy;
-            }
-
-            const minU = Math.min(u0, u1, u2);
-            const maxU = Math.max(u0, u1, u2);
-            const minV = Math.min(v0, v1, v2);
-            const maxV = Math.max(v0, v1, v2);
-            const cellU0 = Math.round(minU * invVoxelRes);
-            const cellU1 = Math.round(maxU * invVoxelRes);
-            const cellV0 = Math.round(minV * invVoxelRes);
-            const cellV1 = Math.round(maxV * invVoxelRes);
-
-            // Per-tri vertex validation: a canonical face-quad half-tri has
-            // all 3 vertices at distinct corners of one unit cell. Tris
-            // spanning multiple cells (non-canonical input) or with vertices
-            // off the cell-corner grid can't be safely fused; route them
-            // verbatim so they print at exact MC positions.
-            const tol = r * 0.25;
-            if (cellU1 - cellU0 !== 1 || cellV1 - cellV0 !== 1) {
-                passThroughTris.push(t);
-                continue;
-            }
-            const uLoW = cellU0 * r;
-            const uHiW = (cellU0 + 1) * r;
-            const vLoW = cellV0 * r;
-            const vHiW = (cellV0 + 1) * r;
-            // Bit layout: 0=u_lo,v_lo  1=u_hi,v_lo  2=u_lo,v_hi  3=u_hi,v_hi
-            const cornerBitAxis = (u: number, v: number): number => {
-                const onULo = Math.abs(u - uLoW) < tol;
-                const onUHi = Math.abs(u - uHiW) < tol;
-                const onVLo = Math.abs(v - vLoW) < tol;
-                const onVHi = Math.abs(v - vHiW) < tol;
-                if (onULo && onVLo) return 0x1;
-                if (onUHi && onVLo) return 0x2;
-                if (onULo && onVHi) return 0x4;
-                if (onUHi && onVHi) return 0x8;
-                return 0;
-            };
-            const bitU = cornerBitAxis(u0, v0);
-            const bitV = cornerBitAxis(u1, v1);
-            const bitW = cornerBitAxis(u2, v2);
-            if (bitU === 0 || bitV === 0 || bitW === 0) {
-                passThroughTris.push(t);
-                continue;
-            }
-
-            const key = `${axis}:${sign}:${planeIdx}`;
-            let bucket = axisBuckets.get(key);
-            if (!bucket) {
-                bucket = {
-                    cells: new Map(),
-                    fusedCells: new Set(),
-                    minU: cellU0,
-                    maxU: cellU0,
-                    minV: cellV0,
-                    maxV: cellV0
-                };
-                axisBuckets.set(key, bucket);
-            } else {
-                if (cellU0 < bucket.minU) bucket.minU = cellU0;
-                if (cellU0 > bucket.maxU) bucket.maxU = cellU0;
-                if (cellV0 < bucket.minV) bucket.minV = cellV0;
-                if (cellV0 > bucket.maxV) bucket.maxV = cellV0;
-            }
-
-            const cellEncoded = encodeCell(cellU0, cellV0);
-            let entry = bucket.cells.get(cellEncoded);
-            if (!entry) {
-                entry = { tris: [] };
-                bucket.cells.set(cellEncoded, entry);
-            }
-            entry.tris.push({ tri: t, mask: bitU | bitV | bitW });
+        if (nLen < 1e-12) {
+            // Degenerate input tri; drop it from the active set.
+            triAliveArr[t] = 0;
             continue;
         }
+        const inv = 1 / nLen;
+        nx *= inv; ny *= inv; nz *= inv;
+        triNxArr[t] = nx;
+        triNyArr[t] = ny;
+        triNzArr[t] = nz;
+        triDArr[t] = nx * ax + ny * ay + nz * az;
+        triAliveArr[t] = 1;
+    }
 
-        // Axis-diagonal classification: one component near zero, the other
-        // two near +/- 1/sqrt(2). Identifies the "edge bevel" family.
-        let pair = -1;
-        if (aax < NORMAL_EPS &&
-            Math.abs(aay - DIAG_COMP) < NORMAL_EPS &&
-            Math.abs(aaz - DIAG_COMP) < NORMAL_EPS) {
-            pair = 1; // YZ, edge axis = X
-        } else if (aay < NORMAL_EPS &&
-                   Math.abs(aax - DIAG_COMP) < NORMAL_EPS &&
-                   Math.abs(aaz - DIAG_COMP) < NORMAL_EPS) {
-            pair = 2; // XZ, edge axis = Y
-        } else if (aaz < NORMAL_EPS &&
-                   Math.abs(aax - DIAG_COMP) < NORMAL_EPS &&
-                   Math.abs(aay - DIAG_COMP) < NORMAL_EPS) {
-            pair = 0; // XY, edge axis = Z
+    // Per-vertex incident-tri lists, stored as a singly-linked free-listed
+    // node pool backed by typed arrays. Each pool node `n` holds:
+    //   poolTri[n]  - the incident tri index
+    //   poolNext[n] - next node in the same vertex's list (or -1 = end)
+    // `vertHead[v]` is the head node for vertex v (or -1 if v has no
+    // incident tris). Removed nodes are pushed onto the `freeHead` chain
+    // for reuse, so the pool's max occupancy is the initial fan-mention
+    // count (3 * inputTriCount): the worklist's K=1/K=2 collapses are
+    // monotonically tri-reducing, so the free list serves all subsequent
+    // ear-clip allocations without ever growing the backing arrays.
+    //
+    // Footprint: 8 B/node * 3 * inputTriCount + 4 B/vert * vertCount.
+    // For 25.7M raw tris / 12.9M raw verts that's ~615 MB pool +
+    // ~52 MB heads, vs ~1.4 GB for the prior `number[][]` adjacency
+    // (V8 Array headers, FixedArray headers, hidden classes per inner
+    // array all inflate the boxed-SMI payload).
+    const poolCap = inputTriCount * 3;
+    const poolTri = new Int32Array(poolCap);
+    const poolNext = new Int32Array(poolCap);
+    let poolLen = 0;
+    let freeHead = -1;
+    const vertHead = new Int32Array(vertCount).fill(-1);
+
+    const allocNode = (): number => {
+        if (freeHead !== -1) {
+            const n = freeHead;
+            freeHead = poolNext[n];
+            return n;
         }
+        return poolLen++;
+    };
 
-        if (pair === -1) {
-            passThroughTris.push(t);
-            continue;
+    const freeNode = (n: number) => {
+        poolNext[n] = freeHead;
+        freeHead = n;
+    };
+
+    const addTriToVert = (v: number, tri: number) => {
+        const n = allocNode();
+        poolTri[n] = tri;
+        poolNext[n] = vertHead[v];
+        vertHead[v] = n;
+    };
+
+    // O(degree) removal of `tri` from `v`'s incident list. Returns true
+    // if found and removed.
+    const removeTriFromVert = (v: number, tri: number): boolean => {
+        let prev = -1;
+        let cur = vertHead[v];
+        while (cur !== -1) {
+            if (poolTri[cur] === tri) {
+                const nxt = poolNext[cur];
+                if (prev === -1) vertHead[v] = nxt;
+                else poolNext[prev] = nxt;
+                freeNode(cur);
+                return true;
+            }
+            prev = cur;
+            cur = poolNext[cur];
         }
+        return false;
+    };
 
-        let su = 0, sv = 0;
-        let uA = 0, uB = 0, uC = 0;
-        let vA = 0, vB = 0, vC = 0;
-        let eA = 0, eB = 0, eC = 0;
-        if (pair === 0) {
-            su = inx > 0 ? 1 : -1;
-            sv = iny > 0 ? 1 : -1;
-            uA = ax; uB = bx; uC = cx;
-            vA = ay; vB = by; vC = cy;
-            eA = az; eB = bz; eC = cz;
-        } else if (pair === 1) {
-            su = iny > 0 ? 1 : -1;
-            sv = inz > 0 ? 1 : -1;
-            uA = ay; uB = by; uC = cy;
-            vA = az; vB = bz; vC = cz;
-            eA = ax; eB = bx; eC = cx;
+    for (let t = 0; t < inputTriCount; t++) {
+        if (triAliveArr[t] === 0) continue;
+        addTriToVert(triVertsArr[t * 3], t);
+        addTriToVert(triVertsArr[t * 3 + 1], t);
+        addTriToVert(triVertsArr[t * 3 + 2], t);
+    }
+
+    // Build a right-handed tangent / bitangent basis (t, b) on the plane
+    // with normal n, picking the cardinal axis least aligned with n to
+    // avoid precision loss in the cross product. By construction
+    // t x b = n, so a polygon traced CCW around +n in 3D projects to a
+    // CCW polygon in (t, b) coordinates (positive 2D signed area).
+    const buildBasis = (nx: number, ny: number, nz: number): [
+        number, number, number, number, number, number
+    ] => {
+        const ax = Math.abs(nx);
+        const ay = Math.abs(ny);
+        const az = Math.abs(nz);
+        let tx: number, ty: number, tz: number;
+        if (ax <= ay && ax <= az) {
+            // X axis least aligned: t = (1, 0, 0) x n
+            tx = 0; ty = -nz; tz = ny;
+        } else if (ay <= az) {
+            // Y axis least aligned: t = (0, 1, 0) x n
+            tx = nz; ty = 0; tz = -nx;
         } else {
-            su = inx > 0 ? 1 : -1;
-            sv = inz > 0 ? 1 : -1;
-            uA = ax; uB = bx; uC = cx;
-            vA = az; vB = bz; vC = cz;
-            eA = ay; eB = by; eC = cy;
+            // Z axis least aligned: t = (0, 0, 1) x n
+            tx = -ny; ty = nx; tz = 0;
+        }
+        const tlen = Math.sqrt(tx * tx + ty * ty + tz * tz);
+        const inv = 1 / tlen;
+        tx *= inv; ty *= inv; tz *= inv;
+        // bitangent = n x t (unit length because n and t are unit and
+        // perpendicular).
+        const bx = ny * tz - nz * ty;
+        const by = nz * tx - nx * tz;
+        const bz = nx * ty - ny * tx;
+        return [tx, ty, tz, bx, by, bz];
+    };
+
+    // Walk v's fan to extract its cyclic boundary polygon AND the matching
+    // cyclic ordered tris. ring[i] is the "from" vertex of the i-th tri
+    // (in fan order), and tris[i] = (v, ring[i], ring[(i+1) % k]) is the
+    // tri whose two non-v vertices are ring[i] and ring[(i+1) % k].
+    // Returns null when the fan is non-manifold (duplicate from-vertex,
+    // visits the same vertex twice, or fails to close).
+    const extractFan = (v: number): { ring: Int32Array; tris: Int32Array } | null => {
+        // Count incident tris (k) by walking v's linked list.
+        let k = 0;
+        for (let n = vertHead[v]; n !== -1; n = poolNext[n]) k++;
+        if (k < 3) return null;
+
+        const fromTo = new Map<number, number>();
+        const fromTri = new Map<number, number>();
+        for (let n = vertHead[v]; n !== -1; n = poolNext[n]) {
+            const t = poolTri[n];
+            const a = triVertsArr[t * 3];
+            const b = triVertsArr[t * 3 + 1];
+            const c = triVertsArr[t * 3 + 2];
+            let from: number, to: number;
+            if (a === v) {
+                from = b; to = c;
+            } else if (b === v) {
+                from = c; to = a;
+            } else {
+                from = a; to = b;
+            }
+            if (fromTo.has(from)) return null;
+            fromTo.set(from, to);
+            fromTri.set(from, t);
         }
 
-        // Cell coords are derived from the minimum vertex coord in each
-        // in-plane axis. For canonical MC bevels, the per-axis vertex range
-        // is exactly half a cell, so floor(min * invVoxelRes) recovers the
-        // owning cell index for both negative and positive sign cases.
-        const minU = Math.min(uA, uB, uC);
-        const minV = Math.min(vA, vB, vC);
-        const minE = Math.min(eA, eB, eC);
-        const cellU = Math.floor(minU * invVoxelRes + cellEps);
-        const cellV = Math.floor(minV * invVoxelRes + cellEps);
-        const cellE = Math.round(minE * invVoxelRes);
+        const start = fromTo.keys().next().value as number;
+        const ring = new Int32Array(k);
+        const tris = new Int32Array(k);
+        const visited = new Set<number>();
+        let cur = start;
+        for (let i = 0; i < k; i++) {
+            if (visited.has(cur)) return null;
+            visited.add(cur);
+            ring[i] = cur;
+            tris[i] = fromTri.get(cur)!;
+            const next = fromTo.get(cur);
+            if (next === undefined) return null;
+            cur = next;
+        }
+        if (cur !== start) return null;
+        return { ring, tris };
+    };
 
-        // Wedge-membership validation (per-tri half). The fuser assumes the
-        // triangle is one half of a 2-tri wedge in cell `(cellU, cellV)`
-        // along the edge axis at `cellE`, with vertices drawn from the
-        // 4-point set
-        //   { (Au, Av, e_lo), (Au, Av, e_hi), (Bu, Bv, e_lo), (Bu, Bv, e_hi) }
-        // where Au/Av/Bu/Bv are the canonical bevel-vertex offsets for the
-        // bucket's signs. Some MC configurations (cubeIndex 29 and friends)
-        // emit triangles with a diagonal normal whose vertices do NOT lie on
-        // that set; if we bucketed them they would fuse into a quad offset
-        // by half a voxel. Reject any tri whose vertices don't all match.
-        // Bit layout of cornerMask: 0=A_lo, 1=A_hi, 2=B_lo, 3=B_hi.
-        const aV = sv === -1 ? 1 : 0;
-        const bU = su === -1 ? 1 : 0;
-        const expAu = (cellU + 0.5) * r;
-        const expAv = (cellV + aV)  * r;
-        const expBu = (cellU + bU)  * r;
-        const expBv = (cellV + 0.5) * r;
-        const expELo = cellE       * r;
-        const expEHi = (cellE + 1) * r;
-        const tol = r * 0.25;
-        const cornerBit = (u: number, v: number, e: number): number => {
-            const onA = Math.abs(u - expAu) < tol && Math.abs(v - expAv) < tol;
-            const onB = Math.abs(u - expBu) < tol && Math.abs(v - expBv) < tol;
-            if (!onA && !onB) return 0;
-            const lo = Math.abs(e - expELo) < tol;
-            const hi = Math.abs(e - expEHi) < tol;
-            if (!lo && !hi) return 0;
-            if (onA) return lo ? 0x1 : 0x2;
-            return lo ? 0x4 : 0x8;
+    // Ear-clip a planar simple polygon. `px, py` are the projected 2D
+    // coordinates of the polygon vertices (in CCW order). Returns a flat
+    // array of (k - 2) * 3 vertex indices into the polygon, or null if
+    // the polygon is degenerate / not simple.
+    //
+    // Strictly-collinear interior vertices (cross product == 0) are not
+    // considered convex ear apices and so produce slivers as side
+    // vertices of neighbouring ears. These are transient: any such
+    // vertex is itself K=1 in the same plane and the worklist removes
+    // it in a subsequent iteration, replacing the slivers with a clean
+    // re-triangulation of its updated fan. An in-earClip pre-pass that
+    // drops the vertex from this polygon would create a T-junction
+    // with the vertex's other incident tris (which still reference it),
+    // so we leave the cleanup to the worklist.
+    const earClip = (px: Float64Array, py: Float64Array): Int32Array | null => {
+        const n = px.length;
+        if (n < 3) return null;
+        if (n === 3) {
+            const tri = new Int32Array(3);
+            tri[0] = 0; tri[1] = 1; tri[2] = 2;
+            return tri;
+        }
+
+        // Verify CCW orientation. By construction (right-handed basis)
+        // valid input polygons are CCW with positive signed area.
+        let area2 = 0;
+        for (let i = 0; i < n; i++) {
+            const j = (i + 1) % n;
+            area2 += px[i] * py[j] - px[j] * py[i];
+        }
+        if (area2 <= 0) return null;
+
+        const prev = new Int32Array(n);
+        const next = new Int32Array(n);
+        for (let i = 0; i < n; i++) {
+            prev[i] = (i - 1 + n) % n;
+            next[i] = (i + 1) % n;
+        }
+
+        const isConvex = (a: number, b: number, c: number): boolean => {
+            return (px[b] - px[a]) * (py[c] - py[a]) -
+                   (py[b] - py[a]) * (px[c] - px[a]) > 0;
         };
-        const bitA = cornerBit(uA, vA, eA);
-        const bitB = cornerBit(uB, vB, eB);
-        const bitC = cornerBit(uC, vC, eC);
-        if (bitA === 0 || bitB === 0 || bitC === 0) {
-            passThroughTris.push(t);
-            continue;
-        }
 
-        const dKey = `${pair}:${su}:${sv}:${cellU}:${cellV}`;
-        let dBucket = diagBuckets.get(dKey);
-        if (!dBucket) {
-            dBucket = {
-                pair,
-                su,
-                sv,
-                cellU,
-                cellV,
-                cells: new Map(),
-                edgeCells: new Set()
-            };
-            diagBuckets.set(dKey, dBucket);
-        }
-        let entry = dBucket.cells.get(cellE);
-        if (!entry) {
-            entry = { tris: [] };
-            dBucket.cells.set(cellE, entry);
-        }
-        entry.tris.push({ tri: t, mask: bitA | bitB | bitC });
-    }
+        const inTri = (p: number, a: number, b: number, c: number): boolean => {
+            const x = px[p], y = py[p];
+            const d1 = (x - px[b]) * (py[a] - py[b]) - (px[a] - px[b]) * (y - py[b]);
+            const d2 = (x - px[c]) * (py[b] - py[c]) - (px[b] - px[c]) * (y - py[c]);
+            const d3 = (x - px[a]) * (py[c] - py[a]) - (px[c] - px[a]) * (y - py[a]);
+            const hasNeg = d1 < 0 || d2 < 0 || d3 < 0;
+            const hasPos = d1 > 0 || d2 > 0 || d3 > 0;
+            return !(hasNeg && hasPos);
+        };
 
-    // Pass 1.4: per-cell axis-aligned face validation. A canonical face
-    // quad is exactly 2 tris covering all 4 cell corners and sharing a cell
-    // diagonal (intersection mask 0x9 = u_lo,v_lo|u_hi,v_hi or 0x6 =
-    // u_hi,v_lo|u_lo,v_hi). Cells that don't match (single half-cell tri,
-    // butterfly pairs sharing a side, etc.) get all their tris routed to
-    // the verbatim queue so the greedy mesher only operates on cells where
-    // emitting a full quad reproduces the original surface.
-    for (const bucket of axisBuckets.values()) {
-        for (const [cellEncoded, entry] of bucket.cells) {
-            const tris = entry.tris;
-            let isCanonicalFace = false;
-            if (tris.length === 2) {
-                const m0 = tris[0].mask;
-                const m1 = tris[1].mask;
-                if ((m0 | m1) === 0xF) {
-                    const shared = m0 & m1;
-                    if (shared === 0x9 || shared === 0x6) {
-                        isCanonicalFace = true;
-                    }
-                }
+        const isEar = (a: number, b: number, c: number): boolean => {
+            if (!isConvex(a, b, c)) return false;
+            let p = next[c];
+            while (p !== a) {
+                if (inTri(p, a, b, c)) return false;
+                p = next[p];
             }
-            if (isCanonicalFace) {
-                bucket.fusedCells.add(cellEncoded);
-            } else {
-                for (const t of tris) {
-                    passThroughTris.push(t.tri);
-                }
-            }
-        }
-    }
+            return true;
+        };
 
-    // Pass 1.5: per-cell wedge validation. A canonical edge-bevel wedge is
-    // exactly 2 tris that cover all 4 corners {A_lo, A_hi, B_lo, B_hi} and
-    // share a diagonal of the wedge parallelogram (A_lo-B_hi or A_hi-B_lo).
-    // Cells that fail any of:
-    //   - exactly 2 tris
-    //   - combined corner mask == 0xF (full coverage, half-wedges fail here)
-    //   - intersection mask == 0x9 (A_lo|B_hi) or 0x6 (A_hi|B_lo) (shared
-    //     diagonal, "butterfly" pairs sharing a side fail here)
-    // get all their tris routed to the verbatim queue. Without the diagonal
-    // check butterflies would still fuse into the canonical 4-corner quad,
-    // covering a different planar region than the original tris and leaving
-    // visible internal-diagonal artifacts on bevel surfaces.
-    for (const dBucket of diagBuckets.values()) {
-        for (const [cellE, entry] of dBucket.cells) {
-            const tris = entry.tris;
-            let isCanonicalWedge = false;
-            if (tris.length === 2) {
-                const m0 = tris[0].mask;
-                const m1 = tris[1].mask;
-                if ((m0 | m1) === 0xF) {
-                    const shared = m0 & m1;
-                    if (shared === 0x9 || shared === 0x6) {
-                        isCanonicalWedge = true;
-                    }
-                }
-            }
-            if (isCanonicalWedge) {
-                dBucket.edgeCells.add(cellE);
-            } else {
-                for (const t of tris) {
-                    passThroughTris.push(t.tri);
-                }
-            }
-        }
-    }
-
-    // Output buffers (capacity-doubling typed arrays) plus a position-keyed
-    // welder. Quantising to the half-voxel grid is exactly the resolution
-    // at which both fused-quad corners and bevel vertices are placed.
-    let posCap = 1024;
-    let posLen = 0;
-    let outPositions = new Float32Array(posCap);
-    let idxCap = 1024;
-    let idxLen = 0;
-    let outIndices = new Uint32Array(idxCap);
-
-    const ensurePos = (need: number) => {
-        if (posLen + need <= posCap) return;
-        while (posLen + need > posCap) posCap *= 2;
-        const grown = new Float32Array(posCap);
-        grown.set(outPositions);
-        outPositions = grown;
-    };
-    const ensureIdx = (need: number) => {
-        if (idxLen + need <= idxCap) return;
-        while (idxLen + need > idxCap) idxCap *= 2;
-        const grown = new Uint32Array(idxCap);
-        grown.set(outIndices);
-        outIndices = grown;
-    };
-
-    const vertexMap = new Map<string, number>();
-    const getOrAddVertex = (x: number, y: number, z: number): number => {
-        const ix = Math.round(x * invPlaneStep);
-        const iy = Math.round(y * invPlaneStep);
-        const iz = Math.round(z * invPlaneStep);
-        const key = `${ix}_${iy}_${iz}`;
-        const existing = vertexMap.get(key);
-        if (existing !== undefined) return existing;
-        ensurePos(3);
-        const idx = posLen / 3;
-        outPositions[posLen++] = x;
-        outPositions[posLen++] = y;
-        outPositions[posLen++] = z;
-        vertexMap.set(key, idx);
-        return idx;
-    };
-
-    const emitQuad = (
-        x0: number, y0: number, z0: number,
-        x1: number, y1: number, z1: number,
-        x2: number, y2: number, z2: number,
-        x3: number, y3: number, z3: number
-    ) => {
-        const i0 = getOrAddVertex(x0, y0, z0);
-        const i1 = getOrAddVertex(x1, y1, z1);
-        const i2 = getOrAddVertex(x2, y2, z2);
-        const i3 = getOrAddVertex(x3, y3, z3);
-        ensureIdx(6);
-        outIndices[idxLen++] = i0;
-        outIndices[idxLen++] = i1;
-        outIndices[idxLen++] = i2;
-        outIndices[idxLen++] = i0;
-        outIndices[idxLen++] = i2;
-        outIndices[idxLen++] = i3;
-    };
-
-    // Pass 2a: greedy-mesh each axis-aligned bucket and emit fused quads.
-    axisBuckets.forEach((bucket, key) => {
-        const parts = key.split(':');
-        const axis = parseInt(parts[0], 10);
-        const sign = parseInt(parts[1], 10);
-        const planeIdx = parseInt(parts[2], 10);
-        const planeCoord = planeIdx * planeStep;
-
-        if (bucket.fusedCells.size === 0) return;
-
-        const minU = bucket.minU;
-        const minV = bucket.minV;
-        const U = bucket.maxU - bucket.minU + 1;
-        const V = bucket.maxV - bucket.minV + 1;
-        const mask = new Uint8Array(U * V);
-        bucket.fusedCells.forEach((c) => {
-            const cu = decodeU(c);
-            const cv = decodeV(c);
-            mask[(cu - minU) + (cv - minV) * U] = 1;
-        });
-
-        for (let v = 0; v < V; v++) {
-            for (let u = 0; u < U; u++) {
-                if (mask[u + v * U] !== 1) continue;
-
-                let w = 1;
-                while (u + w < U && mask[(u + w) + v * U] === 1) w++;
-
-                let h = 1;
-                while (v + h < V) {
-                    let rowFull = true;
-                    for (let du = 0; du < w; du++) {
-                        if (mask[(u + du) + (v + h) * U] !== 1) {
-                            rowFull = false;
-                            break;
-                        }
-                    }
-                    if (!rowFull) break;
-                    h++;
-                }
-
-                for (let dv = 0; dv < h; dv++) {
-                    for (let du = 0; du < w; du++) {
-                        mask[(u + du) + (v + dv) * U] = 2;
-                    }
-                }
-
-                const cu0 = u + minU;
-                const cv0 = v + minV;
-                const cu1 = cu0 + w;
-                const cv1 = cv0 + h;
-                const u0w = cu0 * r;
-                const u1w = cu1 * r;
-                const v0w = cv0 * r;
-                const v1w = cv1 * r;
-
-                if (axis === 0) {
-                    if (sign === 1) {
-                        emitQuad(
-                            planeCoord, u0w, v0w,
-                            planeCoord, u1w, v0w,
-                            planeCoord, u1w, v1w,
-                            planeCoord, u0w, v1w
-                        );
-                    } else {
-                        emitQuad(
-                            planeCoord, u0w, v0w,
-                            planeCoord, u0w, v1w,
-                            planeCoord, u1w, v1w,
-                            planeCoord, u1w, v0w
-                        );
-                    }
-                } else if (axis === 1) {
-                    if (sign === 1) {
-                        emitQuad(
-                            u0w, planeCoord, v0w,
-                            u0w, planeCoord, v1w,
-                            u1w, planeCoord, v1w,
-                            u1w, planeCoord, v0w
-                        );
-                    } else {
-                        emitQuad(
-                            u0w, planeCoord, v0w,
-                            u1w, planeCoord, v0w,
-                            u1w, planeCoord, v1w,
-                            u0w, planeCoord, v1w
-                        );
-                    }
-                } else if (sign === 1) {
-                    emitQuad(
-                        u0w, v0w, planeCoord,
-                        u1w, v0w, planeCoord,
-                        u1w, v1w, planeCoord,
-                        u0w, v1w, planeCoord
-                    );
-                } else {
-                    emitQuad(
-                        u0w, v0w, planeCoord,
-                        u0w, v1w, planeCoord,
-                        u1w, v1w, planeCoord,
-                        u1w, v0w, planeCoord
-                    );
-                }
-            }
-        }
-    });
-
-    // Pass 2b: 1D run-length fuse each axis-diagonal bucket and emit one
-    // fused quad per maximal contiguous run along the bucket's edge axis.
-    //
-    // Per-cell bevel geometry. A bevel with outward normal `(s_u, s_v)` in
-    // its (u, v) plane sits on a cell whose only solid corner (in that
-    // plane projection) is in the `(-s_u, -s_v)` direction. The two MC
-    // edge midpoints adjacent to that solid corner are:
-    //   A = (cellU + 0.5,                 cellV + (s_v == -1 ? 1 : 0))
-    //   B = (cellU + (s_u == -1 ? 1 : 0), cellV + 0.5)
-    // a "U-edge" and "V-edge" midpoint respectively. A run from edge cell
-    // [e0, e1) emits one quad with corners {A_e0, B_e0, B_e1, A_e1}
-    // (or its reverse, depending on handedness; see the AB/BA selector).
-    //
-    // Handedness selector: cross(B - A, +e_axis_unit) gives a normal of
-    // (s_v, s_u, ...) up to a per-pair handedness sign. For the
-    // right-handed pairs XY (e=Z) and YZ (e=X) the cross product matches
-    // the outward normal `(s_u, s_v, 0)` when s_u == s_v (so AB winding
-    // wins). For the left-handed pair XZ (e=Y) the cross product matches
-    // when s_u != s_v. Packed as `(handedness * s_u * s_v) > 0`.
-    diagBuckets.forEach((bucket) => {
-        const { pair, su, sv, cellU, cellV, edgeCells } = bucket;
-
-        const sortedCells = [...edgeCells].sort((a, b) => a - b);
-        const handedness = pair === 2 ? -1 : 1;
-        const useAB = (handedness * su * sv) > 0;
-
-        // Cell-relative half-voxel offsets for the two characteristic
-        // vertex positions in the (u, v) plane.
-        const aU = 0.5;
-        const aV = sv === -1 ? 1 : 0;
-        const bU = su === -1 ? 1 : 0;
-        const bV = 0.5;
-
-        const Au = (cellU + aU) * r;
-        const Av = (cellV + aV) * r;
-        const Bu = (cellU + bU) * r;
-        const Bv = (cellV + bV) * r;
-
+        const result = new Int32Array((n - 2) * 3);
+        let resultLen = 0;
+        let count = n;
         let i = 0;
-        while (i < sortedCells.length) {
-            let j = i + 1;
-            while (j < sortedCells.length && sortedCells[j] === sortedCells[j - 1] + 1) {
-                j++;
-            }
+        let stalls = 0;
 
-            const e0 = sortedCells[i] * r;
-            const e1 = (sortedCells[j - 1] + 1) * r;
-
-            // Resolve (u, v, e) coords back to (x, y, z) for the chosen pair.
-            // Inlined per-pair to avoid an allocation in the inner loop.
-            let x0: number, y0: number, z0: number;
-            let x1: number, y1: number, z1: number;
-            let x2: number, y2: number, z2: number;
-            let x3: number, y3: number, z3: number;
-
-            if (useAB) {
-                if (pair === 0) {
-                    x0 = Au; y0 = Av; z0 = e0;
-                    x1 = Bu; y1 = Bv; z1 = e0;
-                    x2 = Bu; y2 = Bv; z2 = e1;
-                    x3 = Au; y3 = Av; z3 = e1;
-                } else if (pair === 1) {
-                    x0 = e0; y0 = Au; z0 = Av;
-                    x1 = e0; y1 = Bu; z1 = Bv;
-                    x2 = e1; y2 = Bu; z2 = Bv;
-                    x3 = e1; y3 = Au; z3 = Av;
-                } else {
-                    x0 = Au; y0 = e0; z0 = Av;
-                    x1 = Bu; y1 = e0; z1 = Bv;
-                    x2 = Bu; y2 = e1; z2 = Bv;
-                    x3 = Au; y3 = e1; z3 = Av;
-                }
-            } else if (pair === 0) {
-                x0 = Bu; y0 = Bv; z0 = e0;
-                x1 = Au; y1 = Av; z1 = e0;
-                x2 = Au; y2 = Av; z2 = e1;
-                x3 = Bu; y3 = Bv; z3 = e1;
-            } else if (pair === 1) {
-                x0 = e0; y0 = Bu; z0 = Bv;
-                x1 = e0; y1 = Au; z1 = Av;
-                x2 = e1; y2 = Au; z2 = Av;
-                x3 = e1; y3 = Bu; z3 = Bv;
+        while (count > 3) {
+            if (stalls > count) return null;
+            const p = prev[i];
+            const nxt = next[i];
+            if (isEar(p, i, nxt)) {
+                result[resultLen++] = p;
+                result[resultLen++] = i;
+                result[resultLen++] = nxt;
+                next[p] = nxt;
+                prev[nxt] = p;
+                count--;
+                i = nxt;
+                stalls = 0;
             } else {
-                x0 = Bu; y0 = e0; z0 = Bv;
-                x1 = Au; y1 = e0; z1 = Av;
-                x2 = Au; y2 = e1; z2 = Av;
-                x3 = Bu; y3 = e1; z3 = Bv;
+                i = next[i];
+                stalls++;
             }
-
-            emitQuad(
-                x0, y0, z0,
-                x1, y1, z1,
-                x2, y2, z2,
-                x3, y3, z3
-            );
-
-            i = j;
         }
-    });
+        result[resultLen++] = prev[i];
+        result[resultLen++] = i;
+        result[resultLen++] = next[i];
+        return result;
+    };
 
-    // Pass 3: pass-through triangles (corner caps and any non-canonical
-    // input) emitted verbatim, with vertices welded.
-    for (let i = 0; i < passThroughTris.length; i++) {
-        const t = passThroughTris[i];
-        const ia = indices[t * 3] * 3;
-        const ib = indices[t * 3 + 1] * 3;
-        const ic = indices[t * 3 + 2] * 3;
-        const i0 = getOrAddVertex(positions[ia], positions[ia + 1], positions[ia + 2]);
-        const i1 = getOrAddVertex(positions[ib], positions[ib + 1], positions[ib + 2]);
-        const i2 = getOrAddVertex(positions[ic], positions[ic + 1], positions[ic + 2]);
-        ensureIdx(3);
-        outIndices[idxLen++] = i0;
-        outIndices[idxLen++] = i1;
-        outIndices[idxLen++] = i2;
+    // Worklist: iterative dirty-flag scheduler. Initially queue every
+    // vertex; on each successful removal, re-queue the ring neighbours so
+    // chains of K=1 / K=2 vertices collapse in a single run.
+    const inQueue = new Uint8Array(vertCount);
+    let queue = new Int32Array(Math.max(vertCount, 16));
+    let queueLen = 0;
+    let queueHead = 0;
+    const pushQueue = (u: number) => {
+        if (inQueue[u]) return;
+        inQueue[u] = 1;
+        if (queueLen >= queue.length) {
+            const grown = new Int32Array(queue.length * 2);
+            grown.set(queue);
+            queue = grown;
+        }
+        queue[queueLen++] = u;
+    };
+    const compactQueue = () => {
+        // Reclaim consumed prefix when slack exceeds 50% (and is large
+        // enough to be worth the copy). Bounded by O(total pushes).
+        if (queueHead > 4096 && queueHead * 2 > queueLen) {
+            queue.copyWithin(0, queueHead, queueLen);
+            queueLen -= queueHead;
+            queueHead = 0;
+        }
+    };
+    for (let v = 0; v < vertCount; v++) {
+        inQueue[v] = 1;
+        queue[queueLen++] = v;
     }
 
-    return {
-        positions: outPositions.subarray(0, posLen),
-        indices: outIndices.subarray(0, idxLen)
-    };
+    // Tolerance for K=2 seam collinearity: cosine of the angle between
+    // (v -> a) and (v -> b) must be <= -(1 - COLLINEAR_REL_EPS), i.e.
+    // the two seam edges through v are nearly antiparallel (v lies on
+    // the segment from a to b in 3D).
+    const cosineMax = -1 + COLLINEAR_REL_EPS;
+
+    // Reusable scratch for the per-arc plane descriptor.
+    const arcStartIdx = new Int32Array(2);
+    const arcPolySize = new Int32Array(2);
+    const arcPlaneT = new Int32Array(2);
+
+    while (queueHead < queueLen) {
+        const v = queue[queueHead++];
+        inQueue[v] = 0;
+        compactQueue();
+
+        // Cheap "fan size < 3" early-out without traversing the full
+        // linked list.
+        const h0 = vertHead[v];
+        if (h0 === -1) continue;
+        const h1 = poolNext[h0];
+        if (h1 === -1) continue;
+        if (poolNext[h1] === -1) continue;
+
+        const fan = extractFan(v);
+        if (fan === null) continue;
+        const ring = fan.ring;
+        const fanTris = fan.tris;
+        const k = ring.length;
+
+        // Decide K. First check if all tris are coplanar with fanTris[0]
+        // (K=1 fast path).
+        const t0 = fanTris[0];
+        const n0x = triNxArr[t0];
+        const n0y = triNyArr[t0];
+        const n0z = triNzArr[t0];
+        const d0 = triDArr[t0];
+        let allCoplanar = true;
+        for (let i = 1; i < k; i++) {
+            const t = fanTris[i];
+            const dotN = triNxArr[t] * n0x + triNyArr[t] * n0y + triNzArr[t] * n0z;
+            if (dotN < 1 - NORMAL_EPS || Math.abs(triDArr[t] - d0) > planeAbsEps) {
+                allCoplanar = false;
+                break;
+            }
+        }
+
+        let arcCount = 0;
+        if (allCoplanar) {
+            // K=1: single arc covering the whole ring (k vertices).
+            arcStartIdx[0] = 0;
+            arcPolySize[0] = k;
+            arcPlaneT[0] = t0;
+            arcCount = 1;
+        } else {
+            // Walk cyclically; mark transitions where plane changes vs.
+            // the previous tri in fan order. Exactly 2 transitions =>
+            // K=2 candidate.
+            let nTransitions = 0;
+            let i1 = -1;
+            let i2 = -1;
+            for (let i = 0; i < k; i++) {
+                const t = fanTris[i];
+                const prevT = fanTris[(i - 1 + k) % k];
+                const nx1 = triNxArr[t];
+                const ny1 = triNyArr[t];
+                const nz1 = triNzArr[t];
+                const d1 = triDArr[t];
+                const nx0 = triNxArr[prevT];
+                const ny0 = triNyArr[prevT];
+                const nz0 = triNzArr[prevT];
+                const dPrev = triDArr[prevT];
+                const dotN = nx1 * nx0 + ny1 * ny0 + nz1 * nz0;
+                if (dotN < 1 - NORMAL_EPS || Math.abs(d1 - dPrev) > planeAbsEps) {
+                    nTransitions++;
+                    if (nTransitions === 1) i1 = i;
+                    else if (nTransitions === 2) i2 = i;
+                    else break;
+                }
+            }
+            if (nTransitions !== 2) continue;
+
+            // K=2 collinearity: ring[i1], v, ring[i2] must be collinear
+            // with v between (cosine of va-vb angle near -1).
+            const a = ring[i1];
+            const b = ring[i2];
+            const ax = positions[a * 3] - positions[v * 3];
+            const ay = positions[a * 3 + 1] - positions[v * 3 + 1];
+            const az = positions[a * 3 + 2] - positions[v * 3 + 2];
+            const bx = positions[b * 3] - positions[v * 3];
+            const by = positions[b * 3 + 1] - positions[v * 3 + 1];
+            const bz = positions[b * 3 + 2] - positions[v * 3 + 2];
+            const lenA = Math.sqrt(ax * ax + ay * ay + az * az);
+            const lenB = Math.sqrt(bx * bx + by * by + bz * bz);
+            if (lenA < 1e-12 || lenB < 1e-12) continue;
+            const cosine = (ax * bx + ay * by + az * bz) / (lenA * lenB);
+            if (cosine > cosineMax) continue;
+
+            // Two arcs: arc 0 covers tris[i1..i2-1] (mA tris, mA+1 polygon
+            // verts ring[i1..i2]); arc 1 covers tris[i2..i1-1] cyclically
+            // (mB tris, mB+1 polygon verts).
+            const mA = i2 - i1;
+            const mB = k - mA;
+            arcStartIdx[0] = i1; arcPolySize[0] = mA + 1; arcPlaneT[0] = fanTris[i1];
+            arcStartIdx[1] = i2; arcPolySize[1] = mB + 1; arcPlaneT[1] = fanTris[i2];
+            arcCount = 2;
+        }
+
+        // Build polygons and triangulations. Bail (without committing)
+        // if any arc fails to triangulate.
+        const arcPolys: Int32Array[] = new Array(arcCount);
+        const arcEars: Int32Array[] = new Array(arcCount);
+        let allArcsOk = true;
+        for (let g = 0; g < arcCount; g++) {
+            const polySize = arcPolySize[g];
+            const startIdx = arcStartIdx[g];
+            const planeT = arcPlaneT[g];
+            const poly = new Int32Array(polySize);
+            for (let j = 0; j < polySize; j++) {
+                poly[j] = ring[(startIdx + j) % k];
+            }
+
+            const nx = triNxArr[planeT];
+            const ny = triNyArr[planeT];
+            const nz = triNzArr[planeT];
+            const [tx, ty, tz, bx, by, bz] = buildBasis(nx, ny, nz);
+            const px = new Float64Array(polySize);
+            const py = new Float64Array(polySize);
+            for (let j = 0; j < polySize; j++) {
+                const u = poly[j];
+                const x = positions[u * 3];
+                const y = positions[u * 3 + 1];
+                const z = positions[u * 3 + 2];
+                px[j] = x * tx + y * ty + z * tz;
+                py[j] = x * bx + y * by + z * bz;
+            }
+
+            const earIdx = earClip(px, py);
+            if (earIdx === null || earIdx.length !== (polySize - 2) * 3) {
+                allArcsOk = false;
+                break;
+            }
+            arcPolys[g] = poly;
+            arcEars[g] = earIdx;
+        }
+        if (!allArcsOk) continue;
+
+        // Commit: walk v's linked-list of incident tris in place. For each
+        // tri, mark it dead, unlink it from each non-v vertex's list, and
+        // free v's own node. Iteration is safe because we only mutate
+        // OTHER vertices' lists during the walk.
+        let cur = vertHead[v];
+        while (cur !== -1) {
+            const t = poolTri[cur];
+            triAliveArr[t] = 0;
+            for (let j = 0; j < 3; j++) {
+                const u = triVertsArr[t * 3 + j];
+                if (u === v) continue;
+                removeTriFromVert(u, t);
+            }
+            const nxt = poolNext[cur];
+            freeNode(cur);
+            cur = nxt;
+        }
+        vertHead[v] = -1;
+
+        // Append new tris per arc, each carrying its arc's plane.
+        for (let g = 0; g < arcCount; g++) {
+            const planeT = arcPlaneT[g];
+            const nx = triNxArr[planeT];
+            const ny = triNyArr[planeT];
+            const nz = triNzArr[planeT];
+            const d = triDArr[planeT];
+            const earIdx = arcEars[g];
+            const poly = arcPolys[g];
+            for (let i = 0; i < earIdx.length; i += 3) {
+                const ua = poly[earIdx[i]];
+                const ub = poly[earIdx[i + 1]];
+                const uc = poly[earIdx[i + 2]];
+                ensureTriCap();
+                const newT = triCount++;
+                triVertsArr[newT * 3] = ua;
+                triVertsArr[newT * 3 + 1] = ub;
+                triVertsArr[newT * 3 + 2] = uc;
+                triNxArr[newT] = nx;
+                triNyArr[newT] = ny;
+                triNzArr[newT] = nz;
+                triDArr[newT] = d;
+                triAliveArr[newT] = 1;
+                addTriToVert(ua, newT);
+                addTriToVert(ub, newT);
+                addTriToVert(uc, newT);
+            }
+        }
+
+        // Re-queue every ring vertex: each may now satisfy K=1 or K=2 in
+        // its updated fan, allowing the collapse to propagate along long
+        // collinear chains in a single sweep.
+        for (let i = 0; i < k; i++) {
+            pushQueue(ring[i]);
+        }
+    }
+
+    // Compact: drop dead tris and unused vertices, remap indices.
+    const usedVerts = new Uint8Array(vertCount);
+    let outTriCount = 0;
+    for (let t = 0; t < triCount; t++) {
+        if (triAliveArr[t] === 0) continue;
+        outTriCount++;
+        usedVerts[triVertsArr[t * 3]] = 1;
+        usedVerts[triVertsArr[t * 3 + 1]] = 1;
+        usedVerts[triVertsArr[t * 3 + 2]] = 1;
+    }
+
+    let outVertCount = 0;
+    const vertRemap = new Int32Array(vertCount);
+    for (let v = 0; v < vertCount; v++) {
+        if (usedVerts[v] === 1) {
+            vertRemap[v] = outVertCount++;
+        } else {
+            vertRemap[v] = -1;
+        }
+    }
+
+    const outPositions = new Float32Array(outVertCount * 3);
+    for (let v = 0; v < vertCount; v++) {
+        if (usedVerts[v] === 0) continue;
+        const o = vertRemap[v] * 3;
+        outPositions[o] = positions[v * 3];
+        outPositions[o + 1] = positions[v * 3 + 1];
+        outPositions[o + 2] = positions[v * 3 + 2];
+    }
+
+    const outIndices = new Uint32Array(outTriCount * 3);
+    let oi = 0;
+    for (let t = 0; t < triCount; t++) {
+        if (triAliveArr[t] === 0) continue;
+        outIndices[oi++] = vertRemap[triVertsArr[t * 3]];
+        outIndices[oi++] = vertRemap[triVertsArr[t * 3 + 1]];
+        outIndices[oi++] = vertRemap[triVertsArr[t * 3 + 2]];
+    }
+
+    return { positions: outPositions, indices: outIndices };
 };
 
 export { coplanarMerge };
