@@ -61,7 +61,7 @@ const COLLINEAR_REL_EPS = 1e-3;
  * 4. Compact: drop dead tris and unused vertices, remap indices.
  *
  * @param mesh - Input triangle mesh from {@link marchingCubes}.
- * @param voxelResolution - Size of one voxel in world units. Used to scale the plane-offset and collinearity tolerances.
+ * @param voxelResolution - Size of one voxel in world units. Used to scale the plane-offset tolerance. (The K=2 collinearity check is purely angular and has no voxel-scaled term.)
  * @returns A new mesh with the same surface geometry, no T-junctions, and far fewer triangles.
  */
 const coplanarMerge = (mesh: Mesh, voxelResolution: number): Mesh => {
