@@ -664,9 +664,10 @@ const main = async () => {
     // installing the handlers below suppresses it.
     const failExit = (err: unknown, label?: string): never => {
         if (label) {
-            logger.error(`${label}:`);
+            logger.error(`${label}:`, err);
+        } else {
+            logger.error(err);
         }
-        logger.error(err);
         reportDone();
         exit(1);
     };
