@@ -636,6 +636,35 @@ EXAMPLES
 const main = async () => {
     const startTime = performance.now();
 
+    // Emit the final timing line plus the kernel-tracked peak resident set
+    // size. `process.resourceUsage().maxRSS` is reported in kilobytes on
+    // Linux/macOS and bytes on Windows; normalize to bytes for fmtBytes.
+    // Note: V8 fatal OOM (`FATAL ERROR: Reached heap limit`) and external
+    // SIGKILL bypass all JS handlers (uncaughtException, beforeExit, exit),
+    // so peak rss cannot be reported in those cases - use an external wrapper
+    // such as `/usr/bin/time -l` (macOS) or `/usr/bin/time -v` (Linux).
+    const reportDone = () => {
+        const elapsedMs = performance.now() - startTime;
+        const rawMaxRss = process.resourceUsage().maxRSS;
+        const maxRssBytes = process.platform === 'win32' ? rawMaxRss : rawMaxRss * 1024;
+        logger.info(`done in ${fmtTime(elapsedMs)}  [peak mem: ${fmtBytes(maxRssBytes)}]`);
+    };
+
+    const logDataTableInfo = (dataTable: DataTable) => {
+        logger.info(`${fmtCount(dataTable.numRows)} gaussians \u00b7 ${getSHBands(dataTable)} SH bands \u00b7 ${fmtBytes(dataTable.byteLength)}`);
+    };
+
+    process.on('uncaughtException', (err) => {
+        logger.error(err);
+        reportDone();
+        exit(1);
+    });
+    process.on('unhandledRejection', (reason) => {
+        logger.error(reason);
+        reportDone();
+        exit(1);
+    });
+
     // read args
     const { files, options } = await parseArguments();
 
@@ -813,7 +842,7 @@ const main = async () => {
                     throw new Error(`Unsupported data in file '${inputArg.filename}'`);
                 }
 
-                logger.info(`gaussians: ${fmtCount(dataTable.numRows)}, SH bands: ${getSHBands(dataTable)}, mem: ${fmtBytes(dataTable.byteLength)}`);
+                logDataTableInfo(dataTable);
 
                 const isEnv = dataTable.hasColumn('lod') && dataTable.getColumnByName('lod').data.every(v => v === -1);
                 if (!isEnv) {
@@ -852,7 +881,7 @@ const main = async () => {
                 index: phaseTotal,
                 total: phaseTotal
             });
-            logger.info(`gaussians: ${fmtCount(dataTable.numRows)}, SH bands: ${getSHBands(dataTable)}, mem: ${fmtBytes(dataTable.byteLength)}`);
+            logDataTableInfo(dataTable);
             await writeFile({
                 filename: outputFilename,
                 outputFormat: outputFormat!,
@@ -866,11 +895,11 @@ const main = async () => {
     } catch (err) {
         // handle errors
         logger.error(err);
+        reportDone();
         exit(1);
     }
 
-    const elapsedMs = performance.now() - startTime;
-    logger.info(`done in ${fmtTime(elapsedMs)}`);
+    reportDone();
 
     // something in webgpu seems to keep the process alive after returning
     // from main so force exit
