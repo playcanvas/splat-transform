@@ -29,10 +29,15 @@ type InputFormat = 'mjs' | 'ksplat' | 'splat' | 'sog' | 'ply' | 'spz' | 'lcc';
  * const format2 = getInputFormat('scene.splat');  // returns 'splat'
  * ```
  */
-// Strip a trailing `?...` querystring and/or `#...` fragment so that
-// extension sniffing works for http(s):// URL inputs (e.g. presigned
-// URLs like `scene.sog?token=...`).
+// For http(s):// URL inputs only, strip a trailing `?...` querystring and/or
+// `#...` fragment so that extension sniffing works for presigned URLs like
+// `scene.sog?token=...`. Local paths are returned unchanged - on POSIX, `?`
+// and `#` are valid characters in file/directory names and must not be
+// truncated.
 const stripQueryAndHash = (filename: string): string => {
+    if (!/^https?:\/\//i.test(filename)) {
+        return filename;
+    }
     const q = filename.search(/[?#]/);
     return q < 0 ? filename : filename.slice(0, q);
 };
