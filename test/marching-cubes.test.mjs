@@ -6,7 +6,7 @@ import { Vec3 } from 'playcanvas';
 import { BlockMaskBuffer } from '../src/lib/voxel/block-mask-buffer.js';
 import { xyzToMorton } from '../src/lib/voxel/morton.js';
 import { marchingCubes } from '../src/lib/mesh/marching-cubes.js';
-import { simplifyMesh } from '../src/lib/mesh/simplify.js';
+import { coplanarMerge } from '../src/lib/mesh/coplanar-merge.js';
 
 const SOLID_LO = 0xFFFFFFFF >>> 0;
 const SOLID_HI = 0xFFFFFFFF >>> 0;
@@ -125,73 +125,133 @@ describe('marchingCubes', () => {
     });
 });
 
-describe('simplifyMesh', () => {
-    it('should return a valid mesh', async () => {
+/**
+ * Compute triangle count, vertex count, and AABB for a mesh.
+ *
+ * @param {{ positions: Float32Array, indices: Uint32Array }} mesh - The mesh
+ *   to scan.
+ * @returns {{ tris: number, verts: number, min: number[], max: number[] }}
+ *   Triangle count, vertex count, and AABB extremes.
+ */
+const meshStats = (mesh) => {
+    const min = [Infinity, Infinity, Infinity];
+    const max = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < mesh.positions.length; i += 3) {
+        for (let a = 0; a < 3; a++) {
+            const v = mesh.positions[i + a];
+            if (v < min[a]) min[a] = v;
+            if (v > max[a]) max[a] = v;
+        }
+    }
+    return {
+        tris: mesh.indices.length / 3,
+        verts: mesh.positions.length / 3,
+        min,
+        max
+    };
+};
+
+/**
+ * Count triangles whose face normal is not aligned with any cardinal axis
+ * (i.e. bevel / corner-cutting triangles produced by marching cubes).
+ *
+ * @param {{ positions: Float32Array, indices: Uint32Array }} mesh - The mesh
+ *   to scan.
+ * @returns {number} Count of bevel triangles.
+ */
+const countBevelTris = (mesh) => {
+    const { positions, indices } = mesh;
+    let count = 0;
+    for (let i = 0; i < indices.length; i += 3) {
+        const ia = indices[i] * 3;
+        const ib = indices[i + 1] * 3;
+        const ic = indices[i + 2] * 3;
+        const ex = positions[ib] - positions[ia];
+        const ey = positions[ib + 1] - positions[ia + 1];
+        const ez = positions[ib + 2] - positions[ia + 2];
+        const fx = positions[ic] - positions[ia];
+        const fy = positions[ic + 1] - positions[ia + 1];
+        const fz = positions[ic + 2] - positions[ia + 2];
+        const nx = ey * fz - ez * fy;
+        const ny = ez * fx - ex * fz;
+        const nz = ex * fy - ey * fx;
+        const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+        if (len < 1e-6) continue;
+        const ax = Math.abs(nx) / len;
+        const ay = Math.abs(ny) / len;
+        const az = Math.abs(nz) / len;
+        const m = Math.max(ax, ay, az);
+        if (m < 1 - 1e-3) count++;
+    }
+    return count;
+};
+
+describe('coplanarMerge', () => {
+    it('should return an empty mesh when given an empty mesh', () => {
+        const empty = { positions: new Float32Array(0), indices: new Uint32Array(0) };
+        const merged = coplanarMerge(empty, 1.0);
+
+        assert.strictEqual(merged.positions.length, 0);
+        assert.strictEqual(merged.indices.length, 0);
+    });
+
+    it('should fuse the flat faces of a fully-occupied 4x4x4 slab', () => {
         const buffer = new BlockMaskBuffer();
         buffer.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
 
         const bounds = makeGridBounds(0, 0, 0, 4, 4, 4);
-        const mesh = marchingCubes(buffer, bounds, 1.0);
+        const raw = marchingCubes(buffer, bounds, 1.0);
+        const merged = coplanarMerge(raw, 1.0);
 
-        const simplified = await simplifyMesh(mesh, 1.0);
+        const rawStats = meshStats(raw);
+        const mergedStats = meshStats(merged);
+        const rawBevels = countBevelTris(raw);
+        const mergedBevels = countBevelTris(merged);
 
-        assert.ok(simplified.positions.length > 0, 'simplified mesh should have vertices');
-        assert.ok(simplified.indices.length > 0, 'simplified mesh should have indices');
-        assert.strictEqual(simplified.indices.length % 3, 0, 'indices should be multiple of 3');
-        assert.strictEqual(simplified.positions.length % 3, 0, 'positions should be multiple of 3');
-    });
+        // Each of the 6 flat faces collapses to a single quad (2 tris), so
+        // the merged output has exactly 12 axis-aligned face triangles.
+        // Bevel triangles around the cube edges and corners pass through
+        // verbatim and dominate the absolute count.
+        const mergedFaceTris = mergedStats.tris - mergedBevels;
+        assert.strictEqual(mergedFaceTris, 12,
+            `expected exactly 12 fused face tris (2 per face); got ${mergedFaceTris}`);
+        assert.strictEqual(mergedBevels, rawBevels,
+            `bevel tris must pass through unchanged: raw=${rawBevels}, merged=${mergedBevels}`);
 
-    it('should reduce triangle count', async () => {
-        const buffer = new BlockMaskBuffer();
-        buffer.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
-
-        const bounds = makeGridBounds(0, 0, 0, 4, 4, 4);
-        const mesh = marchingCubes(buffer, bounds, 1.0);
-
-        const simplified = await simplifyMesh(mesh, 2.0);
-
-        assert.ok(simplified.indices.length <= mesh.indices.length,
-            'simplified mesh should have fewer or equal triangles');
-        assert.ok(simplified.indices.length < mesh.indices.length,
-            `expected fewer triangles: original=${mesh.indices.length / 3}, simplified=${simplified.indices.length / 3}`);
-    });
-
-    it('should keep all vertex indices within bounds', async () => {
-        const buffer = new BlockMaskBuffer();
-        buffer.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
-        buffer.addBlock(xyzToMorton(1, 0, 0), SOLID_LO, SOLID_HI);
-
-        const bounds = makeGridBounds(0, 0, 0, 8, 4, 4);
-        const mesh = marchingCubes(buffer, bounds, 1.0);
-        const simplified = await simplifyMesh(mesh, 1.0);
-
-        const numVertices = simplified.positions.length / 3;
-        for (let i = 0; i < simplified.indices.length; i++) {
-            assert.ok(simplified.indices[i] < numVertices,
-                `index ${simplified.indices[i]} out of bounds (${numVertices} vertices)`);
+        // Surface AABB must be preserved exactly (lossless).
+        for (let a = 0; a < 3; a++) {
+            assert.strictEqual(mergedStats.min[a], rawStats.min[a],
+                `min[${a}] changed: ${rawStats.min[a]} -> ${mergedStats.min[a]}`);
+            assert.strictEqual(mergedStats.max[a], rawStats.max[a],
+                `max[${a}] changed: ${rawStats.max[a]} -> ${mergedStats.max[a]}`);
         }
     });
 
-    it('should handle small error threshold without crashing', async () => {
+    it('should preserve bevel triangles around isolated voxels', () => {
+        // A single voxel produces a marching-cubes surface with both
+        // axis-aligned face triangles and corner / edge bevel triangles.
+        // The merge pass must leave the bevels untouched.
         const buffer = new BlockMaskBuffer();
-        buffer.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
+        buffer.addBlock(xyzToMorton(0, 0, 0), 1, 0);
 
         const bounds = makeGridBounds(0, 0, 0, 4, 4, 4);
-        const mesh = marchingCubes(buffer, bounds, 1.0);
+        const raw = marchingCubes(buffer, bounds, 1.0);
+        const merged = coplanarMerge(raw, 1.0);
 
-        const simplified = await simplifyMesh(mesh, 0.001);
+        const rawBevels = countBevelTris(raw);
+        const mergedBevels = countBevelTris(merged);
 
-        assert.ok(simplified.positions.length > 0);
-        assert.ok(simplified.indices.length > 0);
+        assert.ok(rawBevels > 0, 'single voxel should have bevel tris in raw MC output');
+        assert.strictEqual(mergedBevels, rawBevels,
+            `bevel tris must pass through unchanged: raw=${rawBevels}, merged=${mergedBevels}`);
     });
 
-    it('should preserve a feature bump while collapsing flat slab regions', async () => {
-        // Build a 2x2 grid of blocks (8x4x8 voxels) whose ly=0 layer is a
-        // fully solid 8x8 slab one voxel thick - this gives the simplifier a
-        // large flat area to flush. Then add a 3-voxel-tall "bump" column
-        // protruding from the slab to act as a feature with unique side and
-        // top normals. Normal-weighted simplification should aggressively
-        // collapse the slab while leaving the bump column intact.
+    it('should preserve a feature bump while collapsing flat slab regions', () => {
+        // 2x2 grid of blocks (8x4x8 voxels) whose ly=0 layer is a fully
+        // solid 8x8 slab one voxel thick. Add a 3-voxel-tall "bump" column
+        // poking up from the slab. The merge pass must fuse the slab's
+        // many coplanar triangles into a handful of quads while leaving
+        // the bump's bevels and side faces intact.
         //
         // ly=0 slab voxel bits, derived from `bitIdx = lx + ly*4 + lz*16`:
         //   lz=0: bits  0..3   → lo 0x0000_000F
@@ -214,53 +274,28 @@ describe('simplifyMesh', () => {
         buffer.addBlock(xyzToMorton(1, 0, 1), (slabLo | bumpLo) >>> 0, slabHi);
 
         const bounds = makeGridBounds(0, 0, 0, 8, 4, 8);
-        const mesh = marchingCubes(buffer, bounds, 1.0);
-        const originalTriangles = mesh.indices.length / 3;
+        const raw = marchingCubes(buffer, bounds, 1.0);
+        const merged = coplanarMerge(raw, 1.0);
 
-        // Generous budget so the simplifier can fully flush the coplanar
-        // slab triangles. A naive (position-only) simplifier with this
-        // budget happily collapses the bump column down into the slab
-        // plane, since the per-edge QEM along the bump's vertical edges is
-        // small. Normal-weighted simplification should refuse those
-        // collapses because the bump's side and top normals diverge sharply
-        // from the slab's.
-        const simplified = await simplifyMesh(mesh, 0.5);
-        const simplifiedTriangles = simplified.indices.length / 3;
+        const rawStats = meshStats(raw);
+        const mergedStats = meshStats(merged);
+        const rawBevels = countBevelTris(raw);
+        const mergedBevels = countBevelTris(merged);
+        const rawFaces = rawStats.tris - rawBevels;
+        const mergedFaces = mergedStats.tris - mergedBevels;
 
-        assert.ok(simplifiedTriangles <= originalTriangles * 0.5,
-            `expected >=50% triangle reduction; got ${simplifiedTriangles} of ${originalTriangles}`);
+        // The flat axis-aligned face count is what the merge attacks; bevels
+        // are passed through untouched. Demand a deep reduction (>=80%) on
+        // the face triangles alone.
+        assert.ok(mergedFaces <= rawFaces * 0.2,
+            `expected >=80% face-triangle reduction; got ${mergedFaces} of ${rawFaces}`);
+        assert.strictEqual(mergedBevels, rawBevels,
+            `bevel tris must pass through unchanged: raw=${rawBevels}, merged=${mergedBevels}`);
 
-        let maxY = -Infinity;
-        for (let i = 1; i < simplified.positions.length; i += 3) {
-            if (simplified.positions[i] > maxY) maxY = simplified.positions[i];
-        }
-        // Bump apex was at y = 4. Allow ~1 voxel of accumulated error
-        // (meshopt's per-collapse budget compounds across the column), but
-        // demand the bulk of the bump survives.
-        assert.ok(maxY >= 3.0,
-            `bump apex should survive normal-weighted simplification: maxY=${maxY}, expected >= 3.0`);
-    });
-
-    it('should produce a valid mesh in sloppy mode', async () => {
-        const buffer = new BlockMaskBuffer();
-        buffer.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
-        buffer.addBlock(xyzToMorton(1, 0, 0), SOLID_LO, SOLID_HI);
-        buffer.addBlock(xyzToMorton(0, 1, 0), SOLID_LO, SOLID_HI);
-
-        const bounds = makeGridBounds(0, 0, 0, 8, 8, 4);
-        const mesh = marchingCubes(buffer, bounds, 1.0);
-
-        const simplified = await simplifyMesh(mesh, 0.5, { sloppy: true });
-
-        assert.ok(simplified.positions.length > 0, 'sloppy mesh should have vertices');
-        assert.ok(simplified.indices.length > 0, 'sloppy mesh should have indices');
-        assert.strictEqual(simplified.indices.length % 3, 0, 'indices should be multiple of 3');
-        assert.strictEqual(simplified.positions.length % 3, 0, 'positions should be multiple of 3');
-
-        const numVertices = simplified.positions.length / 3;
-        for (let i = 0; i < simplified.indices.length; i++) {
-            assert.ok(simplified.indices[i] < numVertices,
-                `index ${simplified.indices[i]} out of bounds (${numVertices} vertices)`);
-        }
+        // Bump apex must survive losslessly. MC places the surface at
+        // voxel-centre boundaries, so the bump apex sits at y=3.5 (midpoint
+        // of the topmost in-corner and the empty corner above).
+        assert.strictEqual(mergedStats.max[1], rawStats.max[1],
+            `bump apex must be preserved exactly: raw=${rawStats.max[1]}, merged=${mergedStats.max[1]}`);
     });
 });

@@ -57,14 +57,8 @@ type WriteVoxelOptions = {
     /** When `floorFill` is enabled, dilation radius in world units used to identify "interior" XZ columns to patch. Empty XZ areas larger than `2 * floorFillDilation` from any solid column are treated as exterior and left empty. Default: 0 (patch every empty column). */
     floorFillDilation?: number;
 
-    /** Mesh extractor for the collision mesh (.collision.glb). When set, a collision mesh is generated. `mc` = marching cubes (smoother), `voxels` = greedy voxel mesh. */
-    meshType?: 'mc' | 'voxels';
-
-    /** Maximum geometric error for collision mesh simplification as a fraction of voxelResolution. Default: 0.08 */
-    meshSimplifyError?: number;
-
-    /** Use a substantially faster but lower-fidelity mesh simplifier (meshopt sloppy). Default: false */
-    meshSimplifySloppy?: boolean;
+    /** Shape of the collision mesh (.collision.glb). When set, a collision mesh is generated. `edge` = axis-aligned greedy voxel surface, `smooth` = marching cubes followed by lossless coplanar merge. */
+    meshType?: 'edge' | 'smooth';
 };
 
 /**
@@ -336,9 +330,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         floorFillDilation = 0,
         navCapsule,
         navSeed,
-        meshType,
-        meshSimplifyError,
-        meshSimplifySloppy = false
+        meshType
     } = options;
 
     if (!createDevice) {
@@ -452,7 +444,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         gridBounds = finalCrop.gridBounds;
 
         const glbBytes = meshType ?
-            await buildCollisionMesh(buffer, gridBounds, voxelResolution, meshType, meshSimplifyError, meshSimplifySloppy) :
+            buildCollisionMesh(buffer, gridBounds, voxelResolution, meshType) :
             null;
 
         const octree = buildSparseOctree(

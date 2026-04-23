@@ -1,5 +1,5 @@
 import type { Bounds } from '../data-table';
-import { greedyVoxelMesh, marchingCubes, simplifyMesh } from '../mesh';
+import { coplanarMerge, greedyVoxelMesh, marchingCubes } from '../mesh';
 import { fmtCount, logger } from '../utils';
 import { BlockMaskBuffer } from '../voxel/block-mask-buffer';
 
@@ -126,36 +126,32 @@ function encodeGlb(positions: Float32Array, indices: Uint32Array): Uint8Array {
 /**
  * Extract a collision mesh from voxel data and encode it as a GLB file.
  *
- * Two extractors are supported:
- * - `'mc'` (default): marching cubes. Produces a smoother surface that follows
- *   voxel boundaries; runs the meshopt simplify pass by default to collapse
- *   the inevitable coplanar redundancy.
- * - `'voxels'`: greedy voxel meshing. Emits one quad per maximal coplanar
- *   rectangle of exposed voxel faces with shared (welded) corner vertices,
- *   yielding an axis-aligned mesh that is connected for downstream
- *   optimization. The simplify pass is skipped by default; pass an explicit
- *   `meshSimplifyError > 0` or `sloppy === true` to opt in.
+ * Two surface shapes are supported:
+ * - `'edge'` (default): greedy voxel meshing. Emits one quad per maximal
+ *   coplanar rectangle of exposed voxel faces with shared (welded) corner
+ *   vertices. Already minimal; no further reduction pass is run.
+ * - `'smooth'`: marching cubes followed by a lossless coplanar-merge pass
+ *   that fuses the redundant axis-aligned triangles inside each voxel-face
+ *   plane into greedy-style quads while leaving the corner-cutting bevel
+ *   triangles untouched. The output surface is identical to the raw MC
+ *   surface but typically has 1-2 orders of magnitude fewer triangles.
  *
  * @param blockBuffer - Voxel block data after filtering
  * @param gridBounds - Grid bounds aligned to block boundaries
  * @param voxelResolution - Size of each voxel in world units
- * @param meshType - Extractor to use (`'mc'` or `'voxels'`)
- * @param meshSimplifyError - Maximum geometric error for simplification, expressed as a fraction of voxelResolution. Defaults to 0.08 on the `mc` path; defaults to skipping simplification on the `voxels` path
- * @param sloppy - If true, run the meshopt sloppy simplifier (also opts the `voxels` path in to simplification with a default error of 0.08)
+ * @param meshType - Surface shape to extract (`'edge'` or `'smooth'`)
  * @returns GLB bytes, or null if no triangles were generated
  */
-const buildCollisionMesh = async (
+const buildCollisionMesh = (
     blockBuffer: BlockMaskBuffer,
     gridBounds: Bounds,
     voxelResolution: number,
-    meshType: 'mc' | 'voxels' = 'mc',
-    meshSimplifyError?: number,
-    sloppy?: boolean
-): Promise<Uint8Array | null> => {
+    meshType: 'edge' | 'smooth' = 'edge'
+): Uint8Array | null => {
     const g = logger.group('Collision mesh');
 
     const extractSub = logger.group(`Extracting (${meshType})`);
-    const rawMesh = meshType === 'voxels' ?
+    const rawMesh = meshType === 'edge' ?
         greedyVoxelMesh(blockBuffer, gridBounds, voxelResolution) :
         marchingCubes(blockBuffer, gridBounds, voxelResolution);
     logger.info(`raw vertices: ${fmtCount(rawMesh.positions.length / 3)}`);
@@ -169,23 +165,16 @@ const buildCollisionMesh = async (
     }
     extractSub.end();
 
-    // mc: simplify by default; voxels: only when explicitly requested.
-    const explicitError = Number.isFinite(meshSimplifyError) && (meshSimplifyError as number) > 0;
-    const wantSimplify = meshType === 'mc' ?
-        explicitError || sloppy === true || meshSimplifyError === undefined :
-        explicitError || sloppy === true;
-
     let finalMesh = rawMesh;
-    if (wantSimplify) {
-        const simplifySub = logger.group(sloppy ? 'Simplifying (sloppy)' : 'Simplifying');
-        const errorFraction = explicitError ? (meshSimplifyError as number) : 0.08;
-        finalMesh = await simplifyMesh(rawMesh, errorFraction * voxelResolution, { sloppy });
+    if (meshType === 'smooth') {
+        const mergeSub = logger.group('Merging coplanar faces');
+        finalMesh = coplanarMerge(rawMesh, voxelResolution);
 
         const reduction = (1 - finalMesh.indices.length / rawMesh.indices.length) * 100;
-        logger.info(`simplified vertices: ${fmtCount(finalMesh.positions.length / 3)}`);
-        logger.info(`simplified triangles: ${fmtCount(finalMesh.indices.length / 3)}`);
+        logger.info(`merged vertices: ${fmtCount(finalMesh.positions.length / 3)}`);
+        logger.info(`merged triangles: ${fmtCount(finalMesh.indices.length / 3)}`);
         logger.info(`reduction: ${reduction.toFixed(0)}%`);
-        simplifySub.end();
+        mergeSub.end();
     }
 
     g.end();

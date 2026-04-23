@@ -41,14 +41,8 @@ type Options = {
     /** Seed position in world space for exterior fill and carve flood fill. */
     navSeed?: { x: number; y: number; z: number };
 
-    /** Mesh extractor for the collision mesh (.collision.glb). When set, a collision mesh is generated. `mc` = marching cubes (smoother), `voxels` = greedy voxel mesh. */
-    meshType?: 'mc' | 'voxels';
-
-    /** Maximum geometric error for collision mesh simplification as a fraction of voxelResolution. Default: 0.08 */
-    meshSimplifyError?: number;
-
-    /** Use a substantially faster but lower-fidelity mesh simplifier (meshopt sloppy) for the collision mesh. Default: false */
-    meshSimplifySloppy?: boolean;
+    /** Shape of the collision mesh (.collision.glb). When set, a collision mesh is generated. `edge` = axis-aligned greedy voxel surface, `smooth` = marching cubes followed by lossless coplanar merge. */
+    meshType?: 'edge' | 'smooth';
 };
 
 /**

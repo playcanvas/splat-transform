@@ -94,7 +94,6 @@ const cliOptionsConfig = {
     'voxel-carve': { type: 'string' },
     'seed-pos': { type: 'string', default: '' },
     'collision-mesh': { type: 'string', short: 'K' },
-    'mesh-simplify-sloppy': { type: 'boolean', default: false },
 
     // per-file options
     translate: { type: 'string', short: 't', multiple: true },
@@ -121,13 +120,7 @@ const stringOptionNames = new Set(Object.entries(cliOptionsConfig)
 
 const isNumericValue = (s: string) => /^-?\d[\d.,e+-]*$/.test(s);
 
-const isCollisionMeshValue = (s: string) => {
-    if (isNumericValue(s)) return true;
-    const [head, tail, ...rest] = s.split(',');
-    if (rest.length > 0) return false;
-    if (head !== 'mc' && head !== 'voxels') return false;
-    return tail === undefined || isNumericValue(tail);
-};
+const isCollisionMeshValue = (s: string) => s === 'edge' || s === 'smooth';
 
 // Options that may appear without a value. The predicate gates whether the
 // next argv token is consumed as the value; when omitted (or rejected) the
@@ -314,23 +307,12 @@ const parseArguments = async () => {
     }
 
     // Collision mesh: presence of the value (even empty) means generate;
-    // absent means skip. Parse optional `[type[,error]]` payload.
+    // absent means skip. The optional `[shape]` payload selects the
+    // extractor; defaults to `edge`.
     const collisionMeshStr = v['collision-mesh'];
-    let meshType: 'mc' | 'voxels' | undefined;
-    let meshSimplifyError: number | undefined;
+    let meshType: 'edge' | 'smooth' | undefined;
     if (collisionMeshStr !== undefined) {
-        meshType = 'mc';
-        if (collisionMeshStr) {
-            for (const part of collisionMeshStr.split(',')) {
-                const trimmed = part.trim();
-                if (trimmed === '') continue;
-                if (trimmed === 'mc' || trimmed === 'voxels') {
-                    meshType = trimmed;
-                } else {
-                    meshSimplifyError = parseNumber(trimmed, 0);
-                }
-            }
-        }
+        meshType = collisionMeshStr === 'smooth' ? 'smooth' : 'edge';
     }
 
     const options: CliOptions = {
@@ -355,9 +337,7 @@ const parseArguments = async () => {
         floorFillDilation,
         navCapsule,
         navSeed,
-        meshType,
-        meshSimplifyError,
-        meshSimplifySloppy: v['mesh-simplify-sloppy']
+        meshType
     };
 
     for (const t of tokens) {
@@ -624,11 +604,9 @@ GLOBAL OPTIONS
         --voxel-floor-fill [size]           Fill below-floor voxels by upward column walk from bottom. Default size: 1.6
         --voxel-carve [h,r]                 Carve navigable space using capsule flood fill from seed. Default: 1.6,0.2
         --seed-pos         <x,y,z>          Seed position for voxel processing and --filter-cluster. Default: 0,0,0
-    -K, --collision-mesh   [type[,error]]   Generate collision mesh (.collision.glb) with voxel output.
-                                              type:  mc (default) | voxels
-                                              error: max geometric error for simplification as a fraction
-                                                     of voxelResolution. Default: 0.08
-        --mesh-simplify-sloppy              Use the much faster but lower-fidelity meshopt sloppy simplifier for the collision mesh
+    -K, --collision-mesh   [edge|smooth]    Generate collision mesh (.collision.glb).
+                                              edge (default): greedy voxel quads.
+                                              smooth: marching cubes + lossless coplanar merge.
 
 EXAMPLES
     # Scale then translate
