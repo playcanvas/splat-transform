@@ -67,15 +67,21 @@ type ResolvedInput = {
 // Resolve a CLI input arg into a (filename, fileSystem) pair. http(s):// URLs
 // are split into a baseUrl (directory) + leaf filename so multi-file formats
 // (SOG meta.json, LCC) can fetch siblings via UrlReadFileSystem's
-// `new URL(filename, baseUrl)` resolution.
+// `new URL(filename, baseUrl)` resolution. Any querystring/fragment on the
+// original URL (e.g. presigned `?token=...`) is preserved on `filename` so
+// the initial fetch carries it; `classifyName` is the bare leaf so format
+// detection sees only the path.
 const resolveInput = (arg: string): ResolvedInput => {
     if (isHttpUrl(arg)) {
         const url = new URL(arg);
         const lastSlash = url.pathname.lastIndexOf('/');
-        const leaf = url.pathname.slice(lastSlash + 1) || 'index';
+        const leaf = url.pathname.slice(lastSlash + 1);
+        if (!leaf) {
+            throw new Error(`Input URL must include a filename: ${arg}`);
+        }
         const baseUrl = new URL('./', url).href;
         return {
-            filename: leaf,
+            filename: `${leaf}${url.search}${url.hash}`,
             fileSystem: new UrlReadFileSystem(baseUrl),
             classifyName: leaf
         };
@@ -810,8 +816,7 @@ const main = async () => {
     const outputArg = files[files.length - 1];
 
     if (isHttpUrl(outputArg.filename)) {
-        logger.error(`Output to a URL is not supported: ${outputArg.filename}`);
-        exit(1);
+        failExit(`Output to a URL is not supported: ${outputArg.filename}`);
     }
 
     const outputFilename = resolve(outputArg.filename);
