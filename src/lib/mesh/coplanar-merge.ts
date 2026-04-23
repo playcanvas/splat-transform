@@ -360,10 +360,26 @@ const coplanarMerge = (mesh: Mesh, voxelResolution: number): Mesh => {
         return k;
     };
 
+    // Reusable scratch for earClip's doubly-linked polygon traversal.
+    // Grows to the largest polygon seen and is reused across every
+    // worklist iteration.
+    let earPrevScratch = new Int32Array(16);
+    let earNextScratch = new Int32Array(16);
+    const growEarInternalScratch = (n: number) => {
+        if (n <= earPrevScratch.length) return;
+        let c = earPrevScratch.length;
+        while (c < n) c *= 2;
+        earPrevScratch = new Int32Array(c);
+        earNextScratch = new Int32Array(c);
+    };
+
     // Ear-clip a planar simple polygon. `px, py` are the projected 2D
-    // coordinates of the polygon vertices (in CCW order). Returns a flat
-    // array of (k - 2) * 3 vertex indices into the polygon, or null if
-    // the polygon is degenerate / not simple.
+    // coordinates of the first `n` polygon vertices (in CCW order); the
+    // arrays may be larger than `n` (scratch-buffer aliasing is fine,
+    // only [0, n) is read). Writes (n - 2) * 3 polygon-relative vertex
+    // indices into `out[outOffset..]` and returns the number of indices
+    // written on success, or -1 if the polygon is degenerate / not
+    // simple.
     //
     // Strictly-collinear interior vertices (cross product == 0) are not
     // considered convex ear apices and so produce slivers as side
@@ -374,13 +390,19 @@ const coplanarMerge = (mesh: Mesh, voxelResolution: number): Mesh => {
     // drops the vertex from this polygon would create a T-junction
     // with the vertex's other incident tris (which still reference it),
     // so we leave the cleanup to the worklist.
-    const earClip = (px: Float64Array, py: Float64Array): Int32Array | null => {
-        const n = px.length;
-        if (n < 3) return null;
+    const earClip = (
+        px: Float64Array,
+        py: Float64Array,
+        n: number,
+        out: Int32Array,
+        outOffset: number
+    ): number => {
+        if (n < 3) return -1;
         if (n === 3) {
-            const tri = new Int32Array(3);
-            tri[0] = 0; tri[1] = 1; tri[2] = 2;
-            return tri;
+            out[outOffset] = 0;
+            out[outOffset + 1] = 1;
+            out[outOffset + 2] = 2;
+            return 3;
         }
 
         // Verify CCW orientation. By construction (right-handed basis)
@@ -390,10 +412,11 @@ const coplanarMerge = (mesh: Mesh, voxelResolution: number): Mesh => {
             const j = (i + 1) % n;
             area2 += px[i] * py[j] - px[j] * py[i];
         }
-        if (area2 <= 0) return null;
+        if (area2 <= 0) return -1;
 
-        const prev = new Int32Array(n);
-        const next = new Int32Array(n);
+        growEarInternalScratch(n);
+        const prev = earPrevScratch;
+        const next = earNextScratch;
         for (let i = 0; i < n; i++) {
             prev[i] = (i - 1 + n) % n;
             next[i] = (i + 1) % n;
@@ -424,20 +447,19 @@ const coplanarMerge = (mesh: Mesh, voxelResolution: number): Mesh => {
             return true;
         };
 
-        const result = new Int32Array((n - 2) * 3);
         let resultLen = 0;
         let count = n;
         let i = 0;
         let stalls = 0;
 
         while (count > 3) {
-            if (stalls > count) return null;
+            if (stalls > count) return -1;
             const p = prev[i];
             const nxt = next[i];
             if (isEar(p, i, nxt)) {
-                result[resultLen++] = p;
-                result[resultLen++] = i;
-                result[resultLen++] = nxt;
+                out[outOffset + resultLen++] = p;
+                out[outOffset + resultLen++] = i;
+                out[outOffset + resultLen++] = nxt;
                 next[p] = nxt;
                 prev[nxt] = p;
                 count--;
@@ -448,10 +470,10 @@ const coplanarMerge = (mesh: Mesh, voxelResolution: number): Mesh => {
                 stalls++;
             }
         }
-        result[resultLen++] = prev[i];
-        result[resultLen++] = i;
-        result[resultLen++] = next[i];
-        return result;
+        out[outOffset + resultLen++] = prev[i];
+        out[outOffset + resultLen++] = i;
+        out[outOffset + resultLen++] = next[i];
+        return resultLen;
     };
 
     // Worklist: iterative dirty-flag scheduler. Initially queue every
@@ -495,6 +517,33 @@ const coplanarMerge = (mesh: Mesh, voxelResolution: number): Mesh => {
     const arcStartIdx = new Int32Array(2);
     const arcPolySize = new Int32Array(2);
     const arcPlaneT = new Int32Array(2);
+
+    // Reusable per-arc scratch buffers (arcCount is always 1 or 2).
+    // Each slot holds the polygon vertex indices, the 2D-projected
+    // coordinates, and the ear-clip triangle indices for one arc. All
+    // grow monotonically to the largest polygon ever seen and are
+    // reused for every worklist iteration, so the hot loop is mostly
+    // allocation-free.
+    const arcPolyScratch: Int32Array[] = [new Int32Array(16), new Int32Array(16)];
+    const arcPxScratch: Float64Array[] = [new Float64Array(16), new Float64Array(16)];
+    const arcPyScratch: Float64Array[] = [new Float64Array(16), new Float64Array(16)];
+    const arcEarScratch: Int32Array[] = [new Int32Array(16), new Int32Array(16)];
+    const arcEarLen = new Int32Array(2);
+    const ensureArcScratch = (g: number, polySize: number) => {
+        if (polySize > arcPolyScratch[g].length) {
+            let c = arcPolyScratch[g].length;
+            while (c < polySize) c *= 2;
+            arcPolyScratch[g] = new Int32Array(c);
+            arcPxScratch[g] = new Float64Array(c);
+            arcPyScratch[g] = new Float64Array(c);
+        }
+        const earNeed = (polySize - 2) * 3;
+        if (earNeed > arcEarScratch[g].length) {
+            let c = arcEarScratch[g].length;
+            while (c < earNeed) c *= 2;
+            arcEarScratch[g] = new Int32Array(c);
+        }
+    };
 
     while (queueHead < queueLen) {
         const v = queue[queueHead++];
@@ -593,16 +642,16 @@ const coplanarMerge = (mesh: Mesh, voxelResolution: number): Mesh => {
             arcCount = 2;
         }
 
-        // Build polygons and triangulations. Bail (without committing)
-        // if any arc fails to triangulate.
-        const arcPolys: Int32Array[] = new Array(arcCount);
-        const arcEars: Int32Array[] = new Array(arcCount);
+        // Build polygons and triangulations into the reusable per-arc
+        // scratch slots. Bail (without committing) if any arc fails to
+        // triangulate.
         let allArcsOk = true;
         for (let g = 0; g < arcCount; g++) {
             const polySize = arcPolySize[g];
             const startIdx = arcStartIdx[g];
             const planeT = arcPlaneT[g];
-            const poly = new Int32Array(polySize);
+            ensureArcScratch(g, polySize);
+            const poly = arcPolyScratch[g];
             for (let j = 0; j < polySize; j++) {
                 poly[j] = ring[(startIdx + j) % k];
             }
@@ -611,8 +660,8 @@ const coplanarMerge = (mesh: Mesh, voxelResolution: number): Mesh => {
             const ny = triNyArr[planeT];
             const nz = triNzArr[planeT];
             const [tx, ty, tz, bx, by, bz] = buildBasis(nx, ny, nz);
-            const px = new Float64Array(polySize);
-            const py = new Float64Array(polySize);
+            const px = arcPxScratch[g];
+            const py = arcPyScratch[g];
             for (let j = 0; j < polySize; j++) {
                 const u = poly[j];
                 const x = positions[u * 3];
@@ -622,13 +671,12 @@ const coplanarMerge = (mesh: Mesh, voxelResolution: number): Mesh => {
                 py[j] = x * bx + y * by + z * bz;
             }
 
-            const earIdx = earClip(px, py);
-            if (earIdx === null || earIdx.length !== (polySize - 2) * 3) {
+            const earCount = earClip(px, py, polySize, arcEarScratch[g], 0);
+            if (earCount !== (polySize - 2) * 3) {
                 allArcsOk = false;
                 break;
             }
-            arcPolys[g] = poly;
-            arcEars[g] = earIdx;
+            arcEarLen[g] = earCount;
         }
         if (!allArcsOk) continue;
 
@@ -658,9 +706,10 @@ const coplanarMerge = (mesh: Mesh, voxelResolution: number): Mesh => {
             const ny = triNyArr[planeT];
             const nz = triNzArr[planeT];
             const d = triDArr[planeT];
-            const earIdx = arcEars[g];
-            const poly = arcPolys[g];
-            for (let i = 0; i < earIdx.length; i += 3) {
+            const earIdx = arcEarScratch[g];
+            const earIdxLen = arcEarLen[g];
+            const poly = arcPolyScratch[g];
+            for (let i = 0; i < earIdxLen; i += 3) {
                 const ua = poly[earIdx[i]];
                 const ub = poly[earIdx[i + 1]];
                 const uc = poly[earIdx[i + 2]];
