@@ -18,11 +18,21 @@ import { fileURLToPath } from 'node:url';
 import {
     getInputFormat,
     readFile,
-    UrlReadFileSystem
+    Transform,
+    UrlReadFileSystem,
+    MemoryFileSystem,
+    WebPCodec,
+    writeSog
 } from '../src/lib/index.js';
+
+import { createMinimalTestData } from './helpers/test-utils.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(__dirname, 'fixtures', 'splat');
+
+// Required so the SOG writer/reader can locate the WebP wasm during the
+// in-process .sog round-trip test below.
+WebPCodec.wasmUrl = join(__dirname, '..', 'lib', 'webp.wasm');
 
 /**
  * Start an http server serving a fixed map of `pathname -> body`.
@@ -204,6 +214,62 @@ describe('UrlReadFileSystem (CLI integration)', () => {
             assert.ok(
                 server.requests.some(u => u.includes('token=abc')),
                 `expected querystring on at least one request, got ${JSON.stringify(server.requests)}`
+            );
+        } finally {
+            await server.close();
+        }
+    });
+
+    it('routes a .sog?token=... URL to the ZIP-container path (presigned SOG)', async () => {
+        // Regression test for the SOG dispatch in readFile(): a presigned URL
+        // like `scene.sog?token=abc` must be recognised as an outer .sog ZIP
+        // (not misrouted to the meta.json branch) and the initial fetch must
+        // carry the querystring. Generate a real bundled SOG in-memory so the
+        // ZIP container is structurally valid and gets fully decoded.
+        const testData = createMinimalTestData();
+        testData.transform = Transform.PLY.clone();
+
+        const writeFs = new MemoryFileSystem();
+        await writeSog({
+            filename: 'scene.sog',
+            dataTable: testData,
+            bundle: true,
+            iterations: 5
+        }, writeFs);
+        const sogBody = writeFs.results.get('scene.sog');
+        assert.ok(sogBody && sogBody.length > 0, 'expected non-empty .sog fixture');
+
+        const server = await startServer({ '/scene.sog': sogBody }, true);
+        try {
+            const baseUrl = `${server.url}/`;
+            const fileSystem = new UrlReadFileSystem(baseUrl);
+
+            // Filename keeps the querystring (mirrors how the CLI's
+            // resolveInput() splits a presigned URL); inputFormat is sniffed
+            // via getInputFormat() to also exercise the URL-aware extension
+            // stripping.
+            const filename = 'scene.sog?token=abc';
+            const inputFormat = getInputFormat(`${baseUrl}${filename}`);
+            assert.strictEqual(inputFormat, 'sog');
+
+            const tables = await readFile({
+                filename,
+                inputFormat,
+                options: {},
+                params: [],
+                fileSystem
+            });
+            assert.strictEqual(tables.length, 1);
+            assert.strictEqual(tables[0].numRows, testData.numRows);
+
+            // The outer .sog request must have been the one carrying the
+            // token. (Inner meta.json / WebP fetches happen against the
+            // mounted ZipReadFileSystem and never hit the network.)
+            const sogRequests = server.requests.filter(u => new URL(u, 'http://localhost').pathname === '/scene.sog');
+            assert.ok(sogRequests.length > 0, 'expected at least one /scene.sog request');
+            assert.ok(
+                sogRequests.some(u => u.includes('token=abc')),
+                `expected querystring on /scene.sog request, got ${JSON.stringify(sogRequests)}`
             );
         } finally {
             await server.close();

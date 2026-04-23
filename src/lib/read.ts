@@ -29,17 +29,20 @@ type InputFormat = 'mjs' | 'ksplat' | 'splat' | 'sog' | 'ply' | 'spz' | 'lcc';
  * const format2 = getInputFormat('scene.splat');  // returns 'splat'
  * ```
  */
-// For http(s):// URL inputs only, strip a trailing `?...` querystring and/or
-// `#...` fragment so that extension sniffing works for presigned URLs like
-// `scene.sog?token=...`. Local paths are returned unchanged - on POSIX, `?`
-// and `#` are valid characters in file/directory names and must not be
-// truncated.
+// Strip a trailing `?...` querystring and/or `#...` fragment from the
+// *basename* so that extension sniffing works for URL-shaped inputs:
+//   - full URLs:   `https://host/scene.sog?token=...`
+//   - CLI splits:  `scene.sog?token=...` (resolveInput passes the bare leaf
+//                  + query down to readFile so the initial fetch carries it)
+// Only the basename (text after the last `/` or `\`) is considered, so
+// POSIX paths containing `?` or `#` in *directory* segments are left
+// untouched. Local files literally named with `?`/`#` in the basename are
+// an unsupported edge case (the extension would be ambiguous anyway).
 const stripQueryAndHash = (filename: string): string => {
-    if (!/^https?:\/\//i.test(filename)) {
-        return filename;
-    }
-    const q = filename.search(/[?#]/);
-    return q < 0 ? filename : filename.slice(0, q);
+    const lastSep = Math.max(filename.lastIndexOf('/'), filename.lastIndexOf('\\'));
+    const basenameStart = lastSep + 1;
+    const q = filename.slice(basenameStart).search(/[?#]/);
+    return q < 0 ? filename : filename.slice(0, basenameStart + q);
 };
 
 const getInputFormat = (filename: string): InputFormat => {
