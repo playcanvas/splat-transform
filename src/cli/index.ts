@@ -654,26 +654,49 @@ const main = async () => {
         logger.info(`${fmtCount(dataTable.numRows)} gaussians \u00b7 ${getSHBands(dataTable)} SH bands \u00b7 ${fmtBytes(dataTable.byteLength)}`);
     };
 
-    process.on('uncaughtException', (err) => {
+    // Centralised failure exit: emits the error, the final timing/peak-mem
+    // line, and terminates with status 1. Used by every non-success exit
+    // path (early arg/overwrite checks, the main try/catch, and the
+    // top-level uncaught{Exception,Rejection} handlers) so peak rss is
+    // always reported on failure - matching the success path.
+    const failExit = (err: unknown): never => {
         logger.error(err);
         reportDone();
         exit(1);
-    });
-    process.on('unhandledRejection', (reason) => {
-        logger.error(reason);
-        reportDone();
-        exit(1);
-    });
+    };
 
-    // read args
-    const { files, options } = await parseArguments();
-
-    // install text renderer and configure verbosity
+    // Install a baseline text renderer immediately so any error emitted
+    // before parseArguments() completes (including from the top-level
+    // exception handlers below, or from parseArguments() itself) is
+    // actually visible. The default logger renderer is a NullRenderer
+    // that drops every event silently. The `--mem` overlay is layered
+    // on later once we've parsed the flag.
     logger.setRenderer(new TextRenderer({
         write: chunk => process.stderr.write(chunk),
-        output: chunk => process.stdout.write(chunk),
-        getMemoryUsage: options.mem ? () => process.memoryUsage() : undefined
+        output: chunk => process.stdout.write(chunk)
     }));
+
+    process.on('uncaughtException', failExit);
+    process.on('unhandledRejection', failExit);
+
+    // read args
+    let files: File[];
+    let options: CliOptions;
+    try {
+        ({ files, options } = await parseArguments());
+    } catch (err) {
+        failExit(err);
+    }
+
+    // re-install the text renderer with the memory-usage overlay if the
+    // user requested it via --mem; otherwise keep the baseline renderer.
+    if (options.mem) {
+        logger.setRenderer(new TextRenderer({
+            write: chunk => process.stderr.write(chunk),
+            output: chunk => process.stdout.write(chunk),
+            getMemoryUsage: () => process.memoryUsage()
+        }));
+    }
     if (options.quiet) {
         logger.setVerbosity('quiet');
     } else if (options.verbose) {
@@ -723,8 +746,7 @@ const main = async () => {
             exit(0);
         }
         // invalid invocation: route usage to stderr as an error
-        logger.error(formattedUsage);
-        exit(1);
+        failExit(formattedUsage);
     }
 
     const inputArgs = files.slice(0, -1);
@@ -746,8 +768,7 @@ const main = async () => {
         } else {
             // check overwrite before doing any work
             if (await fileExists(outputFilename)) {
-                logger.error(`File '${outputFilename}' already exists. Use -w option to overwrite.`);
-                exit(1);
+                failExit(`File '${outputFilename}' already exists. Use -w option to overwrite.`);
             }
 
             // for unbundled HTML, also check for additional files
@@ -763,8 +784,7 @@ const main = async () => {
 
                 for (const file of filesToCheck) {
                     if (await fileExists(file)) {
-                        logger.error(`File '${file}' already exists. Use -w option to overwrite.`);
-                        exit(1);
+                        failExit(`File '${file}' already exists. Use -w option to overwrite.`);
                     }
                 }
             }
@@ -893,10 +913,7 @@ const main = async () => {
             phase.end();
         }
     } catch (err) {
-        // handle errors
-        logger.error(err);
-        reportDone();
-        exit(1);
+        failExit(err);
     }
 
     reportDone();
