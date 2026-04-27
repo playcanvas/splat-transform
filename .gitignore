@@ -4,4 +4,3 @@ docs
 .DS_Store
 scenes/
 .cursor/
-src/lib/version.ts

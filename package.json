@@ -52,6 +52,7 @@
     "@playcanvas/supersplat-viewer": "1.20.2",
     "@rollup/plugin-json": "6.1.0",
     "@rollup/plugin-node-resolve": "16.0.3",
+    "@rollup/plugin-replace": "6.0.3",
     "@rollup/plugin-typescript": "12.3.0",
     "@types/node": "24.12.2",
     "@typescript-eslint/eslint-plugin": "8.59.0",
@@ -72,12 +73,6 @@
     "playcanvas": "^2.0.0"
   },
   "scripts": {
-    "gen-version": "node scripts/gen-version.mjs",
-    "prebuild": "npm run gen-version",
-    "predocs": "npm run gen-version",
-    "prelint": "npm run gen-version",
-    "prelint:fix": "npm run gen-version",
-    "pretest": "npm run gen-version",
     "build": "rollup -c && node -e \"fs=require('fs');fs.copyFileSync('dist/lib/index.d.ts','dist/lib/index.d.cts')\"",
     "docs": "typedoc",
     "lint": "eslint src",

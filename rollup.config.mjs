@@ -1,8 +1,27 @@
+import { execSync } from 'node:child_process';
+
 import json from '@rollup/plugin-json';
 import resolve from '@rollup/plugin-node-resolve';
+import replace from '@rollup/plugin-replace';
 import typescript from '@rollup/plugin-typescript';
 
-import './scripts/gen-version.mjs';
+import pkg from './package.json' with { type: 'json' };
+
+const revision = (() => {
+    try {
+        return execSync('git rev-parse --short HEAD').toString().trim();
+    } catch (e) {
+        return 'unknown';
+    }
+})();
+
+const versionReplace = () => replace({
+    preventAssignment: true,
+    values: {
+        $_CURRENT_VERSION: pkg.version,
+        $_CURRENT_REVISION: revision
+    }
+});
 
 // Library build - ESM (platform agnostic)
 const esm = {
@@ -15,6 +34,7 @@ const esm = {
     },
     external: ['playcanvas'],
     plugins: [
+        versionReplace(),
         typescript({
             tsconfig: './tsconfig.json',
             declaration: true,
@@ -38,6 +58,7 @@ const cjs = {
     },
     external: ['playcanvas'],
     plugins: [
+        versionReplace(),
         typescript({
             tsconfig: './tsconfig.json',
             declaration: false,
@@ -60,6 +81,7 @@ const cli = {
     },
     external: ['webgpu'],
     plugins: [
+        versionReplace(),
         typescript({
             tsconfig: './tsconfig.json',
             declaration: false,
