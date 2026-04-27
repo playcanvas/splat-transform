@@ -694,7 +694,7 @@ const main = async () => {
         const rawMaxRss = process.resourceUsage().maxRSS;
         const maxRssBytes = process.platform === 'win32' ? rawMaxRss : rawMaxRss * 1024;
         const verb = failed ? 'failed in' : 'done in';
-        const line = `${verb} ${fmtTime(elapsedMs)}  [peak mem: ${fmtBytes(maxRssBytes)}]`;
+        const line = `${verb} ${fmtTime(elapsedMs)}  [peak ${fmtBytes(maxRssBytes)}]`;
         if (failed) {
             logger.error(line);
         } else {
