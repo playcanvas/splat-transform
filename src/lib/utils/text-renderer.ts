@@ -1,5 +1,5 @@
 import { fmtBytes, fmtTime } from './fmt';
-import type { LogEvent, Renderer } from './logger';
+import { logger, verbosityRank, type LogEvent, type Renderer } from './logger';
 
 /**
  * Output streams and optional memory-usage probe for {@link TextRenderer}.
@@ -32,20 +32,27 @@ const BAR_WIDTH = 20;
 
 /**
  * Default human-readable text renderer. Emits one event per line - no
- * carriage-return rewriting, no TTY detection, no buffering. Scope starts
- * always emit a header line; successful `scopeEnd` footers are filtered
- * out at `normal` verbosity by `LoggerCore` (kept at `verbose`, and always
- * shown when `failed`), so default-mode runs see headers without timing
- * footers and `--verbose` adds the matching `done in ...` lines. Bars
- * render as `[#### ...... ] duration`, with `#` appended incrementally on
- * each `barTick` and the remainder padded with `.` on `barEnd`. `output`
+ * carriage-return rewriting, no TTY detection, no buffering. Bars render
+ * as `[#### ...... ] duration`, with `#` appended incrementally on each
+ * `barTick` and the remainder padded with `.` on `barEnd`. `output`
  * events are treated as line-oriented: their text is written to the
  * pipeable sink with a trailing `\n` appended (callers should not include
  * one themselves).
  *
- * Verbosity filtering is handled centrally by `LoggerCore` - this renderer
- * receives only events that have already passed the visibility gate, so it
- * is pure presentation.
+ * Verbosity is consulted directly from the shared {@link logger} on each
+ * event, so this renderer alone decides what to display - the core
+ * delivers every scope/bar lifecycle event so embedders consuming the
+ * event stream see a faithful record. The display rules are:
+ *
+ * - `quiet` - suppresses every scope/bar lifecycle line (start, tick,
+ *   end - including failed ends). Errors, warnings and `output` still
+ *   show.
+ * - `normal` (default) - shows scope/bar headers and bar progress;
+ *   shows failed `scopeEnd` / `barEnd` footers (the "failed in ..."
+ *   cascade from `logger.error` / `unwindAll(true)`); hides successful
+ *   `scopeEnd` footers.
+ * - `verbose` - shows everything, including successful `scopeEnd`
+ *   footers ("done in ...").
  *
  * Sinks are injected (no `process` reference here) so the renderer works in
  * both Node CLI and browser/bundle contexts: the CLI passes
@@ -74,9 +81,14 @@ class TextRenderer implements Renderer {
         this.getMemoryUsage = options.getMemoryUsage;
     }
 
+    private rank(): number {
+        return verbosityRank[logger.getVerbosity()];
+    }
+
     handle(event: LogEvent): void {
         switch (event.kind) {
             case 'scopeStart': {
+                if (this.rank() < verbosityRank.normal) return;
                 this.commitDirty();
                 const numbered = event.index !== undefined && event.total !== undefined ?
                     `[${event.index}/${event.total}] ` : '';
@@ -84,12 +96,19 @@ class TextRenderer implements Renderer {
                 return;
             }
             case 'scopeEnd': {
+                const rank = this.rank();
+                if (event.failed) {
+                    if (rank < verbosityRank.normal) return;
+                } else if (rank < verbosityRank.verbose) {
+                    return;
+                }
                 this.commitDirty();
                 const verb = event.failed ? 'failed in' : 'done in';
                 this.write(`${indent(event.depth + 1)}${verb} ${fmtTime(event.durationMs)}${this.memSuffix()}\n`);
                 return;
             }
             case 'barStart': {
+                if (this.rank() < verbosityRank.normal) return;
                 this.commitDirty();
                 this.write(`${indent(event.depth)}\u25b8 ${event.name} [`);
                 this.lineDirty = true;
@@ -98,6 +117,7 @@ class TextRenderer implements Renderer {
             }
             case 'barTick': {
                 if (!this.lineDirty) return;
+                if (this.rank() < verbosityRank.normal) return;
                 const target = event.total <= 0 ? 0 :
                     Math.min(BAR_WIDTH, Math.floor((event.current / event.total) * BAR_WIDTH));
                 if (target > this.barFilled) {
@@ -107,6 +127,7 @@ class TextRenderer implements Renderer {
                 return;
             }
             case 'barEnd': {
+                if (this.rank() < verbosityRank.normal) return;
                 const suffix = event.failed ?
                     `] (failed) ${fmtTime(event.durationMs)}` :
                     `] ${fmtTime(event.durationMs)}`;

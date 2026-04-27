@@ -38,10 +38,19 @@ type LogEvent =
     | { kind: 'output'; text: string };
 
 /**
- * Renderer interface. Receives semantic events (already filtered by the
- * active verbosity inside {@link LoggerCore}) and decides how to display
- * them. Renderers are pure presentation - they never need to consult or
- * track verbosity themselves.
+ * Renderer interface. Receives the full stream of semantic lifecycle
+ * events ({@link LogEvent}) and decides how to display them. The core
+ * does not filter scope/bar events by verbosity, so renderers see a
+ * faithful record of every scope open/close and bar progress update -
+ * embedders consuming the event stream can rely on this for progress
+ * UIs that must close themselves on completion. Visibility decisions
+ * (e.g. hiding successful `scopeEnd` footers at non-`verbose`
+ * verbosity) are the renderer's responsibility; {@link logger.getVerbosity}
+ * is available to consult.
+ *
+ * `message` events for `info`, `warn` and `debug` are gated by verbosity
+ * at the façade (see {@link LoggerCore.isLevelVisible}) before reaching
+ * the renderer; `error` is always delivered.
  */
 interface Renderer {
     /**
@@ -206,35 +215,19 @@ class LoggerCore {
     }
 
     /**
-     * Gate events by the current verbosity, then hand survivors to the
-     * renderer. Renderers see only visible events and never need to know
-     * about verbosity themselves.
+     * Hand the event to the renderer. Lifecycle events (`scopeStart`,
+     * `scopeEnd`, `barStart`, `barTick`, `barEnd`) and `output` are always
+     * forwarded; presentation policy (e.g. hiding successful `scopeEnd`
+     * footers at non-`verbose` verbosity) lives in the renderer so
+     * embedders consuming the event stream see a complete, faithful
+     * record of scope and bar lifecycles. `message` is assumed already
+     * gated at the façade via {@link LoggerCore.isLevelVisible} (so
+     * callers can skip formatting args for filtered levels); anything
+     * that reaches here is passed through.
      *
-     * - `output` is always shown (it's the pipeable channel).
-     * - `message` is assumed already gated at the façade via
-     *   {@link LoggerCore.isLevelVisible} (so callers can skip formatting
-     *   args for filtered levels); anything that reaches here is passed
-     *   through.
-     * - `scopeEnd` footers are noisy on the success path, so success-ends
-     *   are gated one rank higher than their matching start: visible only
-     *   at `verbose`, while `scopeStart` shows at `normal`. Failed ends
-     *   stay at the `normal` gate so the "failed in Xs" cascade from
-     *   `logger.error` / `unwindAll(true)` survives whenever scope
-     *   output is visible at all.
-     * - All other scope/bar events (`scopeStart`, `barStart`, `barTick`,
-     *   `barEnd`) are gated at `normal`.
-     *
-     * @param event - The candidate event.
+     * @param event - The event to deliver.
      */
     emit(event: LogEvent): void {
-        if (event.kind !== 'output' && event.kind !== 'message') {
-            const rank = verbosityRank[this.verbosity];
-            if (event.kind === 'scopeEnd' && !event.failed) {
-                if (rank < verbosityRank.verbose) return;
-            } else if (rank < verbosityRank.normal) {
-                return;
-            }
-        }
         this.renderer.handle(event);
     }
 
@@ -510,7 +503,10 @@ const logger = {
 
     /**
      * Replace the active renderer. Embedders install their own renderer here
-     * to consume `LogEvent`s; the default renderer is a no-op.
+     * to consume `LogEvent`s; the default renderer is a no-op. Renderers
+     * receive every scope/bar lifecycle event regardless of verbosity, so
+     * progress UIs can rely on `scopeStart`/`scopeEnd` and `barStart`/`barEnd`
+     * to manage their state.
      * @param r - The renderer to install.
      */
     setRenderer(r: Renderer): void {
@@ -552,5 +548,5 @@ const logger = {
  */
 type Logger = typeof logger;
 
-export { logger };
+export { logger, verbosityRank };
 export type { Bar, Group, LogEvent, Logger, MessageKind, Renderer, Verbosity };
