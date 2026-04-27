@@ -548,5 +548,5 @@ const logger = {
  */
 type Logger = typeof logger;
 
-export { logger };
+export { logger, verbosityRank };
 export type { Bar, Group, LogEvent, Logger, MessageKind, Renderer, Verbosity };

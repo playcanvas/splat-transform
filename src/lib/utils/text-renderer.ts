@@ -1,5 +1,5 @@
 import { fmtBytes, fmtTime } from './fmt';
-import { logger, type LogEvent, type Renderer, type Verbosity } from './logger';
+import { logger, verbosityRank, type LogEvent, type Renderer } from './logger';
 
 /**
  * Output streams and optional memory-usage probe for {@link TextRenderer}.
@@ -26,25 +26,15 @@ interface TextRendererOptions {
     getMemoryUsage?: () => { rss: number; heapUsed: number; arrayBuffers: number };
 }
 
-const verbosityRank: Record<Verbosity, number> = {
-    quiet: 0,
-    normal: 1,
-    verbose: 2
-};
-
 const indent = (depth: number): string => '  '.repeat(Math.max(0, depth));
 
 const BAR_WIDTH = 20;
 
 /**
  * Default human-readable text renderer. Emits one event per line - no
- * carriage-return rewriting, no TTY detection, no buffering. Scope starts
- * always emit a header line; successful `scopeEnd` footers are hidden by
- * this renderer at `normal` verbosity (shown at `verbose`, and always
- * shown when `failed`), so default-mode runs see headers without timing
- * footers and `--verbose` adds the matching `done in ...` lines. Bars
- * render as `[#### ...... ] duration`, with `#` appended incrementally on
- * each `barTick` and the remainder padded with `.` on `barEnd`. `output`
+ * carriage-return rewriting, no TTY detection, no buffering. Bars render
+ * as `[#### ...... ] duration`, with `#` appended incrementally on each
+ * `barTick` and the remainder padded with `.` on `barEnd`. `output`
  * events are treated as line-oriented: their text is written to the
  * pipeable sink with a trailing `\n` appended (callers should not include
  * one themselves).
@@ -52,8 +42,17 @@ const BAR_WIDTH = 20;
  * Verbosity is consulted directly from the shared {@link logger} on each
  * event, so this renderer alone decides what to display - the core
  * delivers every scope/bar lifecycle event so embedders consuming the
- * event stream see a faithful record. At `quiet` the renderer suppresses
- * every scope/bar line (errors, warnings and `output` still show).
+ * event stream see a faithful record. The display rules are:
+ *
+ * - `quiet` - suppresses every scope/bar lifecycle line (start, tick,
+ *   end - including failed ends). Errors, warnings and `output` still
+ *   show.
+ * - `normal` (default) - shows scope/bar headers and bar progress;
+ *   shows failed `scopeEnd` / `barEnd` footers (the "failed in ..."
+ *   cascade from `logger.error` / `unwindAll(true)`); hides successful
+ *   `scopeEnd` footers.
+ * - `verbose` - shows everything, including successful `scopeEnd`
+ *   footers ("done in ...").
  *
  * Sinks are injected (no `process` reference here) so the renderer works in
  * both Node CLI and browser/bundle contexts: the CLI passes
