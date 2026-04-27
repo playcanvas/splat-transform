@@ -7,7 +7,6 @@ import { GraphicsDevice, Vec3 } from 'playcanvas';
 
 import { createDevice, enumerateAdapters } from './node-device';
 import { NodeFileSystem, NodeReadFileSystem } from './node-file-system';
-import { version } from '../../package.json';
 import {
     combine,
     DataTable,
@@ -20,8 +19,10 @@ import {
     getOutputFormat,
     writeFile,
     processDataTable,
+    revision,
     TextRenderer,
     UrlReadFileSystem,
+    version,
     type ProcessAction,
     type FilterFloaters,
     type FilterCluster,
@@ -768,7 +769,7 @@ const main = async () => {
         logger.setVerbosity('normal');
     }
 
-    logger.info(`splat-transform v${version}`);
+    logger.info(`splat-transform v${version} (${revision})`);
 
     // show version and exit
     if (options.version) {

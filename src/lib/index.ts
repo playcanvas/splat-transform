@@ -56,3 +56,6 @@ export type { NavSeed, NavSimplifyResult } from './voxel';
 
 // Types
 export type { Options, Param, DeviceCreator } from './types';
+
+// Version
+export { version, revision } from './version';

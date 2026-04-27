@@ -1,12 +1,12 @@
 import { basename, dirname, resolve } from 'pathe';
 
 import { logWrittenFile } from './utils';
-import { version } from '../../../package.json';
 import { Column, DataTable, sortMortonOrder, convertToSpace, getSHBands, shRestNames } from '../data-table';
 import { type FileSystem, writeFile, ZipFileSystem } from '../io/write';
 import { kmeans, quantize1d } from '../spatial';
 import type { DeviceCreator } from '../types';
 import { logger, sigmoid, Transform, WebPCodec } from '../utils';
+import { version } from '../version';
 
 const calcMinMax = (dataTable: DataTable, columnNames: string[], indices: Uint32Array) => {
     const columns = columnNames.map(name => dataTable.getColumnByName(name));
