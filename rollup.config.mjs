@@ -1,11 +1,12 @@
 import { execSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 
 import json from '@rollup/plugin-json';
 import resolve from '@rollup/plugin-node-resolve';
 import typescript from '@rollup/plugin-typescript';
 
-const pkg = JSON.parse(readFileSync('./package.json', 'utf-8'));
+import pkg from './package.json' with { type: 'json' };
+
 let revision = 'unknown';
 try {
     revision = execSync('git rev-parse --short HEAD').toString().trim();
