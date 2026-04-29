@@ -19,9 +19,9 @@ interface TextRendererOptions {
      */
     output?: (chunk: string) => void;
     /**
-     * Optional memory probe. When provided, scope-end and bar-end lines
-     * gain a `[rss: X, heap: X, ab: X]` overlay. Use `process.memoryUsage`
-     * in Node, or omit for a clean view.
+     * Optional memory probe. Used by the `[rss: X, heap: X, ab: X]`
+     * overlay gated by the renderer's `mem` field. Use
+     * `process.memoryUsage` in Node.
      */
     getMemoryUsage?: () => { rss: number; heapUsed: number; arrayBuffers: number };
 }
@@ -65,6 +65,15 @@ class TextRenderer implements Renderer {
     private readonly output: (chunk: string) => void;
 
     private readonly getMemoryUsage?: () => { rss: number; heapUsed: number; arrayBuffers: number };
+
+    /**
+     * When true, scope-end and bar-end lines gain a
+     * `[rss: X, heap: X, ab: X]` suffix sourced from
+     * {@link TextRendererOptions.getMemoryUsage}. No effect when the
+     * probe is omitted. Mutable so the host can toggle the overlay
+     * without re-installing the renderer.
+     */
+    mem = false;
 
     /** True while a bar header has been written without its closing `\n`. */
     private lineDirty = false;
@@ -181,7 +190,7 @@ class TextRenderer implements Renderer {
     }
 
     private memSuffix(): string {
-        if (!this.getMemoryUsage) return '';
+        if (!this.mem || !this.getMemoryUsage) return '';
         const m = this.getMemoryUsage();
         return `  [rss: ${fmtBytes(m.rss)}, heap: ${fmtBytes(m.heapUsed)}, ab: ${fmtBytes(m.arrayBuffers)}]`;
     }

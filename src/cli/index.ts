@@ -41,6 +41,7 @@ interface CliOptions extends LibOptions {
     quiet: boolean;
     verbose: boolean;
     mem: boolean;
+    noTty: boolean;
     listGpus: boolean;
     deviceIdx: number;  // -1 = auto, -2 = CPU, 0+ = GPU index
 }
@@ -121,6 +122,7 @@ const cliOptionsConfig = {
     quiet: { type: 'boolean', short: 'q', default: false },
     verbose: { type: 'boolean', default: false },
     mem: { type: 'boolean', default: false },
+    tty: { type: 'boolean', default: true },
     iterations: { type: 'string', short: 'i', default: '10' },
     'list-gpus': { type: 'boolean', short: 'L', default: false },
     gpu: { type: 'string', short: 'g', default: '-1' },
@@ -352,6 +354,7 @@ const parseArguments = async () => {
         quiet: v.quiet,
         verbose: v.verbose,
         mem: v.mem,
+        noTty: !v.tty,
         iterations: parseInteger(v.iterations),
         listGpus: v['list-gpus'],
         deviceIdx,
@@ -623,6 +626,7 @@ GLOBAL OPTIONS
     -q, --quiet                             Suppress non-error output
         --verbose                           Show debug-level diagnostics
         --mem                               Show memory usage in progress output
+        --no-tty                            Force non-interactive output (auto when stderr is not a TTY)
     -w, --overwrite                         Overwrite output file if it exists
     -i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10
     -L, --list-gpus                         List available GPU adapters and exit
@@ -725,16 +729,28 @@ const main = async () => {
         exit(1);
     };
 
-    // Install a baseline text renderer immediately so any error emitted
-    // before parseArguments() completes (including from the top-level
-    // exception handlers below, or from parseArguments() itself) is
-    // actually visible. The default logger renderer is a NullRenderer
-    // that drops every event silently. The `--mem` overlay is layered
-    // on later once we've parsed the flag.
-    logger.setRenderer(new TextRenderer({
-        write: chunk => process.stderr.write(chunk),
-        output: chunk => process.stdout.write(chunk)
-    }));
+    let noTty = !process.stderr.isTTY;
+    let lineBuf = '';
+
+    const write = (chunk: string) => {
+        if (noTty) {
+            lineBuf += chunk;
+            const lastNL = lineBuf.lastIndexOf('\n');
+            if (lastNL !== -1) {
+                process.stderr.write(lineBuf.slice(0, lastNL + 1));
+                lineBuf = lineBuf.slice(lastNL + 1);
+            }
+        } else {
+            process.stderr.write(chunk);
+        }
+    };
+
+    const renderer = new TextRenderer({
+        write,
+        output: chunk => process.stdout.write(chunk),
+        getMemoryUsage: () => process.memoryUsage()
+    });
+    logger.setRenderer(renderer);
 
     process.on('uncaughtException', (err, origin) => {
         failExit(err, `uncaughtException (${origin})`);
@@ -752,15 +768,11 @@ const main = async () => {
         failExit(err);
     }
 
-    // re-install the text renderer with the memory-usage overlay if the
-    // user requested it via --mem; otherwise keep the baseline renderer.
-    if (options.mem) {
-        logger.setRenderer(new TextRenderer({
-            write: chunk => process.stderr.write(chunk),
-            output: chunk => process.stdout.write(chunk),
-            getMemoryUsage: () => process.memoryUsage()
-        }));
-    }
+    // Apply post-parse flags. `--no-tty` forces line buffering even on a
+    // TTY (for backends that report stderr as a TTY but aren't really).
+    noTty ||= options.noTty;
+    renderer.mem = options.mem;
+
     if (options.quiet) {
         logger.setVerbosity('quiet');
     } else if (options.verbose) {
