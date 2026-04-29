@@ -626,7 +626,7 @@ GLOBAL OPTIONS
     -q, --quiet                             Suppress non-error output
         --verbose                           Show debug-level diagnostics
         --mem                               Show memory usage in progress output
-        --no-tty                            Force non-interactive output (auto when stderr is not a TTY)
+        --tty                               Interactive bar rendering (default on a TTY; --no-tty to disable)
     -w, --overwrite                         Overwrite output file if it exists
     -i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10
     -L, --list-gpus                         List available GPU adapters and exit
@@ -687,19 +687,23 @@ EXAMPLES
 const main = async () => {
     const startTime = performance.now();
 
-    // Emit the final timing line plus the kernel-tracked peak resident set
-    // size. `process.resourceUsage().maxRSS` is reported in kilobytes on
+    // Kernel-tracked peak resident set size in bytes.
+    // `process.resourceUsage().maxRSS` is reported in kilobytes on
     // Linux/macOS and bytes on Windows; normalize to bytes for fmtBytes.
     // Note: V8 fatal OOM (`FATAL ERROR: Reached heap limit`) and external
     // SIGKILL bypass all JS handlers (uncaughtException, beforeExit, exit),
     // so peak rss cannot be reported in those cases - use an external wrapper
     // such as `/usr/bin/time -l` (macOS) or `/usr/bin/time -v` (Linux).
+    const peakMemoryBytes = (): number => {
+        const raw = process.resourceUsage().maxRSS;
+        return process.platform === 'win32' ? raw : raw * 1024;
+    };
+
+    // Emit the final timing line plus peak memory usage.
     const reportDone = (failed = false) => {
         const elapsedMs = performance.now() - startTime;
-        const rawMaxRss = process.resourceUsage().maxRSS;
-        const maxRssBytes = process.platform === 'win32' ? rawMaxRss : rawMaxRss * 1024;
         const verb = failed ? 'failed in' : 'done in';
-        const line = `${verb} ${fmtTime(elapsedMs)}  [peak ${fmtBytes(maxRssBytes)}]`;
+        const line = `${verb} ${fmtTime(elapsedMs)}  [peak ${fmtBytes(peakMemoryBytes())}]`;
         if (failed) {
             logger.error(line);
         } else {
@@ -755,7 +759,7 @@ const main = async () => {
     const renderer = new TextRenderer({
         write,
         output: chunk => process.stdout.write(chunk),
-        getMemoryUsage: () => process.memoryUsage()
+        getPeakMemory: peakMemoryBytes
     });
     logger.setRenderer(renderer);
 

@@ -107,7 +107,7 @@ Actions can be repeated and applied in any order:
 -q, --quiet                             Suppress non-error output
     --verbose                           Show debug-level diagnostics
     --mem                               Show memory usage in progress output
-    --no-tty                            Force non-interactive output (auto when stderr is not a TTY)
+    --tty                               Interactive bar rendering (default on a TTY; --no-tty to disable)
 -w, --overwrite                         Overwrite output file if it exists
 -i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10
 -L, --list-gpus                         List available GPU adapters and exit

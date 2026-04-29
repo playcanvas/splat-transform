@@ -24,11 +24,13 @@ interface TextRendererOptions {
      */
     output?: (chunk: string) => void;
     /**
-     * Optional memory probe. Used by the `[rss: X, heap: X, ab: X]`
-     * overlay gated by the renderer's `mem` field. Use
-     * `process.memoryUsage` in Node.
+     * Optional peak-memory probe in bytes. Used by the `[peak X]`
+     * overlay gated by the renderer's `mem` field. In Node this is
+     * typically derived from `process.resourceUsage().maxRSS` (which
+     * is kernel-tracked and reflects the whole process - including
+     * ArrayBuffers - rather than just the V8 heap).
      */
-    getMemoryUsage?: () => { rss: number; heapUsed: number; arrayBuffers: number };
+    getPeakMemory?: () => number;
 }
 
 const indent = (depth: number): string => '  '.repeat(Math.max(0, depth));
@@ -69,16 +71,15 @@ class TextRenderer implements Renderer {
 
     private readonly output: (chunk: string) => void;
 
-    private readonly getMemoryUsage?: () => { rss: number; heapUsed: number; arrayBuffers: number };
+    private readonly getPeakMemory?: () => number;
 
     /**
-     * When true, scope-end and bar-end lines gain a
-     * `[rss: X, heap: X, ab: X]` suffix sourced from
-     * {@link TextRendererOptions.getMemoryUsage}. No effect when the
-     * probe is omitted. Defaults to `true` when `getMemoryUsage` is
-     * provided so embedders that supply a probe see the overlay
-     * automatically (matching the prior behavior). Mutable so the
-     * host can toggle the overlay without re-installing the renderer.
+     * When true, scope-end and bar-end lines gain a `[peak X]` suffix
+     * sourced from {@link TextRendererOptions.getPeakMemory}. No
+     * effect when the probe is omitted. Defaults to `true` when
+     * `getPeakMemory` is provided so embedders that supply a probe
+     * see the overlay automatically. Mutable so the host can toggle
+     * the overlay without re-installing the renderer.
      */
     mem: boolean;
 
@@ -94,8 +95,8 @@ class TextRenderer implements Renderer {
     constructor(options: TextRendererOptions) {
         this.write = options.write;
         this.output = options.output ?? options.write;
-        this.getMemoryUsage = options.getMemoryUsage;
-        this.mem = options.getMemoryUsage !== undefined;
+        this.getPeakMemory = options.getPeakMemory;
+        this.mem = options.getPeakMemory !== undefined;
     }
 
     private rank(): number {
@@ -198,9 +199,8 @@ class TextRenderer implements Renderer {
     }
 
     private memSuffix(): string {
-        if (!this.mem || !this.getMemoryUsage) return '';
-        const m = this.getMemoryUsage();
-        return `  [rss: ${fmtBytes(m.rss)}, heap: ${fmtBytes(m.heapUsed)}, ab: ${fmtBytes(m.arrayBuffers)}]`;
+        if (!this.mem || !this.getPeakMemory) return '';
+        return `  [peak ${fmtBytes(this.getPeakMemory())}]`;
     }
 }
 
