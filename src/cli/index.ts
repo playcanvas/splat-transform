@@ -729,6 +729,12 @@ const main = async () => {
         exit(1);
     };
 
+    // stderr sink for the renderer. When `noTty` is on, line-buffer so the
+    // renderer's partial-line bar sequence (`▸ name [` + `#` ticks +
+    // `....] dur\n`) lands as one complete line per bar - what non-
+    // interactive log viewers want. Defaults to auto-detection from
+    // `stderr.isTTY`; the `--no-tty` flag below ORs it on for backends
+    // that report a TTY but aren't really interactive.
     let noTty = !process.stderr.isTTY;
     let lineBuf = '';
 

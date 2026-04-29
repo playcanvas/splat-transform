@@ -7,8 +7,13 @@ import { logger, verbosityRank, type LogEvent, type Renderer } from './logger';
 interface TextRendererOptions {
     /**
      * Receives all status chunks (scopes, bars, messages). May contain
-     * partial-line writes - hand this to a stream that flushes on partials
-     * (e.g. `process.stderr.write.bind(process.stderr)` in Node).
+     * partial-line writes (e.g. progress-bar `#` ticks). For TTY output,
+     * hand this to a stream that flushes on partials
+     * (`process.stderr.write.bind(process.stderr)` in Node) so bars
+     * render in place. For non-interactive output (CI logs, file
+     * redirects), wrap in a line buffer that holds chunks until a `\n`
+     * arrives - the bar's incremental writes then coalesce into a single
+     * complete line per bar.
      */
     write: (chunk: string) => void;
     /**
