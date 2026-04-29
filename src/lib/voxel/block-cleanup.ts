@@ -62,7 +62,7 @@ function filterAndFillBlocks(buffer: BlockMaskBuffer): BlockMaskBuffer {
     }
 
     // New masks array (snapshot: cross-block lookups always read the original masks)
-    const newMasks = new Array<number>(masks.length);
+    const newMasks = new Uint32Array(masks.length);
     let voxelsRemoved = 0;
     let voxelsFilled = 0;
 
@@ -188,7 +188,7 @@ function addCrossFace(
     nx: number, ny: number, nz: number,
     solidSet: Set<number>,
     mixedMap: Map<number, number>,
-    masks: number[],
+    masks: Uint32Array,
     ourFaceMask: number,
     adjFaceMask: number,
     shiftAmount: number,
@@ -225,7 +225,7 @@ function addCrossFaceZ(
     nx: number, ny: number, nz: number,
     solidSet: Set<number>,
     mixedMap: Map<number, number>,
-    masks: number[],
+    masks: Uint32Array,
     plusZ: boolean,
     curLo: number, curHi: number,
     write: (lo: number, hi: number) => void

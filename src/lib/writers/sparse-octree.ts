@@ -75,6 +75,108 @@ interface LevelData {
 }
 
 // ============================================================================
+// Parallel Sort
+// ============================================================================
+
+/**
+ * Iterative quicksort with median-of-three pivot and an insertion-sort fallback
+ * for small partitions. Sorts three parallel typed arrays in place, ordering
+ * entries by `mortons` ascending.
+ *
+ * Avoids `TypedArray.prototype.sort(comparefn)` so we are not bounded by
+ * FixedArray::kMaxLength (~134M elements with V8 pointer compression).
+ *
+ * @param mortons - Morton codes; sort key.
+ * @param types - Block type per entry; permuted alongside mortons.
+ * @param maskIndices - Mask index per entry; permuted alongside mortons.
+ * @param n - Number of valid entries to sort (from index 0).
+ */
+function sortParallelByMorton(
+    mortons: Float64Array,
+    types: Uint8Array,
+    maskIndices: Int32Array,
+    n: number
+): void {
+    if (n < 2) return;
+
+    const swap = (a: number, b: number): void => {
+        const tm = mortons[a]; mortons[a] = mortons[b]; mortons[b] = tm;
+        const tt = types[a]; types[a] = types[b]; types[b] = tt;
+        const ti = maskIndices[a]; maskIndices[a] = maskIndices[b]; maskIndices[b] = ti;
+    };
+
+    // Stack holds [lo, hi] pairs. Always pushing the larger partition first
+    // bounds depth to O(log n); 64 entries (32 frames) covers n up to 2^32.
+    const stack = new Int32Array(64);
+    let sp = 0;
+    stack[sp++] = 0;
+    stack[sp++] = n - 1;
+
+    while (sp > 0) {
+        const hi = stack[--sp];
+        const lo = stack[--sp];
+
+        if (hi - lo < 16) {
+            // Insertion sort
+            for (let i = lo + 1; i <= hi; i++) {
+                const km = mortons[i], kt = types[i], ki = maskIndices[i];
+                let j = i - 1;
+                while (j >= lo && mortons[j] > km) {
+                    mortons[j + 1] = mortons[j];
+                    types[j + 1] = types[j];
+                    maskIndices[j + 1] = maskIndices[j];
+                    j--;
+                }
+                mortons[j + 1] = km;
+                types[j + 1] = kt;
+                maskIndices[j + 1] = ki;
+            }
+            continue;
+        }
+
+        // Median-of-three: order mortons[lo] <= mortons[mid] <= mortons[hi],
+        // then stash the pivot at hi-1 so the inner loop has sentinels at both ends.
+        const mid = (lo + hi) >>> 1;
+        if (mortons[lo] > mortons[mid]) swap(lo, mid);
+        if (mortons[lo] > mortons[hi]) swap(lo, hi);
+        if (mortons[mid] > mortons[hi]) swap(mid, hi);
+        swap(mid, hi - 1);
+        const pivot = mortons[hi - 1];
+
+        let i = lo;
+        let j = hi - 1;
+        while (true) {
+            while (mortons[++i] < pivot) { /* sentinel at hi */ }
+            while (mortons[--j] > pivot) { /* sentinel at lo */ }
+            if (i >= j) break;
+            swap(i, j);
+        }
+        swap(i, hi - 1);
+
+        // Push larger partition first so the smaller is processed next.
+        const leftSize = i - 1 - lo;
+        const rightSize = hi - (i + 1);
+        if (leftSize > rightSize) {
+            stack[sp++] = lo;
+            stack[sp++] = i - 1;
+            if (rightSize > 0) {
+                stack[sp++] = i + 1;
+                stack[sp++] = hi;
+            }
+        } else {
+            if (rightSize > 0) {
+                stack[sp++] = i + 1;
+                stack[sp++] = hi;
+            }
+            if (leftSize > 0) {
+                stack[sp++] = lo;
+                stack[sp++] = i - 1;
+            }
+        }
+    }
+}
+
+// ============================================================================
 // Octree Construction
 // ============================================================================
 
@@ -103,45 +205,31 @@ function buildSparseOctree(
     const totalBlocks = mixed.morton.length + solid.length;
 
     // --- Phase 1: Combine blocks into SoA arrays and sort by Morton code ---
-    // Uses typed arrays to reduce per-element memory overhead. The block scope
-    // allows the unsorted intermediates (mortons, types, maskIndices, sortOrder)
-    // to be GC'd before Phase 2 begins.
+    // Sort the three parallel typed arrays in place. We avoid
+    // TypedArray.prototype.sort with a comparefn because V8 routes that
+    // through a regular-array path bounded by FixedArray::kMaxLength
+    // (~134M with pointer compression) and throws
+    // `Custom comparefn not supported for huge TypedArrays` past it.
 
-    let sortedMortons!: Float64Array;
-    let sortedTypes!: Uint8Array;
-    let sortedMaskIndices!: Int32Array;
+    const sortedMortons = new Float64Array(totalBlocks);
+    const sortedTypes = new Uint8Array(totalBlocks);
+    const sortedMaskIndices = new Int32Array(totalBlocks);
     {
-        const mortons = new Float64Array(totalBlocks);
-        const types = new Uint8Array(totalBlocks);
-        const maskIndices = new Int32Array(totalBlocks);
-
         let idx = 0;
         for (let i = 0; i < mixed.morton.length; i++) {
-            mortons[idx] = mixed.morton[i];
-            types[idx] = BlockType.Mixed;
-            maskIndices[idx] = i;
+            sortedMortons[idx] = mixed.morton[i];
+            sortedTypes[idx] = BlockType.Mixed;
+            sortedMaskIndices[idx] = i;
             idx++;
         }
         for (let i = 0; i < solid.length; i++) {
-            mortons[idx] = solid[i];
-            types[idx] = BlockType.Solid;
-            maskIndices[idx] = -1;
+            sortedMortons[idx] = solid[i];
+            sortedTypes[idx] = BlockType.Solid;
+            sortedMaskIndices[idx] = -1;
             idx++;
         }
 
-        const sortOrder = new Uint32Array(totalBlocks);
-        for (let i = 0; i < totalBlocks; i++) sortOrder[i] = i;
-        sortOrder.sort((a: number, b: number) => mortons[a] - mortons[b]);
-
-        sortedMortons = new Float64Array(totalBlocks);
-        sortedTypes = new Uint8Array(totalBlocks);
-        sortedMaskIndices = new Int32Array(totalBlocks);
-        for (let i = 0; i < totalBlocks; i++) {
-            const si = sortOrder[i];
-            sortedMortons[i] = mortons[si];
-            sortedTypes[i] = types[si];
-            sortedMaskIndices[i] = maskIndices[si];
-        }
+        sortParallelByMorton(sortedMortons, sortedTypes, sortedMaskIndices, totalBlocks);
     }
 
     const tSort = performance.now();
@@ -279,7 +367,7 @@ function buildSparseOctree(
     // Uses wave-based BFS on level arrays, avoiding BuildNode objects
     // and the O(n²) queue.shift() of the original approach.
     const result = flattenTreeFromLevels(
-        levels, mixed.masks, gridBounds, sceneBounds, voxelResolution, actualDepth
+        levels, mixed.masks, mixed.morton.length, gridBounds, sceneBounds, voxelResolution, actualDepth
     );
 
     const tFlatten = performance.now();
@@ -300,6 +388,7 @@ function buildSparseOctree(
  *
  * @param levels - Array of per-level SoA data (index 0 = leaves, last = root).
  * @param mixedMasks - Interleaved voxel masks for mixed leaf blocks.
+ * @param mixedCount - Number of mixed leaf blocks (upper bound on emitted leaves).
  * @param gridBounds - Grid bounds aligned to block boundaries.
  * @param sceneBounds - Original Gaussian scene bounds.
  * @param voxelResolution - Size of each voxel in world units.
@@ -308,7 +397,8 @@ function buildSparseOctree(
  */
 function flattenTreeFromLevels(
     levels: LevelData[],
-    mixedMasks: number[],
+    mixedMasks: Uint32Array,
+    mixedCount: number,
     gridBounds: Bounds,
     sceneBounds: Bounds,
     voxelResolution: number,
@@ -338,7 +428,12 @@ function flattenTreeFromLevels(
     }
 
     const nodes = new Uint32Array(maxNodes);
-    const leafDataList: number[] = [];
+    // Pre-size leafData to its upper bound (2 entries per mixed leaf). All
+    // mixed leaves originate from level 0, so mixedCount bounds the count
+    // tightly. Avoids unbounded growth of a regular JS array, which hits
+    // V8's backing-store limit on very large grids.
+    const leafData = new Uint32Array(mixedCount * 2);
+    let leafDataLen = 0;
     let numInteriorNodes = 0;
     let numMixedLeaves = 0;
     let emitPos = 0;
@@ -384,9 +479,9 @@ function flattenTreeFromLevels(
                 } else {
                     // Mixed leaf — store index into leafData
                     const maskIdx = level.maskIndices[ii];
-                    const leafDataIndex = leafDataList.length >> 1;
-                    leafDataList.push(mixedMasks[maskIdx * 2]);
-                    leafDataList.push(mixedMasks[maskIdx * 2 + 1]);
+                    const leafDataIndex = leafDataLen >> 1;
+                    leafData[leafDataLen++] = mixedMasks[maskIdx * 2];
+                    leafData[leafDataLen++] = mixedMasks[maskIdx * 2 + 1];
                     nodes[emitPos] = leafDataIndex & 0x00FFFFFF;
                     numMixedLeaves++;
                 }
@@ -457,7 +552,7 @@ function flattenTreeFromLevels(
         numInteriorNodes,
         numMixedLeaves,
         nodes: emitPos === maxNodes ? nodes : nodes.slice(0, emitPos),
-        leafData: new Uint32Array(leafDataList)
+        leafData: leafDataLen === leafData.length ? leafData : leafData.slice(0, leafDataLen)
     };
 }
 

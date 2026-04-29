@@ -12,7 +12,7 @@ import {
 interface BlockLookup {
     solidSet: Set<number>;
     mixedMap: Map<number, number>;
-    masks: number[];
+    masks: Uint32Array;
 }
 
 /**
