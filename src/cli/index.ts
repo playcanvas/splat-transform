@@ -625,7 +625,7 @@ GLOBAL OPTIONS
     -v, --version                           Show version and exit
     -q, --quiet                             Suppress non-error output
         --verbose                           Show debug-level diagnostics
-        --mem                               Show memory usage in progress output
+        --mem                               Show peak memory in progress output
         --tty                               Interactive bar rendering (default on a TTY; --no-tty to disable)
     -w, --overwrite                         Overwrite output file if it exists
     -i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10
