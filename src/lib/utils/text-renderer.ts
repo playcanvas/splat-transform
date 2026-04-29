@@ -75,10 +75,12 @@ class TextRenderer implements Renderer {
      * When true, scope-end and bar-end lines gain a
      * `[rss: X, heap: X, ab: X]` suffix sourced from
      * {@link TextRendererOptions.getMemoryUsage}. No effect when the
-     * probe is omitted. Mutable so the host can toggle the overlay
-     * without re-installing the renderer.
+     * probe is omitted. Defaults to `true` when `getMemoryUsage` is
+     * provided so embedders that supply a probe see the overlay
+     * automatically (matching the prior behavior). Mutable so the
+     * host can toggle the overlay without re-installing the renderer.
      */
-    mem = false;
+    mem: boolean;
 
     /** True while a bar header has been written without its closing `\n`. */
     private lineDirty = false;
@@ -93,6 +95,7 @@ class TextRenderer implements Renderer {
         this.write = options.write;
         this.output = options.output ?? options.write;
         this.getMemoryUsage = options.getMemoryUsage;
+        this.mem = options.getMemoryUsage !== undefined;
     }
 
     private rank(): number {

@@ -41,7 +41,7 @@ interface CliOptions extends LibOptions {
     quiet: boolean;
     verbose: boolean;
     mem: boolean;
-    noTty: boolean;
+    noTty: boolean | undefined;
     listGpus: boolean;
     deviceIdx: number;  // -1 = auto, -2 = CPU, 0+ = GPU index
 }
@@ -122,7 +122,7 @@ const cliOptionsConfig = {
     quiet: { type: 'boolean', short: 'q', default: false },
     verbose: { type: 'boolean', default: false },
     mem: { type: 'boolean', default: false },
-    tty: { type: 'boolean', default: true },
+    tty: { type: 'boolean' },
     iterations: { type: 'string', short: 'i', default: '10' },
     'list-gpus': { type: 'boolean', short: 'L', default: false },
     gpu: { type: 'string', short: 'g', default: '-1' },
@@ -354,7 +354,7 @@ const parseArguments = async () => {
         quiet: v.quiet,
         verbose: v.verbose,
         mem: v.mem,
-        noTty: !v.tty,
+        noTty: v.tty === undefined ? undefined : !v.tty,
         iterations: parseInteger(v.iterations),
         listGpus: v['list-gpus'],
         deviceIdx,
@@ -733,8 +733,9 @@ const main = async () => {
     // renderer's partial-line bar sequence (`▸ name [` + `#` ticks +
     // `....] dur\n`) lands as one complete line per bar - what non-
     // interactive log viewers want. Defaults to auto-detection from
-    // `stderr.isTTY`; the `--no-tty` flag below ORs it on for backends
-    // that report a TTY but aren't really interactive.
+    // `stderr.isTTY`; the `--no-tty` / `--tty` flags applied below
+    // override either way for backends whose stderr-TTY status doesn't
+    // match what the user wants.
     let noTty = !process.stderr.isTTY;
     let lineBuf = '';
 
@@ -775,8 +776,12 @@ const main = async () => {
     }
 
     // Apply post-parse flags. `--no-tty` forces line buffering even on a
-    // TTY (for backends that report stderr as a TTY but aren't really).
-    noTty ||= options.noTty;
+    // TTY (for backends that report stderr as a TTY but aren't really);
+    // `--tty` forces it off even on a piped stderr. When neither flag is
+    // passed, the auto-detected default sticks.
+    if (options.noTty !== undefined) {
+        noTty = options.noTty;
+    }
     renderer.mem = options.mem;
 
     if (options.quiet) {
