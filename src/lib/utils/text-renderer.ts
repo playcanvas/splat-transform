@@ -7,8 +7,13 @@ import { logger, verbosityRank, type LogEvent, type Renderer } from './logger';
 interface TextRendererOptions {
     /**
      * Receives all status chunks (scopes, bars, messages). May contain
-     * partial-line writes - hand this to a stream that flushes on partials
-     * (e.g. `process.stderr.write.bind(process.stderr)` in Node).
+     * partial-line writes (e.g. progress-bar `#` ticks). For TTY output,
+     * hand this to a stream that flushes on partials
+     * (`process.stderr.write.bind(process.stderr)` in Node) so bars
+     * render in place. For non-interactive output (CI logs, file
+     * redirects), wrap in a line buffer that holds chunks until a `\n`
+     * arrives - the bar's incremental writes then coalesce into a single
+     * complete line per bar.
      */
     write: (chunk: string) => void;
     /**
@@ -19,11 +24,13 @@ interface TextRendererOptions {
      */
     output?: (chunk: string) => void;
     /**
-     * Optional memory probe. When provided, scope-end and bar-end lines
-     * gain a `[rss: X, heap: X, ab: X]` overlay. Use `process.memoryUsage`
-     * in Node, or omit for a clean view.
+     * Optional peak-memory probe in bytes. Used by the `[peak X]`
+     * overlay gated by the renderer's `mem` field. In Node this is
+     * typically derived from `process.resourceUsage().maxRSS` (which
+     * is kernel-tracked and reflects the whole process - including
+     * ArrayBuffers - rather than just the V8 heap).
      */
-    getMemoryUsage?: () => { rss: number; heapUsed: number; arrayBuffers: number };
+    getPeakMemory?: () => number;
 }
 
 const indent = (depth: number): string => '  '.repeat(Math.max(0, depth));
@@ -64,7 +71,17 @@ class TextRenderer implements Renderer {
 
     private readonly output: (chunk: string) => void;
 
-    private readonly getMemoryUsage?: () => { rss: number; heapUsed: number; arrayBuffers: number };
+    private readonly getPeakMemory?: () => number;
+
+    /**
+     * When true, scope-end and bar-end lines gain a `[peak X]` suffix
+     * sourced from {@link TextRendererOptions.getPeakMemory}. No
+     * effect when the probe is omitted. Defaults to `true` when
+     * `getPeakMemory` is provided so embedders that supply a probe
+     * see the overlay automatically. Mutable so the host can toggle
+     * the overlay without re-installing the renderer.
+     */
+    mem: boolean;
 
     /** True while a bar header has been written without its closing `\n`. */
     private lineDirty = false;
@@ -78,7 +95,8 @@ class TextRenderer implements Renderer {
     constructor(options: TextRendererOptions) {
         this.write = options.write;
         this.output = options.output ?? options.write;
-        this.getMemoryUsage = options.getMemoryUsage;
+        this.getPeakMemory = options.getPeakMemory;
+        this.mem = options.getPeakMemory !== undefined;
     }
 
     private rank(): number {
@@ -181,9 +199,8 @@ class TextRenderer implements Renderer {
     }
 
     private memSuffix(): string {
-        if (!this.getMemoryUsage) return '';
-        const m = this.getMemoryUsage();
-        return `  [rss: ${fmtBytes(m.rss)}, heap: ${fmtBytes(m.heapUsed)}, ab: ${fmtBytes(m.arrayBuffers)}]`;
+        if (!this.mem || !this.getPeakMemory) return '';
+        return `  [peak ${fmtBytes(this.getPeakMemory())}]`;
     }
 }
 

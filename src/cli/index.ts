@@ -41,6 +41,7 @@ interface CliOptions extends LibOptions {
     quiet: boolean;
     verbose: boolean;
     mem: boolean;
+    noTty: boolean | undefined;
     listGpus: boolean;
     deviceIdx: number;  // -1 = auto, -2 = CPU, 0+ = GPU index
 }
@@ -121,6 +122,7 @@ const cliOptionsConfig = {
     quiet: { type: 'boolean', short: 'q', default: false },
     verbose: { type: 'boolean', default: false },
     mem: { type: 'boolean', default: false },
+    tty: { type: 'boolean' },
     iterations: { type: 'string', short: 'i', default: '10' },
     'list-gpus': { type: 'boolean', short: 'L', default: false },
     gpu: { type: 'string', short: 'g', default: '-1' },
@@ -352,6 +354,7 @@ const parseArguments = async () => {
         quiet: v.quiet,
         verbose: v.verbose,
         mem: v.mem,
+        noTty: v.tty === undefined ? undefined : !v.tty,
         iterations: parseInteger(v.iterations),
         listGpus: v['list-gpus'],
         deviceIdx,
@@ -622,7 +625,8 @@ GLOBAL OPTIONS
     -v, --version                           Show version and exit
     -q, --quiet                             Suppress non-error output
         --verbose                           Show debug-level diagnostics
-        --mem                               Show memory usage in progress output
+        --mem                               Show peak memory in progress output
+        --tty                               Interactive bar rendering (default on a TTY; --no-tty to disable)
     -w, --overwrite                         Overwrite output file if it exists
     -i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10
     -L, --list-gpus                         List available GPU adapters and exit
@@ -683,19 +687,23 @@ EXAMPLES
 const main = async () => {
     const startTime = performance.now();
 
-    // Emit the final timing line plus the kernel-tracked peak resident set
-    // size. `process.resourceUsage().maxRSS` is reported in kilobytes on
+    // Kernel-tracked peak resident set size in bytes.
+    // `process.resourceUsage().maxRSS` is reported in kilobytes on
     // Linux/macOS and bytes on Windows; normalize to bytes for fmtBytes.
     // Note: V8 fatal OOM (`FATAL ERROR: Reached heap limit`) and external
     // SIGKILL bypass all JS handlers (uncaughtException, beforeExit, exit),
     // so peak rss cannot be reported in those cases - use an external wrapper
     // such as `/usr/bin/time -l` (macOS) or `/usr/bin/time -v` (Linux).
+    const peakMemoryBytes = (): number => {
+        const raw = process.resourceUsage().maxRSS;
+        return process.platform === 'win32' ? raw : raw * 1024;
+    };
+
+    // Emit the final timing line plus peak memory usage.
     const reportDone = (failed = false) => {
         const elapsedMs = performance.now() - startTime;
-        const rawMaxRss = process.resourceUsage().maxRSS;
-        const maxRssBytes = process.platform === 'win32' ? rawMaxRss : rawMaxRss * 1024;
         const verb = failed ? 'failed in' : 'done in';
-        const line = `${verb} ${fmtTime(elapsedMs)}  [peak ${fmtBytes(maxRssBytes)}]`;
+        const line = `${verb} ${fmtTime(elapsedMs)}  [peak ${fmtBytes(peakMemoryBytes())}]`;
         if (failed) {
             logger.error(line);
         } else {
@@ -725,16 +733,35 @@ const main = async () => {
         exit(1);
     };
 
-    // Install a baseline text renderer immediately so any error emitted
-    // before parseArguments() completes (including from the top-level
-    // exception handlers below, or from parseArguments() itself) is
-    // actually visible. The default logger renderer is a NullRenderer
-    // that drops every event silently. The `--mem` overlay is layered
-    // on later once we've parsed the flag.
-    logger.setRenderer(new TextRenderer({
-        write: chunk => process.stderr.write(chunk),
-        output: chunk => process.stdout.write(chunk)
-    }));
+    // stderr sink for the renderer. When `noTty` is on, line-buffer so the
+    // renderer's partial-line bar sequence (`▸ name [` + `#` ticks +
+    // `....] dur\n`) lands as one complete line per bar - what non-
+    // interactive log viewers want. Defaults to auto-detection from
+    // `stderr.isTTY`; the `--no-tty` / `--tty` flags applied below
+    // override either way for backends whose stderr-TTY status doesn't
+    // match what the user wants.
+    let noTty = !process.stderr.isTTY;
+    let lineBuf = '';
+
+    const write = (chunk: string) => {
+        if (noTty) {
+            lineBuf += chunk;
+            const lastNL = lineBuf.lastIndexOf('\n');
+            if (lastNL !== -1) {
+                process.stderr.write(lineBuf.slice(0, lastNL + 1));
+                lineBuf = lineBuf.slice(lastNL + 1);
+            }
+        } else {
+            process.stderr.write(chunk);
+        }
+    };
+
+    const renderer = new TextRenderer({
+        write,
+        output: chunk => process.stdout.write(chunk),
+        getPeakMemory: peakMemoryBytes
+    });
+    logger.setRenderer(renderer);
 
     process.on('uncaughtException', (err, origin) => {
         failExit(err, `uncaughtException (${origin})`);
@@ -752,15 +779,15 @@ const main = async () => {
         failExit(err);
     }
 
-    // re-install the text renderer with the memory-usage overlay if the
-    // user requested it via --mem; otherwise keep the baseline renderer.
-    if (options.mem) {
-        logger.setRenderer(new TextRenderer({
-            write: chunk => process.stderr.write(chunk),
-            output: chunk => process.stdout.write(chunk),
-            getMemoryUsage: () => process.memoryUsage()
-        }));
+    // Apply post-parse flags. `--no-tty` forces line buffering even on a
+    // TTY (for backends that report stderr as a TTY but aren't really);
+    // `--tty` forces it off even on a piped stderr. When neither flag is
+    // passed, the auto-detected default sticks.
+    if (options.noTty !== undefined) {
+        noTty = options.noTty;
     }
+    renderer.mem = options.mem;
+
     if (options.quiet) {
         logger.setVerbosity('quiet');
     } else if (options.verbose) {
