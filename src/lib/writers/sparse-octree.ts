@@ -317,13 +317,6 @@ function buildSparseOctree(
     const solid = buffer.getSolidBlocks();
     const totalBlocks = mixed.morton.length + solid.length;
 
-    const memProbe = (label: string): void => {
-        const u = process.memoryUsage();
-        const live = u.heapUsed + u.external;
-        logger.info(`mem [octree: ${label}]: ${(live / 1e9).toFixed(3)}GB  (heap ${(u.heapUsed / 1e9).toFixed(3)}GB + ext ${(u.external / 1e9).toFixed(3)}GB)`);
-    };
-    memProbe(`entry (mixed=${mixed.morton.length} solid=${solid.length} total=${totalBlocks})`);
-
     // --- Phase 1: Sort the buffer's existing typed arrays in place ---
     // Level 0 (leaves) is represented as TWO sorted streams — solid mortons
     // and mixed mortons (with paired masks). Sorting in place avoids
@@ -348,8 +341,6 @@ function buildSparseOctree(
 
     if (nSolid > 1) solidStream.sort();
     if (nMixed > 1) sortMixedByMorton(mixedStream, mixedMasks, nMixed);
-
-    memProbe('after Phase 1 (in-place sort, no SoA copy)');
 
     const tSort = performance.now();
 
@@ -540,15 +531,11 @@ function buildSparseOctree(
 
     const tBuild = performance.now();
 
-    memProbe(`after Phase 2 (built ${levels.length} levels)`);
-
     // --- Phase 3: Flatten tree to Laine-Karras format ---
     const result = flattenTreeFromLevels(
         levels, solidStream, mixedStream, mixedMasks, nSolid, nMixed,
         gridBounds, sceneBounds, voxelResolution, actualDepth
     );
-
-    memProbe('after Phase 3 (flattenTreeFromLevels)');
 
     const tFlatten = performance.now();
 
