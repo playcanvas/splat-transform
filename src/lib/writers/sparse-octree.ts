@@ -15,7 +15,10 @@ const SOLID_LEAF_MARKER = 0xFF000000 >>> 0;
 /**
  * Maximum value encodable in the low 24 bits of a Laine-Karras node word.
  * Both the interior `baseOffset` (child node index) and the mixed-leaf
- * `leafDataIndex` share this ceiling. 16,777,215 nodes / mixed leaves.
+ * `leafDataIndex` share this ceiling: indices range 0..MAX_24BIT_OFFSET
+ * (= 0xFFFFFF = 16,777,215), giving up to 16,777,216 distinct encodable
+ * values. (Interior nodes additionally reserve baseOffset=0 for
+ * `SOLID_LEAF_MARKER`, so the practical interior cap is 16,777,215.)
  */
 const MAX_24BIT_OFFSET = 0x00FFFFFF;
 
