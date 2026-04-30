@@ -5,7 +5,8 @@ import {
     EVEN_BITS,
     SOLID_HI,
     SOLID_LO,
-    SparseVoxelGrid
+    SparseVoxelGrid,
+    readBlockType
 } from './sparse-voxel-grid';
 import { logger } from '../utils';
 
@@ -92,8 +93,9 @@ function getActiveXYPairs(grid: SparseVoxelGrid): Set<number> {
 // ============================================================================
 // Line Extraction / Write-back
 //
-// `getType` reads a packed 2-bit block type. V8 should JIT this into a few
-// inline ops per call; small overhead vs the old direct Uint8Array read.
+// `readBlockType` reads a packed 2-bit block type. As a module-level arrow
+// function it inlines under V8's JIT, matching the perf of the previous
+// direct Uint8Array read modulo the bit math.
 // ============================================================================
 
 function extractLineX(grid: SparseVoxelGrid, iy: number, iz: number, buf: Uint32Array): void {
@@ -105,7 +107,7 @@ function extractLineX(grid: SparseVoxelGrid, iy: number, iz: number, buf: Uint32
     const types = grid.types;
     for (let bx = 0; bx < grid.nbx; bx++) {
         const blockIdx = lineBase + bx;
-        const bt = (types[blockIdx >>> 4] >>> ((blockIdx & 15) << 1)) & 0x3;
+        const bt = readBlockType(types, blockIdx);
         if (bt === BLOCK_EMPTY) continue;
         let row4: number;
         if (bt === BLOCK_SOLID) {
@@ -147,7 +149,7 @@ function extractLineY(grid: SparseVoxelGrid, ix: number, iz: number, buf: Uint32
     const types = grid.types;
     for (let by = 0; by < grid.nby; by++) {
         const blockIdx = bx + by * grid.nbx + bz * grid.bStride;
-        const bt = (types[blockIdx >>> 4] >>> ((blockIdx & 15) << 1)) & 0x3;
+        const bt = readBlockType(types, blockIdx);
         if (bt === BLOCK_EMPTY) continue;
         let row4: number;
         if (bt === BLOCK_SOLID) {
@@ -194,7 +196,7 @@ function extractLineZ(grid: SparseVoxelGrid, ix: number, iy: number, buf: Uint32
     const types = grid.types;
     for (let bz = 0; bz < grid.nbz; bz++) {
         const blockIdx = bx + by * grid.nbx + bz * grid.bStride;
-        const bt = (types[blockIdx >>> 4] >>> ((blockIdx & 15) << 1)) & 0x3;
+        const bt = readBlockType(types, blockIdx);
         if (bt === BLOCK_EMPTY) continue;
         let row4: number;
         if (bt === BLOCK_SOLID) {
@@ -268,7 +270,7 @@ function sparseDilateX(src: SparseVoxelGrid, dst: SparseVoxelGrid, halfExtent: n
         let allSolid = true;
         for (let bx = 0; bx < nbx; bx++) {
             const idx = lineBase + bx;
-            if (((srcTypes[idx >>> 4] >>> ((idx & 15) << 1)) & 0x3) !== BLOCK_SOLID) {
+            if (readBlockType(srcTypes, idx) !== BLOCK_SOLID) {
                 allSolid = false;
                 break;
             }
@@ -311,7 +313,7 @@ function sparseDilateZ(src: SparseVoxelGrid, dst: SparseVoxelGrid, halfExtent: n
         let allSolid = true;
         for (let bz = 0; bz < nbz; bz++) {
             const idx = lineStart + bz * bStride;
-            if (((srcTypes[idx >>> 4] >>> ((idx & 15) << 1)) & 0x3) !== BLOCK_SOLID) {
+            if (readBlockType(srcTypes, idx) !== BLOCK_SOLID) {
                 allSolid = false;
                 break;
             }
@@ -354,7 +356,7 @@ function sparseDilateY(src: SparseVoxelGrid, dst: SparseVoxelGrid, halfExtent: n
         let allSolid = true;
         for (let by = 0; by < nby; by++) {
             const idx = lineStart + by * nbx;
-            if (((srcTypes[idx >>> 4] >>> ((idx & 15) << 1)) & 0x3) !== BLOCK_SOLID) {
+            if (readBlockType(srcTypes, idx) !== BLOCK_SOLID) {
                 allSolid = false;
                 break;
             }

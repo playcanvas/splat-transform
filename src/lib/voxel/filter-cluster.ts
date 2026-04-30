@@ -13,6 +13,8 @@ import {
     BLOCK_EMPTY,
     BLOCK_MIXED,
     BLOCK_SOLID,
+    BLOCKS_PER_WORD,
+    EVEN_BITS,
     SparseVoxelGrid
 } from './sparse-voxel-grid';
 import {
@@ -122,12 +124,11 @@ const findClusterVoxelFlood = (
     const ccSet = new Set<number>();
     const totalBlocks = nbx * (ny >> 2) * (nz >> 2);
     const visitedTypes = visited.types;
-    const EVEN = 0x55555555 >>> 0;
     for (let w = 0; w < visitedTypes.length; w++) {
         const word = visitedTypes[w];
         if (word === 0) continue;
-        let nonEmpty = ((word & EVEN) | ((word >>> 1) & EVEN)) >>> 0;
-        const baseIdx = w * 16;
+        let nonEmpty = ((word & EVEN_BITS) | ((word >>> 1) & EVEN_BITS)) >>> 0;
+        const baseIdx = w * BLOCKS_PER_WORD;
         while (nonEmpty) {
             const bp = 31 - Math.clz32(nonEmpty & -nonEmpty);
             const blockIdx = baseIdx + (bp >>> 1);

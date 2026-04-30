@@ -65,6 +65,35 @@ const SOLID_WORD = 0x55555555 >>> 0;             // 16 lanes, each = SOLID
 // const MIXED_WORD = 0xAAAAAAAA >>> 0;          // 16 lanes, each = MIXED (unused so far)
 const EVEN_BITS = 0x55555555 >>> 0;              // mask for even bit positions
 
+/**
+ * Read the 2-bit block type directly from a packed `types` Uint32Array.
+ * Module-level so V8 can inline it into hot loops without method dispatch.
+ * Equivalent to `grid.getBlockType(blockIdx)` when `types === grid.types`.
+ *
+ * @param types - Packed types array (16 blocks per word).
+ * @param blockIdx - Linear block index.
+ * @returns Block type: `BLOCK_EMPTY`, `BLOCK_SOLID`, or `BLOCK_MIXED`.
+ */
+const readBlockType = (types: Uint32Array, blockIdx: number): number => {
+    return (types[blockIdx >>> 4] >>> ((blockIdx & 15) << 1)) & TYPE_MASK;
+};
+
+/**
+ * Write the 2-bit block type directly into a packed `types` Uint32Array.
+ * Module-level so V8 can inline it into hot loops without method dispatch.
+ * Caller is responsible for keeping the grid's `masks` consistent (only
+ * `MIXED` blocks should have a mask entry).
+ *
+ * @param types - Packed types array (16 blocks per word).
+ * @param blockIdx - Linear block index.
+ * @param value - Block type to set.
+ */
+const writeBlockType = (types: Uint32Array, blockIdx: number, value: number): void => {
+    const w = blockIdx >>> 4;
+    const shift = (blockIdx & 15) << 1;
+    types[w] = ((types[w] & ~(TYPE_MASK << shift)) | ((value & TYPE_MASK) << shift)) >>> 0;
+};
+
 class SparseVoxelGrid {
     readonly nx: number;
     readonly ny: number;
@@ -103,7 +132,7 @@ class SparseVoxelGrid {
      * @returns Block type: `BLOCK_EMPTY`, `BLOCK_SOLID`, or `BLOCK_MIXED`.
      */
     getBlockType(blockIdx: number): number {
-        return (this.types[blockIdx >>> 4] >>> ((blockIdx & 15) << 1)) & TYPE_MASK;
+        return readBlockType(this.types, blockIdx);
     }
 
     /**
@@ -115,9 +144,7 @@ class SparseVoxelGrid {
      * @param value - Block type to set.
      */
     setBlockType(blockIdx: number, value: number): void {
-        const w = blockIdx >>> 4;
-        const shift = (blockIdx & 15) << 1;
-        this.types[w] = ((this.types[w] & ~(TYPE_MASK << shift)) | ((value & TYPE_MASK) << shift)) >>> 0;
+        writeBlockType(this.types, blockIdx, value);
     }
 
     getVoxel(ix: number, iy: number, iz: number): number {
@@ -422,5 +449,7 @@ export {
     SOLID_LO,
     SOLID_WORD,
     SparseVoxelGrid,
-    TYPE_MASK
+    TYPE_MASK,
+    readBlockType,
+    writeBlockType
 };

@@ -23,20 +23,24 @@ const growUint32 = (src: Uint32Array, newCap: number): Uint32Array => {
  * voxel masks use Uint32Array. This raises the per-buffer capacity well
  * above V8's regular-array backing-store limit so very large grids can
  * round-trip without throwing `RangeError: Invalid array length`.
+ *
+ * Buffers start at length 0 and the first `addBlock` allocates
+ * `INITIAL_CAPACITY` entries; subsequent grows double. A freshly cleared
+ * instance therefore retains no allocations until it is reused.
  */
 class BlockMaskBuffer {
     /** Morton codes for solid blocks (mask is implicitly all 1s) */
-    private _solidMorton: Float64Array = new Float64Array(INITIAL_CAPACITY);
+    private _solidMorton: Float64Array = new Float64Array(0);
     private _solidCount = 0;
-    private _solidCap = INITIAL_CAPACITY;
+    private _solidCap = 0;
 
     /** Morton codes for mixed blocks */
-    private _mixedMorton: Float64Array = new Float64Array(INITIAL_CAPACITY);
+    private _mixedMorton: Float64Array = new Float64Array(0);
     private _mixedCount = 0;
-    private _mixedCap = INITIAL_CAPACITY;
+    private _mixedCap = 0;
 
     /** Interleaved voxel masks for mixed blocks: [lo0, hi0, lo1, hi1, ...] */
-    private _mixedMasks: Uint32Array = new Uint32Array(INITIAL_CAPACITY * 2);
+    private _mixedMasks: Uint32Array = new Uint32Array(0);
 
     /**
      * Add a non-empty block to the buffer.
@@ -53,13 +57,14 @@ class BlockMaskBuffer {
 
         if (isSolid(lo, hi)) {
             if (this._solidCount === this._solidCap) {
-                this._solidCap *= 2;
+                // First grow: 0 → INITIAL_CAPACITY. Subsequent: double.
+                this._solidCap = this._solidCap === 0 ? INITIAL_CAPACITY : this._solidCap * 2;
                 this._solidMorton = growFloat64(this._solidMorton, this._solidCap);
             }
             this._solidMorton[this._solidCount++] = morton;
         } else {
             if (this._mixedCount === this._mixedCap) {
-                this._mixedCap *= 2;
+                this._mixedCap = this._mixedCap === 0 ? INITIAL_CAPACITY : this._mixedCap * 2;
                 this._mixedMorton = growFloat64(this._mixedMorton, this._mixedCap);
                 this._mixedMasks = growUint32(this._mixedMasks, this._mixedCap * 2);
             }
@@ -121,17 +126,18 @@ class BlockMaskBuffer {
 
     /**
      * Clear all buffered blocks. Releases the underlying buffers so a cleared
-     * instance does not retain peak memory.
+     * instance does not retain peak memory; the next `addBlock` re-allocates
+     * to `INITIAL_CAPACITY`.
      */
     clear(): void {
-        this._solidMorton = new Float64Array(INITIAL_CAPACITY);
+        this._solidMorton = new Float64Array(0);
         this._solidCount = 0;
-        this._solidCap = INITIAL_CAPACITY;
+        this._solidCap = 0;
 
-        this._mixedMorton = new Float64Array(INITIAL_CAPACITY);
-        this._mixedMasks = new Uint32Array(INITIAL_CAPACITY * 2);
+        this._mixedMorton = new Float64Array(0);
+        this._mixedMasks = new Uint32Array(0);
         this._mixedCount = 0;
-        this._mixedCap = INITIAL_CAPACITY;
+        this._mixedCap = 0;
     }
 }
 

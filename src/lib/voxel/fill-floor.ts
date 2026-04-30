@@ -9,7 +9,8 @@ import {
     BLOCK_SOLID,
     SOLID_HI,
     SOLID_LO,
-    SparseVoxelGrid
+    SparseVoxelGrid,
+    readBlockType
 } from './sparse-voxel-grid';
 import { logger } from '../utils';
 
@@ -91,7 +92,7 @@ const fillFloor = (
 
             for (let by = 0; by < nby && walking; by++) {
                 const blockIdx = bx + by * nbx + bz * bStride;
-                const bt = (dilatedTypes[blockIdx >>> 4] >>> ((blockIdx & 15) << 1)) & 0x3;
+                const bt = readBlockType(dilatedTypes, blockIdx);
 
                 if (bt === BLOCK_SOLID) {
                     break;

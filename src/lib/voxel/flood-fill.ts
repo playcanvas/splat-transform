@@ -7,7 +7,8 @@ import {
     SOLID_HI,
     SOLID_LO,
     SparseVoxelGrid,
-    TYPE_MASK
+    readBlockType,
+    writeBlockType
 } from './sparse-voxel-grid';
 
 /**
@@ -49,18 +50,6 @@ function twoLevelBFS(
     const bMasks = blocked.masks;
     const visitedTypes = visited.types;
     const vMasks = visited.masks;
-
-    // Inline helpers for the 2-bit packed type array. V8 should JIT
-    // these into the same native operations as the previous direct
-    // Uint8Array accesses, modulo the bit math.
-    const readType = (typesArr: Uint32Array, idx: number): number => {
-        return (typesArr[idx >>> 4] >>> ((idx & 15) << 1)) & TYPE_MASK;
-    };
-    const writeType = (typesArr: Uint32Array, idx: number, value: number): void => {
-        const w = idx >>> 4;
-        const shift = (idx & 15) << 1;
-        typesArr[w] = ((typesArr[w] & ~(TYPE_MASK << shift)) | ((value & TYPE_MASK) << shift)) >>> 0;
-    };
 
     // Block queue (ring buffer of block indices)
     let bqCap = 1 << 14;
@@ -121,9 +110,9 @@ function twoLevelBFS(
     };
 
     const tryFillBlock = (blockIdx: number): boolean => {
-        if (readType(blockedTypes, blockIdx) !== BLOCK_EMPTY) return false;
-        if (readType(visitedTypes, blockIdx) !== BLOCK_EMPTY) return false;
-        writeType(visitedTypes, blockIdx, BLOCK_SOLID);
+        if (readBlockType(blockedTypes, blockIdx) !== BLOCK_EMPTY) return false;
+        if (readBlockType(visitedTypes, blockIdx) !== BLOCK_EMPTY) return false;
+        writeBlockType(visitedTypes, blockIdx, BLOCK_SOLID);
         if (bqSize >= bqCap) growBlockQueue();
         bqBuf[bqTail] = blockIdx;
         bqTail = (bqTail + 1) & bqMask;
@@ -132,7 +121,7 @@ function twoLevelBFS(
     };
 
     const enqueueFaceVoxels = (nBlockIdx: number, face: number, nBx: number, nBy: number, nBz: number): void => {
-        const vbt = readType(visitedTypes, nBlockIdx);
+        const vbt = readBlockType(visitedTypes, nBlockIdx);
         if (vbt === BLOCK_SOLID) return;
 
         const bs = bMasks.slot(nBlockIdx);
@@ -149,14 +138,14 @@ function twoLevelBFS(
         if (freeLo === 0 && freeHi === 0) return;
 
         if (vbt === BLOCK_EMPTY) {
-            writeType(visitedTypes, nBlockIdx, BLOCK_MIXED);
+            writeBlockType(visitedTypes, nBlockIdx, BLOCK_MIXED);
             vMasks.set(nBlockIdx, freeLo, freeHi);
         } else {
             vMasks.lo[vs] = (vMasks.lo[vs] | freeLo) >>> 0;
             vMasks.hi[vs] = (vMasks.hi[vs] | freeHi) >>> 0;
             if (vMasks.lo[vs] === SOLID_LO && vMasks.hi[vs] === SOLID_HI) {
                 vMasks.removeAt(vs);
-                writeType(visitedTypes, nBlockIdx, BLOCK_SOLID);
+                writeBlockType(visitedTypes, nBlockIdx, BLOCK_SOLID);
             }
         }
 
@@ -187,37 +176,37 @@ function twoLevelBFS(
 
         if (bx > 0) {
             const ni = blockIdx - 1;
-            const nbt = readType(blockedTypes, ni);
+            const nbt = readBlockType(blockedTypes, ni);
             if (nbt === BLOCK_EMPTY) tryFillBlock(ni);
             else if (nbt === BLOCK_MIXED) enqueueFaceVoxels(ni, 1, bx - 1, by, bz);
         }
         if (bx < nbx - 1) {
             const ni = blockIdx + 1;
-            const nbt = readType(blockedTypes, ni);
+            const nbt = readBlockType(blockedTypes, ni);
             if (nbt === BLOCK_EMPTY) tryFillBlock(ni);
             else if (nbt === BLOCK_MIXED) enqueueFaceVoxels(ni, 0, bx + 1, by, bz);
         }
         if (by > 0) {
             const ni = blockIdx - nbx;
-            const nbt = readType(blockedTypes, ni);
+            const nbt = readBlockType(blockedTypes, ni);
             if (nbt === BLOCK_EMPTY) tryFillBlock(ni);
             else if (nbt === BLOCK_MIXED) enqueueFaceVoxels(ni, 3, bx, by - 1, bz);
         }
         if (by < nby - 1) {
             const ni = blockIdx + nbx;
-            const nbt = readType(blockedTypes, ni);
+            const nbt = readBlockType(blockedTypes, ni);
             if (nbt === BLOCK_EMPTY) tryFillBlock(ni);
             else if (nbt === BLOCK_MIXED) enqueueFaceVoxels(ni, 2, bx, by + 1, bz);
         }
         if (bz > 0) {
             const ni = blockIdx - bStride;
-            const nbt = readType(blockedTypes, ni);
+            const nbt = readBlockType(blockedTypes, ni);
             if (nbt === BLOCK_EMPTY) tryFillBlock(ni);
             else if (nbt === BLOCK_MIXED) enqueueFaceVoxels(ni, 5, bx, by, bz - 1);
         }
         if (bz < nbz - 1) {
             const ni = blockIdx + bStride;
-            const nbt = readType(blockedTypes, ni);
+            const nbt = readBlockType(blockedTypes, ni);
             if (nbt === BLOCK_EMPTY) tryFillBlock(ni);
             else if (nbt === BLOCK_MIXED) enqueueFaceVoxels(ni, 4, bx, by, bz + 1);
         }
@@ -226,7 +215,7 @@ function twoLevelBFS(
     const tryEnqueueVoxel = (ix: number, iy: number, iz: number): void => {
         const blockIdx = (ix >> 2) + (iy >> 2) * nbx + (iz >> 2) * bStride;
 
-        const bbt = readType(blockedTypes, blockIdx);
+        const bbt = readBlockType(blockedTypes, blockIdx);
         if (bbt === BLOCK_SOLID) return;
         if (bbt === BLOCK_EMPTY) {
             tryFillBlock(blockIdx);
@@ -237,7 +226,7 @@ function twoLevelBFS(
         const bitIdx = (ix & 3) + ((iy & 3) << 2) + ((iz & 3) << 4);
         if (bitIdx < 32 ? (bMasks.lo[bs] >>> bitIdx) & 1 : (bMasks.hi[bs] >>> (bitIdx - 32)) & 1) return;
 
-        const vbt = readType(visitedTypes, blockIdx);
+        const vbt = readBlockType(visitedTypes, blockIdx);
         if (vbt === BLOCK_SOLID) return;
         if (vbt === BLOCK_MIXED) {
             const vs = vMasks.slot(blockIdx);
@@ -246,10 +235,10 @@ function twoLevelBFS(
             else vMasks.hi[vs] = (vMasks.hi[vs] | (1 << (bitIdx - 32))) >>> 0;
             if (vMasks.lo[vs] === SOLID_LO && vMasks.hi[vs] === SOLID_HI) {
                 vMasks.removeAt(vs);
-                writeType(visitedTypes, blockIdx, BLOCK_SOLID);
+                writeBlockType(visitedTypes, blockIdx, BLOCK_SOLID);
             }
         } else {
-            writeType(visitedTypes, blockIdx, BLOCK_MIXED);
+            writeBlockType(visitedTypes, blockIdx, BLOCK_MIXED);
             vMasks.set(blockIdx,
                 bitIdx < 32 ? (1 << bitIdx) >>> 0 : 0,
                 bitIdx >= 32 ? (1 << (bitIdx - 32)) >>> 0 : 0

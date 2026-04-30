@@ -86,6 +86,10 @@ interface LevelData {
  * Avoids `TypedArray.prototype.sort(comparefn)` so we are not bounded by
  * FixedArray::kMaxLength (~134M elements with V8 pointer compression).
  *
+ * **Sibling: {@link sortMixedByMorton} shares this exact partition/stack
+ * scaffold but with a different swap shape (Float64 + Uint32×2). Keep the
+ * two implementations in lockstep — fixes here should be mirrored there.**
+ *
  * @param mortons - Morton codes; sort key.
  * @param types - Block type per entry; permuted alongside mortons.
  * @param maskIndices - Mask index per entry; permuted alongside mortons.
@@ -182,6 +186,11 @@ function sortParallelByMorton(
  * `sortParallelByMorton`, but tailored to the (Float64 morton, Uint32×2 mask)
  * layout used by `BlockMaskBuffer` so the buffer's typed arrays can serve as
  * the sorted data directly — no SoA copy required.
+ *
+ * **Sibling: {@link sortParallelByMorton} shares this exact partition/stack
+ * scaffold but with a different swap shape (Float64 + Uint8 + Int32). Keep
+ * the two implementations in lockstep — fixes here should be mirrored
+ * there.**
  *
  * @param mortons - Morton codes; sort key.
  * @param masks - Interleaved [lo, hi] mask pairs (length = 2 * n).
@@ -299,7 +308,15 @@ function lowerBoundF64(arr: Float64Array, target: number, n: number): number {
  * Uses Structure-of-Arrays (SoA) representation and linear scans on sorted
  * Morton codes instead of Maps and per-node objects for performance.
  *
- * @param buffer - BlockMaskBuffer containing voxelized blocks
+ * **Mutates `buffer` in place.** Phase 1 sorts the buffer's solid-morton,
+ * mixed-morton, and mixed-mask typed arrays directly (no SoA copy) to keep
+ * peak memory low on very large grids. After this call the buffer's blocks
+ * are still semantically equivalent — same morton/mask pairs — but reordered
+ * by morton ascending. Callers must not rely on insertion order being
+ * preserved across this call.
+ *
+ * @param buffer - BlockMaskBuffer containing voxelized blocks. Mutated:
+ * solid mortons, mixed mortons, and mixed masks are sorted in place.
  * @param gridBounds - Grid bounds aligned to block boundaries
  * @param sceneBounds - Original scene bounds
  * @param voxelResolution - Size of each voxel in world units
@@ -350,10 +367,10 @@ function buildSparseOctree(
     // levels (2, 3, ...) are built from JS-array level data via the same
     // single-array linear scan as before.
     //
-    // `levels[]` holds INTERIOR levels only (no level 0). `levels[0]` is the
-    // first interior level (= original "level 1"); `levels[length-1]` is the
-    // root. Phase 3 special-cases level 0 access via a wave-entry sentinel
-    // (`li === -1`).
+    // `interiorLevels[]` holds INTERIOR levels only (no level 0).
+    // `interiorLevels[0]` is the first interior level (= original "level 1");
+    // `interiorLevels[length-1]` is the root. Phase 3 special-cases level 0
+    // access via a wave-entry sentinel (`li === -1`).
 
     const bar = logger.bar('Building tree', 10);
     let octreeStep = 0;
@@ -372,22 +389,25 @@ function buildSparseOctree(
     );
     const treeDepth = Math.max(1, Math.ceil(Math.log2(blocksPerAxis)));
 
-    const levels: LevelData[] = [];
+    const interiorLevels: LevelData[] = [];
 
     // === Build level 1 from dual-stream level 0 ===
     // Two-pointer merge: at each step, the smaller-morton stream is the next
     // child to process. Group children with the same `floor(morton/8)` parent.
     // childMask records which octants are present; allSolid tracks whether we
     // can collapse this parent into a SOLID leaf at level 1.
+    // All interior levels (level 1 and up) carry a real childMasks array; the
+    // `LevelData.childMasks: number[] | null` shape exists only to model the
+    // never-pushed leaf level, so we can use a non-nullable type here.
     let curMortons: number[] = [];
     let curTypes: number[] = [];
     let curMaskIndices: number[] = [];
-    let curChildMasks: number[] | null = [];
+    let curChildMasks: number[] = [];
 
     {
         let sI = 0;
         let mI = 0;
-        const nextChildMasks = curChildMasks!;
+        const nextChildMasks = curChildMasks;
         while (sI < nSolid || mI < nMixed) {
             const sM0 = sI < nSolid ? solidStream[sI] : Number.POSITIVE_INFINITY;
             const mM0 = mI < nMixed ? mixedStream[mI] : Number.POSITIVE_INFINITY;
@@ -437,12 +457,12 @@ function buildSparseOctree(
     // Same logic as before — single-array linear scan. We push each level
     // before building the next, then push the final root after the loop.
     if (curMortons.length === 0) {
-        // Empty input: nothing to push. levels stays empty.
+        // Empty input: nothing to push. interiorLevels stays empty.
         actualDepth = 1;
     } else if (curMortons.length === 1 && curMortons[0] === 0) {
         // Level 1 IS the root.
         actualDepth = 1;
-        levels.push({
+        interiorLevels.push({
             mortons: curMortons,
             types: curTypes,
             maskIndices: curMaskIndices,
@@ -457,7 +477,7 @@ function buildSparseOctree(
             }
 
             // Push current level before building one above it
-            levels.push({
+            interiorLevels.push({
                 mortons: curMortons,
                 types: curTypes,
                 maskIndices: curMaskIndices,
@@ -506,22 +526,22 @@ function buildSparseOctree(
             curMaskIndices = nextMaskIndices;
             curChildMasks = nextChildMasks;
 
-            if (curMortons.length === 0 ||
-                (curMortons.length === 1 && curMortons[0] === 0)) {
+            // Each iteration consumes n >= 1 entries and produces ceil(n/8) >= 1
+            // parents, so curMortons.length stays >= 1 here; we only need to
+            // check for convergence to a single root at morton 0.
+            if (curMortons.length === 1 && curMortons[0] === 0) {
                 actualDepth = level + 1;
                 break;
             }
         }
 
-        // Save root
-        if (curMortons.length > 0) {
-            levels.push({
-                mortons: curMortons,
-                types: curTypes,
-                maskIndices: curMaskIndices,
-                childMasks: curChildMasks
-            });
-        }
+        // Save root. By the invariant above, curMortons.length >= 1 always.
+        interiorLevels.push({
+            mortons: curMortons,
+            types: curTypes,
+            maskIndices: curMaskIndices,
+            childMasks: curChildMasks
+        });
     }
 
     while (octreeStep < 9) {
@@ -533,7 +553,7 @@ function buildSparseOctree(
 
     // --- Phase 3: Flatten tree to Laine-Karras format ---
     const result = flattenTreeFromLevels(
-        levels, solidStream, mixedStream, mixedMasks, nSolid, nMixed,
+        interiorLevels, solidStream, mixedStream, mixedMasks, nSolid, nMixed,
         gridBounds, sceneBounds, voxelResolution, actualDepth
     );
 
@@ -556,10 +576,10 @@ function buildSparseOctree(
  * indicates a mixed leaf at `mixedStream[ii]`, while `ii >= nMixed`
  * indicates a solid leaf at `solidStream[ii - nMixed]`.
  *
- * `levels[i]` (for `i >= 0`) holds the i-th INTERIOR level (= original
- * "level i+1"), built bottom-up. `levels[length-1]` is the root.
+ * `interiorLevels[i]` (for `i >= 0`) holds the i-th INTERIOR level (= original
+ * "level i+1"), built bottom-up. `interiorLevels[length-1]` is the root.
  *
- * @param levels - Interior level data (index 0 = first interior level
+ * @param interiorLevels - Interior level data (index 0 = first interior level
  * above leaves, last = root).
  * @param solidStream - Sorted Float64 mortons for solid leaves.
  * @param mixedStream - Sorted Float64 mortons for mixed leaves (paired with
@@ -575,7 +595,7 @@ function buildSparseOctree(
  * @returns Sparse octree structure in Laine-Karras format.
  */
 function flattenTreeFromLevels(
-    levels: LevelData[],
+    interiorLevels: LevelData[],
     solidStream: Float64Array,
     mixedStream: Float64Array,
     mixedMasks: Uint32Array,
@@ -586,7 +606,7 @@ function flattenTreeFromLevels(
     voxelResolution: number,
     treeDepth: number
 ): SparseOctree {
-    if (levels.length === 0) {
+    if (interiorLevels.length === 0) {
         // Empty tree (no leaves and no interior levels).
         return {
             gridBounds,
@@ -601,12 +621,12 @@ function flattenTreeFromLevels(
         };
     }
 
-    const rootLevel = levels[levels.length - 1];
+    const rootLevel = interiorLevels[interiorLevels.length - 1];
 
     // Upper bound on total nodes (not all may be reachable if solids collapsed)
     let maxNodes = nSolid + nMixed;
-    for (let l = 0; l < levels.length; l++) {
-        maxNodes += levels[l].mortons.length;
+    for (let l = 0; l < interiorLevels.length; l++) {
+        maxNodes += interiorLevels[l].mortons.length;
     }
 
     const nodes = new Uint32Array(maxNodes);
@@ -622,7 +642,7 @@ function flattenTreeFromLevels(
     let waveIi: number[] = [];
 
     // Initialize wave with root level entries.
-    const rootLi = levels.length - 1;
+    const rootLi = interiorLevels.length - 1;
     for (let i = 0; i < rootLevel.mortons.length; i++) {
         waveLi.push(rootLi);
         waveIi.push(i);
@@ -662,7 +682,7 @@ function flattenTreeFromLevels(
                 continue;
             }
 
-            const level = levels[li];
+            const level = interiorLevels[li];
             const type = level.types[ii];
 
             // A node is a leaf if it's Solid (at any level, collapsed or original).
@@ -696,7 +716,7 @@ function flattenTreeFromLevels(
             nodes[intPos[j]] = ((childMask & 0xFF) << 24) | (nextChildStart & 0x00FFFFFF);
 
             const myLi = intLi[j];
-            const myMorton = levels[myLi].mortons[intIi[j]];
+            const myMorton = interiorLevels[myLi].mortons[intIi[j]];
             const childMortonBase = myMorton * 8;
             const childMortonEnd = childMortonBase + 8;
 
@@ -727,7 +747,7 @@ function flattenTreeFromLevels(
             } else {
                 // Children are at an interior level → single-array binary search.
                 const childLi = myLi - 1;
-                const childLevel = levels[childLi];
+                const childLevel = interiorLevels[childLi];
                 const childMortons = childLevel.mortons;
 
                 let lo = 0;

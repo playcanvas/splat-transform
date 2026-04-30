@@ -6,7 +6,8 @@ import {
     SOLID_HI,
     SOLID_LO,
     SparseVoxelGrid,
-    TYPE_MASK
+    TYPE_MASK,
+    readBlockType
 } from './sparse-voxel-grid';
 
 /**
@@ -45,7 +46,7 @@ function computeEmptyGrid(visited: SparseVoxelGrid, blocked: SparseVoxelGrid): S
                 vLo = visited.masks.lo[vs];
                 vHi = visited.masks.hi[vs];
             }
-            const bbt = (blockedTypes[blockIdx >>> 4] >>> ((blockIdx & 15) << 1)) & TYPE_MASK;
+            const bbt = readBlockType(blockedTypes, blockIdx);
             let lo: number, hi: number;
             if (bbt === BLOCK_EMPTY) {
                 lo = vLo;
