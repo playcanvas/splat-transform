@@ -155,10 +155,21 @@ const fillFloor = (
 
     if (r > 0) dilatedSolid.clear();
 
-    const dilatedFound = r > 0 ? sparseDilate3(foundEmpty, r, 0) : foundEmpty;
-    if (r > 0) foundEmpty.clear();
+    // foundEmpty is no longer read after this point — pass consumeSrc=true
+    // so sparseDilate3 reuses its memory as the Z-pass working buffer
+    // instead of allocating a fresh full grid. Saves one
+    // SparseVoxelGrid (blockType + occupancy + masks) at peak.
+    // sparseDilate3 also clears foundEmpty on its way out, so no
+    // separate clear() is needed. (When r === 0, dilatedFound IS
+    // foundEmpty; the previous `foundEmpty.clear()` was correctly
+    // skipped on that branch and the same logic applies here.)
+    const dilatedFound = r > 0 ? sparseDilate3(foundEmpty, r, 0, true) : foundEmpty;
 
-    const combined = sparseOrGrids(grid, dilatedFound);
+    // grid is the original voxelization; not read after this OR. Pass
+    // consumeA=true so sparseOrGrids mutates it in place rather than
+    // cloning — saves a full SparseVoxelGrid clone right at the end of
+    // the fill-floor phase.
+    const combined = sparseOrGrids(grid, dilatedFound, true);
     const result = combined.toBuffer(0, 0, 0, nbx, nby, nbz);
 
     return { buffer: result, gridBounds };

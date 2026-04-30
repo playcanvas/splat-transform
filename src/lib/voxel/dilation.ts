@@ -354,17 +354,46 @@ function sparseDilateY(src: SparseVoxelGrid, dst: SparseVoxelGrid, halfExtent: n
     }
 }
 
+/**
+ * 3D dilation by separable 1D passes (X then Z then Y).
+ *
+ * Allocates one fresh working grid (`a`) and uses one more (`b`) for the
+ * intermediate. When `consumeSrc` is true the caller relinquishes `src`
+ * — it gets cleared and reused as the second working grid, saving one
+ * full SparseVoxelGrid allocation per call. After the function returns
+ * with `consumeSrc=true`, `src` references an empty grid and must not
+ * be read by the caller.
+ *
+ * @param src - Input grid. Read-only when `consumeSrc=false`; consumed
+ * (cleared and used as scratch) when `consumeSrc=true`.
+ * @param halfExtentXZ - Dilation half-extent in voxels along X and Z.
+ * @param halfExtentY - Dilation half-extent in voxels along Y.
+ * @param consumeSrc - If true, the function may reuse `src`'s memory as
+ * a working buffer. Saves ~one full grid's worth of allocation. The
+ * caller must not read `src` after the call.
+ * @returns Newly allocated dilated grid.
+ */
 function sparseDilate3(
     src: SparseVoxelGrid,
     halfExtentXZ: number,
-    halfExtentY: number
+    halfExtentY: number,
+    consumeSrc: boolean = false
 ): SparseVoxelGrid {
     const { nx, ny, nz } = src;
     const a = new SparseVoxelGrid(nx, ny, nz);
     const bar = logger.bar('Dilating', 3);
     sparseDilateX(src, a, halfExtentXZ);
     bar.tick();
-    const b = new SparseVoxelGrid(nx, ny, nz);
+    // Reuse src as the Z-dilation target when allowed. After dilateX,
+    // src is no longer read by anyone in this function, so its storage
+    // is free to repurpose.
+    let b: SparseVoxelGrid;
+    if (consumeSrc) {
+        src.clear();
+        b = src;
+    } else {
+        b = new SparseVoxelGrid(nx, ny, nz);
+    }
     sparseDilateZ(a, b, halfExtentXZ);
     a.clear();
     bar.tick();

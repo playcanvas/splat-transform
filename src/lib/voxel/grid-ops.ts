@@ -59,12 +59,22 @@ function computeEmptyGrid(visited: SparseVoxelGrid, blocked: SparseVoxelGrid): S
 /**
  * Compute the union of two sparse voxel grids (bitwise OR).
  *
- * @param a - First grid (cloned as the base).
- * @param b - Second grid (OR'd into the clone of a).
- * @returns New grid containing the union of both inputs.
+ * @param a - First grid. By default a fresh clone is taken as the base;
+ * with `consumeA=true` it is mutated in place and returned, saving one
+ * full grid's worth of clone allocation.
+ * @param b - Second grid (OR'd into the result).
+ * @param consumeA - If true, `a` is mutated in place and returned. The
+ * caller must not subsequently read `a` as an independent value
+ * (the returned grid IS `a`).
+ * @returns Grid containing the union of both inputs. Equal to `a` when
+ * `consumeA=true`, otherwise a freshly cloned grid.
  */
-function sparseOrGrids(a: SparseVoxelGrid, b: SparseVoxelGrid): SparseVoxelGrid {
-    const result = a.clone();
+function sparseOrGrids(
+    a: SparseVoxelGrid,
+    b: SparseVoxelGrid,
+    consumeA: boolean = false
+): SparseVoxelGrid {
+    const result = consumeA ? a : a.clone();
     const totalBlocks = b.nbx * b.nby * b.nbz;
     for (let w = 0; w < b.occupancy.length; w++) {
         let bits = b.occupancy[w];

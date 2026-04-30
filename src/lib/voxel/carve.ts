@@ -50,7 +50,8 @@ const carve = (
 
     const gridA = SparseVoxelGrid.fromBuffer(buffer, nx, ny, nz);
 
-    const blocked = sparseDilate3(gridA, kernelR, yHalfExtent);
+    // gridA is read only by this dilate; consume it as scratch.
+    const blocked = sparseDilate3(gridA, kernelR, yHalfExtent, true);
 
     let seedIx = Math.floor((seed.x - gridBounds.min.x) / voxelResolution);
     let seedIy = Math.floor((seed.y - gridBounds.min.y) / voxelResolution);
@@ -81,7 +82,8 @@ const carve = (
 
     const emptyGrid = computeEmptyGrid(visited, blocked);
 
-    const navRegion = sparseDilate3(emptyGrid, kernelR, yHalfExtent);
+    // emptyGrid is read only by this dilate; consume it as scratch.
+    const navRegion = sparseDilate3(emptyGrid, kernelR, yHalfExtent, true);
 
     const navBounds = navRegion.getOccupiedBlockBounds();
 
