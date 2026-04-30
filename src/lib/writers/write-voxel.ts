@@ -8,7 +8,7 @@ import { GpuVoxelization } from '../gpu';
 import { type FileSystem, writeFile } from '../io/write';
 import { GaussianBVH } from '../spatial';
 import type { DeviceCreator } from '../types';
-import { fmtCount, logger, Transform } from '../utils';
+import { fmtBytes, fmtCount, logger, Transform } from '../utils';
 import { buildSparseOctree, type SparseOctree } from './sparse-octree';
 import {
     filterAndFillBlocks,
@@ -202,7 +202,14 @@ const cropToNavigable = (
     const nby = ny >> 2;
     const nbz = nz >> 2;
 
+    logger.info(`mem [cropToNavigable: nx=${nx} ny=${ny} nz=${nz} (nbx*nby*nbz=${nbx * nby * nbz} blocks)]`);
+    const u0 = process.memoryUsage();
+    logger.info(`mem [cropToNavigable: pre-fromBuffer]: ${(u0.heapUsed + u0.external) / 1e9}GB`);
+
     const grid = SparseVoxelGrid.fromBuffer(buffer, nx, ny, nz);
+
+    const u1 = process.memoryUsage();
+    logger.info(`mem [cropToNavigable: post-fromBuffer]: ${(u1.heapUsed + u1.external) / 1e9}GB  (Δ=${((u1.heapUsed + u1.external - u0.heapUsed - u0.external) / 1e9).toFixed(3)}GB)`);
 
     const navBounds = grid.getNavigableBlockBounds();
     if (!navBounds) {
@@ -219,7 +226,13 @@ const cropToNavigable = (
         return { buffer, gridBounds };
     }
 
+    const u2 = process.memoryUsage();
+    logger.info(`mem [cropToNavigable: pre-toBuffer (crop=${cropMaxBx - minBx}x${cropMaxBy - minBy}x${cropMaxBz - minBz})]: ${(u2.heapUsed + u2.external) / 1e9}GB`);
+
     const croppedBuffer = grid.toBuffer(minBx, minBy, minBz, cropMaxBx, cropMaxBy, cropMaxBz);
+
+    const u3 = process.memoryUsage();
+    logger.info(`mem [cropToNavigable: post-toBuffer]: ${(u3.heapUsed + u3.external) / 1e9}GB  (Δ=${((u3.heapUsed + u3.external - u2.heapUsed - u2.external) / 1e9).toFixed(3)}GB)`);
 
     const blockSize = 4 * voxelResolution;
     const croppedMin = new Vec3(
@@ -393,16 +406,39 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             voxelResolution
         );
 
+        // Diagnostic: force a major GC at phase boundaries when Node was
+        // started with `--expose-gc`. Without it, V8's old-generation
+        // mark-sweep is lazy: each phase's intermediate grids stay in
+        // old-gen until the next phase's allocations cross the GC
+        // heuristic, which can drift several GB of dead memory across the
+        // pipeline. With `--expose-gc` this collapses the carry-over and
+        // makes per-phase memory readings reflect each phase's actual
+        // working set. Harmless no-op when `gc` isn't exposed.
+        const forceGc = (): void => {
+            (globalThis as { gc?: () => void }).gc?.();
+        };
+
+        // Sub-phase memory probe. Logs heapUsed + external (= V8's
+        // currently-live memory, the same `live` figure the --mem
+        // overlay shows). Used to localize which sub-step inside a
+        // bar window is allocating.
+        const memProbe = (label: string): void => {
+            const u = process.memoryUsage();
+            logger.info(`mem [${label}]: ${fmtBytes(u.heapUsed + u.external)}  (heap ${fmtBytes(u.heapUsed)} + ext ${fmtBytes(u.external)})`);
+        };
+
         let buffer = await voxelizeToBuffer(
             bvh, gpuVoxelization, gridBounds, voxelResolution, opacityCutoff
         );
 
         gpuVoxelization.destroy();
         gpuVoxelization = null;
+        forceGc();
 
         const filterSub = logger.group('Filtering');
         buffer = filterAndFillBlocks(buffer);
         filterSub.end();
+        forceGc();
 
         if (hasFillExterior) {
             const sub = logger.group('Fill exterior');
@@ -413,6 +449,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             buffer = fillResult.buffer;
             gridBounds = fillResult.gridBounds;
             sub.end();
+            forceGc();
         }
 
         if (hasFloorFill) {
@@ -423,6 +460,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             buffer = floorResult.buffer;
             gridBounds = floorResult.gridBounds;
             sub.end();
+            forceGc();
         }
 
         if (hasNav) {
@@ -435,13 +473,18 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             buffer = navResult.buffer;
             gridBounds = navResult.gridBounds;
             sub.end();
+            forceGc();
         }
 
+        memProbe('before finalCrop');
         const finalCrop = hasFillExterior || hasFloorFill ?
             cropToNavigable(buffer, gridBounds, voxelResolution) :
             cropToOccupied(buffer, gridBounds, voxelResolution);
         buffer = finalCrop.buffer;
         gridBounds = finalCrop.gridBounds;
+        memProbe('after finalCrop, pre-GC');
+        forceGc();
+        memProbe('after finalCrop, post-GC');
 
         const glbBytes = collisionMesh ?
             buildCollisionMesh(buffer, gridBounds, voxelResolution) :
@@ -453,6 +496,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             bounds,
             voxelResolution
         );
+        memProbe('after buildSparseOctree');
         buffer.clear();
 
         logger.info(`octree depth: ${octree.treeDepth}`);
