@@ -15,6 +15,7 @@ import {
     BLOCK_SOLID,
     BLOCKS_PER_WORD,
     EVEN_BITS,
+    SOLID_WORD,
     SparseVoxelGrid
 } from './sparse-voxel-grid';
 import {
@@ -44,17 +45,17 @@ const buildInvertedGrid = (
 ): SparseVoxelGrid => {
     const grid = new SparseVoxelGrid(nx, ny, nz);
 
-    // Inverted grid: every block defaults to SOLID (fully blocked).
-    // SOLID = 0b01 in each 2-bit lane, so the SOLID-everywhere word is
-    // 0x55555555. Then we clear the lanes corresponding to originally-
-    // occupied (i.e. unblocked-in-the-inverted-world) blocks.
-    grid.types.fill(0x55555555 >>> 0);
+    // Inverted grid: every block defaults to SOLID (fully blocked). SOLID is
+    // 0b01 in each 2-bit lane, so the SOLID-everywhere word is `SOLID_WORD`
+    // (0x55555555). Subsequent code clears the lanes corresponding to
+    // originally-occupied (i.e. unblocked-in-the-inverted-world) blocks.
+    grid.types.fill(SOLID_WORD);
     // Trim the final word so the trailing lanes (past totalBlocks) read
     // back as EMPTY rather than SOLID.
     const totalBlocks = grid.nbx * grid.nby * grid.nbz;
     const lastWord = grid.types.length - 1;
-    const lastLanes = totalBlocks - lastWord * 16;
-    if (lastLanes < 16) {
+    const lastLanes = totalBlocks - lastWord * BLOCKS_PER_WORD;
+    if (lastLanes < BLOCKS_PER_WORD) {
         const validBits = (1 << (lastLanes * 2)) - 1;
         grid.types[lastWord] = (grid.types[lastWord] & validBits) >>> 0;
     }
