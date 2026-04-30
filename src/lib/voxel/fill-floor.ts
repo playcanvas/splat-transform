@@ -84,13 +84,14 @@ const fillFloor = (
 
     const foundEmpty = new SparseVoxelGrid(nx, ny, nz);
 
+    const dilatedTypes = dilatedSolid.types;
     for (let bz = 0; bz < nbz; bz++) {
         for (let bx = 0; bx < nbx; bx++) {
             let walking = 0xFFFF;
 
             for (let by = 0; by < nby && walking; by++) {
                 const blockIdx = bx + by * nbx + bz * bStride;
-                const bt = dilatedSolid.blockType[blockIdx];
+                const bt = (dilatedTypes[blockIdx >>> 4] >>> ((blockIdx & 15) << 1)) & 0x3;
 
                 if (bt === BLOCK_SOLID) {
                     break;

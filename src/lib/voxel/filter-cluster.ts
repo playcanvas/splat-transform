@@ -42,30 +42,33 @@ const buildInvertedGrid = (
 ): SparseVoxelGrid => {
     const grid = new SparseVoxelGrid(nx, ny, nz);
 
-    // Default blockType is BLOCK_EMPTY (0). For the inverted grid,
-    // non-occupied blocks must be BLOCK_SOLID (fully blocked).
-    grid.blockType.fill(BLOCK_SOLID);
-    grid.occupancy.fill(0xFFFFFFFF >>> 0);
+    // Inverted grid: every block defaults to SOLID (fully blocked).
+    // SOLID = 0b01 in each 2-bit lane, so the SOLID-everywhere word is
+    // 0x55555555. Then we clear the lanes corresponding to originally-
+    // occupied (i.e. unblocked-in-the-inverted-world) blocks.
+    grid.types.fill(0x55555555 >>> 0);
+    // Trim the final word so the trailing lanes (past totalBlocks) read
+    // back as EMPTY rather than SOLID.
     const totalBlocks = grid.nbx * grid.nby * grid.nbz;
-    const lastWord = totalBlocks >>> 5;
-    const remainder = totalBlocks & 31;
-    if (remainder > 0) {
-        grid.occupancy[lastWord] = ((1 << remainder) - 1) >>> 0;
+    const lastWord = grid.types.length - 1;
+    const lastLanes = totalBlocks - lastWord * 16;
+    if (lastLanes < 16) {
+        const validBits = (1 << (lastLanes * 2)) - 1;
+        grid.types[lastWord] = (grid.types[lastWord] & validBits) >>> 0;
     }
 
     const solidMortons = buffer.getSolidBlocks();
     for (let i = 0; i < solidMortons.length; i++) {
         const [bx, by, bz] = mortonToXYZ(solidMortons[i]);
         const blockIdx = bx + by * grid.nbx + bz * grid.bStride;
-        grid.blockType[blockIdx] = BLOCK_EMPTY;
-        grid.occupancy[blockIdx >>> 5] &= ~(1 << (blockIdx & 31));
+        grid.setBlockType(blockIdx, BLOCK_EMPTY);
     }
 
     const mixed = buffer.getMixedBlocks();
     for (let i = 0; i < mixed.morton.length; i++) {
         const [bx, by, bz] = mortonToXYZ(mixed.morton[i]);
         const blockIdx = bx + by * grid.nbx + bz * grid.bStride;
-        grid.blockType[blockIdx] = BLOCK_MIXED;
+        grid.setBlockType(blockIdx, BLOCK_MIXED);
         grid.masks.set(blockIdx, (~mixed.masks[i * 2]) >>> 0, (~mixed.masks[i * 2 + 1]) >>> 0);
     }
 
@@ -110,7 +113,7 @@ const findClusterVoxelFlood = (
     }
 
     const seedBlockIdx = (seedIx >> 2) + (seedIy >> 2) * nbx + (seedIz >> 2) * bStride;
-    const seedBt = blocked.blockType[seedBlockIdx];
+    const seedBt = blocked.getBlockType(seedBlockIdx);
     const blockSeeds = seedBt === BLOCK_EMPTY ? [seedBlockIdx] : [];
     const voxelSeeds = seedBt === BLOCK_EMPTY ? [] : [{ ix: seedIx, iy: seedIy, iz: seedIz }];
 
@@ -118,15 +121,20 @@ const findClusterVoxelFlood = (
 
     const ccSet = new Set<number>();
     const totalBlocks = nbx * (ny >> 2) * (nz >> 2);
-    for (let w = 0; w < visited.occupancy.length; w++) {
-        let bits = visited.occupancy[w];
-        while (bits) {
-            const bitPos = 31 - Math.clz32(bits & -bits);
-            const blockIdx = w * 32 + bitPos;
+    const visitedTypes = visited.types;
+    const EVEN = 0x55555555 >>> 0;
+    for (let w = 0; w < visitedTypes.length; w++) {
+        const word = visitedTypes[w];
+        if (word === 0) continue;
+        let nonEmpty = ((word & EVEN) | ((word >>> 1) & EVEN)) >>> 0;
+        const baseIdx = w * 16;
+        while (nonEmpty) {
+            const bp = 31 - Math.clz32(nonEmpty & -nonEmpty);
+            const blockIdx = baseIdx + (bp >>> 1);
             if (blockIdx < totalBlocks) {
                 ccSet.add(blockIdx);
             }
-            bits &= bits - 1;
+            nonEmpty &= nonEmpty - 1;
         }
     }
 

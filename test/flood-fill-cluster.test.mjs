@@ -86,18 +86,22 @@ function verifyVisitedVoxelConnectivity(visited, seedIx, seedIy, seedIz) {
     const visitedVoxels = new Set();
     const voxelKey = (ix, iy, iz) => ix + iy * nx + iz * nx * ny;
 
-    for (let w = 0; w < visited.occupancy.length; w++) {
-        let bits = visited.occupancy[w];
-        while (bits) {
-            const bitPos = 31 - Math.clz32(bits & -bits);
-            const bi = w * 32 + bitPos;
-            bits &= bits - 1;
+    const EVEN = 0x55555555 >>> 0;
+    for (let w = 0; w < visited.types.length; w++) {
+        const word = visited.types[w];
+        if (word === 0) continue;
+        let nonEmpty = ((word & EVEN) | ((word >>> 1) & EVEN)) >>> 0;
+        const baseIdx = w * 16;
+        while (nonEmpty) {
+            const bp = 31 - Math.clz32(nonEmpty & -nonEmpty);
+            const bi = baseIdx + (bp >>> 1);
+            nonEmpty &= nonEmpty - 1;
             if (bi >= nbx * nby * nbz) continue;
             const bx = bi % nbx;
             const byBz = (bi / nbx) | 0;
             const by = byBz % nby;
             const bz = (byBz / nby) | 0;
-            const bt = visited.blockType[bi];
+            const bt = visited.getBlockType(bi);
             if (bt === BLOCK_SOLID) {
                 for (let lz = 0; lz < 4; lz++)
                     for (let ly = 0; ly < 4; ly++)
@@ -151,15 +155,15 @@ function verifyInvertedGrid(buffer, grid, nbx, nby, nbz) {
         const [bx, by, bz] = mortonToXYZ(m);
         const bi = bx + by * nbx + bz * bStride;
         known.add(bi);
-        if (grid.blockType[bi] !== BLOCK_EMPTY) errors.push(`solid(${bx},${by},${bz}) expected EMPTY got ${NAMES[grid.blockType[bi]]}`);
+        if (grid.getBlockType(bi) !== BLOCK_EMPTY) errors.push(`solid(${bx},${by},${bz}) expected EMPTY got ${NAMES[grid.getBlockType(bi)]}`);
     }
     const mixed = buffer.getMixedBlocks();
     for (let i = 0; i < mixed.morton.length; i++) {
         const [bx, by, bz] = mortonToXYZ(mixed.morton[i]);
         const bi = bx + by * nbx + bz * bStride;
         known.add(bi);
-        if (grid.blockType[bi] !== BLOCK_MIXED) {
-            errors.push(`mixed(${bx},${by},${bz}) expected MIXED got ${NAMES[grid.blockType[bi]]}`);
+        if (grid.getBlockType(bi) !== BLOCK_MIXED) {
+            errors.push(`mixed(${bx},${by},${bz}) expected MIXED got ${NAMES[grid.getBlockType(bi)]}`);
         } else {
             const s = grid.masks.slot(bi);
             const elo = (~mixed.masks[i * 2]) >>> 0, ehi = (~mixed.masks[i * 2 + 1]) >>> 0;
@@ -167,7 +171,7 @@ function verifyInvertedGrid(buffer, grid, nbx, nby, nbz) {
         }
     }
     for (let bi = 0; bi < nbx * nby * nbz; bi++) {
-        if (!known.has(bi) && grid.blockType[bi] !== BLOCK_SOLID) errors.push(`block ${bi} expected SOLID`);
+        if (!known.has(bi) && grid.getBlockType(bi) !== BLOCK_SOLID) errors.push(`block ${bi} expected SOLID`);
     }
     return errors;
 }
@@ -183,12 +187,12 @@ describe('buildInvertedGrid', () => {
         const grid = buildInvertedGrid(buffer, nx, ny, nz);
         const nbx = nx >> 2, nby = ny >> 2;
 
-        assert.strictEqual(grid.blockType[blockIdx(0, 0, 0, nbx, nby)], BLOCK_EMPTY);
-        assert.strictEqual(grid.blockType[blockIdx(1, 0, 0, nbx, nby)], BLOCK_EMPTY);
-        assert.strictEqual(grid.blockType[blockIdx(0, 1, 0, nbx, nby)], BLOCK_EMPTY);
+        assert.strictEqual(grid.getBlockType(blockIdx(0, 0, 0, nbx, nby)), BLOCK_EMPTY);
+        assert.strictEqual(grid.getBlockType(blockIdx(1, 0, 0, nbx, nby)), BLOCK_EMPTY);
+        assert.strictEqual(grid.getBlockType(blockIdx(0, 1, 0, nbx, nby)), BLOCK_EMPTY);
 
-        assert.strictEqual(grid.blockType[blockIdx(2, 0, 0, nbx, nby)], BLOCK_SOLID);
-        assert.strictEqual(grid.blockType[blockIdx(0, 2, 0, nbx, nby)], BLOCK_SOLID);
+        assert.strictEqual(grid.getBlockType(blockIdx(2, 0, 0, nbx, nby)), BLOCK_SOLID);
+        assert.strictEqual(grid.getBlockType(blockIdx(0, 2, 0, nbx, nby)), BLOCK_SOLID);
     });
 
     it('should map mixed buffer blocks to BLOCK_MIXED with inverted masks', () => {
@@ -200,7 +204,7 @@ describe('buildInvertedGrid', () => {
         const nbx = nx >> 2, nby = ny >> 2;
         const bi = blockIdx(1, 1, 0, nbx, nby);
 
-        assert.strictEqual(grid.blockType[bi], BLOCK_MIXED);
+        assert.strictEqual(grid.getBlockType(bi), BLOCK_MIXED);
         const s = grid.masks.slot(bi);
         assert.strictEqual(grid.masks.lo[s], (~lo) >>> 0);
         assert.strictEqual(grid.masks.hi[s], (~hi) >>> 0);

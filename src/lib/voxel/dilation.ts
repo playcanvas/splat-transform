@@ -1,7 +1,8 @@
 import {
     BLOCK_EMPTY,
-    BLOCK_MIXED,
     BLOCK_SOLID,
+    BLOCKS_PER_WORD,
+    EVEN_BITS,
     SOLID_HI,
     SOLID_LO,
     SparseVoxelGrid
@@ -10,21 +11,31 @@ import { logger } from '../utils';
 
 // ============================================================================
 // Active Pair Computation
+//
+// Each function iterates `grid.types` (packed 2-bit blockTypes, 16 blocks
+// per word) and derives a per-word "non-empty lane" mask using the trick
+//   nonEmpty = (word & 0x55555555) | ((word >>> 1) & 0x55555555)
+// which sets bit 2k iff lane k is non-zero. The set bits are then walked
+// the same way the old occupancy bitfield was.
 // ============================================================================
 
 function getActiveYZPairs(grid: SparseVoxelGrid): Set<number> {
     const pairs = new Set<number>();
     const { nbx } = grid;
     const totalBlocks = grid.nbx * grid.nby * grid.nbz;
-    for (let w = 0; w < grid.occupancy.length; w++) {
-        let bits = grid.occupancy[w];
-        while (bits) {
-            const bitPos = 31 - Math.clz32(bits & -bits);
-            const blockIdx = w * 32 + bitPos;
+    const types = grid.types;
+    for (let w = 0; w < types.length; w++) {
+        const word = types[w];
+        if (word === 0) continue;
+        let nonEmpty = ((word & EVEN_BITS) | ((word >>> 1) & EVEN_BITS)) >>> 0;
+        const baseIdx = w * BLOCKS_PER_WORD;
+        while (nonEmpty) {
+            const bp = 31 - Math.clz32(nonEmpty & -nonEmpty);
+            const blockIdx = baseIdx + (bp >>> 1);
             if (blockIdx < totalBlocks) {
                 pairs.add((blockIdx / nbx) | 0);
             }
-            bits &= bits - 1;
+            nonEmpty &= nonEmpty - 1;
         }
     }
     return pairs;
@@ -34,17 +45,21 @@ function getActiveXZPairs(grid: SparseVoxelGrid): Set<number> {
     const pairs = new Set<number>();
     const { nbx, bStride } = grid;
     const totalBlocks = grid.nbx * grid.nby * grid.nbz;
-    for (let w = 0; w < grid.occupancy.length; w++) {
-        let bits = grid.occupancy[w];
-        while (bits) {
-            const bitPos = 31 - Math.clz32(bits & -bits);
-            const blockIdx = w * 32 + bitPos;
+    const types = grid.types;
+    for (let w = 0; w < types.length; w++) {
+        const word = types[w];
+        if (word === 0) continue;
+        let nonEmpty = ((word & EVEN_BITS) | ((word >>> 1) & EVEN_BITS)) >>> 0;
+        const baseIdx = w * BLOCKS_PER_WORD;
+        while (nonEmpty) {
+            const bp = 31 - Math.clz32(nonEmpty & -nonEmpty);
+            const blockIdx = baseIdx + (bp >>> 1);
             if (blockIdx < totalBlocks) {
                 const bx = blockIdx % nbx;
                 const bz = (blockIdx / bStride) | 0;
                 pairs.add(bx + bz * nbx);
             }
-            bits &= bits - 1;
+            nonEmpty &= nonEmpty - 1;
         }
     }
     return pairs;
@@ -54,17 +69,21 @@ function getActiveXYPairs(grid: SparseVoxelGrid): Set<number> {
     const pairs = new Set<number>();
     const { nbx, nby } = grid;
     const totalBlocks = grid.nbx * grid.nby * grid.nbz;
-    for (let w = 0; w < grid.occupancy.length; w++) {
-        let bits = grid.occupancy[w];
-        while (bits) {
-            const bitPos = 31 - Math.clz32(bits & -bits);
-            const blockIdx = w * 32 + bitPos;
+    const types = grid.types;
+    for (let w = 0; w < types.length; w++) {
+        const word = types[w];
+        if (word === 0) continue;
+        let nonEmpty = ((word & EVEN_BITS) | ((word >>> 1) & EVEN_BITS)) >>> 0;
+        const baseIdx = w * BLOCKS_PER_WORD;
+        while (nonEmpty) {
+            const bp = 31 - Math.clz32(nonEmpty & -nonEmpty);
+            const blockIdx = baseIdx + (bp >>> 1);
             if (blockIdx < totalBlocks) {
                 const bx = blockIdx % nbx;
                 const by = ((blockIdx / nbx) | 0) % nby;
                 pairs.add(bx + by * nbx);
             }
-            bits &= bits - 1;
+            nonEmpty &= nonEmpty - 1;
         }
     }
     return pairs;
@@ -72,6 +91,9 @@ function getActiveXYPairs(grid: SparseVoxelGrid): Set<number> {
 
 // ============================================================================
 // Line Extraction / Write-back
+//
+// `getType` reads a packed 2-bit block type. V8 should JIT this into a few
+// inline ops per call; small overhead vs the old direct Uint8Array read.
 // ============================================================================
 
 function extractLineX(grid: SparseVoxelGrid, iy: number, iz: number, buf: Uint32Array): void {
@@ -80,9 +102,10 @@ function extractLineX(grid: SparseVoxelGrid, iy: number, iz: number, buf: Uint32
     const inHi = bitBase >= 32;
     const shift = inHi ? bitBase - 32 : bitBase;
     const lineBase = by * grid.nbx + bz * grid.bStride;
+    const types = grid.types;
     for (let bx = 0; bx < grid.nbx; bx++) {
         const blockIdx = lineBase + bx;
-        const bt = grid.blockType[blockIdx];
+        const bt = (types[blockIdx >>> 4] >>> ((blockIdx & 15) << 1)) & 0x3;
         if (bt === BLOCK_EMPTY) continue;
         let row4: number;
         if (bt === BLOCK_SOLID) {
@@ -121,9 +144,10 @@ function extractLineY(grid: SparseVoxelGrid, ix: number, iz: number, buf: Uint32
     const lx = ix & 3, lz = iz & 3;
     const inHi = lz >= 2;
     const base = lx + (lz & 1) * 16;
+    const types = grid.types;
     for (let by = 0; by < grid.nby; by++) {
         const blockIdx = bx + by * grid.nbx + bz * grid.bStride;
-        const bt = grid.blockType[blockIdx];
+        const bt = (types[blockIdx >>> 4] >>> ((blockIdx & 15) << 1)) & 0x3;
         if (bt === BLOCK_EMPTY) continue;
         let row4: number;
         if (bt === BLOCK_SOLID) {
@@ -167,9 +191,10 @@ function writeLineY(grid: SparseVoxelGrid, ix: number, iz: number, buf: Uint32Ar
 function extractLineZ(grid: SparseVoxelGrid, ix: number, iy: number, buf: Uint32Array): void {
     const bx = ix >> 2, by = iy >> 2;
     const base = (ix & 3) + ((iy & 3) << 2);
+    const types = grid.types;
     for (let bz = 0; bz < grid.nbz; bz++) {
         const blockIdx = bx + by * grid.nbx + bz * grid.bStride;
-        const bt = grid.blockType[blockIdx];
+        const bt = (types[blockIdx >>> 4] >>> ((blockIdx & 15) << 1)) & 0x3;
         if (bt === BLOCK_EMPTY) continue;
         let row4: number;
         if (bt === BLOCK_SOLID) {
@@ -233,7 +258,7 @@ function sparseDilateX(src: SparseVoxelGrid, dst: SparseVoxelGrid, halfExtent: n
     const lineWords = (nx + 31) >>> 5;
     const srcBuf = new Uint32Array(lineWords);
     const dstBuf = new Uint32Array(lineWords);
-    const srcBT = src.blockType;
+    const srcTypes = src.types;
     const activePairs = getActiveYZPairs(src);
     for (const key of activePairs) {
         const by = key % nby;
@@ -242,7 +267,8 @@ function sparseDilateX(src: SparseVoxelGrid, dst: SparseVoxelGrid, halfExtent: n
         const lineBase = by * nbx + bz * bStride;
         let allSolid = true;
         for (let bx = 0; bx < nbx; bx++) {
-            if (srcBT[lineBase + bx] !== BLOCK_SOLID) {
+            const idx = lineBase + bx;
+            if (((srcTypes[idx >>> 4] >>> ((idx & 15) << 1)) & 0x3) !== BLOCK_SOLID) {
                 allSolid = false;
                 break;
             }
@@ -275,7 +301,7 @@ function sparseDilateZ(src: SparseVoxelGrid, dst: SparseVoxelGrid, halfExtent: n
     const lineWords = (nz + 31) >>> 5;
     const srcBuf = new Uint32Array(lineWords);
     const dstBuf = new Uint32Array(lineWords);
-    const srcBT = src.blockType;
+    const srcTypes = src.types;
     const activePairs = getActiveXYPairs(src);
     for (const key of activePairs) {
         const bx = key % nbx;
@@ -284,7 +310,8 @@ function sparseDilateZ(src: SparseVoxelGrid, dst: SparseVoxelGrid, halfExtent: n
         const lineStart = bx + by * nbx;
         let allSolid = true;
         for (let bz = 0; bz < nbz; bz++) {
-            if (srcBT[lineStart + bz * bStride] !== BLOCK_SOLID) {
+            const idx = lineStart + bz * bStride;
+            if (((srcTypes[idx >>> 4] >>> ((idx & 15) << 1)) & 0x3) !== BLOCK_SOLID) {
                 allSolid = false;
                 break;
             }
@@ -317,7 +344,7 @@ function sparseDilateY(src: SparseVoxelGrid, dst: SparseVoxelGrid, halfExtent: n
     const lineWords = (ny + 31) >>> 5;
     const srcBuf = new Uint32Array(lineWords);
     const dstBuf = new Uint32Array(lineWords);
-    const srcBT = src.blockType;
+    const srcTypes = src.types;
     const activePairs = getActiveXZPairs(src);
     for (const key of activePairs) {
         const bx = key % nbx;
@@ -326,7 +353,8 @@ function sparseDilateY(src: SparseVoxelGrid, dst: SparseVoxelGrid, halfExtent: n
         const lineStart = bx + bz * bStride;
         let allSolid = true;
         for (let by = 0; by < nby; by++) {
-            if (srcBT[lineStart + by * nbx] !== BLOCK_SOLID) {
+            const idx = lineStart + by * nbx;
+            if (((srcTypes[idx >>> 4] >>> ((idx & 15) << 1)) & 0x3) !== BLOCK_SOLID) {
                 allSolid = false;
                 break;
             }
@@ -384,9 +412,6 @@ function sparseDilate3(
     const bar = logger.bar('Dilating', 3);
     sparseDilateX(src, a, halfExtentXZ);
     bar.tick();
-    // Reuse src as the Z-dilation target when allowed. After dilateX,
-    // src is no longer read by anyone in this function, so its storage
-    // is free to repurpose.
     let b: SparseVoxelGrid;
     if (consumeSrc) {
         src.clear();

@@ -67,7 +67,7 @@ const fillExterior = (
     const faceVoxelSeeds: { ix: number; iy: number; iz: number }[] = [];
 
     const seedBoundaryBlock = (blockIdx: number, bx: number, by: number, bz: number, face: number): void => {
-        const bt = dilated.blockType[blockIdx];
+        const bt = dilated.getBlockType(blockIdx);
         if (bt === BLOCK_SOLID) return;
         if (bt === BLOCK_MIXED) {
             const ms = dilated.masks.slot(blockIdx);
@@ -158,7 +158,7 @@ const fillExterior = (
         for (let by = 0; by < nby; by++) {
             for (let bx = 0; bx < nbx; bx++) {
                 const blockIdx = bx + by * nbx + bz * combined.bStride;
-                const bt = combined.blockType[blockIdx];
+                const bt = combined.getBlockType(blockIdx);
                 if (bt === BLOCK_SOLID) continue;
                 if (bt === BLOCK_MIXED) {
                     const cs = combined.masks.slot(blockIdx);

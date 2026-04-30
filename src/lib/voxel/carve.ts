@@ -75,7 +75,7 @@ const carve = (
     }
 
     const seedBlockIdx = (seedIx >> 2) + (seedIy >> 2) * nbx + (seedIz >> 2) * (nbx * nby);
-    const seedBt = blocked.blockType[seedBlockIdx];
+    const seedBt = blocked.getBlockType(seedBlockIdx);
     const bSeeds = seedBt === BLOCK_EMPTY ? [seedBlockIdx] : [];
     const vSeeds = seedBt === BLOCK_EMPTY ? [] : [{ ix: seedIx, iy: seedIy, iz: seedIz }];
     const visited = twoLevelBFS(blocked, bSeeds, vSeeds, nx, ny, nz);
