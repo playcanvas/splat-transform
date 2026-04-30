@@ -699,6 +699,17 @@ const main = async () => {
         return process.platform === 'win32' ? raw : raw * 1024;
     };
 
+    // V8-tracked currently-live memory: heapUsed (JS objects) + external
+    // (C++-bound, includes ArrayBuffer storage for typed arrays — which is
+    // most of our memory in this app). Drops when GC reclaims, so the
+    // delta between phase boundaries reveals whether each phase actually
+    // releases its scratch buffers (vs the kernel maxRSS metric, which is
+    // monotonic).
+    const liveMemoryBytes = (): number => {
+        const u = process.memoryUsage();
+        return u.heapUsed + u.external;
+    };
+
     // Emit the final timing line plus peak memory usage.
     const reportDone = (failed = false) => {
         const elapsedMs = performance.now() - startTime;
@@ -759,7 +770,8 @@ const main = async () => {
     const renderer = new TextRenderer({
         write,
         output: chunk => process.stdout.write(chunk),
-        getPeakMemory: peakMemoryBytes
+        getPeakMemory: peakMemoryBytes,
+        getLiveMemory: liveMemoryBytes
     });
     logger.setRenderer(renderer);
 
