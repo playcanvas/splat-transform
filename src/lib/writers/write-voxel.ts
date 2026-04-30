@@ -393,29 +393,16 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             voxelResolution
         );
 
-        // Force a major GC at phase boundaries when Node was started with
-        // `--expose-gc`. Each phase produces a result buffer/grid that
-        // supersedes the previous one, but V8's old-generation mark-sweep
-        // is lazy and can drift several GB of dead intermediate memory
-        // across the pipeline before reclaiming. With `--expose-gc` this
-        // collapses the carry-over so each phase starts from a clean
-        // baseline. Harmless no-op when `gc` isn't exposed.
-        const forceGc = (): void => {
-            (globalThis as { gc?: () => void }).gc?.();
-        };
-
         let buffer = await voxelizeToBuffer(
             bvh, gpuVoxelization, gridBounds, voxelResolution, opacityCutoff
         );
 
         gpuVoxelization.destroy();
         gpuVoxelization = null;
-        forceGc();
 
         const filterSub = logger.group('Filtering');
         buffer = filterAndFillBlocks(buffer);
         filterSub.end();
-        forceGc();
 
         if (hasFillExterior) {
             const sub = logger.group('Fill exterior');
@@ -426,7 +413,6 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             buffer = fillResult.buffer;
             gridBounds = fillResult.gridBounds;
             sub.end();
-            forceGc();
         }
 
         if (hasFloorFill) {
@@ -437,7 +423,6 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             buffer = floorResult.buffer;
             gridBounds = floorResult.gridBounds;
             sub.end();
-            forceGc();
         }
 
         if (hasNav) {
@@ -450,7 +435,6 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             buffer = navResult.buffer;
             gridBounds = navResult.gridBounds;
             sub.end();
-            forceGc();
         }
 
         const finalCrop = hasFillExterior || hasFloorFill ?
@@ -458,7 +442,6 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             cropToOccupied(buffer, gridBounds, voxelResolution);
         buffer = finalCrop.buffer;
         gridBounds = finalCrop.gridBounds;
-        forceGc();
 
         const glbBytes = collisionMesh ?
             buildCollisionMesh(buffer, gridBounds, voxelResolution) :
