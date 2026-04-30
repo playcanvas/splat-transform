@@ -31,6 +31,18 @@ interface TextRendererOptions {
      * ArrayBuffers - rather than just the V8 heap).
      */
     getPeakMemory?: () => number;
+    /**
+     * Optional currently-live memory probe in bytes. When supplied
+     * alongside `getPeakMemory`, the `--mem` overlay becomes
+     * `[peak X | live Y]`, where `live` reflects memory that V8 still
+     * tracks as alive. Unlike `peak` (kernel max RSS, monotonic), this
+     * value drops when the GC reclaims unreferenced allocations, so
+     * the gap between consecutive phases reveals whether each phase
+     * actually releases its scratch buffers. In Node this is typically
+     * `heapUsed + external` from `process.memoryUsage()` so ArrayBuffer
+     * storage (typed arrays) is included.
+     */
+    getLiveMemory?: () => number;
 }
 
 const indent = (depth: number): string => '  '.repeat(Math.max(0, depth));
@@ -73,13 +85,16 @@ class TextRenderer implements Renderer {
 
     private readonly getPeakMemory?: () => number;
 
+    private readonly getLiveMemory?: () => number;
+
     /**
      * When true, scope-end and bar-end lines gain a `[peak X]` suffix
-     * sourced from {@link TextRendererOptions.getPeakMemory}. No
-     * effect when the probe is omitted. Defaults to `true` when
-     * `getPeakMemory` is provided so embedders that supply a probe
-     * see the overlay automatically. Mutable so the host can toggle
-     * the overlay without re-installing the renderer.
+     * (or `[peak X | live Y]` when {@link TextRendererOptions.getLiveMemory}
+     * is also supplied) sourced from
+     * {@link TextRendererOptions.getPeakMemory}. No effect when the probe
+     * is omitted. Defaults to `true` when `getPeakMemory` is provided so
+     * embedders that supply a probe see the overlay automatically. Mutable
+     * so the host can toggle the overlay without re-installing the renderer.
      */
     mem: boolean;
 
@@ -96,6 +111,7 @@ class TextRenderer implements Renderer {
         this.write = options.write;
         this.output = options.output ?? options.write;
         this.getPeakMemory = options.getPeakMemory;
+        this.getLiveMemory = options.getLiveMemory;
         this.mem = options.getPeakMemory !== undefined;
     }
 
@@ -200,7 +216,9 @@ class TextRenderer implements Renderer {
 
     private memSuffix(): string {
         if (!this.mem || !this.getPeakMemory) return '';
-        return `  [peak ${fmtBytes(this.getPeakMemory())}]`;
+        const peak = fmtBytes(this.getPeakMemory());
+        if (!this.getLiveMemory) return `  [peak ${peak}]`;
+        return `  [peak ${peak} | live ${fmtBytes(this.getLiveMemory())}]`;
     }
 }
 

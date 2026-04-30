@@ -565,6 +565,252 @@ describe('buildSparseOctree', function () {
             );
         });
     });
+
+    // ========================================================================
+    // Dual-stream encoding (post-refactor): exercises level-0 split into
+    // separate solid/mixed streams, the `li === -1` wave-entry sentinel, the
+    // `ii < nMixed` vs `ii >= nMixed` solid-leaf encoding, the dual-stream
+    // child binary search, and the `sortMixedByMorton` paired-mask permutation.
+    // ========================================================================
+
+    /**
+     * Walk a built octree from root, return the set of {morton, isSolid, lo, hi}
+     * for every reachable leaf. Mortons are reconstructed from the BFS path.
+     */
+    function walkLeaves(octree) {
+        const leaves = [];
+        if (octree.nodes.length === 0) return leaves;
+
+        // BFS: each frame holds (nodeIdx, morton). Root morton is 0; child
+        // morton is parent * 8 + octant.
+        const stack = [{ idx: 0, morton: 0 }];
+        while (stack.length > 0) {
+            const { idx, morton } = stack.pop();
+            const node = octree.nodes[idx] >>> 0;
+
+            if (node === 0xFF000000 >>> 0) {
+                // Solid leaf marker
+                leaves.push({ morton, isSolid: true, lo: 0xFFFFFFFF, hi: 0xFFFFFFFF });
+                continue;
+            }
+
+            const childMask = (node >>> 24) & 0xFF;
+            const baseOffset = node & 0x00FFFFFF;
+
+            if (childMask === 0x00) {
+                // Mixed leaf — baseOffset is leafData index
+                const lo = octree.leafData[baseOffset * 2];
+                const hi = octree.leafData[baseOffset * 2 + 1];
+                leaves.push({ morton, isSolid: false, lo, hi });
+                continue;
+            }
+
+            // Interior — walk children in octant order
+            let off = 0;
+            for (let oct = 0; oct < 8; oct++) {
+                if (childMask & (1 << oct)) {
+                    stack.push({
+                        idx: baseOffset + off,
+                        morton: morton * 8 + oct
+                    });
+                    off++;
+                }
+            }
+        }
+        return leaves;
+    }
+
+    describe('dual-stream encoding', function () {
+        it('should round-trip a mixed solid+mixed leaf set through the tree', function () {
+            // Pseudorandom seed: deterministic across runs.
+            let s = 12345;
+            const rand = () => {
+                s = (s * 1664525 + 1013904223) >>> 0;
+                return s;
+            };
+
+            // 4x4x4 of leaf blocks (= 8x8x8 voxels per axis at block scale).
+            // Spread solid + mixed leaves across the volume so the merge logic
+            // sees a non-trivial interleaving of streams.
+            const expected = new Map(); // morton -> {isSolid, lo, hi}
+            const acc = new BlockMaskBuffer();
+
+            for (let z = 0; z < 4; z++) {
+                for (let y = 0; y < 4; y++) {
+                    for (let x = 0; x < 4; x++) {
+                        const r = rand() % 10;
+                        if (r < 4) continue; // empty
+                        const morton = xyzToMorton(x, y, z);
+                        if (r < 7) {
+                            // solid
+                            acc.addBlock(morton, 0xFFFFFFFF, 0xFFFFFFFF);
+                            expected.set(morton, { isSolid: true, lo: 0xFFFFFFFF, hi: 0xFFFFFFFF });
+                        } else {
+                            // mixed — distinctive lo/hi tied to morton so a
+                            // mis-permutation in sortMixedByMorton is visible.
+                            const lo = (morton * 0x01010101 + 0x12345678) >>> 0;
+                            const hi = (morton * 0x02020203 + 0x9ABCDEF0) >>> 0;
+                            acc.addBlock(morton, lo, hi);
+                            expected.set(morton, { isSolid: false, lo, hi });
+                        }
+                    }
+                }
+            }
+
+            assert.ok(expected.size > 0, 'test setup should produce some leaves');
+
+            const gridBounds = {
+                min: new Vec3(0, 0, 0),
+                max: new Vec3(4, 4, 4)
+            };
+            const octree = buildSparseOctree(acc, gridBounds, gridBounds, 0.25);
+            const got = walkLeaves(octree);
+
+            // Every reachable leaf must match an expected entry — UNLESS it's
+            // a solid leaf one level above the leaf grid (i.e. parent of an
+            // 8-solid group, which the builder collapses).
+            const remaining = new Map(expected);
+            for (const leaf of got) {
+                if (remaining.has(leaf.morton)) {
+                    const exp = remaining.get(leaf.morton);
+                    assert.strictEqual(leaf.isSolid, exp.isSolid,
+                        `morton ${leaf.morton}: solidness mismatch`);
+                    if (!leaf.isSolid) {
+                        assert.strictEqual(leaf.lo >>> 0, exp.lo >>> 0,
+                            `morton ${leaf.morton}: lo mismatch`);
+                        assert.strictEqual(leaf.hi >>> 0, exp.hi >>> 0,
+                            `morton ${leaf.morton}: hi mismatch`);
+                    }
+                    remaining.delete(leaf.morton);
+                } else {
+                    // Could be a collapsed-solid parent; verify all 8
+                    // children of this morton were expected solid and remove.
+                    assert.ok(leaf.isSolid,
+                        `unexpected non-solid leaf at morton ${leaf.morton}`);
+                    const baseChild = leaf.morton * 8;
+                    for (let oct = 0; oct < 8; oct++) {
+                        const childMorton = baseChild + oct;
+                        const exp = remaining.get(childMorton);
+                        assert.ok(exp && exp.isSolid,
+                            `collapsed solid covers morton ${childMorton} which was not expected solid`);
+                        remaining.delete(childMorton);
+                    }
+                }
+            }
+            assert.strictEqual(remaining.size, 0,
+                `unreachable leaves: ${[...remaining.keys()]}`);
+        });
+
+        it('should preserve mixed mask pairing under sortMixedByMorton', function () {
+            // Insert mortons in REVERSE order so sort actually permutes; each
+            // mask is a unique signature derived from its morton, so any
+            // mis-pairing after sort is detectable from the buffer state.
+            const acc = new BlockMaskBuffer();
+            const mortons = [];
+            for (let m = 31; m >= 0; m--) {
+                const morton = m * 8 + 1; // arbitrary spread
+                const lo = (morton * 0xDEADBEEF) >>> 0;
+                const hi = (morton * 0xCAFEBABE) >>> 0;
+                acc.addBlock(morton, lo, hi);
+                mortons.push(morton);
+            }
+
+            const gridBounds = {
+                min: new Vec3(0, 0, 0),
+                max: new Vec3(8, 8, 8)
+            };
+            buildSparseOctree(acc, gridBounds, gridBounds, 0.25);
+
+            // After build, the buffer's mixed view is sorted ascending and
+            // each mask still corresponds to its original morton.
+            const mixed = acc.getMixedBlocks();
+            for (let i = 1; i < mixed.morton.length; i++) {
+                assert.ok(mixed.morton[i] > mixed.morton[i - 1],
+                    `mixed mortons must be strictly ascending after sort (i=${i})`);
+            }
+            for (let i = 0; i < mixed.morton.length; i++) {
+                const m = mixed.morton[i];
+                const expectedLo = (m * 0xDEADBEEF) >>> 0;
+                const expectedHi = (m * 0xCAFEBABE) >>> 0;
+                assert.strictEqual(mixed.masks[i * 2] >>> 0, expectedLo,
+                    `mask lo at sorted index ${i} (morton ${m}) does not match its origin`);
+                assert.strictEqual(mixed.masks[i * 2 + 1] >>> 0, expectedHi,
+                    `mask hi at sorted index ${i} (morton ${m}) does not match its origin`);
+            }
+        });
+
+        it('should handle solid-only input (mixed stream empty)', function () {
+            // Exercises the dual-stream merge / search with one stream empty.
+            const acc = new BlockMaskBuffer();
+            const expected = [];
+            for (let i = 0; i < 8; i++) {
+                const x = i & 1, y = (i >> 1) & 1, z = (i >> 2) & 1;
+                // Spread within a 4x4x4 leaf-block space, but skip 1 to
+                // prevent the 8-children collapse so we keep distinct leaves.
+                if (i === 7) continue;
+                const m = xyzToMorton(x, y, z);
+                acc.addBlock(m, 0xFFFFFFFF, 0xFFFFFFFF);
+                expected.push(m);
+            }
+
+            const gridBounds = { min: new Vec3(0, 0, 0), max: new Vec3(2, 2, 2) };
+            const octree = buildSparseOctree(acc, gridBounds, gridBounds, 0.25);
+            const got = walkLeaves(octree).filter(l => l.isSolid).map(l => l.morton);
+
+            assert.deepStrictEqual([...got].sort((a, b) => a - b), expected.sort((a, b) => a - b));
+            assert.strictEqual(octree.numMixedLeaves, 0);
+        });
+
+        it('should handle mixed-only input (solid stream empty)', function () {
+            const acc = new BlockMaskBuffer();
+            const expectedMortons = [];
+            for (let i = 0; i < 5; i++) {
+                const m = i * 3;
+                acc.addBlock(m, 0xAAAA0000 | i, 0x5555FFFF & ~i);
+                expectedMortons.push(m);
+            }
+            assert.strictEqual(acc.solidCount, 0);
+
+            const gridBounds = { min: new Vec3(0, 0, 0), max: new Vec3(4, 4, 4) };
+            const octree = buildSparseOctree(acc, gridBounds, gridBounds, 0.25);
+            const gotMixed = walkLeaves(octree).filter(l => !l.isSolid).map(l => l.morton);
+
+            assert.deepStrictEqual(
+                [...gotMixed].sort((a, b) => a - b),
+                expectedMortons.sort((a, b) => a - b)
+            );
+            assert.strictEqual(octree.numMixedLeaves, expectedMortons.length);
+        });
+    });
+
+    describe('input mutation contract', function () {
+        it('should sort the BlockMaskBuffer in place by morton ascending', function () {
+            const acc = new BlockMaskBuffer();
+            // Insert in non-monotonic order
+            const inputSolids = [12, 3, 17, 1, 9];
+            const inputMixed = [8, 2, 14, 5];
+            for (const m of inputSolids) acc.addBlock(m, 0xFFFFFFFF, 0xFFFFFFFF);
+            for (const m of inputMixed) acc.addBlock(m, m * 17, m * 31);
+
+            const gridBounds = { min: new Vec3(0, 0, 0), max: new Vec3(8, 8, 8) };
+            buildSparseOctree(acc, gridBounds, gridBounds, 0.25);
+
+            const solid = acc.getSolidBlocks();
+            for (let i = 1; i < solid.length; i++) {
+                assert.ok(solid[i] > solid[i - 1],
+                    `solid mortons must be ascending post-build: index ${i}`);
+            }
+            const mixed = acc.getMixedBlocks();
+            for (let i = 1; i < mixed.morton.length; i++) {
+                assert.ok(mixed.morton[i] > mixed.morton[i - 1],
+                    `mixed mortons must be ascending post-build: index ${i}`);
+            }
+            assert.deepStrictEqual(
+                [...solid].sort((a, b) => a - b),
+                inputSolids.slice().sort((a, b) => a - b)
+            );
+        });
+    });
 });
 
 // ============================================================================

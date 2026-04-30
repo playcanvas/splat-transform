@@ -30,19 +30,69 @@ const FACE_MASKS_HI = [
 ];
 
 // ============================================================================
-// SparseVoxelGrid
+// SparseVoxelGrid (packed 2-bit types)
 //
 // Stores voxel data at 4x4x4 block granularity with exact voxel-level
-// precision. Memory is proportional to the number of non-empty blocks.
+// precision. The per-block type {EMPTY=0, SOLID=1, MIXED=2} is packed into
+// a single Uint32Array at 2 bits per block (16 blocks per word):
 //
-// Each block has a type stored in blockType[blockIdx]:
-//   0 (EMPTY):  no voxels set
-//   1 (SOLID):  all 64 voxels set, no mask entry
-//   2 (MIXED):  partial voxels, lo/hi mask in BlockMaskMap
+//   block i  -> word index = i >>> 4, bit shift = (i & 15) << 1
+//   read     -> (types[w] >>> shift) & 0x3
+//   write    -> types[w] = (types[w] & ~(0x3 << shift)) | (value << shift)
 //
-// An occupancy bitfield is maintained in parallel for fast scanning
-// of occupied blocks (used by active-pair computation in dilation).
+// Per-word patterns:
+//   0x55555555 = all 16 lanes SOLID  (0b01 in each pair)
+//   0xAAAAAAAA = all 16 lanes MIXED  (0b10 in each pair)
+//
+// "Find non-empty blocks" iteration uses the trick:
+//   nonEmpty = (word & 0x55555555) | ((word >>> 1) & 0x55555555);
+// which sets bit 2k in `nonEmpty` whenever lane k is non-zero. Iterating
+// the set bits with `clz32(nonEmpty & -nonEmpty)` then yields lane indices
+// the same way the old occupancy bitfield did.
+//
+// MIXED blocks store their lo/hi voxel mask in `masks` keyed on the
+// global block index (bx + by*nbx + bz*bStride).
+//
+// Memory: 2 bits per block, vs 1 byte (blockType) + 1 bit (occupancy)
+// = 9 bits per block in the previous design. ~4.5x reduction on this
+// component.
 // ============================================================================
+
+const TYPE_BITS_PER_BLOCK = 2;
+const BLOCKS_PER_WORD = 32 / TYPE_BITS_PER_BLOCK; // 16
+const TYPE_MASK = (1 << TYPE_BITS_PER_BLOCK) - 1; // 0b11
+const SOLID_WORD = 0x55555555 >>> 0;             // 16 lanes, each = SOLID
+// const MIXED_WORD = 0xAAAAAAAA >>> 0;          // 16 lanes, each = MIXED (unused so far)
+const EVEN_BITS = 0x55555555 >>> 0;              // mask for even bit positions
+
+/**
+ * Read the 2-bit block type directly from a packed `types` Uint32Array.
+ * Module-level so V8 can inline it into hot loops without method dispatch.
+ * Equivalent to `grid.getBlockType(blockIdx)` when `types === grid.types`.
+ *
+ * @param types - Packed types array (16 blocks per word).
+ * @param blockIdx - Linear block index.
+ * @returns Block type: `BLOCK_EMPTY`, `BLOCK_SOLID`, or `BLOCK_MIXED`.
+ */
+const readBlockType = (types: Uint32Array, blockIdx: number): number => {
+    return (types[blockIdx >>> 4] >>> ((blockIdx & 15) << 1)) & TYPE_MASK;
+};
+
+/**
+ * Write the 2-bit block type directly into a packed `types` Uint32Array.
+ * Module-level so V8 can inline it into hot loops without method dispatch.
+ * Caller is responsible for keeping the grid's `masks` consistent (only
+ * `MIXED` blocks should have a mask entry).
+ *
+ * @param types - Packed types array (16 blocks per word).
+ * @param blockIdx - Linear block index.
+ * @param value - Block type to set.
+ */
+const writeBlockType = (types: Uint32Array, blockIdx: number, value: number): void => {
+    const w = blockIdx >>> 4;
+    const shift = (blockIdx & 15) << 1;
+    types[w] = ((types[w] & ~(TYPE_MASK << shift)) | ((value & TYPE_MASK) << shift)) >>> 0;
+};
 
 class SparseVoxelGrid {
     readonly nx: number;
@@ -53,8 +103,13 @@ class SparseVoxelGrid {
     readonly nbz: number;
     readonly bStride: number;
 
-    blockType: Uint8Array;
-    occupancy: Uint32Array;
+    /**
+     * Packed block types: 2 bits per block, 16 blocks per Uint32 word.
+     * Length = ceil(totalBlocks / 16).
+     */
+    types: Uint32Array;
+
+    /** Voxel masks for MIXED blocks, keyed on global block index. */
     masks: BlockMaskMap;
 
     constructor(nx: number, ny: number, nz: number) {
@@ -66,14 +121,35 @@ class SparseVoxelGrid {
         this.nbz = nz >> 2;
         this.bStride = this.nbx * this.nby;
         const totalBlocks = this.nbx * this.nby * this.nbz;
-        this.blockType = new Uint8Array(totalBlocks);
-        this.occupancy = new Uint32Array(((totalBlocks) + 31) >>> 5);
+        this.types = new Uint32Array((totalBlocks + BLOCKS_PER_WORD - 1) >>> 4);
         this.masks = new BlockMaskMap();
+    }
+
+    /**
+     * Read the 2-bit block type at the given block index.
+     *
+     * @param blockIdx - Linear block index (`bx + by*nbx + bz*bStride`).
+     * @returns Block type: `BLOCK_EMPTY`, `BLOCK_SOLID`, or `BLOCK_MIXED`.
+     */
+    getBlockType(blockIdx: number): number {
+        return readBlockType(this.types, blockIdx);
+    }
+
+    /**
+     * Write the 2-bit block type at the given block index. Caller is
+     * responsible for keeping `masks` consistent (only `MIXED` blocks
+     * should have a mask entry; `EMPTY`/`SOLID` should not).
+     *
+     * @param blockIdx - Linear block index.
+     * @param value - Block type to set.
+     */
+    setBlockType(blockIdx: number, value: number): void {
+        writeBlockType(this.types, blockIdx, value);
     }
 
     getVoxel(ix: number, iy: number, iz: number): number {
         const blockIdx = (ix >> 2) + (iy >> 2) * this.nbx + (iz >> 2) * this.bStride;
-        const bt = this.blockType[blockIdx];
+        const bt = this.getBlockType(blockIdx);
         if (bt === BLOCK_EMPTY) return 0;
         if (bt === BLOCK_SOLID) return 1;
         const s = this.masks.slot(blockIdx);
@@ -83,7 +159,7 @@ class SparseVoxelGrid {
 
     setVoxel(ix: number, iy: number, iz: number): void {
         const blockIdx = (ix >> 2) + (iy >> 2) * this.nbx + (iz >> 2) * this.bStride;
-        const bt = this.blockType[blockIdx];
+        const bt = this.getBlockType(blockIdx);
         if (bt === BLOCK_SOLID) return;
         const bitIdx = (ix & 3) + ((iy & 3) << 2) + ((iz & 3) << 4);
         if (bt === BLOCK_MIXED) {
@@ -92,11 +168,10 @@ class SparseVoxelGrid {
             else this.masks.hi[s] = (this.masks.hi[s] | (1 << (bitIdx - 32))) >>> 0;
             if (this.masks.lo[s] === SOLID_LO && this.masks.hi[s] === SOLID_HI) {
                 this.masks.removeAt(s);
-                this.blockType[blockIdx] = BLOCK_SOLID;
+                this.setBlockType(blockIdx, BLOCK_SOLID);
             }
         } else {
-            this.blockType[blockIdx] = BLOCK_MIXED;
-            this.occupancy[blockIdx >>> 5] |= (1 << (blockIdx & 31));
+            this.setBlockType(blockIdx, BLOCK_MIXED);
             this.masks.set(blockIdx,
                 bitIdx < 32 ? (1 << bitIdx) >>> 0 : 0,
                 bitIdx >= 32 ? (1 << (bitIdx - 32)) >>> 0 : 0
@@ -106,7 +181,7 @@ class SparseVoxelGrid {
 
     orBlock(blockIdx: number, lo: number, hi: number): void {
         if (lo === 0 && hi === 0) return;
-        const bt = this.blockType[blockIdx];
+        const bt = this.getBlockType(blockIdx);
         if (bt === BLOCK_SOLID) return;
         if (bt === BLOCK_MIXED) {
             const s = this.masks.slot(blockIdx);
@@ -114,29 +189,26 @@ class SparseVoxelGrid {
             this.masks.hi[s] = (this.masks.hi[s] | hi) >>> 0;
             if (this.masks.lo[s] === SOLID_LO && this.masks.hi[s] === SOLID_HI) {
                 this.masks.removeAt(s);
-                this.blockType[blockIdx] = BLOCK_SOLID;
+                this.setBlockType(blockIdx, BLOCK_SOLID);
             }
         } else {
-            this.occupancy[blockIdx >>> 5] |= (1 << (blockIdx & 31));
             if ((lo >>> 0) === SOLID_LO && (hi >>> 0) === SOLID_HI) {
-                this.blockType[blockIdx] = BLOCK_SOLID;
+                this.setBlockType(blockIdx, BLOCK_SOLID);
             } else {
-                this.blockType[blockIdx] = BLOCK_MIXED;
+                this.setBlockType(blockIdx, BLOCK_MIXED);
                 this.masks.set(blockIdx, lo >>> 0, hi >>> 0);
             }
         }
     }
 
     clear(): void {
-        this.blockType.fill(0);
-        this.occupancy.fill(0);
+        this.types.fill(0);
         this.masks.clear();
     }
 
     clone(): SparseVoxelGrid {
         const g = new SparseVoxelGrid(this.nx, this.ny, this.nz);
-        g.blockType.set(this.blockType);
-        g.occupancy.set(this.occupancy);
+        g.types.set(this.types);
         g.masks = this.masks.clone();
         return g;
     }
@@ -147,15 +219,13 @@ class SparseVoxelGrid {
         for (let i = 0; i < solidMortons.length; i++) {
             const [bx, by, bz] = mortonToXYZ(solidMortons[i]);
             const blockIdx = bx + by * g.nbx + bz * g.bStride;
-            g.blockType[blockIdx] = BLOCK_SOLID;
-            g.occupancy[blockIdx >>> 5] |= (1 << (blockIdx & 31));
+            g.setBlockType(blockIdx, BLOCK_SOLID);
         }
         const mixed = acc.getMixedBlocks();
         for (let i = 0; i < mixed.morton.length; i++) {
             const [bx, by, bz] = mortonToXYZ(mixed.morton[i]);
             const blockIdx = bx + by * g.nbx + bz * g.bStride;
-            g.blockType[blockIdx] = BLOCK_MIXED;
-            g.occupancy[blockIdx >>> 5] |= (1 << (blockIdx & 31));
+            g.setBlockType(blockIdx, BLOCK_MIXED);
             g.masks.set(blockIdx, mixed.masks[i * 2], mixed.masks[i * 2 + 1]);
         }
         return g;
@@ -171,7 +241,7 @@ class SparseVoxelGrid {
             for (let by = cropMinBy; by < cropMaxBy; by++) {
                 for (let bx = cropMinBx; bx < cropMaxBx; bx++) {
                     const blockIdx = bx + by * this.nbx + bz * this.bStride;
-                    const bt = this.blockType[blockIdx];
+                    const bt = this.getBlockType(blockIdx);
                     let lo: number, hi: number;
                     if (bt === BLOCK_SOLID) {
                         lo = SOLID_LO;
@@ -207,7 +277,7 @@ class SparseVoxelGrid {
             for (let by = cropMinBy; by < cropMaxBy; by++) {
                 for (let bx = cropMinBx; bx < cropMaxBx; bx++) {
                     const blockIdx = bx + by * this.nbx + bz * this.bStride;
-                    const bt = this.blockType[blockIdx];
+                    const bt = this.getBlockType(blockIdx);
                     let lo: number, hi: number;
                     if (bt === BLOCK_SOLID) {
                         continue;
@@ -244,12 +314,20 @@ class SparseVoxelGrid {
         const totalBlocks = this.nbx * this.nby * this.nbz;
         let minBx = nbx, minBy = nby, minBz = this.nbz;
         let maxBx = 0, maxBy = 0, maxBz = 0;
-        for (let w = 0; w < this.occupancy.length; w++) {
-            let bits = this.occupancy[w];
-            while (bits) {
-                const bitPos = 31 - Math.clz32(bits & -bits);
-                const blockIdx = w * 32 + bitPos;
-                if (blockIdx >= totalBlocks) break;
+        let found = false;
+        for (let w = 0; w < this.types.length; w++) {
+            const word = this.types[w];
+            if (word === 0) continue;
+            // Set bit at even position 2k iff lane k is non-empty.
+            let nonEmpty = ((word & EVEN_BITS) | ((word >>> 1) & EVEN_BITS)) >>> 0;
+            while (nonEmpty) {
+                const bp = 31 - Math.clz32(nonEmpty & -nonEmpty);
+                const lane = bp >>> 1;
+                const blockIdx = w * BLOCKS_PER_WORD + lane;
+                if (blockIdx >= totalBlocks) {
+                    nonEmpty = 0;
+                    break;
+                }
                 const bx = blockIdx % nbx;
                 const byBz = (blockIdx / nbx) | 0;
                 const by = byBz % nby;
@@ -260,10 +338,11 @@ class SparseVoxelGrid {
                 if (by > maxBy) maxBy = by;
                 if (bz < minBz) minBz = bz;
                 if (bz > maxBz) maxBz = bz;
-                bits &= bits - 1;
+                found = true;
+                nonEmpty &= nonEmpty - 1;
             }
         }
-        return minBx <= maxBx ? { minBx, minBy, minBz, maxBx, maxBy, maxBz } : null;
+        return found ? { minBx, minBy, minBz, maxBx, maxBy, maxBz } : null;
     }
 
     /**
@@ -280,42 +359,32 @@ class SparseVoxelGrid {
     } | null {
         const { nbx, nby } = this;
         const totalBlocks = this.nbx * this.nby * this.nbz;
-        const words = (totalBlocks + 31) >>> 5;
-        const remainder = totalBlocks & 31;
-        const lastMask = remainder === 0 ? 0xFFFFFFFF >>> 0 : (((1 << remainder) - 1) >>> 0);
+        // Mask of valid lanes in the last word (in terms of even bit positions).
+        const lastWordIdx = this.types.length - 1;
+        const lastLanes = totalBlocks - lastWordIdx * BLOCKS_PER_WORD;
+        // navMask in the last word: only the first `lastLanes` lanes are valid;
+        // each lane occupies 2 bits, so the valid even-bit mask spans
+        // 2 * lastLanes bits.
+        const lastNonEmptyMask = lastLanes >= BLOCKS_PER_WORD ?
+            EVEN_BITS :
+            (((1 << (lastLanes * 2)) - 1) >>> 0) & EVEN_BITS;
 
         let minBx = nbx, minBy = nby, minBz = this.nbz;
         let maxBx = -1, maxBy = 0, maxBz = 0;
 
-        for (let w = 0; w < words; w++) {
-            // Build a bitmask of SOLID blocks in this 32-block word. SOLID
-            // requires occupancy bit set AND blockType === BLOCK_SOLID.
-            // nonSolid is then the inverse of that mask, so it includes any
-            // block not marked solid here, including both EMPTY and MIXED blocks.
-            const baseIdx = w * 32;
-            const upper = Math.min(32, totalBlocks - baseIdx);
-            const occWord = this.occupancy[w];
-            let solid = 0 >>> 0;
-            let occBits = occWord;
-            while (occBits) {
-                const bitPos = 31 - Math.clz32(occBits & -occBits);
-                if (this.blockType[baseIdx + bitPos] === BLOCK_SOLID) {
-                    solid |= (1 << bitPos);
-                }
-                occBits &= occBits - 1;
-            }
-            let nonSolid = (~solid) >>> 0;
-            if (w === words - 1 && remainder > 0) nonSolid &= lastMask;
-            // Trim bits past totalBlocks for any partial last word (already
-            // handled above, but guard against upper < 32 in non-last words
-            // which shouldn't happen).
-            if (upper < 32 && w < words - 1) {
-                nonSolid &= ((1 << upper) - 1) >>> 0;
-            }
+        for (let w = 0; w < this.types.length; w++) {
+            const word = this.types[w];
+            // Lane is non-SOLID iff its 2 bits aren't (1, 0) i.e. iff
+            // word ^ SOLID_WORD has any bit set in that pair.
+            const flipped = (word ^ SOLID_WORD) >>> 0;
+            let navMask = ((flipped & EVEN_BITS) | ((flipped >>> 1) & EVEN_BITS)) >>> 0;
+            // For the final (possibly partial) word, drop lanes past totalBlocks.
+            if (w === lastWordIdx) navMask &= lastNonEmptyMask;
 
-            while (nonSolid) {
-                const bitPos = 31 - Math.clz32(nonSolid & -nonSolid);
-                const blockIdx = baseIdx + bitPos;
+            while (navMask) {
+                const bp = 31 - Math.clz32(navMask & -navMask);
+                const lane = bp >>> 1;
+                const blockIdx = w * BLOCKS_PER_WORD + lane;
                 const bx = blockIdx % nbx;
                 const byBz = (blockIdx / nbx) | 0;
                 const by = byBz % nby;
@@ -326,7 +395,7 @@ class SparseVoxelGrid {
                 if (by > maxBy) maxBy = by;
                 if (bz < minBz) minBz = bz;
                 if (bz > maxBz) maxBz = bz;
-                nonSolid &= nonSolid - 1;
+                navMask &= navMask - 1;
             }
         }
 
@@ -372,9 +441,15 @@ export {
     BLOCK_EMPTY,
     BLOCK_MIXED,
     BLOCK_SOLID,
+    BLOCKS_PER_WORD,
+    EVEN_BITS,
     FACE_MASKS_HI,
     FACE_MASKS_LO,
     SOLID_HI,
     SOLID_LO,
-    SparseVoxelGrid
+    SOLID_WORD,
+    SparseVoxelGrid,
+    TYPE_MASK,
+    readBlockType,
+    writeBlockType
 };

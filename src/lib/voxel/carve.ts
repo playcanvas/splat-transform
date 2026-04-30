@@ -50,7 +50,8 @@ const carve = (
 
     const gridA = SparseVoxelGrid.fromBuffer(buffer, nx, ny, nz);
 
-    const blocked = sparseDilate3(gridA, kernelR, yHalfExtent);
+    // gridA is read only by this dilate; consume it as scratch.
+    const blocked = sparseDilate3(gridA, kernelR, yHalfExtent, true);
 
     let seedIx = Math.floor((seed.x - gridBounds.min.x) / voxelResolution);
     let seedIy = Math.floor((seed.y - gridBounds.min.y) / voxelResolution);
@@ -74,14 +75,15 @@ const carve = (
     }
 
     const seedBlockIdx = (seedIx >> 2) + (seedIy >> 2) * nbx + (seedIz >> 2) * (nbx * nby);
-    const seedBt = blocked.blockType[seedBlockIdx];
+    const seedBt = blocked.getBlockType(seedBlockIdx);
     const bSeeds = seedBt === BLOCK_EMPTY ? [seedBlockIdx] : [];
     const vSeeds = seedBt === BLOCK_EMPTY ? [] : [{ ix: seedIx, iy: seedIy, iz: seedIz }];
     const visited = twoLevelBFS(blocked, bSeeds, vSeeds, nx, ny, nz);
 
     const emptyGrid = computeEmptyGrid(visited, blocked);
 
-    const navRegion = sparseDilate3(emptyGrid, kernelR, yHalfExtent);
+    // emptyGrid is read only by this dilate; consume it as scratch.
+    const navRegion = sparseDilate3(emptyGrid, kernelR, yHalfExtent, true);
 
     const navBounds = navRegion.getOccupiedBlockBounds();
 
