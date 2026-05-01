@@ -1,7 +1,7 @@
 import { Vec3 } from 'playcanvas';
 
 import { BlockMaskBuffer } from './block-mask-buffer';
-import { gpuDilate3, sparseDilate3 } from './dilation';
+import { gpuDilate3 } from './dilation';
 import type { NavSeed, NavSimplifyResult } from './fill-exterior';
 import { twoLevelBFS } from './flood-fill';
 import { computeEmptyGrid } from './grid-ops';
@@ -20,7 +20,7 @@ const carve = async (
     capsuleHeight: number,
     capsuleRadius: number,
     seed: NavSeed,
-    gpu: GpuDilation | null = null
+    gpu: GpuDilation
 ): Promise<NavSimplifyResult> => {
     if (!Number.isFinite(voxelResolution) || voxelResolution <= 0) {
         throw new Error(`carve: voxelResolution must be finite and > 0, got ${voxelResolution}`);
@@ -57,10 +57,7 @@ const carve = async (
     );
     fromBufBar.end();
 
-    // gridA is read only by this dilate; consume it as scratch (CPU path only).
-    const blocked = gpu ?
-        await gpuDilate3(gpu, gridA, kernelR, yHalfExtent) :
-        sparseDilate3(gridA, kernelR, yHalfExtent, true);
+    const blocked = await gpuDilate3(gpu, gridA, kernelR, yHalfExtent);
 
     let seedIx = Math.floor((seed.x - gridBounds.min.x) / voxelResolution);
     let seedIy = Math.floor((seed.y - gridBounds.min.y) / voxelResolution);
@@ -100,10 +97,7 @@ const carve = async (
 
     const emptyGrid = computeEmptyGrid(visited, blocked);
 
-    // emptyGrid is read only by this dilate; consume it as scratch (CPU path only).
-    const navRegion = gpu ?
-        await gpuDilate3(gpu, emptyGrid, kernelR, yHalfExtent) :
-        sparseDilate3(emptyGrid, kernelR, yHalfExtent, true);
+    const navRegion = await gpuDilate3(gpu, emptyGrid, kernelR, yHalfExtent);
 
     const boundsBar = logger.bar('Scanning bounds', navRegion.types.length);
     const navBounds = navRegion.getOccupiedBlockBounds(done => boundsBar.update(done));

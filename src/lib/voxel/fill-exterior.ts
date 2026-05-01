@@ -1,10 +1,11 @@
 import { Vec3 } from 'playcanvas';
 
 import { BlockMaskBuffer } from './block-mask-buffer';
-import { sparseDilate3 } from './dilation';
+import { gpuDilate3 } from './dilation';
 import { twoLevelBFS } from './flood-fill';
 import { sparseOrGrids } from './grid-ops';
 import type { Bounds } from '../data-table';
+import type { GpuDilation } from '../gpu';
 import {
     BLOCK_MIXED,
     BLOCK_SOLID,
@@ -27,13 +28,14 @@ type NavSimplifyResult = {
     gridBounds: Bounds;
 };
 
-const fillExterior = (
+const fillExterior = async (
     buffer: BlockMaskBuffer,
     gridBounds: Bounds,
     voxelResolution: number,
     dilation: number,
-    seed: NavSeed
-): NavSimplifyResult => {
+    seed: NavSeed,
+    gpu: GpuDilation
+): Promise<NavSimplifyResult> => {
     if (!Number.isFinite(voxelResolution) || voxelResolution <= 0) {
         throw new Error(`fillExterior: voxelResolution must be finite and > 0, got ${voxelResolution}`);
     }
@@ -60,7 +62,7 @@ const fillExterior = (
 
     const gridOriginal = SparseVoxelGrid.fromBuffer(buffer, nx, ny, nz);
 
-    const dilated = sparseDilate3(gridOriginal, halfExtent, halfExtent);
+    const dilated = await gpuDilate3(gpu, gridOriginal, halfExtent, halfExtent);
 
     const bStride = nbx * nby;
     const blockSeeds: number[] = [];
@@ -147,7 +149,7 @@ const fillExterior = (
         return { buffer, gridBounds };
     }
 
-    const dilatedVisited = sparseDilate3(visited, halfExtent, halfExtent);
+    const dilatedVisited = await gpuDilate3(gpu, visited, halfExtent, halfExtent);
 
     const combined = sparseOrGrids(gridOriginal, dilatedVisited);
 

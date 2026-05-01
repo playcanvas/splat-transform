@@ -716,12 +716,9 @@ class GpuDilation {
         // inner chunk in block coords
         innerBx: number, innerBy: number, innerBz: number,
         halfExtentXZ: number,
-        halfExtentY: number,
-        // optional debug — pre-extracted dense buffer to load into bufferA
-        // (skips GPU extract). Used to isolate whether bugs are in extract.
-        debugDense?: Uint32Array
-    ): { types: Promise<Uint32Array>, masks: Promise<Uint32Array>, bufferA?: Promise<Uint32Array> } {
-        if (this.srcTypesBuffer === null && !debugDense) {
+        halfExtentY: number
+    ): { types: Promise<Uint32Array>, masks: Promise<Uint32Array> } {
+        if (this.srcTypesBuffer === null) {
             throw new Error('GpuDilation: must call uploadSrc() before submitChunkSparse()');
         }
         const slot = this.slots[slotIdx];
@@ -738,30 +735,17 @@ class GpuDilation {
 
         const typesOutWords = (innerBlocks + 15) >>> 4;
 
-        if (debugDense) {
-            // Bypass extract: upload pre-computed dense bits to bufferA.
-            slot.bufferA.write(0, debugDense, 0, numWords);
-        } else {
-            // Extract: clear bufferA, dispatch extract from sparse src into bufferA.
-            this.dispatchClear(slot, slot.bufferA, numWords);
-            this.dispatchExtract(slot, minBx, minBy, minBz, outerBx, outerBy, outerBz, numXWords);
+        // Extract: clear bufferA, dispatch extract from sparse src into bufferA.
+        this.dispatchClear(slot, slot.bufferA, numWords);
+        this.dispatchExtract(slot, minBx, minBy, minBz, outerBx, outerBy, outerBz, numXWords);
 
-            // Tiny throwaway readback forces a queue submit between extract
-            // and dilate. WITHOUT this, atomicOr writes from the extract pass
-            // aren't reliably visible to the next dilate pass (apparent
-            // missing memory barrier in PlayCanvas/Dawn for cross-pass atomic
-            // writes). Promise is intentionally not awaited — only the
-            // implicit submit+barrier matters. 16 bytes ≈ negligible PCIe.
-            slot.bufferA.read(0, 16, null, true).catch(() => { /* ignore */ });
-        }
-
-        // Debug: read back bufferA after extract and return as a Promise so the
-        // caller can diff it against a CPU-computed reference.
-        let bufferAPromise: Promise<Uint32Array> | undefined;
-        if (typeof process !== 'undefined' && process.env?.GPU_DILATE_DUMP_EXTRACT === '1') {
-            bufferAPromise = slot.bufferA.read(0, numWords * 4, null, true)
-                .then((readData: Uint8Array) => new Uint32Array(readData.buffer, readData.byteOffset, numWords));
-        }
+        // Tiny throwaway readback forces a queue submit between extract
+        // and dilate. WITHOUT this, atomicOr writes from the extract pass
+        // aren't reliably visible to the next dilate pass (apparent
+        // missing memory barrier in PlayCanvas/Dawn for cross-pass atomic
+        // writes). Promise is intentionally not awaited — only the
+        // implicit submit+barrier matters. 16 bytes ≈ negligible PCIe.
+        slot.bufferA.read(0, 16, null, true).catch(() => { /* ignore */ });
 
         // X-pass: A → B
         this.dispatchClear(slot, slot.bufferB, numWords);
@@ -789,7 +773,7 @@ class GpuDilation {
             .then((readData: Uint8Array) =>
                 new Uint32Array(readData.buffer, readData.byteOffset, innerBlocks * 2));
 
-        return { types: typesPromise, masks: masksPromise, bufferA: bufferAPromise };
+        return { types: typesPromise, masks: masksPromise };
     }
 
     private dispatchExtract(

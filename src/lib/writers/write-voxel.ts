@@ -431,16 +431,17 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         buffer = filterAndFillBlocks(buffer);
         filterSub.end();
 
-        // Reuse the same device for GPU dilation across fill-floor and carve.
-        if (hasFloorFill || hasNav) {
+        // Reuse the same device for GPU dilation across exterior, floor, carve.
+        if (hasFillExterior || hasFloorFill || hasNav) {
             gpuDilation = new GpuDilation(device);
         }
 
         if (hasFillExterior) {
             const sub = logger.group('Fill exterior');
-            const fillResult = fillExterior(
+            const fillResult = await fillExterior(
                 buffer, gridBounds, voxelResolution,
-                navExteriorRadius!, navSeed!
+                navExteriorRadius!, navSeed!,
+                gpuDilation!
             );
             buffer = fillResult.buffer;
             gridBounds = fillResult.gridBounds;
