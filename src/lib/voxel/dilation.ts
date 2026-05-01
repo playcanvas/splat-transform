@@ -732,7 +732,9 @@ function extractDenseChunk(
 
     const types = src.types;
     for (let bz = minBz; bz < maxBz; bz++) {
+        const baseGz = bz * 4;
         for (let by = minBy; by < maxBy; by++) {
+            const baseGy = by * 4;
             for (let bx = minBx; bx < maxBx; bx++) {
                 const blockIdx = bx + by * src.nbx + bz * src.bStride;
                 const bt = readBlockType(types, blockIdx);
@@ -749,27 +751,39 @@ function extractDenseChunk(
                 }
 
                 const baseGx = bx * 4;
-                const baseGy = by * 4;
-                const baseGz = bz * 4;
+                const dx0 = baseGx - ox;
+                // baseGx is 4-aligned and ox is integer, so dx0 is 4-aligned.
+                // The 4 bits along X for each (ly,lz) row therefore live in a
+                // single dense word at bit positions [dx0&31 .. dx0&31+3].
+                const dxFastPath = dx0 >= 0 && dx0 + 4 <= cx;
+                const wordOffsetX = dx0 >>> 5;
+                const bitShiftX = dx0 & 31;
 
                 for (let lz = 0; lz < 4; lz++) {
-                    const gz = baseGz + lz;
-                    const dz = gz - oz;
+                    const dz = baseGz + lz - oz;
                     if (dz < 0 || dz >= cz) continue;
                     const word = lz < 2 ? lo : hi;
                     const zBitBase = (lz & 1) * 16;
+                    const planeBase = dz * planeWords;
                     for (let ly = 0; ly < 4; ly++) {
-                        const gy = baseGy + ly;
-                        const dy = gy - oy;
+                        const dy = baseGy + ly - oy;
                         if (dy < 0 || dy >= cy) continue;
                         const bitBase = zBitBase + ly * 4;
-                        for (let lx = 0; lx < 4; lx++) {
-                            if (!((word >>> (bitBase + lx)) & 1)) continue;
-                            const gx = baseGx + lx;
-                            const dx = gx - ox;
-                            if (dx < 0 || dx >= cx) continue;
-                            const wordIdx = (dx >>> 5) + dy * numXWords + dz * planeWords;
-                            dense[wordIdx] |= (1 << (dx & 31));
+                        const pattern = (word >>> bitBase) & 0xF;
+                        if (pattern === 0) continue;
+
+                        if (dxFastPath) {
+                            const wordIdx = wordOffsetX + dy * numXWords + planeBase;
+                            dense[wordIdx] |= (pattern << bitShiftX);
+                        } else {
+                            // Edge: clip per-bit (chunks straddling grid edge).
+                            for (let lx = 0; lx < 4; lx++) {
+                                if (!((pattern >>> lx) & 1)) continue;
+                                const dx = dx0 + lx;
+                                if (dx < 0 || dx >= cx) continue;
+                                const wordIdx = (dx >>> 5) + dy * numXWords + planeBase;
+                                dense[wordIdx] |= (1 << (dx & 31));
+                            }
                         }
                     }
                 }
@@ -819,11 +833,15 @@ function insertDenseChunk(
     const maxBz = Math.min(dst.nbz, (innerOz + innerCz + 3) >> 2);
 
     for (let bz = minBz; bz < maxBz; bz++) {
+        const baseGz = bz * 4;
         for (let by = minBy; by < maxBy; by++) {
+            const baseGy = by * 4;
             for (let bx = minBx; bx < maxBx; bx++) {
                 const baseGx = bx * 4;
-                const baseGy = by * 4;
-                const baseGz = bz * 4;
+                const dx0 = baseGx - ox;
+                const dxFastPath = dx0 >= 0 && dx0 + 4 <= cx;
+                const wordOffsetX = dx0 >>> 5;
+                const bitShiftX = dx0 & 31;
 
                 let lo = 0;
                 let hi = 0;
@@ -832,19 +850,33 @@ function insertDenseChunk(
                     if (dz < 0 || dz >= cz) continue;
                     const zBitBase = (lz & 1) * 16;
                     const inHi = lz >= 2;
+                    const planeBase = dz * planeWords;
                     for (let ly = 0; ly < 4; ly++) {
                         const dy = baseGy + ly - oy;
                         if (dy < 0 || dy >= cy) continue;
                         const bitBase = zBitBase + ly * 4;
-                        for (let lx = 0; lx < 4; lx++) {
-                            const dx = baseGx + lx - ox;
-                            if (dx < 0 || dx >= cx) continue;
-                            const wordIdx = (dx >>> 5) + dy * numXWords + dz * planeWords;
-                            if (!((dense[wordIdx] >>> (dx & 31)) & 1)) continue;
-                            const bit = 1 << (bitBase + lx);
-                            if (inHi) hi |= bit;
-                            else lo |= bit;
+
+                        let pattern: number;
+                        if (dxFastPath) {
+                            const wordIdx = wordOffsetX + dy * numXWords + planeBase;
+                            pattern = (dense[wordIdx] >>> bitShiftX) & 0xF;
+                        } else {
+                            // Edge: read each bit individually with clipping.
+                            pattern = 0;
+                            for (let lx = 0; lx < 4; lx++) {
+                                const dx = dx0 + lx;
+                                if (dx < 0 || dx >= cx) continue;
+                                const wordIdx = (dx >>> 5) + dy * numXWords + planeBase;
+                                if ((dense[wordIdx] >>> (dx & 31)) & 1) {
+                                    pattern |= (1 << lx);
+                                }
+                            }
                         }
+                        if (pattern === 0) continue;
+
+                        const bits = pattern << bitBase;
+                        if (inHi) hi |= bits;
+                        else lo |= bits;
                     }
                 }
                 if (lo || hi) {
