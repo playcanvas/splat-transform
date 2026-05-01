@@ -111,11 +111,15 @@ const isCenterInOccupiedVoxel = (
 };
 
 /**
- * Test whether a Gaussian has meaningful contribution at any occupied voxel
- * center within its AABB range.
+ * Test whether a Gaussian has meaningful contribution at occupied voxel
+ * centers in blocks that overlap its AABB.
  *
  * Iterates over blocks that overlap the Gaussian's AABB, then evaluates the
- * Gaussian's opacity contribution at each occupied voxel center in those blocks.
+ * Gaussian's opacity contribution at each occupied voxel center in those
+ * blocks. Returns true once `minHits` qualifying voxels are found. With the
+ * default `minHits = 1` this short-circuits on the first hit; larger values
+ * let callers reject elongated outliers (e.g. spikes) whose tails clip only
+ * a single cluster voxel.
  *
  * @param gaussianIdx - Index of the Gaussian.
  * @param columns - Gaussian column data arrays.
@@ -123,7 +127,8 @@ const isCenterInOccupiedVoxel = (
  * @param lookup - Block lookup structures.
  * @param minContribution - Minimum contribution threshold.
  * @param blockFilter - Optional set of block indices to restrict the test to.
- * @returns True if the Gaussian contributes above threshold at any qualifying voxel.
+ * @param minHits - Minimum number of qualifying voxels required. Default 1.
+ * @returns True if at least `minHits` qualifying voxels were found.
  */
 const gaussianContributesToVoxels = (
     gaussianIdx: number,
@@ -131,7 +136,8 @@ const gaussianContributesToVoxels = (
     grid: BlockGridParams,
     lookup: BlockLookup,
     minContribution: number,
-    blockFilter?: Set<number>
+    blockFilter?: Set<number>,
+    minHits: number = 1
 ): boolean => {
     const px = columns.posX[gaussianIdx];
     const py = columns.posY[gaussianIdx];
@@ -154,6 +160,7 @@ const gaussianContributesToVoxels = (
         columns.scaleZ[gaussianIdx], columns.opacity[gaussianIdx]
     );
 
+    let hits = 0;
     for (let bbz = aabbMinBz; bbz <= aabbMaxBz; bbz++) {
         const zOff = bbz * grid.strideZ;
         for (let bby = aabbMinBy; bby <= aabbMaxBy; bby++) {
@@ -187,7 +194,7 @@ const gaussianContributesToVoxels = (
                             const vx = blockOriginX + (lx + 0.5) * grid.voxelResolution;
 
                             if (evaluateGaussianAt(g, px, py, pz, vx, vy, vz) >= minContribution) {
-                                return true;
+                                if (++hits >= minHits) return true;
                             }
                         }
                     }

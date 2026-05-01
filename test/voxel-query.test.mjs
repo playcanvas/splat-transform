@@ -297,6 +297,71 @@ describe('voxel-query', function () {
             assert.strictEqual(withoutFilter, true, 'Should contribute without filter');
             assert.strictEqual(withEmptyFilter, false, 'Should not contribute with restrictive filter');
         });
+
+        it('should require minHits qualifying voxels when minHits > 1', function () {
+            const buffer = new BlockMaskBuffer();
+            buffer.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
+
+            const voxelRes = 1.0;
+            const grid = makeGrid(2, 2, 2, voxelRes);
+            const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+
+            const gaussianCols = {
+                posX: new Float32Array([2.0]),
+                posY: new Float32Array([2.0]),
+                posZ: new Float32Array([2.0]),
+                rotW: new Float32Array([1.0]),
+                rotX: new Float32Array([0.0]),
+                rotY: new Float32Array([0.0]),
+                rotZ: new Float32Array([0.0]),
+                scaleX: new Float32Array([Math.log(2.0)]),
+                scaleY: new Float32Array([Math.log(2.0)]),
+                scaleZ: new Float32Array([Math.log(2.0)]),
+                opacity: new Float32Array([5.0]),
+                extentX: new Float32Array([6.0]),
+                extentY: new Float32Array([6.0]),
+                extentZ: new Float32Array([6.0])
+            };
+
+            // Single solid block has 64 occupied voxels, all of which qualify
+            // for this broad Gaussian at threshold 1e-6.
+            assert.strictEqual(gaussianContributesToVoxels(0, gaussianCols, grid, lookup, 1e-6, undefined, 1), true);
+            assert.strictEqual(gaussianContributesToVoxels(0, gaussianCols, grid, lookup, 1e-6, undefined, 64), true);
+            assert.strictEqual(gaussianContributesToVoxels(0, gaussianCols, grid, lookup, 1e-6, undefined, 65), false);
+        });
+
+        it('should count only filtered hits toward minHits when blockFilter is set', function () {
+            const buffer = new BlockMaskBuffer();
+            buffer.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
+            buffer.addBlock(xyzToMorton(1, 0, 0), SOLID_LO, SOLID_HI);
+
+            const voxelRes = 1.0;
+            const grid = makeGrid(4, 4, 4, voxelRes);
+            const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+
+            const gaussianCols = {
+                posX: new Float32Array([4.0]),
+                posY: new Float32Array([2.0]),
+                posZ: new Float32Array([2.0]),
+                rotW: new Float32Array([1.0]),
+                rotX: new Float32Array([0.0]),
+                rotY: new Float32Array([0.0]),
+                rotZ: new Float32Array([0.0]),
+                scaleX: new Float32Array([Math.log(4.0)]),
+                scaleY: new Float32Array([Math.log(4.0)]),
+                scaleZ: new Float32Array([Math.log(4.0)]),
+                opacity: new Float32Array([5.0]),
+                extentX: new Float32Array([12.0]),
+                extentY: new Float32Array([12.0]),
+                extentZ: new Float32Array([12.0])
+            };
+
+            // Two solid blocks (128 voxels) both qualify; filter to one (64 voxels).
+            const filter = new Set([0]);
+            assert.strictEqual(gaussianContributesToVoxels(0, gaussianCols, grid, lookup, 1e-6, undefined, 100), true);
+            assert.strictEqual(gaussianContributesToVoxels(0, gaussianCols, grid, lookup, 1e-6, filter, 64), true);
+            assert.strictEqual(gaussianContributesToVoxels(0, gaussianCols, grid, lookup, 1e-6, filter, 65), false);
+        });
     });
 
     // ====================================================================

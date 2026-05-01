@@ -279,6 +279,14 @@ const filterCluster = async (
         const gaussianCols = buildGaussianColumns(ctx);
         const keepIndices: number[] = [];
 
+        // Gaussians whose AABB exceeds `largeThreshold` on any axis must hit
+        // at least `minOccupancyRatio` of the voxels in their AABB to be kept,
+        // rejecting elongated outliers (spikes whose tails clip a single
+        // cluster voxel) while preserving structural large gaussians.
+        const largeThreshold = 2.0 * clampedResolution;
+        const minOccupancyRatio = 0.1;
+        const invVoxel = 1 / clampedResolution;
+
         for (let i = 0; i < numRows; i++) {
             const px = gaussianCols.posX[i];
             const py = gaussianCols.posY[i];
@@ -289,7 +297,17 @@ const filterCluster = async (
                 continue;
             }
 
-            if (gaussianContributesToVoxels(i, gaussianCols, grid, lookup, minContribution)) {
+            const ex = gaussianCols.extentX[i];
+            const ey = gaussianCols.extentY[i];
+            const ez = gaussianCols.extentZ[i];
+
+            let minHits = 1;
+            if (Math.max(ex, ey, ez) * 2 > largeThreshold) {
+                const aabbVoxels = (2 * ex * invVoxel) * (2 * ey * invVoxel) * (2 * ez * invVoxel);
+                minHits = Math.max(1, Math.ceil(aabbVoxels * minOccupancyRatio));
+            }
+
+            if (gaussianContributesToVoxels(i, gaussianCols, grid, lookup, minContribution, undefined, minHits)) {
                 keepIndices.push(i);
             }
         }
