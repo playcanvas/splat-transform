@@ -136,10 +136,13 @@ const cropToOccupied = (
     };
 
     const solidMortons = buffer.getSolidBlocks();
-    for (let i = 0; i < solidMortons.length; i++) scanMorton(solidMortons[i]);
-
     const mixed = buffer.getMixedBlocks();
+    const totalScan = solidMortons.length + mixed.morton.length;
+    const scanBar = logger.bar('Scanning bounds', Math.max(1, totalScan));
+    for (let i = 0; i < solidMortons.length; i++) scanMorton(solidMortons[i]);
+    scanBar.update(solidMortons.length);
     for (let i = 0; i < mixed.morton.length; i++) scanMorton(mixed.morton[i]);
+    scanBar.end();
 
     if (minBx > maxBx) {
         return { buffer, gridBounds };
@@ -154,8 +157,19 @@ const cropToOccupied = (
         return { buffer, gridBounds };
     }
 
-    const grid = SparseVoxelGrid.fromBuffer(buffer, nx, ny, nz);
-    const croppedBuffer = grid.toBuffer(minBx, minBy, minBz, cropMaxBx, cropMaxBy, cropMaxBz);
+    const loadBar = logger.bar('Loading grid', Math.max(1, buffer.count));
+    const grid = SparseVoxelGrid.fromBuffer(
+        buffer, nx, ny, nz,
+        (done, total) => loadBar.update(Math.min(done, total))
+    );
+    loadBar.end();
+
+    const buildBar = logger.bar('Building buffer', cropMaxBz - minBz);
+    const croppedBuffer = grid.toBuffer(
+        minBx, minBy, minBz, cropMaxBx, cropMaxBy, cropMaxBz,
+        false, done => buildBar.update(done)
+    );
+    buildBar.end();
 
     const blockSize = 4 * voxelResolution;
     const croppedMin = new Vec3(
@@ -202,9 +216,16 @@ const cropToNavigable = (
     const nby = ny >> 2;
     const nbz = nz >> 2;
 
-    const grid = SparseVoxelGrid.fromBuffer(buffer, nx, ny, nz);
+    const loadBar = logger.bar('Loading grid', Math.max(1, buffer.count));
+    const grid = SparseVoxelGrid.fromBuffer(
+        buffer, nx, ny, nz,
+        (done, total) => loadBar.update(Math.min(done, total))
+    );
+    loadBar.end();
 
-    const navBounds = grid.getNavigableBlockBounds();
+    const boundsBar = logger.bar('Scanning bounds', grid.types.length);
+    const navBounds = grid.getNavigableBlockBounds(done => boundsBar.update(done));
+    boundsBar.end();
     if (!navBounds) {
         return { buffer, gridBounds };
     }
@@ -219,7 +240,12 @@ const cropToNavigable = (
         return { buffer, gridBounds };
     }
 
-    const croppedBuffer = grid.toBuffer(minBx, minBy, minBz, cropMaxBx, cropMaxBy, cropMaxBz);
+    const buildBar = logger.bar('Building buffer', cropMaxBz - minBz);
+    const croppedBuffer = grid.toBuffer(
+        minBx, minBy, minBz, cropMaxBx, cropMaxBy, cropMaxBz,
+        false, done => buildBar.update(done)
+    );
+    buildBar.end();
 
     const blockSize = 4 * voxelResolution;
     const croppedMin = new Vec3(
@@ -444,11 +470,13 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             sub.end();
         }
 
+        const cropSub = logger.group('Cropping');
         const finalCrop = hasFillExterior || hasFloorFill ?
             cropToNavigable(buffer, gridBounds, voxelResolution) :
             cropToOccupied(buffer, gridBounds, voxelResolution);
         buffer = finalCrop.buffer;
         gridBounds = finalCrop.gridBounds;
+        cropSub.end();
 
         const glbBytes = collisionMesh ?
             buildCollisionMesh(buffer, gridBounds, voxelResolution) :

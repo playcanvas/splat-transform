@@ -50,7 +50,12 @@ const carve = async (
     const nby = ny >> 2;
     const nbz = nz >> 2;
 
-    const gridA = SparseVoxelGrid.fromBuffer(buffer, nx, ny, nz);
+    const fromBufBar = logger.bar('Loading grid', Math.max(1, buffer.count));
+    const gridA = SparseVoxelGrid.fromBuffer(
+        buffer, nx, ny, nz,
+        (done, total) => fromBufBar.update(Math.min(done, total))
+    );
+    fromBufBar.end();
 
     // gridA is read only by this dilate; consume it as scratch (CPU path only).
     const blocked = gpu ?
@@ -82,7 +87,16 @@ const carve = async (
     const seedBt = blocked.getBlockType(seedBlockIdx);
     const bSeeds = seedBt === BLOCK_EMPTY ? [seedBlockIdx] : [];
     const vSeeds = seedBt === BLOCK_EMPTY ? [] : [{ ix: seedIx, iy: seedIy, iz: seedIz }];
-    const visited = twoLevelBFS(blocked, bSeeds, vSeeds, nx, ny, nz);
+
+    // Approximate total: nbx*nby*nbz is an upper bound on whole-block fills,
+    // so the bar usually finishes shy of 100% (mixed/solid blocks aren't
+    // counted). Good enough for visual feedback on a long BFS.
+    const bfsBar = logger.bar('BFS', nbx * nby * nbz);
+    const visited = twoLevelBFS(
+        blocked, bSeeds, vSeeds, nx, ny, nz,
+        count => bfsBar.update(count)
+    );
+    bfsBar.end();
 
     const emptyGrid = computeEmptyGrid(visited, blocked);
 
@@ -91,7 +105,9 @@ const carve = async (
         await gpuDilate3(gpu, emptyGrid, kernelR, yHalfExtent) :
         sparseDilate3(emptyGrid, kernelR, yHalfExtent, true);
 
-    const navBounds = navRegion.getOccupiedBlockBounds();
+    const boundsBar = logger.bar('Scanning bounds', navRegion.types.length);
+    const navBounds = navRegion.getOccupiedBlockBounds(done => boundsBar.update(done));
+    boundsBar.end();
 
     if (!navBounds) {
         logger.warn('no navigable cells remain after carve, returning empty result');
@@ -124,11 +140,16 @@ const carve = async (
         )
     };
 
+    const buildBar = logger.bar('Building buffer', cropMaxBz - cropMinBz);
+    const outBuffer = navRegion.toBufferInverted(
+        cropMinBx, cropMinBy, cropMinBz,
+        cropMaxBx, cropMaxBy, cropMaxBz,
+        done => buildBar.update(done)
+    );
+    buildBar.end();
+
     return {
-        buffer: navRegion.toBufferInverted(
-            cropMinBx, cropMinBy, cropMinBz,
-            cropMaxBx, cropMaxBy, cropMaxBz
-        ),
+        buffer: outBuffer,
         gridBounds: croppedBounds
     };
 };

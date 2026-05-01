@@ -89,6 +89,7 @@ const fillFloor = async (
 
     const foundEmpty = new SparseVoxelGrid(nx, ny, nz);
 
+    const walkBar = logger.bar('Column walk', nbx * nbz);
     const dilatedTypes = dilatedSolid.types;
     for (let bz = 0; bz < nbz; bz++) {
         for (let bx = 0; bx < nbx; bx++) {
@@ -156,8 +157,10 @@ const fillFloor = async (
                     foundEmpty.orBlock(blockIdx, foundLo >>> 0, foundHi >>> 0);
                 }
             }
+            walkBar.tick();
         }
     }
+    walkBar.end();
 
     if (r > 0) dilatedSolid.clear();
 
@@ -177,8 +180,13 @@ const fillFloor = async (
     // consumeA=true so sparseOrGrids mutates it in place rather than
     // cloning — saves a full SparseVoxelGrid clone right at the end of
     // the fill-floor phase.
-    const combined = sparseOrGrids(grid, dilatedFound, true);
-    const result = combined.toBuffer(0, 0, 0, nbx, nby, nbz);
+    const combineBar = logger.bar('Combining', grid.types.length);
+    const combined = sparseOrGrids(grid, dilatedFound, true, done => combineBar.update(done));
+    combineBar.end();
+
+    const buildBar = logger.bar('Building buffer', nbz);
+    const result = combined.toBuffer(0, 0, 0, nbx, nby, nbz, false, done => buildBar.update(done));
+    buildBar.end();
 
     return { buffer: result, gridBounds };
 };
