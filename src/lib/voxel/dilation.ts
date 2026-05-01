@@ -926,6 +926,58 @@ function insertDenseChunk(
  * @param halfExtentY - Dilation half-extent in voxels along Y.
  * @returns Newly allocated dilated sparse grid.
  */
+/**
+ * Apply a chunk's GPU-produced output (`typesOut` + `masksOut`) to `dst`.
+ * Iterates inner blocks; for each, reads the precomputed type and (if MIXED)
+ * the precomputed `lo`/`hi`, then writes directly into `dst.types` and
+ * `dst.masks`. Replaces the dense-bit-reading hot loop with O(blocks) work
+ * dominated by hash inserts for mixed blocks.
+ */
+function applyChunkToDst(
+    dst: SparseVoxelGrid,
+    typesOut: Uint32Array,
+    masksOut: Uint32Array,
+    cx: number, cy: number, cz: number,
+    innerNx: number, innerNy: number, innerNz: number
+): void {
+    const innerBx = innerNx >> 2;
+    const innerBy = innerNy >> 2;
+    const innerBz = innerNz >> 2;
+    const dstNbx = dst.nbx;
+    const dstBStride = dst.bStride;
+    const dstTypes = dst.types;
+    const dstMasks = dst.masks;
+
+    const baseBx = cx >> 2;
+    const baseBy = cy >> 2;
+    const baseBz = cz >> 2;
+
+    let innerIdx = 0;
+    for (let bz = 0; bz < innerBz; bz++) {
+        const globalBz = baseBz + bz;
+        for (let by = 0; by < innerBy; by++) {
+            const globalBy = baseBy + by;
+            const baseGlobalIdx = baseBx + globalBy * dstNbx + globalBz * dstBStride;
+            for (let bx = 0; bx < innerBx; bx++, innerIdx++) {
+                const wordIdx = innerIdx >>> 4;
+                const bitShift = (innerIdx & 15) << 1;
+                const bt = (typesOut[wordIdx] >>> bitShift) & 3;
+                if (bt === 0) continue;  // EMPTY
+
+                const globalBlockIdx = baseGlobalIdx + bx;
+                const w = globalBlockIdx >>> 4;
+                const shift = (globalBlockIdx & 15) << 1;
+                dstTypes[w] = ((dstTypes[w] & ~(3 << shift)) | (bt << shift)) >>> 0;
+
+                if (bt === 2) {  // MIXED
+                    const m2 = innerIdx * 2;
+                    dstMasks.set(globalBlockIdx, masksOut[m2], masksOut[m2 + 1]);
+                }
+            }
+        }
+    }
+}
+
 async function gpuDilate3(
     gpu: GpuDilation,
     src: SparseVoxelGrid,
@@ -934,9 +986,21 @@ async function gpuDilate3(
 ): Promise<SparseVoxelGrid> {
     const dst = new SparseVoxelGrid(src.nx, src.ny, src.nz);
 
+    if (halfExtentXZ % 4 !== 0 && halfExtentXZ !== 0) {
+        // Halo must be block-aligned for the sparse path's chunk math.
+        // Current callers (fill-floor 32, carve XZ 4) satisfy this; assert.
+        throw new Error(`gpuDilate3: halfExtentXZ=${halfExtentXZ} must be a multiple of 4`);
+    }
+    if (halfExtentY % 4 !== 0 && halfExtentY !== 0) {
+        throw new Error(`gpuDilate3: halfExtentY=${halfExtentY} must be a multiple of 4`);
+    }
+
     const haloX = halfExtentXZ;
     const haloY = halfExtentY;
     const haloZ = halfExtentXZ;
+    const haloBx = haloX >> 2;
+    const haloBy = haloY >> 2;
+    const haloBz = haloZ >> 2;
 
     // Round inner chunk down to multiple of 4 (block alignment).
     const innerStep = CHUNK_INNER & ~3;
@@ -946,67 +1010,42 @@ async function gpuDilate3(
     const numChunksZ = Math.ceil(src.nz / innerStep);
     const totalChunks = numChunksX * numChunksY * numChunksZ;
 
-    const popcountBits = (arr: Uint32Array): number => {
-        let n = 0;
-        for (let i = 0; i < arr.length; i++) {
-            let w = arr[i];
-            w = w - ((w >>> 1) & 0x55555555);
-            w = (w & 0x33333333) + ((w >>> 2) & 0x33333333);
-            n += (((w + (w >>> 4)) & 0x0F0F0F0F) * 0x01010101) >>> 24;
-        }
-        return n;
-    };
+    // Phase timings accumulated across all chunks in this dilate3 call.
+    let tSubmit = 0;
+    let tAwait = 0;
+    let tApply = 0;
 
-    // Snapshot of a submitted chunk's state, held on the inflight queue while
-    // the GPU is processing it. When the readback resolves we use this to
-    // insert the dilated bits into `dst` (and run debug-compare if enabled).
     interface InFlight {
-        readPromise: Promise<Uint32Array>;
+        typesPromise: Promise<Uint32Array>;
+        masksPromise: Promise<Uint32Array>;
         chunkIdx: number;
-        ox: number; oy: number; oz: number;
-        outerNx: number; outerNy: number; outerNz: number;
-        numXWords: number;
         cx: number; cy: number; cz: number;
         innerNx: number; innerNy: number; innerNz: number;
-        inBits: number;
-        denseInput?: Uint32Array;  // retained only for GPU_DILATE_DEBUG
     }
 
     let currentSlot = 0;
     let inflight: InFlight | null = null;
-
-    // Phase timings accumulated across all chunks in this dilate3 call.
-    // `tAwait` includes everything blocked on the GPU readback (compute +
-    // PCIe transfer + any wait for prior chunk on the same slot). The
-    // ratio of these tells us where time actually goes.
-    let tExtract = 0;
-    let tSubmit = 0;
-    let tAwait = 0;
-    let tInsert = 0;
 
     const drainInflight = async (): Promise<void> => {
         if (!inflight) return;
         const f = inflight;
         inflight = null;
         const tAwaitStart = performance.now();
-        const dilated = await f.readPromise;
+        const [typesOut, masksOut] = await Promise.all([f.typesPromise, f.masksPromise]);
         tAwait += performance.now() - tAwaitStart;
-        const outBits = popcountBits(dilated);
-        logger.debug(`gpuDilate3 chunk ${f.chunkIdx}: outer=${f.outerNx}x${f.outerNy}x${f.outerNz} kernel=(${halfExtentXZ},${halfExtentY},${halfExtentXZ}) in=${f.inBits} out=${outBits}`);
-        if (GPU_DILATE_DEBUG && f.denseInput) {
-            debugCompareDilate(f.chunkIdx, f.denseInput, dilated, f.outerNx, f.outerNy, f.outerNz, f.numXWords, halfExtentXZ, halfExtentY);
-        }
-        const tInsertStart = performance.now();
-        insertDenseChunk(
-            dst, dilated,
-            f.ox, f.oy, f.oz,
-            f.outerNx, f.outerNy, f.outerNz,
-            f.numXWords,
-            f.cx, f.cy, f.cz,
-            f.innerNx, f.innerNy, f.innerNz
-        );
-        tInsert += performance.now() - tInsertStart;
+        const tApplyStart = performance.now();
+        applyChunkToDst(dst, typesOut, masksOut, f.cx, f.cy, f.cz, f.innerNx, f.innerNy, f.innerNz);
+        tApply += performance.now() - tApplyStart;
     };
+
+    // BUG-HUNTING: Setting GPU_DILATE_CPU_EXTRACT=1 routes extract through CPU
+    // (current production path) and uses GPU only for dilate + compact. Lets us
+    // narrow whether the new bug is in `extract` shader or downstream.
+    const useCpuExtract = process.env.GPU_DILATE_CPU_EXTRACT === '1';
+
+    const tUploadStart = performance.now();
+    if (!useCpuExtract) gpu.uploadSrc(src);
+    const tUpload = performance.now() - tUploadStart;
 
     const bar = logger.bar('Dilating', totalChunks);
     try {
@@ -1025,38 +1064,41 @@ async function gpuDilate3(
                     const outerNy = innerNy + 2 * haloY;
                     const outerNz = innerNz + 2 * haloZ;
 
-                    // Empty / saturated chunks bypass the GPU entirely, but
-                    // could still race against an inflight chunk's slot. The
-                    // skip itself doesn't touch any slot's buffers, so we can
-                    // process the chunk-level skip immediately and let the
-                    // inflight chunk continue on its own slot in the background.
                     if (chunkIsEmpty(src, ox, oy, oz, outerNx, outerNy, outerNz)) {
-                        logger.debug(`gpuDilate3 chunk ${chunkIdx}: empty, skipped`);
                         chunkIdx++;
                         bar.tick();
                         continue;
                     }
                     if (chunkIsSaturated(src, ox, oy, oz, outerNx, outerNy, outerNz)) {
                         insertSaturatedInner(dst, cx, cy, cz, innerNx, innerNy, innerNz);
-                        logger.debug(`gpuDilate3 chunk ${chunkIdx}: saturated, fast-path`);
                         chunkIdx++;
                         bar.tick();
                         continue;
                     }
 
-                    const numXWords = (outerNx + 31) >>> 5;
-                    const tExtractStart = performance.now();
-                    const dense = extractDenseChunk(src, ox, oy, oz, outerNx, outerNy, outerNz, numXWords);
-                    tExtract += performance.now() - tExtractStart;
-                    const inBits = popcountBits(dense);
+                    const innerBx = innerNx >> 2;
+                    const innerBy = innerNy >> 2;
+                    const innerBz = innerNz >> 2;
+                    const outerBx = outerNx >> 2;
+                    const outerBy = outerNy >> 2;
+                    const outerBz = outerNz >> 2;
+                    const minBx = ox >> 2;
+                    const minBy = oy >> 2;
+                    const minBz = oz >> 2;
 
-                    // Submit on the current slot (returns deferred Promise).
-                    // Then drain any previously inflight chunk (CPU work overlaps
-                    // with this submit's GPU work). Finally, register the new
-                    // submission as the next inflight.
                     const tSubmitStart = performance.now();
-                    const readPromise = gpu.submitChunk(
-                        currentSlot, dense, numXWords, outerNy, outerNz, halfExtentXZ, halfExtentY
+                    let debugDense: Uint32Array | undefined;
+                    if (useCpuExtract) {
+                        debugDense = extractDenseChunk(src, ox, oy, oz, outerNx, outerNy, outerNz, (outerNx + 31) >>> 5);
+                    }
+                    const { types: typesPromise, masks: masksPromise } = gpu.submitChunkSparse(
+                        currentSlot,
+                        minBx, minBy, minBz,
+                        outerBx, outerBy, outerBz,
+                        haloBx, haloBy, haloBz,
+                        innerBx, innerBy, innerBz,
+                        halfExtentXZ, halfExtentY,
+                        debugDense
                     );
                     tSubmit += performance.now() - tSubmitStart;
 
@@ -1065,15 +1107,11 @@ async function gpuDilate3(
                     }
 
                     inflight = {
-                        readPromise,
+                        typesPromise,
+                        masksPromise,
                         chunkIdx,
-                        ox, oy, oz,
-                        outerNx, outerNy, outerNz,
-                        numXWords,
                         cx, cy, cz,
-                        innerNx, innerNy, innerNz,
-                        inBits,
-                        denseInput: GPU_DILATE_DEBUG ? dense : undefined
+                        innerNx, innerNy, innerNz
                     };
                     currentSlot = (currentSlot + 1) % GpuDilation.NUM_SLOTS;
 
@@ -1083,14 +1121,14 @@ async function gpuDilate3(
             }
         }
 
-        // Drain the final inflight chunk.
         if (inflight) {
             await drainInflight();
         }
     } finally {
         bar.end();
+        gpu.releaseSrc();
     }
     const fmt = (ms: number) => `${ms.toFixed(0)}ms`;
-    logger.info(`gpuDilate3 timing: extract=${fmt(tExtract)} submit=${fmt(tSubmit)} await=${fmt(tAwait)} insert=${fmt(tInsert)}`);
+    logger.info(`gpuDilate3 timing: upload=${fmt(tUpload)} submit=${fmt(tSubmit)} await=${fmt(tAwait)} apply=${fmt(tApply)}`);
     return dst;
 }
