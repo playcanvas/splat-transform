@@ -1,8 +1,9 @@
 import { BlockMaskBuffer } from './block-mask-buffer';
-import { sparseDilate3 } from './dilation';
+import { gpuDilate3, sparseDilate3 } from './dilation';
 import type { NavSimplifyResult } from './fill-exterior';
 import { sparseOrGrids } from './grid-ops';
 import type { Bounds } from '../data-table';
+import type { GpuDilation } from '../gpu';
 import {
     BLOCK_EMPTY,
     BLOCK_MIXED,
@@ -46,12 +47,13 @@ import { logger } from '../utils';
  * @param dilation - XZ dilation radius in world units. 0 disables dilation.
  * @returns Modified buffer with under-surface regions filled.
  */
-const fillFloor = (
+const fillFloor = async (
     buffer: BlockMaskBuffer,
     gridBounds: Bounds,
     voxelResolution: number,
-    dilation: number = 0
-): NavSimplifyResult => {
+    dilation: number = 0,
+    gpu: GpuDilation | null = null
+): Promise<NavSimplifyResult> => {
     if (!Number.isFinite(voxelResolution) || voxelResolution <= 0) {
         throw new Error(`fillFloor: voxelResolution must be finite and > 0, got ${voxelResolution}`);
     }
@@ -81,7 +83,9 @@ const fillFloor = (
     logger.debug(`fill floor: ${nx}x${ny}x${nz} grid, dilation radius ${r} voxels`);
 
     const grid = SparseVoxelGrid.fromBuffer(buffer, nx, ny, nz);
-    const dilatedSolid = r > 0 ? sparseDilate3(grid, r, 0) : grid;
+    const dilatedSolid = r > 0 ?
+        (gpu ? await gpuDilate3(gpu, grid, r, 0) : sparseDilate3(grid, r, 0)) :
+        grid;
 
     const foundEmpty = new SparseVoxelGrid(nx, ny, nz);
 
@@ -165,7 +169,9 @@ const fillFloor = (
     // separate clear() is needed. (When r === 0, dilatedFound IS
     // foundEmpty; the previous `foundEmpty.clear()` was correctly
     // skipped on that branch and the same logic applies here.)
-    const dilatedFound = r > 0 ? sparseDilate3(foundEmpty, r, 0, true) : foundEmpty;
+    const dilatedFound = r > 0 ?
+        (gpu ? await gpuDilate3(gpu, foundEmpty, r, 0) : sparseDilate3(foundEmpty, r, 0, true)) :
+        foundEmpty;
 
     // grid is the original voxelization; not read after this OR. Pass
     // consumeA=true so sparseOrGrids mutates it in place rather than

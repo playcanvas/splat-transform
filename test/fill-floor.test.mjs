@@ -43,7 +43,7 @@ describe('fillFloor', function () {
     const voxelResolution = 0.25;
 
     describe('empty column fill', function () {
-        it('should fill entirely empty columns solid from bottom to top', function () {
+        it('should fill entirely empty columns solid from bottom to top', async function () {
             const nbx = 2, nby = 4, nbz = 2;
             const gridBounds = makeGridBounds(nbx, nby, nbz, voxelResolution);
 
@@ -51,7 +51,7 @@ describe('fillFloor', function () {
             const acc = new BlockMaskBuffer();
             acc.addBlock(xyzToMorton(0, 2, 0), SOLID_LO, SOLID_HI);
 
-            const result = fillFloor(acc, gridBounds, voxelResolution);
+            const result = await fillFloor(acc, gridBounds, voxelResolution);
             const grid = bufferToGrid(result.buffer, result.gridBounds, voxelResolution);
 
             // Column at (4, *, 4) has no solid -- should be filled entirely.
@@ -63,7 +63,7 @@ describe('fillFloor', function () {
     });
 
     describe('fill below solid', function () {
-        it('should fill below the floor block and not above', function () {
+        it('should fill below the floor block and not above', async function () {
             const nbx = 2, nby = 4, nbz = 2;
             const floorBlockY = 2;
             const gridBounds = makeGridBounds(nbx, nby, nbz, voxelResolution);
@@ -76,7 +76,7 @@ describe('fillFloor', function () {
                 }
             }
 
-            const result = fillFloor(acc, gridBounds, voxelResolution);
+            const result = await fillFloor(acc, gridBounds, voxelResolution);
             const grid = bufferToGrid(result.buffer, result.gridBounds, voxelResolution);
 
             const floorVoxelY = floorBlockY * 4;
@@ -103,7 +103,7 @@ describe('fillFloor', function () {
             }
         });
 
-        it('should stop at the first solid voxel per sub-column in a mixed block', function () {
+        it('should stop at the first solid voxel per sub-column in a mixed block', async function () {
             const nbx = 1, nby = 3, nbz = 1;
             const gridBounds = makeGridBounds(nbx, nby, nbz, voxelResolution);
 
@@ -113,7 +113,7 @@ describe('fillFloor', function () {
             const lo = (1 << 4) >>> 0;
             acc.addBlock(xyzToMorton(0, 1, 0), lo, 0);
 
-            const result = fillFloor(acc, gridBounds, voxelResolution);
+            const result = await fillFloor(acc, gridBounds, voxelResolution);
             const grid = bufferToGrid(result.buffer, result.gridBounds, voxelResolution);
 
             // Sub-column (lx=0, lz=0): solid at iy=5, should fill iy=0..4
@@ -137,7 +137,7 @@ describe('fillFloor', function () {
     });
 
     describe('already solid from bottom', function () {
-        it('should not modify a fully solid grid', function () {
+        it('should not modify a fully solid grid', async function () {
             const nbx = 2, nby = 2, nbz = 2;
             const gridBounds = makeGridBounds(nbx, nby, nbz, voxelResolution);
 
@@ -151,14 +151,14 @@ describe('fillFloor', function () {
             }
 
             const inputCount = countSolidVoxels(acc);
-            const result = fillFloor(acc, gridBounds, voxelResolution);
+            const result = await fillFloor(acc, gridBounds, voxelResolution);
             const resultCount = countSolidVoxels(result.buffer);
 
             assert.strictEqual(resultCount, inputCount,
                 'A fully solid grid should not be modified');
         });
 
-        it('should not add voxels when the bottom block is already solid', function () {
+        it('should not add voxels when the bottom block is already solid', async function () {
             const nbx = 1, nby = 3, nbz = 1;
             const gridBounds = makeGridBounds(nbx, nby, nbz, voxelResolution);
 
@@ -167,7 +167,7 @@ describe('fillFloor', function () {
             acc.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
 
             const inputCount = countSolidVoxels(acc);
-            const result = fillFloor(acc, gridBounds, voxelResolution);
+            const result = await fillFloor(acc, gridBounds, voxelResolution);
             const resultCount = countSolidVoxels(result.buffer);
 
             assert.strictEqual(resultCount, inputCount,
@@ -176,47 +176,47 @@ describe('fillFloor', function () {
     });
 
     describe('empty buffer', function () {
-        it('should return the same buffer reference when input is empty', function () {
+        it('should return the same buffer reference when input is empty', async function () {
             const acc = new BlockMaskBuffer();
             assert.strictEqual(acc.count, 0);
             const gridBounds = makeGridBounds(2, 2, 2, voxelResolution);
 
-            const result = fillFloor(acc, gridBounds, voxelResolution);
+            const result = await fillFloor(acc, gridBounds, voxelResolution);
             assert.strictEqual(result.buffer, acc, 'Empty input should return same buffer reference');
         });
     });
 
     describe('parameter validation', function () {
-        it('should throw for zero voxel resolution', function () {
+        it('should throw for zero voxel resolution', async function () {
             const acc = new BlockMaskBuffer();
             acc.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
             const gridBounds = makeGridBounds(1, 1, 1, 0.25);
-            assert.throws(
-                () => fillFloor(acc, gridBounds, 0),
+            await assert.rejects(
+                fillFloor(acc, gridBounds, 0),
                 /voxelResolution must be finite and > 0/
             );
         });
 
-        it('should throw for negative voxel resolution', function () {
+        it('should throw for negative voxel resolution', async function () {
             const acc = new BlockMaskBuffer();
             acc.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
             const gridBounds = makeGridBounds(1, 1, 1, 0.25);
-            assert.throws(
-                () => fillFloor(acc, gridBounds, -1),
+            await assert.rejects(
+                fillFloor(acc, gridBounds, -1),
                 /voxelResolution must be finite and > 0/
             );
         });
     });
 
     describe('gridBounds preserved', function () {
-        it('should return the same gridBounds as input', function () {
+        it('should return the same gridBounds as input', async function () {
             const nbx = 2, nby = 2, nbz = 2;
             const gridBounds = makeGridBounds(nbx, nby, nbz, voxelResolution);
 
             const acc = new BlockMaskBuffer();
             acc.addBlock(xyzToMorton(0, 1, 0), SOLID_LO, SOLID_HI);
 
-            const result = fillFloor(acc, gridBounds, voxelResolution);
+            const result = await fillFloor(acc, gridBounds, voxelResolution);
 
             assert.strictEqual(result.gridBounds, gridBounds,
                 'gridBounds should be the same object reference');
@@ -224,7 +224,7 @@ describe('fillFloor', function () {
     });
 
     describe('multiple solids in column', function () {
-        it('should stop at the first (lowest) solid and not fill between solids', function () {
+        it('should stop at the first (lowest) solid and not fill between solids', async function () {
             const nbx = 1, nby = 4, nbz = 1;
             const gridBounds = makeGridBounds(nbx, nby, nbz, voxelResolution);
 
@@ -233,7 +233,7 @@ describe('fillFloor', function () {
             acc.addBlock(xyzToMorton(0, 1, 0), SOLID_LO, SOLID_HI);
             acc.addBlock(xyzToMorton(0, 3, 0), SOLID_LO, SOLID_HI);
 
-            const result = fillFloor(acc, gridBounds, voxelResolution);
+            const result = await fillFloor(acc, gridBounds, voxelResolution);
             const grid = bufferToGrid(result.buffer, result.gridBounds, voxelResolution);
 
             // by=0 should be filled (below the first solid at by=1)

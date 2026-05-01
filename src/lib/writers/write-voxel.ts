@@ -4,7 +4,7 @@ import { Vec3 } from 'playcanvas';
 import { buildCollisionMesh } from './collision-glb';
 import { logWrittenFile } from './utils';
 import { Column, DataTable, computeGaussianExtents, computeWriteTransform, transformColumns, type Bounds } from '../data-table';
-import { GpuVoxelization } from '../gpu';
+import { GpuDilation, GpuVoxelization } from '../gpu';
 import { type FileSystem, writeFile } from '../io/write';
 import { GaussianBVH } from '../spatial';
 import type { DeviceCreator } from '../types';
@@ -369,6 +369,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     // destruction is the sole job of the finally below. Open scopes on the
     // error path are reaped by the embedder's logger.error() -> unwindAll.
     let gpuVoxelization: GpuVoxelization | null = null;
+    let gpuDilation: GpuDilation | null = null;
     try {
         const bvhSub = logger.group('Building BVH');
         logger.debug(`scene extents: (${bounds.min.x.toFixed(2)},${bounds.min.y.toFixed(2)},${bounds.min.z.toFixed(2)}) - (${bounds.max.x.toFixed(2)},${bounds.max.y.toFixed(2)},${bounds.max.z.toFixed(2)})`);
@@ -404,6 +405,11 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         buffer = filterAndFillBlocks(buffer);
         filterSub.end();
 
+        // Reuse the same device for GPU dilation across fill-floor and carve.
+        if (hasFloorFill || hasNav) {
+            gpuDilation = new GpuDilation(device);
+        }
+
         if (hasFillExterior) {
             const sub = logger.group('Fill exterior');
             const fillResult = fillExterior(
@@ -417,8 +423,8 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
 
         if (hasFloorFill) {
             const sub = logger.group('Fill floor');
-            const floorResult = fillFloor(
-                buffer, gridBounds, voxelResolution, floorFillDilation
+            const floorResult = await fillFloor(
+                buffer, gridBounds, voxelResolution, floorFillDilation, gpuDilation
             );
             buffer = floorResult.buffer;
             gridBounds = floorResult.gridBounds;
@@ -427,10 +433,11 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
 
         if (hasNav) {
             const sub = logger.group('Carve');
-            const navResult = carve(
+            const navResult = await carve(
                 buffer, gridBounds, voxelResolution,
                 navCapsule!.height, navCapsule!.radius,
-                navSeed!
+                navSeed!,
+                gpuDilation
             );
             buffer = navResult.buffer;
             gridBounds = navResult.gridBounds;
@@ -472,6 +479,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         g.end();
     } finally {
         gpuVoxelization?.destroy();
+        gpuDilation?.destroy();
     }
 };
 

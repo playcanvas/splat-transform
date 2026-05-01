@@ -1,25 +1,27 @@
 import { Vec3 } from 'playcanvas';
 
 import { BlockMaskBuffer } from './block-mask-buffer';
-import { sparseDilate3 } from './dilation';
+import { gpuDilate3, sparseDilate3 } from './dilation';
 import type { NavSeed, NavSimplifyResult } from './fill-exterior';
 import { twoLevelBFS } from './flood-fill';
 import { computeEmptyGrid } from './grid-ops';
 import type { Bounds } from '../data-table';
+import type { GpuDilation } from '../gpu';
 import {
     BLOCK_EMPTY,
     SparseVoxelGrid
 } from './sparse-voxel-grid';
 import { logger } from '../utils';
 
-const carve = (
+const carve = async (
     buffer: BlockMaskBuffer,
     gridBounds: Bounds,
     voxelResolution: number,
     capsuleHeight: number,
     capsuleRadius: number,
-    seed: NavSeed
-): NavSimplifyResult => {
+    seed: NavSeed,
+    gpu: GpuDilation | null = null
+): Promise<NavSimplifyResult> => {
     if (!Number.isFinite(voxelResolution) || voxelResolution <= 0) {
         throw new Error(`carve: voxelResolution must be finite and > 0, got ${voxelResolution}`);
     }
@@ -50,8 +52,10 @@ const carve = (
 
     const gridA = SparseVoxelGrid.fromBuffer(buffer, nx, ny, nz);
 
-    // gridA is read only by this dilate; consume it as scratch.
-    const blocked = sparseDilate3(gridA, kernelR, yHalfExtent, true);
+    // gridA is read only by this dilate; consume it as scratch (CPU path only).
+    const blocked = gpu ?
+        await gpuDilate3(gpu, gridA, kernelR, yHalfExtent) :
+        sparseDilate3(gridA, kernelR, yHalfExtent, true);
 
     let seedIx = Math.floor((seed.x - gridBounds.min.x) / voxelResolution);
     let seedIy = Math.floor((seed.y - gridBounds.min.y) / voxelResolution);
@@ -82,8 +86,10 @@ const carve = (
 
     const emptyGrid = computeEmptyGrid(visited, blocked);
 
-    // emptyGrid is read only by this dilate; consume it as scratch.
-    const navRegion = sparseDilate3(emptyGrid, kernelR, yHalfExtent, true);
+    // emptyGrid is read only by this dilate; consume it as scratch (CPU path only).
+    const navRegion = gpu ?
+        await gpuDilate3(gpu, emptyGrid, kernelR, yHalfExtent) :
+        sparseDilate3(emptyGrid, kernelR, yHalfExtent, true);
 
     const navBounds = navRegion.getOccupiedBlockBounds();
 
