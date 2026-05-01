@@ -32,7 +32,7 @@ import type { SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
 const extractWgsl = () => /* wgsl */`
 struct ExtractUniforms {
     minBx: i32, minBy: i32, minBz: i32,
-    halfPad: u32,            // padding to keep i32 trio aligned ahead of the u32 block
+    _pad0: u32,
 
     outerBx: u32, outerBy: u32, outerBz: u32,
     numXWords: u32,
@@ -41,7 +41,7 @@ struct ExtractUniforms {
     srcBStride: u32,
 
     srcCapMinusOne: u32,
-    _pad0: u32, _pad1: u32, _pad2: u32
+    _pad1: u32, _pad2: u32, _pad3: u32
 }
 
 @group(0) @binding(0) var<uniform> u: ExtractUniforms;
@@ -402,7 +402,8 @@ interface DilationSlot {
  * Separable 3D dilation on the GPU using a row-aligned dense bit grid
  * (1 bit per voxel, packed into u32 words; each row of bits along X starts
  * on a word boundary so per-word access is trivial). Each pass owns its
- * own `Compute` instance — see `submitChunk` for why this matters.
+ * own `Compute` instance because their uniform buffers must not collide
+ * within a single submit.
  */
 class GpuDilation {
     private device: GraphicsDevice;
@@ -529,7 +530,7 @@ class GpuDilation {
                     new UniformFormat('minBx', UNIFORMTYPE_UINT),  // signed reinterpret
                     new UniformFormat('minBy', UNIFORMTYPE_UINT),
                     new UniformFormat('minBz', UNIFORMTYPE_UINT),
-                    new UniformFormat('halfPad', UNIFORMTYPE_UINT),
+                    new UniformFormat('_pad0', UNIFORMTYPE_UINT),
                     new UniformFormat('outerBx', UNIFORMTYPE_UINT),
                     new UniformFormat('outerBy', UNIFORMTYPE_UINT),
                     new UniformFormat('outerBz', UNIFORMTYPE_UINT),
@@ -794,7 +795,7 @@ class GpuDilation {
         c.setParameter('minBx', (minBx >>> 0));
         c.setParameter('minBy', (minBy >>> 0));
         c.setParameter('minBz', (minBz >>> 0));
-        c.setParameter('halfPad', 0);
+        c.setParameter('_pad0', 0);
         c.setParameter('outerBx', outerBx);
         c.setParameter('outerBy', outerBy);
         c.setParameter('outerBz', outerBz);
@@ -837,60 +838,6 @@ class GpuDilation {
         const wgZ = Math.ceil(innerBz / 8);
         c.setupDispatch(wgX, wgY, wgZ);
         this.device.computeDispatch([c], c.name);
-    }
-
-    /**
-     * Submit one chunk's three separable dilation passes on the given slot
-     * and return a `Promise` that resolves to the dilated dense bit grid.
-     *
-     * The promise is **deferred** — caller should NOT await immediately.
-     * Submit the next chunk on the OTHER slot, then await the previous
-     * chunk's promise; this overlaps GPU compute on the new chunk with
-     * CPU extract / insert work on the previous chunk.
-     *
-     * @param slotIdx - Which slot to use (0 or 1).
-     * @param srcBits - Row-aligned dense bit grid (`numXWords * ny * nz` u32
-     *  words). Bit at voxel `(x, y, z)` is at word
-     *  `(x >> 5) + y * numXWords + z * numXWords * ny`, bit `x & 31`.
-     * @param numXWords - Words per row (= ceil(nx / 32)).
-     * @param ny - Chunk height in voxels.
-     * @param nz - Chunk depth in voxels.
-     * @param halfExtentXZ - Dilation half-extent for X and Z passes.
-     * @param halfExtentY - Dilation half-extent for Y pass.
-     * @returns Promise resolving to the dilated dense bit grid.
-     */
-    submitChunk(
-        slotIdx: number,
-        srcBits: Uint32Array,
-        numXWords: number, ny: number, nz: number,
-        halfExtentXZ: number,
-        halfExtentY: number
-    ): Promise<Uint32Array> {
-        const slot = this.slots[slotIdx];
-        const numWords = numXWords * ny * nz;
-        this.ensureSlotBuffers(slot, numWords);
-
-        // Upload source into bufferA. Inter-pass clears use compute dispatches
-        // so they're encoder-ordered with the dilation dispatches.
-        slot.bufferA.write(0, srcBits, 0, numWords);
-
-        // X-pass: A -> B.
-        this.dispatchClear(slot, slot.bufferB, numWords);
-        this.dispatchX(slot, slot.bufferA, slot.bufferB, numXWords, ny, nz, halfExtentXZ);
-
-        // Z-pass: B -> A.
-        this.dispatchClear(slot, slot.bufferA, numWords);
-        this.dispatchYZ(slot.dilateZCompute, slot.bufferB, slot.bufferA,
-            numXWords, ny, nz, halfExtentXZ, numXWords * ny, nz);
-
-        // Y-pass: A -> B.
-        this.dispatchClear(slot, slot.bufferB, numWords);
-        this.dispatchYZ(slot.dilateYCompute, slot.bufferA, slot.bufferB,
-            numXWords, ny, nz, halfExtentY, numXWords, ny);
-
-        return slot.bufferB.read(0, numWords * 4, null, true).then((readData: Uint8Array) => {
-            return new Uint32Array(readData.buffer, readData.byteOffset, numWords);
-        });
     }
 
     private dispatchX(

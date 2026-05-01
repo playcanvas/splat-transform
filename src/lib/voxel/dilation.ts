@@ -146,113 +146,6 @@ function insertSaturatedInner(
 }
 
 /**
- * OR the inner region of a dense bit chunk into a `SparseVoxelGrid`. Iterates
- * over destination blocks that intersect the inner region (chunk minus halo)
- * and OR's the corresponding bits in.
- *
- * @param dst - Destination sparse grid (mutated).
- * @param dense - Dilated dense bit grid for the outer chunk.
- * @param ox - Outer chunk origin X in voxels.
- * @param oy - Outer chunk origin Y.
- * @param oz - Outer chunk origin Z.
- * @param cx - Outer chunk size X.
- * @param cy - Outer chunk size Y.
- * @param cz - Outer chunk size Z.
- * @param innerOx - Inner region origin X (= ox + haloX, in voxels).
- * @param innerOy - Inner region origin Y.
- * @param innerOz - Inner region origin Z.
- * @param innerCx - Inner region size X.
- * @param innerCy - Inner region size Y.
- * @param innerCz - Inner region size Z.
- */
-function insertDenseChunk(
-    dst: SparseVoxelGrid,
-    dense: Uint32Array,
-    ox: number, oy: number, oz: number,
-    cx: number, cy: number, cz: number,
-    numXWords: number,
-    innerOx: number, innerOy: number, innerOz: number,
-    innerCx: number, innerCy: number, innerCz: number
-): void {
-    const planeWords = numXWords * cy;
-
-    // Inner region must be 4-aligned (caller guarantees), so iterate full blocks.
-    const minBx = Math.max(0, innerOx >> 2);
-    const minBy = Math.max(0, innerOy >> 2);
-    const minBz = Math.max(0, innerOz >> 2);
-    const maxBx = Math.min(dst.nbx, (innerOx + innerCx + 3) >> 2);
-    const maxBy = Math.min(dst.nby, (innerOy + innerCy + 3) >> 2);
-    const maxBz = Math.min(dst.nbz, (innerOz + innerCz + 3) >> 2);
-
-    for (let bz = minBz; bz < maxBz; bz++) {
-        const baseGz = bz * 4;
-        for (let by = minBy; by < maxBy; by++) {
-            const baseGy = by * 4;
-            for (let bx = minBx; bx < maxBx; bx++) {
-                const baseGx = bx * 4;
-                const dx0 = baseGx - ox;
-                const dxFastPath = dx0 >= 0 && dx0 + 4 <= cx;
-                const wordOffsetX = dx0 >>> 5;
-                const bitShiftX = dx0 & 31;
-
-                let lo = 0;
-                let hi = 0;
-                for (let lz = 0; lz < 4; lz++) {
-                    const dz = baseGz + lz - oz;
-                    if (dz < 0 || dz >= cz) continue;
-                    const zBitBase = (lz & 1) * 16;
-                    const inHi = lz >= 2;
-                    const planeBase = dz * planeWords;
-                    for (let ly = 0; ly < 4; ly++) {
-                        const dy = baseGy + ly - oy;
-                        if (dy < 0 || dy >= cy) continue;
-                        const bitBase = zBitBase + ly * 4;
-
-                        let pattern: number;
-                        if (dxFastPath) {
-                            const wordIdx = wordOffsetX + dy * numXWords + planeBase;
-                            pattern = (dense[wordIdx] >>> bitShiftX) & 0xF;
-                        } else {
-                            // Edge: read each bit individually with clipping.
-                            pattern = 0;
-                            for (let lx = 0; lx < 4; lx++) {
-                                const dx = dx0 + lx;
-                                if (dx < 0 || dx >= cx) continue;
-                                const wordIdx = (dx >>> 5) + dy * numXWords + planeBase;
-                                if ((dense[wordIdx] >>> (dx & 31)) & 1) {
-                                    pattern |= (1 << lx);
-                                }
-                            }
-                        }
-                        if (pattern === 0) continue;
-
-                        const bits = pattern << bitBase;
-                        if (inHi) hi |= bits;
-                        else lo |= bits;
-                    }
-                }
-                if (lo || hi) {
-                    const blockIdx = bx + by * dst.nbx + bz * dst.bStride;
-                    dst.orBlock(blockIdx, lo >>> 0, hi >>> 0);
-                }
-            }
-        }
-    }
-}
-
-/**
- * GPU separable 3D dilation. Chunks the grid into ~1024³ inner regions plus
- * a halo on each side, runs three GPU passes per chunk, and OR's the
- * dilated inner region into a fresh destination `SparseVoxelGrid`. Mirrors
- * `sparseDilate3`'s API (returns a new grid).
- *
- * @param gpu - Reusable GPU dilation context (compiled shader + buffers).
- * @param src - Input sparse grid (read-only across the call).
- * @param halfExtentXZ - Dilation half-extent in voxels along X and Z.
- * @param halfExtentY - Dilation half-extent in voxels along Y.
- * @returns Newly allocated dilated sparse grid.
- */
-/**
  * Apply a chunk's GPU-produced output (`typesOut` + `masksOut`) to `dst`.
  * Iterates inner blocks; for each, reads the precomputed type and (if MIXED)
  * the precomputed `lo`/`hi`, then writes directly into `dst.types` and
@@ -304,6 +197,18 @@ function applyChunkToDst(
     }
 }
 
+/**
+ * GPU separable 3D dilation. Chunks the grid into ~1024³ inner regions plus
+ * a halo on each side, runs three GPU passes per chunk, and OR's the
+ * dilated inner region into a fresh destination `SparseVoxelGrid`. Mirrors
+ * `sparseDilate3`'s API (returns a new grid).
+ *
+ * @param gpu - Reusable GPU dilation context (compiled shader + buffers).
+ * @param src - Input sparse grid (read-only across the call).
+ * @param halfExtentXZ - Dilation half-extent in voxels along X and Z.
+ * @param halfExtentY - Dilation half-extent in voxels along Y.
+ * @returns Newly allocated dilated sparse grid.
+ */
 async function gpuDilate3(
     gpu: GpuDilation,
     src: SparseVoxelGrid,
@@ -336,15 +241,9 @@ async function gpuDilate3(
     const numChunksZ = Math.ceil(src.nz / innerStep);
     const totalChunks = numChunksX * numChunksY * numChunksZ;
 
-    // Phase timings accumulated across all chunks in this dilate3 call.
-    let tSubmit = 0;
-    let tAwait = 0;
-    let tApply = 0;
-
     interface InFlight {
         typesPromise: Promise<Uint32Array>;
         masksPromise: Promise<Uint32Array>;
-        chunkIdx: number;
         cx: number; cy: number; cz: number;
         innerNx: number; innerNy: number; innerNz: number;
     }
@@ -356,21 +255,14 @@ async function gpuDilate3(
         if (!inflight) return;
         const f = inflight;
         inflight = null;
-        const tAwaitStart = performance.now();
         const [typesOut, masksOut] = await Promise.all([f.typesPromise, f.masksPromise]);
-        tAwait += performance.now() - tAwaitStart;
-        const tApplyStart = performance.now();
         applyChunkToDst(dst, typesOut, masksOut, f.cx, f.cy, f.cz, f.innerNx, f.innerNy, f.innerNz);
-        tApply += performance.now() - tApplyStart;
     };
 
-    const tUploadStart = performance.now();
     gpu.uploadSrc(src);
-    const tUpload = performance.now() - tUploadStart;
 
     const bar = logger.bar('Dilating', totalChunks);
     try {
-        let chunkIdx = 0;
         for (let cz = 0; cz < src.nz; cz += innerStep) {
             for (let cy = 0; cy < src.ny; cy += innerStep) {
                 for (let cx = 0; cx < src.nx; cx += innerStep) {
@@ -386,13 +278,11 @@ async function gpuDilate3(
                     const outerNz = innerNz + 2 * haloZ;
 
                     if (chunkIsEmpty(src, ox, oy, oz, outerNx, outerNy, outerNz)) {
-                        chunkIdx++;
                         bar.tick();
                         continue;
                     }
                     if (chunkIsSaturated(src, ox, oy, oz, outerNx, outerNy, outerNz)) {
                         insertSaturatedInner(dst, cx, cy, cz, innerNx, innerNy, innerNz);
-                        chunkIdx++;
                         bar.tick();
                         continue;
                     }
@@ -407,7 +297,6 @@ async function gpuDilate3(
                     const minBy = oy >> 2;
                     const minBz = oz >> 2;
 
-                    const tSubmitStart = performance.now();
                     const { types: typesPromise, masks: masksPromise } = gpu.submitChunkSparse(
                         currentSlot,
                         minBx, minBy, minBz,
@@ -416,7 +305,6 @@ async function gpuDilate3(
                         innerBx, innerBy, innerBz,
                         halfExtentXZ, halfExtentY
                     );
-                    tSubmit += performance.now() - tSubmitStart;
 
                     if (inflight) {
                         await drainInflight();
@@ -425,13 +313,11 @@ async function gpuDilate3(
                     inflight = {
                         typesPromise,
                         masksPromise,
-                        chunkIdx,
                         cx, cy, cz,
                         innerNx, innerNy, innerNz
                     };
                     currentSlot = (currentSlot + 1) % GpuDilation.NUM_SLOTS;
 
-                    chunkIdx++;
                     bar.tick();
                 }
             }
@@ -444,8 +330,6 @@ async function gpuDilate3(
         bar.end();
         gpu.releaseSrc();
     }
-    const fmt = (ms: number) => `${ms.toFixed(0)}ms`;
-    logger.info(`gpuDilate3 timing: upload=${fmt(tUpload)} submit=${fmt(tSubmit)} await=${fmt(tAwait)} apply=${fmt(tApply)}`);
     return dst;
 }
 
