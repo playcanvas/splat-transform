@@ -457,13 +457,16 @@ const CHUNK_INNER = 1024;
 const GPU_DILATE_DEBUG = (typeof process !== 'undefined' && !!process.env?.GPU_DILATE_DEBUG);
 
 /**
- * Convert a dense bit chunk back into a `SparseVoxelGrid` of the chunk's
- * outer dims. Used in `GPU_DILATE_DEBUG` to feed the same input into the
- * CPU dilation for diffing.
+ * Convert a row-aligned dense bit chunk back into a `SparseVoxelGrid` of the
+ * chunk's outer dims. Used in `GPU_DILATE_DEBUG` to feed the same input into
+ * the CPU dilation for diffing.
  */
-function denseToSparseGrid(dense: Uint32Array, nx: number, ny: number, nz: number): SparseVoxelGrid {
+function denseToSparseGrid(
+    dense: Uint32Array,
+    nx: number, ny: number, nz: number, numXWords: number
+): SparseVoxelGrid {
     const grid = new SparseVoxelGrid(nx, ny, nz);
-    const planeStride = nx * ny;
+    const planeWords = numXWords * ny;
     for (let bz = 0; bz < grid.nbz; bz++) {
         for (let by = 0; by < grid.nby; by++) {
             for (let bx = 0; bx < grid.nbx; bx++) {
@@ -484,8 +487,8 @@ function denseToSparseGrid(dense: Uint32Array, nx: number, ny: number, nz: numbe
                         for (let lx = 0; lx < 4; lx++) {
                             const gx = baseGx + lx;
                             if (gx >= nx) continue;
-                            const denseBit = gx + gy * nx + gz * planeStride;
-                            if (!((dense[denseBit >>> 5] >>> (denseBit & 31)) & 1)) continue;
+                            const wordIdx = (gx >>> 5) + gy * numXWords + gz * planeWords;
+                            if (!((dense[wordIdx] >>> (gx & 31)) & 1)) continue;
                             const bit = 1 << (bitBase + lx);
                             if (inHi) hi |= bit;
                             else lo |= bit;
@@ -502,11 +505,107 @@ function denseToSparseGrid(dense: Uint32Array, nx: number, ny: number, nz: numbe
     return grid;
 }
 
-/** Convert a `SparseVoxelGrid` back to a dense bit buffer for diffing. */
-function sparseGridToDense(grid: SparseVoxelGrid): Uint32Array {
-    const totalVoxels = grid.nx * grid.ny * grid.nz;
-    const dense = new Uint32Array((totalVoxels + 31) >>> 5);
-    const planeStride = grid.nx * grid.ny;
+/**
+ * Fast empty-chunk check. Scans only `types` (no mask reads) for the source
+ * blocks that overlap the chunk's outer region; returns true if every block
+ * is `BLOCK_EMPTY`. Lets `gpuDilate3` skip extract / dispatch / insert for
+ * chunks far from the scene's occupied region.
+ */
+function chunkIsEmpty(
+    src: SparseVoxelGrid,
+    ox: number, oy: number, oz: number,
+    cx: number, cy: number, cz: number
+): boolean {
+    const minBx = Math.max(0, Math.floor(ox / 4));
+    const minBy = Math.max(0, Math.floor(oy / 4));
+    const minBz = Math.max(0, Math.floor(oz / 4));
+    const maxBx = Math.min(src.nbx, Math.ceil((ox + cx) / 4));
+    const maxBy = Math.min(src.nby, Math.ceil((oy + cy) / 4));
+    const maxBz = Math.min(src.nbz, Math.ceil((oz + cz) / 4));
+    if (maxBx <= minBx || maxBy <= minBy || maxBz <= minBz) return true;
+
+    const types = src.types;
+    for (let bz = minBz; bz < maxBz; bz++) {
+        for (let by = minBy; by < maxBy; by++) {
+            for (let bx = minBx; bx < maxBx; bx++) {
+                const blockIdx = bx + by * src.nbx + bz * src.bStride;
+                if (readBlockType(types, blockIdx) !== BLOCK_EMPTY) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+/**
+ * Fast saturated-chunk check. Returns true if the chunk's outer region is
+ * entirely within `src` bounds AND every overlapping block is `BLOCK_SOLID`
+ * (so extract would produce all 1s). Dilation of an all-solid input is
+ * trivially all-solid, letting the caller skip GPU dispatch and write
+ * `BLOCK_SOLID` directly into the destination's inner region.
+ */
+function chunkIsSaturated(
+    src: SparseVoxelGrid,
+    ox: number, oy: number, oz: number,
+    cx: number, cy: number, cz: number
+): boolean {
+    // Halo extends past grid → those bits are 0, not saturated.
+    if (ox < 0 || oy < 0 || oz < 0) return false;
+    if (ox + cx > src.nx || oy + cy > src.ny || oz + cz > src.nz) return false;
+
+    const minBx = ox >> 2;
+    const minBy = oy >> 2;
+    const minBz = oz >> 2;
+    const maxBx = (ox + cx + 3) >> 2;
+    const maxBy = (oy + cy + 3) >> 2;
+    const maxBz = (oz + cz + 3) >> 2;
+
+    const types = src.types;
+    for (let bz = minBz; bz < maxBz; bz++) {
+        for (let by = minBy; by < maxBy; by++) {
+            for (let bx = minBx; bx < maxBx; bx++) {
+                const blockIdx = bx + by * src.nbx + bz * src.bStride;
+                if (readBlockType(types, blockIdx) !== BLOCK_SOLID) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+/**
+ * Insert a fully-solid inner region into `dst` without going through the
+ * dense path. Used when the source chunk is saturated and dilation is
+ * trivially saturated.
+ */
+function insertSaturatedInner(
+    dst: SparseVoxelGrid,
+    innerOx: number, innerOy: number, innerOz: number,
+    innerCx: number, innerCy: number, innerCz: number
+): void {
+    const minBx = Math.max(0, innerOx >> 2);
+    const minBy = Math.max(0, innerOy >> 2);
+    const minBz = Math.max(0, innerOz >> 2);
+    const maxBx = Math.min(dst.nbx, (innerOx + innerCx + 3) >> 2);
+    const maxBy = Math.min(dst.nby, (innerOy + innerCy + 3) >> 2);
+    const maxBz = Math.min(dst.nbz, (innerOz + innerCz + 3) >> 2);
+
+    for (let bz = minBz; bz < maxBz; bz++) {
+        for (let by = minBy; by < maxBy; by++) {
+            for (let bx = minBx; bx < maxBx; bx++) {
+                const blockIdx = bx + by * dst.nbx + bz * dst.bStride;
+                dst.orBlock(blockIdx, SOLID_LO, SOLID_HI);
+            }
+        }
+    }
+}
+
+/** Convert a `SparseVoxelGrid` back to a row-aligned dense bit buffer for diffing. */
+function sparseGridToDense(grid: SparseVoxelGrid, numXWords: number): Uint32Array {
+    const dense = new Uint32Array(numXWords * grid.ny * grid.nz);
+    const planeWords = numXWords * grid.ny;
     const types = grid.types;
     for (let bz = 0; bz < grid.nbz; bz++) {
         for (let by = 0; by < grid.nby; by++) {
@@ -539,8 +638,8 @@ function sparseGridToDense(grid: SparseVoxelGrid): Uint32Array {
                             if (!((word >>> (bitBase + lx)) & 1)) continue;
                             const gx = baseGx + lx;
                             if (gx >= grid.nx) continue;
-                            const denseBit = gx + gy * grid.nx + gz * planeStride;
-                            dense[denseBit >>> 5] |= (1 << (denseBit & 31));
+                            const wordIdx = (gx >>> 5) + gy * numXWords + gz * planeWords;
+                            dense[wordIdx] |= (1 << (gx & 31));
                         }
                     }
                 }
@@ -557,14 +656,14 @@ function sparseGridToDense(grid: SparseVoxelGrid): Uint32Array {
  */
 function debugCompareDilate(
     chunkIdx: number, srcDense: Uint32Array, gpuDense: Uint32Array,
-    nx: number, ny: number, nz: number,
+    nx: number, ny: number, nz: number, numXWords: number,
     halfExtentXZ: number, halfExtentY: number
 ): void {
-    const inputGrid = denseToSparseGrid(srcDense, nx, ny, nz);
+    const inputGrid = denseToSparseGrid(srcDense, nx, ny, nz, numXWords);
     const cpuGrid = sparseDilate3(inputGrid, halfExtentXZ, halfExtentY);
-    const cpuDense = sparseGridToDense(cpuGrid);
+    const cpuDense = sparseGridToDense(cpuGrid, numXWords);
 
-    const planeStride = nx * ny;
+    const planeWords = numXWords * ny;
     let mismatches = 0;
     let firstMismatchAt = -1;
     let cpuOnly = 0;
@@ -581,11 +680,11 @@ function debugCompareDilate(
     }
 
     if (mismatches > 0) {
-        const fmBit = firstMismatchAt * 32;
-        const fmZ = Math.floor(fmBit / planeStride);
-        const fmY = Math.floor((fmBit - fmZ * planeStride) / nx);
-        const fmX = fmBit - fmZ * planeStride - fmY * nx;
-        logger.warn(`gpuDilate3 chunk ${chunkIdx} mismatch: ${mismatches} words diverge; cpu-only bits=${cpuOnly}, gpu-only bits=${gpuOnly}; first divergent word at voxel (${fmX},${fmY},${fmZ})`);
+        const fmZ = Math.floor(firstMismatchAt / planeWords);
+        const fmRowOff = firstMismatchAt - fmZ * planeWords;
+        const fmY = Math.floor(fmRowOff / numXWords);
+        const fmXWord = fmRowOff - fmY * numXWords;
+        logger.warn(`gpuDilate3 chunk ${chunkIdx} mismatch: ${mismatches} words diverge; cpu-only bits=${cpuOnly}, gpu-only bits=${gpuOnly}; first divergent word at xWord=${fmXWord},y=${fmY},z=${fmZ}`);
     } else {
         logger.debug(`gpuDilate3 chunk ${chunkIdx}: GPU matches CPU ✓`);
     }
@@ -598,8 +697,11 @@ const popcount32 = (w: number): number => {
 };
 
 /**
- * Extract a dense bit chunk (1 bit per voxel, packed in u32) from a
- * `SparseVoxelGrid`. Voxels outside the source grid bounds are written as 0.
+ * Extract a dense bit chunk (1 bit per voxel) from a `SparseVoxelGrid` using
+ * a row-aligned layout: each row of bits along X starts on a 32-bit word
+ * boundary. Bit at chunk-local (dx, dy, dz) lives at word index
+ * `(dx >> 5) + dy * numXWords + dz * numXWords * cy`, bit `dx & 31`. Voxels
+ * outside the source grid are written as 0.
  *
  * @param src - Source sparse grid.
  * @param ox - Chunk origin X in voxels (may be negative if halo extends beyond grid).
@@ -608,17 +710,17 @@ const popcount32 = (w: number): number => {
  * @param cx - Chunk size X in voxels (outer = inner + 2 * halo).
  * @param cy - Chunk size Y in voxels.
  * @param cz - Chunk size Z in voxels.
- * @returns Dense bit grid of length `ceil(cx*cy*cz/32)`.
+ * @param numXWords - Words per row (= ceil(cx / 32)).
+ * @returns Dense bit grid of length `numXWords * cy * cz`.
  */
 function extractDenseChunk(
     src: SparseVoxelGrid,
     ox: number, oy: number, oz: number,
-    cx: number, cy: number, cz: number
+    cx: number, cy: number, cz: number,
+    numXWords: number
 ): Uint32Array {
-    const totalVoxels = cx * cy * cz;
-    const numWords = (totalVoxels + 31) >>> 5;
-    const dense = new Uint32Array(numWords);
-    const planeStride = cx * cy;
+    const planeWords = numXWords * cy;
+    const dense = new Uint32Array(numXWords * cy * cz);
 
     // Iterate over source blocks that overlap the outer chunk.
     const minBx = Math.max(0, Math.floor(ox / 4));
@@ -666,8 +768,8 @@ function extractDenseChunk(
                             const gx = baseGx + lx;
                             const dx = gx - ox;
                             if (dx < 0 || dx >= cx) continue;
-                            const denseBit = dx + dy * cx + dz * planeStride;
-                            dense[denseBit >>> 5] |= (1 << (denseBit & 31));
+                            const wordIdx = (dx >>> 5) + dy * numXWords + dz * planeWords;
+                            dense[wordIdx] |= (1 << (dx & 31));
                         }
                     }
                 }
@@ -702,10 +804,11 @@ function insertDenseChunk(
     dense: Uint32Array,
     ox: number, oy: number, oz: number,
     cx: number, cy: number, cz: number,
+    numXWords: number,
     innerOx: number, innerOy: number, innerOz: number,
     innerCx: number, innerCy: number, innerCz: number
 ): void {
-    const planeStride = cx * cy;
+    const planeWords = numXWords * cy;
 
     // Inner region must be 4-aligned (caller guarantees), so iterate full blocks.
     const minBx = Math.max(0, innerOx >> 2);
@@ -736,8 +839,8 @@ function insertDenseChunk(
                         for (let lx = 0; lx < 4; lx++) {
                             const dx = baseGx + lx - ox;
                             if (dx < 0 || dx >= cx) continue;
-                            const denseBit = dx + dy * cx + dz * planeStride;
-                            if (!((dense[denseBit >>> 5] >>> (denseBit & 31)) & 1)) continue;
+                            const wordIdx = (dx >>> 5) + dy * numXWords + dz * planeWords;
+                            if (!((dense[wordIdx] >>> (dx & 31)) & 1)) continue;
                             const bit = 1 << (bitBase + lx);
                             if (inHi) hi |= bit;
                             else lo |= bit;
@@ -813,20 +916,43 @@ async function gpuDilate3(
                     const outerNy = innerNy + 2 * haloY;
                     const outerNz = innerNz + 2 * haloZ;
 
-                    const dense = extractDenseChunk(src, ox, oy, oz, outerNx, outerNy, outerNz);
+                    // Empty chunk (no occupied source blocks intersect outer):
+                    // dilation of an empty chunk is empty, so nothing to insert.
+                    // Skip extract / GPU dispatch / download entirely.
+                    if (chunkIsEmpty(src, ox, oy, oz, outerNx, outerNy, outerNz)) {
+                        logger.debug(`gpuDilate3 chunk ${chunkIdx}: empty, skipped`);
+                        chunkIdx++;
+                        bar.tick();
+                        continue;
+                    }
+
+                    // Saturated chunk (entire outer is BLOCK_SOLID and within
+                    // grid): dilation is trivially saturated. Write SOLID
+                    // directly into the inner region.
+                    if (chunkIsSaturated(src, ox, oy, oz, outerNx, outerNy, outerNz)) {
+                        insertSaturatedInner(dst, cx, cy, cz, innerNx, innerNy, innerNz);
+                        logger.debug(`gpuDilate3 chunk ${chunkIdx}: saturated, fast-path`);
+                        chunkIdx++;
+                        bar.tick();
+                        continue;
+                    }
+
+                    const numXWords = (outerNx + 31) >>> 5;
+                    const dense = extractDenseChunk(src, ox, oy, oz, outerNx, outerNy, outerNz, numXWords);
                     const inBits = popcountBits(dense);
                     const dilated = await gpu.dilateChunk(
-                        dense, outerNx, outerNy, outerNz, halfExtentXZ, halfExtentY
+                        dense, numXWords, outerNy, outerNz, halfExtentXZ, halfExtentY
                     );
                     const outBits = popcountBits(dilated);
                     logger.debug(`gpuDilate3 chunk ${chunkIdx}: outer=${outerNx}x${outerNy}x${outerNz} kernel=(${halfExtentXZ},${halfExtentY},${halfExtentXZ}) in=${inBits} out=${outBits}`);
                     if (GPU_DILATE_DEBUG) {
-                        debugCompareDilate(chunkIdx, dense, dilated, outerNx, outerNy, outerNz, halfExtentXZ, halfExtentY);
+                        debugCompareDilate(chunkIdx, dense, dilated, outerNx, outerNy, outerNz, numXWords, halfExtentXZ, halfExtentY);
                     }
                     insertDenseChunk(
                         dst, dilated,
                         ox, oy, oz,
                         outerNx, outerNy, outerNz,
+                        numXWords,
                         cx, cy, cz,
                         innerNx, innerNy, innerNz
                     );
