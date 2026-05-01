@@ -188,10 +188,26 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 `;
 
 /**
+ * One double-buffered slot — the four `Compute` instances (X, Y, Z, clear)
+ * each own a uniform buffer that mustn't be overwritten by a sibling
+ * dispatch on the same submit, plus the ping-pong storage buffers. Two
+ * slots let the CPU prepare chunk N+1 while the GPU is busy with chunk N.
+ */
+interface DilationSlot {
+    bufferA: StorageBuffer;
+    bufferB: StorageBuffer;
+    capacity: number;
+    dilateXCompute: Compute;
+    dilateYCompute: Compute;
+    dilateZCompute: Compute;
+    clearCompute: Compute;
+}
+
+/**
  * Separable 3D dilation on the GPU using a row-aligned dense bit grid
  * (1 bit per voxel, packed into u32 words; each row of bits along X starts
  * on a word boundary so per-word access is trivial). Each pass owns its
- * own `Compute` instance — see `dilateChunk` for why this matters.
+ * own `Compute` instance — see `submitChunk` for why this matters.
  */
 class GpuDilation {
     private device: GraphicsDevice;
@@ -202,19 +218,10 @@ class GpuDilation {
     private dilateYZBindGroupFormat: BindGroupFormat;
     private clearBindGroupFormat: BindGroupFormat;
 
-    private bufferA: StorageBuffer;
-    private bufferB: StorageBuffer;
-    private bufferCapacity: number;
+    private slots: DilationSlot[];
 
-    // Three Compute instances (one per axis pass) so each has its own uniform
-    // buffer. With a single shared Compute, PlayCanvas's setParameter routes
-    // through `queue.writeBuffer(uniformBuffer)`, and all three pre-submit
-    // writes end up overwriting each other — every dispatch then reads the
-    // last-written uniforms.
-    private dilateXCompute: Compute;
-    private dilateYCompute: Compute;
-    private dilateZCompute: Compute;
-    private clearCompute: Compute;
+    /** Number of double-buffered dispatch slots. */
+    static readonly NUM_SLOTS = 2;
 
     constructor(device: GraphicsDevice) {
         this.device = device;
@@ -287,29 +294,33 @@ class GpuDilation {
             computeBindGroupFormat: this.clearBindGroupFormat
         });
 
-        this.dilateXCompute = new Compute(device, this.dilateXShader, 'gpu-dilate-x');
-        this.dilateYCompute = new Compute(device, this.dilateYZShader, 'gpu-dilate-y');
-        this.dilateZCompute = new Compute(device, this.dilateYZShader, 'gpu-dilate-z');
-        this.clearCompute = new Compute(device, this.clearShader, 'gpu-dilate-clear');
-
-        // Initial buffer size — grown lazily in ensureBuffers.
-        this.bufferCapacity = 1024 * 1024 * 4;
-        this.bufferA = new StorageBuffer(device, this.bufferCapacity, BUFFERUSAGE_COPY_DST | BUFFERUSAGE_COPY_SRC);
-        this.bufferB = new StorageBuffer(device, this.bufferCapacity, BUFFERUSAGE_COPY_DST | BUFFERUSAGE_COPY_SRC);
+        this.slots = [];
+        for (let i = 0; i < GpuDilation.NUM_SLOTS; i++) {
+            const initialCapacity = 1024 * 1024 * 4;
+            this.slots.push({
+                bufferA: new StorageBuffer(device, initialCapacity, BUFFERUSAGE_COPY_DST | BUFFERUSAGE_COPY_SRC),
+                bufferB: new StorageBuffer(device, initialCapacity, BUFFERUSAGE_COPY_DST | BUFFERUSAGE_COPY_SRC),
+                capacity: initialCapacity,
+                dilateXCompute: new Compute(device, this.dilateXShader, `gpu-dilate-x-${i}`),
+                dilateYCompute: new Compute(device, this.dilateYZShader, `gpu-dilate-y-${i}`),
+                dilateZCompute: new Compute(device, this.dilateYZShader, `gpu-dilate-z-${i}`),
+                clearCompute: new Compute(device, this.clearShader, `gpu-dilate-clear-${i}`)
+            });
+        }
     }
 
-    private ensureBuffers(numWords: number): void {
+    private ensureSlotBuffers(slot: DilationSlot, numWords: number): void {
         const neededBytes = numWords * 4;
-        if (neededBytes <= this.bufferCapacity) return;
+        if (neededBytes <= slot.capacity) return;
 
-        let cap = this.bufferCapacity;
+        let cap = slot.capacity;
         while (cap < neededBytes) cap *= 2;
 
-        this.bufferA.destroy();
-        this.bufferB.destroy();
-        this.bufferA = new StorageBuffer(this.device, cap, BUFFERUSAGE_COPY_DST | BUFFERUSAGE_COPY_SRC);
-        this.bufferB = new StorageBuffer(this.device, cap, BUFFERUSAGE_COPY_DST | BUFFERUSAGE_COPY_SRC);
-        this.bufferCapacity = cap;
+        slot.bufferA.destroy();
+        slot.bufferB.destroy();
+        slot.bufferA = new StorageBuffer(this.device, cap, BUFFERUSAGE_COPY_DST | BUFFERUSAGE_COPY_SRC);
+        slot.bufferB = new StorageBuffer(this.device, cap, BUFFERUSAGE_COPY_DST | BUFFERUSAGE_COPY_SRC);
+        slot.capacity = cap;
     }
 
     /**
@@ -318,71 +329,81 @@ class GpuDilation {
      * dilation passes (unlike `queue.writeBuffer`, which is queued separately
      * and would race against the dispatches).
      */
-    private dispatchClear(dst: StorageBuffer, numWords: number): void {
+    private dispatchClear(slot: DilationSlot, dst: StorageBuffer, numWords: number): void {
         const totalWg = Math.ceil(numWords / 256);
         const MAX_DIM = 65535;
         const wgX = Math.min(totalWg, MAX_DIM);
         const wgY = Math.ceil(totalWg / wgX);
         const rowStride = wgX * 256;
 
-        this.clearCompute.setParameter('clearDst', dst);
-        this.clearCompute.setParameter('clearNumWords', numWords);
-        this.clearCompute.setParameter('clearRowStride', rowStride);
-        this.clearCompute.setupDispatch(wgX, wgY, 1);
-        this.device.computeDispatch([this.clearCompute], 'gpu-dilate-clear');
+        slot.clearCompute.setParameter('clearDst', dst);
+        slot.clearCompute.setParameter('clearNumWords', numWords);
+        slot.clearCompute.setParameter('clearRowStride', rowStride);
+        slot.clearCompute.setupDispatch(wgX, wgY, 1);
+        this.device.computeDispatch([slot.clearCompute], 'gpu-dilate-clear');
     }
 
     /**
-     * Run the three separable dilation passes on a dense bit chunk.
+     * Submit one chunk's three separable dilation passes on the given slot
+     * and return a `Promise` that resolves to the dilated dense bit grid.
      *
-     * @param srcBits - Row-aligned dense bit grid (`numXWords * ny * nz`
-     *  u32 words). Bit at voxel (x, y, z) lives at word index
+     * The promise is **deferred** — caller should NOT await immediately.
+     * Submit the next chunk on the OTHER slot, then await the previous
+     * chunk's promise; this overlaps GPU compute on the new chunk with
+     * CPU extract / insert work on the previous chunk.
+     *
+     * @param slotIdx - Which slot to use (0 or 1).
+     * @param srcBits - Row-aligned dense bit grid (`numXWords * ny * nz` u32
+     *  words). Bit at voxel `(x, y, z)` is at word
      *  `(x >> 5) + y * numXWords + z * numXWords * ny`, bit `x & 31`.
-     * @param numXWords - Number of u32 words per row (= ceil(nx / 32)).
+     * @param numXWords - Words per row (= ceil(nx / 32)).
      * @param ny - Chunk height in voxels.
      * @param nz - Chunk depth in voxels.
      * @param halfExtentXZ - Dilation half-extent for X and Z passes.
      * @param halfExtentY - Dilation half-extent for Y pass.
      * @returns Promise resolving to the dilated dense bit grid.
      */
-    async dilateChunk(
+    submitChunk(
+        slotIdx: number,
         srcBits: Uint32Array,
         numXWords: number, ny: number, nz: number,
         halfExtentXZ: number,
         halfExtentY: number
     ): Promise<Uint32Array> {
+        const slot = this.slots[slotIdx];
         const numWords = numXWords * ny * nz;
-        this.ensureBuffers(numWords);
+        this.ensureSlotBuffers(slot, numWords);
 
         // Upload source into bufferA. Inter-pass clears use compute dispatches
         // so they're encoder-ordered with the dilation dispatches.
-        this.bufferA.write(0, srcBits, 0, numWords);
+        slot.bufferA.write(0, srcBits, 0, numWords);
 
-        // X-pass: A -> B. Per-word, no atomics, but B must be a clean
-        // destination buffer; clear keeps it consistent across calls.
-        this.dispatchClear(this.bufferB, numWords);
-        this.dispatchX(this.bufferA, this.bufferB, numXWords, ny, nz, halfExtentXZ);
+        // X-pass: A -> B.
+        this.dispatchClear(slot, slot.bufferB, numWords);
+        this.dispatchX(slot, slot.bufferA, slot.bufferB, numXWords, ny, nz, halfExtentXZ);
 
         // Z-pass: B -> A.
-        this.dispatchClear(this.bufferA, numWords);
-        this.dispatchYZ(this.dilateZCompute, this.bufferB, this.bufferA,
+        this.dispatchClear(slot, slot.bufferA, numWords);
+        this.dispatchYZ(slot.dilateZCompute, slot.bufferB, slot.bufferA,
             numXWords, ny, nz, halfExtentXZ, numXWords * ny, nz);
 
         // Y-pass: A -> B.
-        this.dispatchClear(this.bufferB, numWords);
-        this.dispatchYZ(this.dilateYCompute, this.bufferA, this.bufferB,
+        this.dispatchClear(slot, slot.bufferB, numWords);
+        this.dispatchYZ(slot.dilateYCompute, slot.bufferA, slot.bufferB,
             numXWords, ny, nz, halfExtentY, numXWords, ny);
 
-        const readData = await this.bufferB.read(0, numWords * 4, null, true) as Uint8Array;
-        return new Uint32Array(readData.buffer, readData.byteOffset, numWords);
+        return slot.bufferB.read(0, numWords * 4, null, true).then((readData: Uint8Array) => {
+            return new Uint32Array(readData.buffer, readData.byteOffset, numWords);
+        });
     }
 
     private dispatchX(
+        slot: DilationSlot,
         src: StorageBuffer, dst: StorageBuffer,
         numXWords: number, ny: number, nz: number,
         halfExtent: number
     ): void {
-        const c = this.dilateXCompute;
+        const c = slot.dilateXCompute;
         c.setParameter('src', src);
         c.setParameter('dst', dst);
         c.setParameter('numXWords', numXWords);
@@ -394,7 +415,7 @@ class GpuDilation {
         const wgY = Math.ceil(ny / 4);
         const wgZ = Math.ceil(nz / 8);
         c.setupDispatch(wgX, wgY, wgZ);
-        this.device.computeDispatch([c], 'gpu-dilate-x');
+        this.device.computeDispatch([c], c.name);
     }
 
     private dispatchYZ(
@@ -421,12 +442,14 @@ class GpuDilation {
     }
 
     destroy(): void {
-        this.bufferA.destroy();
-        this.bufferB.destroy();
-        this.dilateXCompute.destroy();
-        this.dilateYCompute.destroy();
-        this.dilateZCompute.destroy();
-        this.clearCompute.destroy();
+        for (const slot of this.slots) {
+            slot.bufferA.destroy();
+            slot.bufferB.destroy();
+            slot.dilateXCompute.destroy();
+            slot.dilateYCompute.destroy();
+            slot.dilateZCompute.destroy();
+            slot.clearCompute.destroy();
+        }
         this.dilateXShader.destroy();
         this.dilateYZShader.destroy();
         this.clearShader.destroy();
