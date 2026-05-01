@@ -279,6 +279,18 @@ const filterCluster = async (
         const gaussianCols = buildGaussianColumns(ctx);
         const keepIndices: number[] = [];
 
+        // Gaussians whose AABB exceeds `largeFactor * voxelSize` on any axis must
+        // pass an additional occupancy-ratio check, so that elongated outliers
+        // (spikes whose tails clip a single cluster voxel) are rejected while
+        // structural large gaussians (slabs aligned with surfaces) are kept.
+        const largeFactor = 2.0;
+        const minOccupancyRatio = 0.1;
+        const largeThreshold = largeFactor * clampedResolution;
+
+        let largeKept = 0;
+        let largeRejectedByRatio = 0;
+        const stats = { anyHit: false };
+
         for (let i = 0; i < numRows; i++) {
             const px = gaussianCols.posX[i];
             const py = gaussianCols.posY[i];
@@ -289,10 +301,21 @@ const filterCluster = async (
                 continue;
             }
 
-            if (gaussianContributesToVoxels(i, gaussianCols, grid, lookup, minContribution)) {
+            const ex = gaussianCols.extentX[i];
+            const ey = gaussianCols.extentY[i];
+            const ez = gaussianCols.extentZ[i];
+            const isLarge = Math.max(ex, ey, ez) * 2 > largeThreshold;
+            const ratio = isLarge ? minOccupancyRatio : 0;
+
+            if (gaussianContributesToVoxels(i, gaussianCols, grid, lookup, minContribution, undefined, ratio, stats)) {
                 keepIndices.push(i);
+                if (isLarge) largeKept++;
+            } else if (isLarge && stats.anyHit) {
+                largeRejectedByRatio++;
             }
         }
+
+        logger.info(`large gaussians (>${fmtDistance(largeThreshold)}): ${fmtCount(largeKept)} kept, ${fmtCount(largeRejectedByRatio)} rejected by occupancy ratio (<${(minOccupancyRatio * 100).toFixed(0)}%)`);
 
         if (keepIndices.length === numRows) {
             return finish(dataTable);

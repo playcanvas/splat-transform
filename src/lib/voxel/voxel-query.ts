@@ -117,13 +117,22 @@ const isCenterInOccupiedVoxel = (
  * Iterates over blocks that overlap the Gaussian's AABB, then evaluates the
  * Gaussian's opacity contribution at each occupied voxel center in those blocks.
  *
+ * When `minOccupancyRatio` > 0, instead of returning on the first qualifying
+ * voxel, count qualifying voxels and require that count divided by the total
+ * voxels in the Gaussian's AABB (clipped to the grid) meets the ratio. This
+ * is the "support" check used to reject elongated outliers (e.g. spikes) whose
+ * tails happen to clip a single cluster voxel: their AABB is huge but their
+ * occupancy ratio is tiny.
+ *
  * @param gaussianIdx - Index of the Gaussian.
  * @param columns - Gaussian column data arrays.
  * @param grid - Block grid parameters.
  * @param lookup - Block lookup structures.
  * @param minContribution - Minimum contribution threshold.
  * @param blockFilter - Optional set of block indices to restrict the test to.
- * @returns True if the Gaussian contributes above threshold at any qualifying voxel.
+ * @param minOccupancyRatio - If > 0, require qualifying voxels / AABB voxels >= this. Default 0 (early-exit on first hit).
+ * @param stats - Optional out-object that receives `anyHit` so callers can distinguish "rejected by ratio" from "no contribution at all".
+ * @returns True if the Gaussian contributes above threshold (per the chosen mode).
  */
 const gaussianContributesToVoxels = (
     gaussianIdx: number,
@@ -131,8 +140,11 @@ const gaussianContributesToVoxels = (
     grid: BlockGridParams,
     lookup: BlockLookup,
     minContribution: number,
-    blockFilter?: Set<number>
+    blockFilter?: Set<number>,
+    minOccupancyRatio: number = 0,
+    stats?: { anyHit: boolean }
 ): boolean => {
+    if (stats) stats.anyHit = false;
     const px = columns.posX[gaussianIdx];
     const py = columns.posY[gaussianIdx];
     const pz = columns.posZ[gaussianIdx];
@@ -147,6 +159,22 @@ const gaussianContributesToVoxels = (
     const aabbMinBz = Math.max(0, Math.floor((pz - ez - grid.gridMinZ) / grid.blockSize));
     const aabbMaxBz = Math.min(grid.numBlocksZ - 1, Math.floor((pz + ez - grid.gridMinZ) / grid.blockSize));
 
+    let minHits = 1;
+    if (minOccupancyRatio > 0) {
+        const nx = grid.numBlocksX * 4;
+        const ny = grid.numBlocksY * 4;
+        const nz = grid.numBlocksZ * 4;
+        const vMinX = Math.max(0, Math.floor((px - ex - grid.gridMinX) / grid.voxelResolution));
+        const vMaxX = Math.min(nx - 1, Math.floor((px + ex - grid.gridMinX) / grid.voxelResolution));
+        const vMinY = Math.max(0, Math.floor((py - ey - grid.gridMinY) / grid.voxelResolution));
+        const vMaxY = Math.min(ny - 1, Math.floor((py + ey - grid.gridMinY) / grid.voxelResolution));
+        const vMinZ = Math.max(0, Math.floor((pz - ez - grid.gridMinZ) / grid.voxelResolution));
+        const vMaxZ = Math.min(nz - 1, Math.floor((pz + ez - grid.gridMinZ) / grid.voxelResolution));
+        if (vMaxX < vMinX || vMaxY < vMinY || vMaxZ < vMinZ) return false;
+        const aabbVoxelTotal = (vMaxX - vMinX + 1) * (vMaxY - vMinY + 1) * (vMaxZ - vMinZ + 1);
+        minHits = Math.max(1, Math.ceil(aabbVoxelTotal * minOccupancyRatio));
+    }
+
     const g = computeGaussianInverse(
         columns.rotW[gaussianIdx], columns.rotX[gaussianIdx],
         columns.rotY[gaussianIdx], columns.rotZ[gaussianIdx],
@@ -154,6 +182,7 @@ const gaussianContributesToVoxels = (
         columns.scaleZ[gaussianIdx], columns.opacity[gaussianIdx]
     );
 
+    let hits = 0;
     for (let bbz = aabbMinBz; bbz <= aabbMaxBz; bbz++) {
         const zOff = bbz * grid.strideZ;
         for (let bby = aabbMinBy; bby <= aabbMaxBy; bby++) {
@@ -187,7 +216,8 @@ const gaussianContributesToVoxels = (
                             const vx = blockOriginX + (lx + 0.5) * grid.voxelResolution;
 
                             if (evaluateGaussianAt(g, px, py, pz, vx, vy, vz) >= minContribution) {
-                                return true;
+                                if (stats) stats.anyHit = true;
+                                if (++hits >= minHits) return true;
                             }
                         }
                     }
