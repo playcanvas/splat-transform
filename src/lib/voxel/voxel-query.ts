@@ -112,7 +112,7 @@ const isCenterInOccupiedVoxel = (
 
 /**
  * Test whether a Gaussian has meaningful contribution at occupied voxel
- * centers within its AABB range.
+ * centers in blocks that overlap its AABB.
  *
  * Iterates over blocks that overlap the Gaussian's AABB, then evaluates the
  * Gaussian's opacity contribution at each occupied voxel center in those
