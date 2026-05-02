@@ -1,6 +1,12 @@
 import type { Bounds } from '../data-table';
-import { BlockMaskBuffer } from '../voxel/block-mask-buffer';
-import { mortonToXYZ, xyzToMorton } from '../voxel/morton';
+import {
+    BLOCK_EMPTY,
+    BLOCK_SOLID,
+    BLOCKS_PER_WORD,
+    EVEN_BITS,
+    SparseVoxelGrid,
+    readBlockType
+} from '../voxel/sparse-voxel-grid';
 
 /**
  * A simple triangle mesh with positions and indices.
@@ -52,35 +58,24 @@ const NEIGHBOR_EMPTY = -2;
 const NEIGHBOR_SOLID = -1;
 
 /**
- * Extract a triangle mesh from a BlockMaskBuffer using marching cubes.
+ * Extract a triangle mesh from a SparseVoxelGrid using marching cubes.
  *
  * Each voxel is treated as a cell in the marching cubes grid. Corner values
  * are binary (0 = empty, 1 = occupied) with a 0.5 threshold. Vertices are
  * placed at edge midpoints, producing a mesh that follows voxel boundaries.
  *
- * @param buffer - Voxel block data after filtering
+ * @param grid - Voxel grid (after filtering / nav phases)
  * @param gridBounds - Grid bounds aligned to block boundaries
  * @param voxelResolution - Size of each voxel in world units
  * @returns Mesh with positions and indices
  */
 function marchingCubes(
-    buffer: BlockMaskBuffer,
+    grid: SparseVoxelGrid,
     gridBounds: Bounds,
     voxelResolution: number
 ): MarchingCubesMesh {
-    const mixed = buffer.getMixedBlocks();
-    const solid = buffer.getSolidBlocks();
-    const masks = mixed.masks;
-
-    // Build the global block lookup. Value encodes index into the mask array,
-    // or -1 as a sentinel for solid blocks.
-    const blockMap = new Map<number, number>();
-    for (let i = 0; i < mixed.morton.length; i++) {
-        blockMap.set(mixed.morton[i], i);
-    }
-    for (let i = 0; i < solid.length; i++) {
-        blockMap.set(solid[i], -1);
-    }
+    const { nbx, nby, nbz, bStride, types, masks } = grid;
+    const totalBlocks = nbx * nby * nbz;
 
     // Vertex deduplication: edge ID -> vertex index
     const vertexMap = new Map<number, number>();
@@ -105,8 +100,8 @@ function marchingCubes(
 
     // Per-block 3x3x3 neighbor lookup table populated once per processed block.
     // Index = (dx+1) + (dy+1)*3 + (dz+1)*9, dx/dy/dz in {-1, 0, 1}.
-    // neighborEntry: NEIGHBOR_EMPTY, NEIGHBOR_SOLID, or >=0 mixed-block index.
-    // neighborMasks: lo, hi pair per slot (only valid for mixed blocks).
+    // neighborEntry: NEIGHBOR_EMPTY, NEIGHBOR_SOLID, or NEIGHBOR_MIXED (mask in neighborMasks).
+    const NEIGHBOR_MIXED = 0;
     const neighborEntry = new Int32Array(27);
     const neighborMasks = new Uint32Array(54);
 
@@ -115,7 +110,7 @@ function marchingCubes(
 
     // Block coordinate of the block currently being processed. Captured by
     // isOccupiedLocal so it can fold the per-corner block lookup into a
-    // direct typed-array index instead of hashing a Morton code.
+    // direct typed-array index instead of a hash lookup.
     let bx = 0, by = 0, bz = 0;
 
     const isOccupiedLocal = (cx: number, cy: number, cz: number): boolean => {
@@ -168,129 +163,149 @@ function marchingCubes(
     // orphan cell is only processed once.
     const processedOrphans = new Set<number>();
 
-    // Process all blocks and their boundary neighbors
-    const allMortons: number[] = [];
-    blockMap.forEach((_, m) => allMortons.push(m));
+    // Iterate non-empty blocks of the grid via word-level skipping.
+    // Each block is processed once; the inner loop also handles boundary cells
+    // that straddle into neighboring blocks (so we don't need a separate pass
+    // for orphan boundary cells along the negative grid edges).
+    for (let w = 0; w < types.length; w++) {
+        const word = types[w];
+        if (word === 0) continue;
+        let nonEmpty = ((word & EVEN_BITS) | ((word >>> 1) & EVEN_BITS)) >>> 0;
+        const baseBlockIdx = w * BLOCKS_PER_WORD;
+        while (nonEmpty) {
+            const bp = 31 - Math.clz32(nonEmpty & -nonEmpty);
+            const lane = bp >>> 1;
+            const blockIdx = baseBlockIdx + lane;
+            nonEmpty &= nonEmpty - 1;
+            if (blockIdx >= totalBlocks) break;
 
-    for (let bi = 0; bi < allMortons.length; bi++) {
-        const morton = allMortons[bi];
-        const [cbx, cby, cbz] = mortonToXYZ(morton);
-        bx = cbx; by = cby; bz = cbz;
+            // Decode block coordinates.
+            bx = blockIdx % nbx;
+            const byBz = (blockIdx / nbx) | 0;
+            by = byBz % nby;
+            bz = (byBz / nby) | 0;
 
-        // Populate the 3x3x3 neighbor table for this block. After this loop,
-        // every per-cell occupancy query is a direct typed-array index.
-        let currentBlockIsSolid = false;
-        for (let dz = -1; dz <= 1; dz++) {
-            const nbz = bz + dz;
-            for (let dy = -1; dy <= 1; dy++) {
-                const nby = by + dy;
-                for (let dx = -1; dx <= 1; dx++) {
-                    const nbx = bx + dx;
-                    const slot = (dx + 1) + (dy + 1) * 3 + (dz + 1) * 9;
-                    if (nbx < 0 || nby < 0 || nbz < 0) {
-                        neighborEntry[slot] = NEIGHBOR_EMPTY;
-                        continue;
-                    }
-                    const e = blockMap.get(xyzToMorton(nbx, nby, nbz));
-                    if (e === undefined) {
-                        neighborEntry[slot] = NEIGHBOR_EMPTY;
-                    } else if (e === -1) {
-                        neighborEntry[slot] = NEIGHBOR_SOLID;
-                        if (dx === 0 && dy === 0 && dz === 0) currentBlockIsSolid = true;
-                    } else {
-                        neighborEntry[slot] = e;
-                        neighborMasks[slot * 2] = masks[e * 2];
-                        neighborMasks[slot * 2 + 1] = masks[e * 2 + 1];
+            // Populate the 3x3x3 neighbor table for this block. After this loop,
+            // every per-cell occupancy query is a direct typed-array index.
+            let currentBlockIsSolid = false;
+            for (let dz = -1; dz <= 1; dz++) {
+                const nbZ = bz + dz;
+                for (let dy = -1; dy <= 1; dy++) {
+                    const nbY = by + dy;
+                    for (let dx = -1; dx <= 1; dx++) {
+                        const nbX = bx + dx;
+                        const slot = (dx + 1) + (dy + 1) * 3 + (dz + 1) * 9;
+                        if (nbX < 0 || nbY < 0 || nbZ < 0 ||
+                            nbX >= nbx || nbY >= nby || nbZ >= nbz) {
+                            neighborEntry[slot] = NEIGHBOR_EMPTY;
+                            continue;
+                        }
+                        const nbIdx = nbX + nbY * nbx + nbZ * bStride;
+                        const bt = readBlockType(types, nbIdx);
+                        if (bt === BLOCK_EMPTY) {
+                            neighborEntry[slot] = NEIGHBOR_EMPTY;
+                        } else if (bt === BLOCK_SOLID) {
+                            neighborEntry[slot] = NEIGHBOR_SOLID;
+                            if (dx === 0 && dy === 0 && dz === 0) currentBlockIsSolid = true;
+                        } else {
+                            neighborEntry[slot] = NEIGHBOR_MIXED;
+                            const ms = masks.slot(nbIdx);
+                            neighborMasks[slot * 2] = masks.lo[ms];
+                            neighborMasks[slot * 2 + 1] = masks.hi[ms];
+                        }
                     }
                 }
             }
-        }
 
-        // Iterate -1..3 to include the boundary layer in the negative
-        // direction. Cells at lx/ly/lz = -1 straddle the block edge and
-        // are needed to close the surface where no neighboring block exists.
-        for (let lz = -1; lz < 4; lz++) {
-            const lzInside = lz >= 0 && lz <= 2;
-            for (let ly = -1; ly < 4; ly++) {
-                const lyInside = ly >= 0 && ly <= 2;
-                for (let lx = -1; lx < 4; lx++) {
+            // Iterate -1..3 to include the boundary layer in the negative
+            // direction. Cells at lx/ly/lz = -1 straddle the block edge and
+            // are needed to close the surface where no neighboring block exists.
+            for (let lz = -1; lz < 4; lz++) {
+                const lzInside = lz >= 0 && lz <= 2;
+                for (let ly = -1; ly < 4; ly++) {
+                    const lyInside = ly >= 0 && ly <= 2;
+                    for (let lx = -1; lx < 4; lx++) {
                     // For solid blocks, the 27 cells with all axes in 0..2
                     // are fully inside the block. All 8 corners are 1 so
                     // cubeIndex == 255 and no triangles are emitted -- skip.
-                    if (currentBlockIsSolid && lzInside && lyInside && lx >= 0 && lx <= 2) continue;
+                        if (currentBlockIsSolid && lzInside && lyInside && lx >= 0 && lx <= 2) continue;
 
-                    const vx = bx * 4 + lx;
-                    const vy = by * 4 + ly;
-                    const vz = bz * 4 + lz;
+                        const vx = bx * 4 + lx;
+                        const vy = by * 4 + ly;
+                        const vz = bz * 4 + lz;
 
-                    // Determine which block owns this cell
-                    const ownerBx = vx >> 2;
-                    const ownerBy = vy >> 2;
-                    const ownerBz = vz >> 2;
+                        // Determine which block owns this cell
+                        const ownerBx = vx >> 2;
+                        const ownerBy = vy >> 2;
+                        const ownerBz = vz >> 2;
 
-                    if (ownerBx !== bx || ownerBy !== by || ownerBz !== bz) {
+                        if (ownerBx !== bx || ownerBy !== by || ownerBz !== bz) {
                         // Cell belongs to a different block — skip if that
-                        // block exists (it will process the cell itself).
-                        // Guard negative coords: xyzToMorton assumes non-negative inputs.
-                        if (ownerBx >= 0 && ownerBy >= 0 && ownerBz >= 0 &&
-                            blockMap.has(xyzToMorton(ownerBx, ownerBy, ownerBz))) continue;
+                        // block is non-empty (it will process the cell itself).
+                            if (ownerBx >= 0 && ownerBy >= 0 && ownerBz >= 0 &&
+                            ownerBx < nbx && ownerBy < nby && ownerBz < nbz) {
+                                const ownerIdx = ownerBx + ownerBy * nbx + ownerBz * bStride;
+                                if (readBlockType(types, ownerIdx) !== BLOCK_EMPTY) continue;
+                            }
 
-                        // Owner block doesn't exist — deduplicate so only the
-                        // first neighboring block to reach this cell emits triangles.
-                        const cellKey = (vx + 1) + (vy + 1) * strideX + (vz + 1) * strideXY;
-                        if (processedOrphans.has(cellKey)) continue;
-                        processedOrphans.add(cellKey);
-                    }
+                            // Owner block doesn't exist or is out-of-bounds —
+                            // deduplicate so only the first neighboring block to
+                            // reach this cell emits triangles.
+                            const cellKey = (vx + 1) + (vy + 1) * strideX + (vz + 1) * strideXY;
+                            if (processedOrphans.has(cellKey)) continue;
+                            processedOrphans.add(cellKey);
+                        }
 
-                    // Get corner values for this cell (8 corners)
-                    // Corners: (vx,vy,vz), (vx+1,vy,vz), (vx+1,vy+1,vz), (vx,vy+1,vz),
-                    //          (vx,vy,vz+1), (vx+1,vy,vz+1), (vx+1,vy+1,vz+1), (vx,vy+1,vz+1)
-                    const c0 = isOccupiedLocal(vx, vy, vz) ? 1 : 0;
-                    const c1 = isOccupiedLocal(vx + 1, vy, vz) ? 1 : 0;
-                    const c2 = isOccupiedLocal(vx + 1, vy + 1, vz) ? 1 : 0;
-                    const c3 = isOccupiedLocal(vx, vy + 1, vz) ? 1 : 0;
-                    const c4 = isOccupiedLocal(vx, vy, vz + 1) ? 1 : 0;
-                    const c5 = isOccupiedLocal(vx + 1, vy, vz + 1) ? 1 : 0;
-                    const c6 = isOccupiedLocal(vx + 1, vy + 1, vz + 1) ? 1 : 0;
-                    const c7 = isOccupiedLocal(vx, vy + 1, vz + 1) ? 1 : 0;
+                        // Get corner values for this cell (8 corners)
+                        // Corners: (vx,vy,vz), (vx+1,vy,vz), (vx+1,vy+1,vz), (vx,vy+1,vz),
+                        //          (vx,vy,vz+1), (vx+1,vy,vz+1), (vx+1,vy+1,vz+1), (vx,vy+1,vz+1)
+                        const c0 = isOccupiedLocal(vx, vy, vz) ? 1 : 0;
+                        const c1 = isOccupiedLocal(vx + 1, vy, vz) ? 1 : 0;
+                        const c2 = isOccupiedLocal(vx + 1, vy + 1, vz) ? 1 : 0;
+                        const c3 = isOccupiedLocal(vx, vy + 1, vz) ? 1 : 0;
+                        const c4 = isOccupiedLocal(vx, vy, vz + 1) ? 1 : 0;
+                        const c5 = isOccupiedLocal(vx + 1, vy, vz + 1) ? 1 : 0;
+                        const c6 = isOccupiedLocal(vx + 1, vy + 1, vz + 1) ? 1 : 0;
+                        const c7 = isOccupiedLocal(vx, vy + 1, vz + 1) ? 1 : 0;
 
-                    const cubeIndex = c0 | (c1 << 1) | (c2 << 2) | (c3 << 3) |
+                        const cubeIndex = c0 | (c1 << 1) | (c2 << 2) | (c3 << 3) |
                                       (c4 << 4) | (c5 << 5) | (c6 << 6) | (c7 << 7);
 
-                    if (cubeIndex === 0 || cubeIndex === 255) continue;
+                        if (cubeIndex === 0 || cubeIndex === 255) continue;
 
-                    const edges = EDGE_TABLE[cubeIndex]; // eslint-disable-line no-use-before-define
-                    if (edges === 0) continue;
+                        const edges = EDGE_TABLE[cubeIndex]; // eslint-disable-line no-use-before-define
+                        if (edges === 0) continue;
 
-                    // Compute vertices on active edges
-                    if (edges & 1)    edgeVerts[0]  = getVertex(vx, vy, vz, 0);       // edge 0: x-axis at (vx, vy, vz)
-                    if (edges & 2)    edgeVerts[1]  = getVertex(vx + 1, vy, vz, 1);   // edge 1: y-axis at (vx+1, vy, vz)
-                    if (edges & 4)    edgeVerts[2]  = getVertex(vx, vy + 1, vz, 0);   // edge 2: x-axis at (vx, vy+1, vz)
-                    if (edges & 8)    edgeVerts[3]  = getVertex(vx, vy, vz, 1);       // edge 3: y-axis at (vx, vy, vz)
-                    if (edges & 16)   edgeVerts[4]  = getVertex(vx, vy, vz + 1, 0);   // edge 4: x-axis at (vx, vy, vz+1)
-                    if (edges & 32)   edgeVerts[5]  = getVertex(vx + 1, vy, vz + 1, 1); // edge 5: y-axis at (vx+1, vy, vz+1)
-                    if (edges & 64)   edgeVerts[6]  = getVertex(vx, vy + 1, vz + 1, 0); // edge 6: x-axis at (vx, vy+1, vz+1)
-                    if (edges & 128)  edgeVerts[7]  = getVertex(vx, vy, vz + 1, 1);   // edge 7: y-axis at (vx, vy, vz+1)
-                    if (edges & 256)  edgeVerts[8]  = getVertex(vx, vy, vz, 2);       // edge 8: z-axis at (vx, vy, vz)
-                    if (edges & 512)  edgeVerts[9]  = getVertex(vx + 1, vy, vz, 2);   // edge 9: z-axis at (vx+1, vy, vz)
-                    if (edges & 1024) edgeVerts[10] = getVertex(vx + 1, vy + 1, vz, 2); // edge 10: z-axis at (vx+1, vy+1, vz)
-                    if (edges & 2048) edgeVerts[11] = getVertex(vx, vy + 1, vz, 2);   // edge 11: z-axis at (vx, vy+1, vz)
+                        // Compute vertices on active edges
+                        if (edges & 1)    edgeVerts[0]  = getVertex(vx, vy, vz, 0);       // edge 0: x-axis at (vx, vy, vz)
+                        if (edges & 2)    edgeVerts[1]  = getVertex(vx + 1, vy, vz, 1);   // edge 1: y-axis at (vx+1, vy, vz)
+                        if (edges & 4)    edgeVerts[2]  = getVertex(vx, vy + 1, vz, 0);   // edge 2: x-axis at (vx, vy+1, vz)
+                        if (edges & 8)    edgeVerts[3]  = getVertex(vx, vy, vz, 1);       // edge 3: y-axis at (vx, vy, vz)
+                        if (edges & 16)   edgeVerts[4]  = getVertex(vx, vy, vz + 1, 0);   // edge 4: x-axis at (vx, vy, vz+1)
+                        if (edges & 32)   edgeVerts[5]  = getVertex(vx + 1, vy, vz + 1, 1); // edge 5: y-axis at (vx+1, vy, vz+1)
+                        if (edges & 64)   edgeVerts[6]  = getVertex(vx, vy + 1, vz + 1, 0); // edge 6: x-axis at (vx, vy+1, vz+1)
+                        if (edges & 128)  edgeVerts[7]  = getVertex(vx, vy, vz + 1, 1);   // edge 7: y-axis at (vx, vy, vz+1)
+                        if (edges & 256)  edgeVerts[8]  = getVertex(vx, vy, vz, 2);       // edge 8: z-axis at (vx, vy, vz)
+                        if (edges & 512)  edgeVerts[9]  = getVertex(vx + 1, vy, vz, 2);   // edge 9: z-axis at (vx+1, vy, vz)
+                        if (edges & 1024) edgeVerts[10] = getVertex(vx + 1, vy + 1, vz, 2); // edge 10: z-axis at (vx+1, vy+1, vz)
+                        if (edges & 2048) edgeVerts[11] = getVertex(vx, vy + 1, vz, 2);   // edge 11: z-axis at (vx, vy+1, vz)
 
-                    // Emit triangles (reversed winding to face outward)
-                    const triRow = TRI_TABLE[cubeIndex]; // eslint-disable-line no-use-before-define
-                    const triLen = triRow.length;
-                    if (idxLen + triLen > idxCap) {
-                        while (idxLen + triLen > idxCap) {
-                            idxCap *= 2;
+                        // Emit triangles (reversed winding to face outward)
+                        const triRow = TRI_TABLE[cubeIndex]; // eslint-disable-line no-use-before-define
+                        const triLen = triRow.length;
+                        if (idxLen + triLen > idxCap) {
+                            while (idxLen + triLen > idxCap) {
+                                idxCap *= 2;
+                            }
+                            const grown = new Uint32Array(idxCap);
+                            grown.set(indices);
+                            indices = grown;
                         }
-                        const grown = new Uint32Array(idxCap);
-                        grown.set(indices);
-                        indices = grown;
-                    }
-                    for (let t = 0; t < triLen; t += 3) {
-                        indices[idxLen++] = edgeVerts[triRow[t]];
-                        indices[idxLen++] = edgeVerts[triRow[t + 2]];
-                        indices[idxLen++] = edgeVerts[triRow[t + 1]];
+                        for (let t = 0; t < triLen; t += 3) {
+                            indices[idxLen++] = edgeVerts[triRow[t]];
+                            indices[idxLen++] = edgeVerts[triRow[t + 2]];
+                            indices[idxLen++] = edgeVerts[triRow[t + 1]];
+                        }
                     }
                 }
             }

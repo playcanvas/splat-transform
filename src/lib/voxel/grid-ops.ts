@@ -78,6 +78,7 @@ function computeEmptyGrid(visited: SparseVoxelGrid, blocked: SparseVoxelGrid): S
  * @param consumeA - If true, `a` is mutated in place and returned. The
  * caller must not subsequently read `a` as an independent value
  * (the returned grid IS `a`).
+ * @param onProgress - Optional progress callback over `b.types` words.
  * @returns Grid containing the union of both inputs. Equal to `a` when
  * `consumeA=true`, otherwise a freshly cloned grid.
  */

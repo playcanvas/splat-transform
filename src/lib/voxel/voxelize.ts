@@ -1,7 +1,6 @@
 import { Vec3 } from 'playcanvas';
 
 import { BlockMaskBuffer } from './block-mask-buffer';
-import { xyzToMorton } from './morton';
 import type { Bounds } from '../data-table';
 import {
     GpuVoxelization,
@@ -46,6 +45,7 @@ const voxelizeToBuffer = async (
     const numBlocksZ = Math.round((gridBounds.max.z - gridBounds.min.z) / blockSize);
 
     const buffer = new BlockMaskBuffer();
+    const bStride = numBlocksX * numBlocksY;
     const batchSize = 16;
 
     const MEGA_MAX_BATCHES = 512;
@@ -90,8 +90,8 @@ const voxelizeToBuffer = async (
                 const absBlockY = batch.by + localY;
                 const absBlockZ = batch.bz + localZ;
 
-                const morton = xyzToMorton(absBlockX, absBlockY, absBlockZ);
-                buffer.addBlock(morton, maskLo, maskHi);
+                const idx = absBlockX + absBlockY * numBlocksX + absBlockZ * bStride;
+                buffer.addBlock(idx, maskLo, maskHi);
             }
         }
     };

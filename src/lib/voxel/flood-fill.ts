@@ -33,8 +33,8 @@ import {
  * @param ny - Grid dimension Y in voxels.
  * @param nz - Grid dimension Z in voxels.
  * @param onBlockFilled - Optional progress callback receiving the running
- *   count of whole-block fills. Throttled internally so callers can wire it
- *   directly to a progress bar without worrying about per-block overhead.
+ * count of whole-block fills. Throttled internally so callers can wire it
+ * directly to a progress bar without worrying about per-block overhead.
  * @returns Sparse voxel grid marking all reachable voxels.
  */
 function twoLevelBFS(

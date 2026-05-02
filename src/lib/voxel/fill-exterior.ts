@@ -1,6 +1,5 @@
 import { Vec3 } from 'playcanvas';
 
-import { BlockMaskBuffer } from './block-mask-buffer';
 import { gpuDilate3 } from './dilation';
 import { twoLevelBFS } from './flood-fill';
 import { sparseOrGrids } from './grid-ops';
@@ -24,12 +23,12 @@ type NavSeed = {
 };
 
 type NavSimplifyResult = {
-    buffer: BlockMaskBuffer;
+    grid: SparseVoxelGrid;
     gridBounds: Bounds;
 };
 
 const fillExterior = async (
-    buffer: BlockMaskBuffer,
+    gridOriginal: SparseVoxelGrid,
     gridBounds: Bounds,
     voxelResolution: number,
     dilation: number,
@@ -43,28 +42,16 @@ const fillExterior = async (
         throw new Error(`fillExterior: dilation must be finite and > 0, got ${dilation}`);
     }
 
-    const nx = Math.round((gridBounds.max.x - gridBounds.min.x) / voxelResolution);
-    const ny = Math.round((gridBounds.max.y - gridBounds.min.y) / voxelResolution);
-    const nz = Math.round((gridBounds.max.z - gridBounds.min.z) / voxelResolution);
+    const { nx, ny, nz, nbx, nby, nbz, bStride } = gridOriginal;
 
     if (nx % 4 !== 0 || ny % 4 !== 0 || nz % 4 !== 0) {
         throw new Error(`Grid dimensions must be multiples of 4, got ${nx}x${ny}x${nz}`);
     }
 
-    if (buffer.count === 0) {
-        return { buffer, gridBounds };
-    }
-
     const halfExtent = Math.ceil(dilation / voxelResolution);
-    const nbx = nx >> 2;
-    const nby = ny >> 2;
-    const nbz = nz >> 2;
-
-    const gridOriginal = SparseVoxelGrid.fromBuffer(buffer, nx, ny, nz);
 
     const dilated = await gpuDilate3(gpu, gridOriginal, halfExtent, halfExtent);
 
-    const bStride = nbx * nby;
     const blockSeeds: number[] = [];
     const faceVoxelSeeds: { ix: number; iy: number; iz: number }[] = [];
 
@@ -142,11 +129,11 @@ const fillExterior = async (
     if (seedIx >= 0 && seedIx < nx && seedIy >= 0 && seedIy < ny && seedIz >= 0 && seedIz < nz) {
         if (visited.getVoxel(seedIx, seedIy, seedIz)) {
             logger.info('seed reachable from outside, skipping exterior fill');
-            return { buffer, gridBounds };
+            return { grid: gridOriginal, gridBounds };
         }
     } else {
         logger.info('seed outside grid bounds, skipping exterior fill');
-        return { buffer, gridBounds };
+        return { grid: gridOriginal, gridBounds };
     }
 
     const dilatedVisited = await gpuDilate3(gpu, visited, halfExtent, halfExtent);
@@ -182,7 +169,7 @@ const fillExterior = async (
     if (minIx > maxIx) {
         logger.warn('no navigable cells remain, returning empty result');
         return {
-            buffer: new BlockMaskBuffer(),
+            grid: new SparseVoxelGrid(0, 0, 0),
             gridBounds: { min: gridBounds.min.clone(), max: gridBounds.min.clone() }
         };
     }
@@ -211,7 +198,7 @@ const fillExterior = async (
     };
 
     return {
-        buffer: combined.toBuffer(
+        grid: combined.cropTo(
             cropMinBx, cropMinBy, cropMinBz,
             cropMaxBx, cropMaxBy, cropMaxBz
         ),

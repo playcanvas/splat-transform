@@ -609,6 +609,9 @@ class GpuDilation {
      * Uses the command encoder so it's correctly ordered with subsequent
      * dilation passes (unlike `queue.writeBuffer`, which is queued separately
      * and would race against the dispatches).
+     * @param slot
+     * @param dst
+     * @param numWords
      */
     private dispatchClear(slot: DilationSlot, dst: StorageBuffer, numWords: number): void {
         const totalWg = Math.ceil(numWords / 256);
@@ -629,6 +632,7 @@ class GpuDilation {
      * shader. Reuses the existing buffers if they're large enough; otherwise
      * destroys and reallocates. Designed to be called once per
      * `gpuDilate3` call (the same `src` is read across all chunks).
+     * @param src
      */
     uploadSrc(src: SparseVoxelGrid): void {
         const types = src.types;
@@ -706,6 +710,21 @@ class GpuDilation {
      * and returns Promises for the per-block `typesOut` (packed 2-bit) and
      * `masksOut` (lo/hi pairs). Caller integrates these into `dst` directly,
      * skipping the dense-bit hot loop that currently dominates wall time.
+     * @param slotIdx
+     * @param minBx
+     * @param minBy
+     * @param minBz
+     * @param outerBx
+     * @param outerBy
+     * @param outerBz
+     * @param haloBx
+     * @param haloBy
+     * @param haloBz
+     * @param innerBx
+     * @param innerBy
+     * @param innerBz
+     * @param halfExtentXZ
+     * @param halfExtentY
      */
     submitChunkSparse(
         slotIdx: number,
@@ -768,11 +787,9 @@ class GpuDilation {
         this.dispatchCompact(slot, haloBx, haloBy, haloBz, innerBx, innerBy, innerBz, numXWords, outerBy);
 
         const typesPromise = slot.typesOutBuffer.read(0, typesOutWords * 4, null, true)
-            .then((readData: Uint8Array) =>
-                new Uint32Array(readData.buffer, readData.byteOffset, typesOutWords));
+        .then((readData: Uint8Array) => new Uint32Array(readData.buffer, readData.byteOffset, typesOutWords));
         const masksPromise = slot.masksOutBuffer.read(0, innerBlocks * 8, null, true)
-            .then((readData: Uint8Array) =>
-                new Uint32Array(readData.buffer, readData.byteOffset, innerBlocks * 2));
+        .then((readData: Uint8Array) => new Uint32Array(readData.buffer, readData.byteOffset, innerBlocks * 2));
 
         return { types: typesPromise, masks: masksPromise };
     }

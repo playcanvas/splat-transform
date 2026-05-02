@@ -1,7 +1,7 @@
 import type { Bounds } from '../data-table';
 import { coplanarMerge, marchingCubes } from '../mesh';
 import { fmtCount, logger } from '../utils';
-import { BlockMaskBuffer } from '../voxel/block-mask-buffer';
+import { SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
 
 /**
  * Build a minimal GLB (glTF 2.0 binary) file containing a single triangle mesh.
@@ -132,20 +132,20 @@ function encodeGlb(positions: Float32Array, indices: Uint32Array): Uint8Array {
  * bevel triangles untouched. The output surface is identical to the raw MC
  * surface but typically has 1-2 orders of magnitude fewer triangles.
  *
- * @param blockBuffer - Voxel block data after filtering
+ * @param grid - Voxel grid after filtering / nav phases
  * @param gridBounds - Grid bounds aligned to block boundaries
  * @param voxelResolution - Size of each voxel in world units
  * @returns GLB bytes, or null if no triangles were generated
  */
 const buildCollisionMesh = (
-    blockBuffer: BlockMaskBuffer,
+    grid: SparseVoxelGrid,
     gridBounds: Bounds,
     voxelResolution: number
 ): Uint8Array | null => {
     const g = logger.group('Collision mesh');
 
     const extractSub = logger.group('Extracting');
-    const rawMesh = marchingCubes(blockBuffer, gridBounds, voxelResolution);
+    const rawMesh = marchingCubes(grid, gridBounds, voxelResolution);
     logger.info(`raw vertices: ${fmtCount(rawMesh.positions.length / 3)}`);
     logger.info(`raw triangles: ${fmtCount(rawMesh.indices.length / 3)}`);
 

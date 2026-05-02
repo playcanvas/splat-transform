@@ -1,6 +1,5 @@
 import { BlockMaskBuffer } from './block-mask-buffer';
 import { BlockMaskMap } from './block-mask-map';
-import { mortonToXYZ, xyzToMorton } from './morton';
 
 const SOLID_LO = 0xFFFFFFFF >>> 0;
 const SOLID_HI = 0xFFFFFFFF >>> 0;
@@ -219,24 +218,21 @@ class SparseVoxelGrid {
         onProgress?: (done: number, total: number) => void
     ): SparseVoxelGrid {
         const g = new SparseVoxelGrid(nx, ny, nz);
-        const solidMortons = acc.getSolidBlocks();
+        const solidIdx = acc.getSolidBlocks();
         const mixed = acc.getMixedBlocks();
-        const total = solidMortons.length + mixed.morton.length;
+        const total = solidIdx.length + mixed.blockIdx.length;
         const PROGRESS_INTERVAL = 1 << 16;
         let nextTick = PROGRESS_INTERVAL;
-        for (let i = 0; i < solidMortons.length; i++) {
-            const [bx, by, bz] = mortonToXYZ(solidMortons[i]);
-            const blockIdx = bx + by * g.nbx + bz * g.bStride;
-            g.setBlockType(blockIdx, BLOCK_SOLID);
+        for (let i = 0; i < solidIdx.length; i++) {
+            g.setBlockType(solidIdx[i], BLOCK_SOLID);
             if (onProgress && i + 1 >= nextTick) {
                 onProgress(i + 1, total);
                 nextTick = i + 1 + PROGRESS_INTERVAL;
             }
         }
-        const baseMixed = solidMortons.length;
-        for (let i = 0; i < mixed.morton.length; i++) {
-            const [bx, by, bz] = mortonToXYZ(mixed.morton[i]);
-            const blockIdx = bx + by * g.nbx + bz * g.bStride;
+        const baseMixed = solidIdx.length;
+        for (let i = 0; i < mixed.blockIdx.length; i++) {
+            const blockIdx = mixed.blockIdx[i];
             g.setBlockType(blockIdx, BLOCK_MIXED);
             g.masks.set(blockIdx, mixed.masks[i * 2], mixed.masks[i * 2 + 1]);
             const done = baseMixed + i + 1;
@@ -256,6 +252,9 @@ class SparseVoxelGrid {
         onProgress?: (done: number, total: number) => void
     ): BlockMaskBuffer {
         const acc = new BlockMaskBuffer();
+        const outNbx = cropMaxBx - cropMinBx;
+        const outNby = cropMaxBy - cropMinBy;
+        const outBStride = outNbx * outNby;
         const totalZ = cropMaxBz - cropMinBz;
         for (let bz = cropMinBz; bz < cropMaxBz; bz++) {
             if (onProgress) onProgress(bz - cropMinBz, totalZ);
@@ -278,10 +277,10 @@ class SparseVoxelGrid {
                         continue;
                     }
                     if (lo || hi) {
-                        acc.addBlock(
-                            xyzToMorton(bx - cropMinBx, by - cropMinBy, bz - cropMinBz),
-                            lo, hi
-                        );
+                        const outIdx = (bx - cropMinBx) +
+                            (by - cropMinBy) * outNbx +
+                            (bz - cropMinBz) * outBStride;
+                        acc.addBlock(outIdx, lo, hi);
                     }
                 }
             }
@@ -296,6 +295,9 @@ class SparseVoxelGrid {
         onProgress?: (done: number, total: number) => void
     ): BlockMaskBuffer {
         const acc = new BlockMaskBuffer();
+        const outNbx = cropMaxBx - cropMinBx;
+        const outNby = cropMaxBy - cropMinBy;
+        const outBStride = outNbx * outNby;
         const totalZ = cropMaxBz - cropMinBz;
         for (let bz = cropMinBz; bz < cropMaxBz; bz++) {
             if (onProgress) onProgress(bz - cropMinBz, totalZ);
@@ -315,10 +317,10 @@ class SparseVoxelGrid {
                         hi = SOLID_HI;
                     }
                     if (lo || hi) {
-                        acc.addBlock(
-                            xyzToMorton(bx - cropMinBx, by - cropMinBy, bz - cropMinBz),
-                            lo, hi
-                        );
+                        const outIdx = (bx - cropMinBx) +
+                            (by - cropMinBy) * outNbx +
+                            (bz - cropMinBz) * outBStride;
+                        acc.addBlock(outIdx, lo, hi);
                     }
                 }
             }
@@ -328,8 +330,175 @@ class SparseVoxelGrid {
     }
 
     /**
+     * Crop this grid to a block-aligned sub-region. Returns a fresh grid of
+     * size `(cropMaxBx-cropMinBx)*4 x (cropMaxBy-cropMinBy)*4 x (cropMaxBz-cropMinBz)*4`
+     * containing the same data with origin shifted to (cropMinBx, cropMinBy, cropMinBz).
+     *
+     * Iterates only non-empty blocks of the source via word-level skipping.
+     *
+     * @param cropMinBx - Min block X (inclusive).
+     * @param cropMinBy - Min block Y (inclusive).
+     * @param cropMinBz - Min block Z (inclusive).
+     * @param cropMaxBx - Max block X (exclusive).
+     * @param cropMaxBy - Max block Y (exclusive).
+     * @param cropMaxBz - Max block Z (exclusive).
+     * @param onProgress - Optional progress callback over source `types` words.
+     * @returns Newly allocated cropped grid.
+     */
+    cropTo(
+        cropMinBx: number, cropMinBy: number, cropMinBz: number,
+        cropMaxBx: number, cropMaxBy: number, cropMaxBz: number,
+        onProgress?: (done: number, total: number) => void
+    ): SparseVoxelGrid {
+        const outNbx = cropMaxBx - cropMinBx;
+        const outNby = cropMaxBy - cropMinBy;
+        const outNbz = cropMaxBz - cropMinBz;
+        const out = new SparseVoxelGrid(outNbx * 4, outNby * 4, outNbz * 4);
+        const outBStride = outNbx * outNby;
+        const totalBlocks = this.nbx * this.nby * this.nbz;
+        const types = this.types;
+        const masks = this.masks;
+        const outTypes = out.types;
+        const outMasks = out.masks;
+
+        const PROGRESS_INTERVAL = 1 << 13;
+        let nextTick = PROGRESS_INTERVAL;
+        for (let w = 0; w < types.length; w++) {
+            if (onProgress && w >= nextTick) {
+                onProgress(w, types.length);
+                nextTick = w + PROGRESS_INTERVAL;
+            }
+            const word = types[w];
+            if (word === 0) continue;
+            let nonEmpty = ((word & EVEN_BITS) | ((word >>> 1) & EVEN_BITS)) >>> 0;
+            const baseIdx = w * BLOCKS_PER_WORD;
+            while (nonEmpty) {
+                const bp = 31 - Math.clz32(nonEmpty & -nonEmpty);
+                const lane = bp >>> 1;
+                nonEmpty &= nonEmpty - 1;
+                const blockIdx = baseIdx + lane;
+                if (blockIdx >= totalBlocks) break;
+                const bx = blockIdx % this.nbx;
+                const byBz = (blockIdx / this.nbx) | 0;
+                const by = byBz % this.nby;
+                const bz = (byBz / this.nby) | 0;
+                if (bx < cropMinBx || bx >= cropMaxBx ||
+                    by < cropMinBy || by >= cropMaxBy ||
+                    bz < cropMinBz || bz >= cropMaxBz) continue;
+                const outIdx = (bx - cropMinBx) +
+                    (by - cropMinBy) * outNbx +
+                    (bz - cropMinBz) * outBStride;
+                const bt = (word >>> (lane << 1)) & TYPE_MASK;
+                writeBlockType(outTypes, outIdx, bt);
+                if (bt === BLOCK_MIXED) {
+                    const s = masks.slot(blockIdx);
+                    outMasks.set(outIdx, masks.lo[s], masks.hi[s]);
+                }
+            }
+        }
+        if (onProgress) onProgress(types.length, types.length);
+        return out;
+    }
+
+    /**
+     * Crop this grid to a sub-region with inverted occupancy: source EMPTY
+     * becomes destination SOLID, source SOLID becomes destination EMPTY,
+     * source MIXED becomes destination MIXED with bitwise-inverted mask.
+     *
+     * The destination grid has dimensions matching the crop window. Used by
+     * carve to flip the navigable region (1=navigable) into the runtime's
+     * occupancy convention (1=blocked).
+     *
+     * Note: cropping the EMPTY-becomes-SOLID region is exact within the crop
+     * window only. Since the source grid's EMPTY blocks become SOLID in the
+     * output, the output's `types` for empty blocks must be set rather than
+     * left at their default. We therefore initialize the entire output to
+     * SOLID (word fill) and then patch any non-EMPTY source blocks.
+     *
+     * @param cropMinBx - Min block X (inclusive).
+     * @param cropMinBy - Min block Y (inclusive).
+     * @param cropMinBz - Min block Z (inclusive).
+     * @param cropMaxBx - Max block X (exclusive).
+     * @param cropMaxBy - Max block Y (exclusive).
+     * @param cropMaxBz - Max block Z (exclusive).
+     * @param onProgress - Optional progress callback over source `types` words.
+     * @returns Newly allocated cropped + inverted grid.
+     */
+    cropToInverted(
+        cropMinBx: number, cropMinBy: number, cropMinBz: number,
+        cropMaxBx: number, cropMaxBy: number, cropMaxBz: number,
+        onProgress?: (done: number, total: number) => void
+    ): SparseVoxelGrid {
+        const outNbx = cropMaxBx - cropMinBx;
+        const outNby = cropMaxBy - cropMinBy;
+        const outNbz = cropMaxBz - cropMinBz;
+        const out = new SparseVoxelGrid(outNbx * 4, outNby * 4, outNbz * 4);
+        const outBStride = outNbx * outNby;
+        const outTotalBlocks = outNbx * outNby * outNbz;
+        const outTypes = out.types;
+        const outMasks = out.masks;
+
+        // Default the output to SOLID everywhere (matches the source-EMPTY case).
+        // Trim trailing lanes past totalBlocks back to EMPTY.
+        outTypes.fill(SOLID_WORD);
+        const lastWord = outTypes.length - 1;
+        const lastLanes = outTotalBlocks - lastWord * BLOCKS_PER_WORD;
+        if (lastLanes < BLOCKS_PER_WORD) {
+            const validBits = (1 << (lastLanes * 2)) - 1;
+            outTypes[lastWord] = (outTypes[lastWord] & validBits) >>> 0;
+        }
+
+        // Now overwrite any non-EMPTY source block within the crop window.
+        const types = this.types;
+        const masks = this.masks;
+        const totalBlocks = this.nbx * this.nby * this.nbz;
+        const PROGRESS_INTERVAL = 1 << 13;
+        let nextTick = PROGRESS_INTERVAL;
+        for (let w = 0; w < types.length; w++) {
+            if (onProgress && w >= nextTick) {
+                onProgress(w, types.length);
+                nextTick = w + PROGRESS_INTERVAL;
+            }
+            const word = types[w];
+            if (word === 0) continue;
+            let nonEmpty = ((word & EVEN_BITS) | ((word >>> 1) & EVEN_BITS)) >>> 0;
+            const baseIdx = w * BLOCKS_PER_WORD;
+            while (nonEmpty) {
+                const bp = 31 - Math.clz32(nonEmpty & -nonEmpty);
+                const lane = bp >>> 1;
+                nonEmpty &= nonEmpty - 1;
+                const blockIdx = baseIdx + lane;
+                if (blockIdx >= totalBlocks) break;
+                const bx = blockIdx % this.nbx;
+                const byBz = (blockIdx / this.nbx) | 0;
+                const by = byBz % this.nby;
+                const bz = (byBz / this.nby) | 0;
+                if (bx < cropMinBx || bx >= cropMaxBx ||
+                    by < cropMinBy || by >= cropMaxBy ||
+                    bz < cropMinBz || bz >= cropMaxBz) continue;
+                const outIdx = (bx - cropMinBx) +
+                    (by - cropMinBy) * outNbx +
+                    (bz - cropMinBz) * outBStride;
+                const bt = (word >>> (lane << 1)) & TYPE_MASK;
+                if (bt === BLOCK_SOLID) {
+                    // Source SOLID → dest EMPTY (overwrite the SOLID default).
+                    writeBlockType(outTypes, outIdx, BLOCK_EMPTY);
+                } else {
+                    // Source MIXED → dest MIXED with inverted mask.
+                    writeBlockType(outTypes, outIdx, BLOCK_MIXED);
+                    const s = masks.slot(blockIdx);
+                    outMasks.set(outIdx, (~masks.lo[s]) >>> 0, (~masks.hi[s]) >>> 0);
+                }
+            }
+        }
+        if (onProgress) onProgress(types.length, types.length);
+        return out;
+    }
+
+    /**
      * Get the bounding box of occupied blocks.
      *
+     * @param onProgress - Optional progress callback over `types` words.
      * @returns Block coordinate bounds, or null if no blocks are occupied.
      */
     getOccupiedBlockBounds(
@@ -386,6 +555,7 @@ class SparseVoxelGrid {
      * voxel). Useful when the runtime treats out-of-grid as solid, so fully
      * solid blocks beyond the navigable region can be cropped away.
      *
+     * @param onProgress - Optional progress callback over `types` words.
      * @returns Block coordinate bounds, or null if every block is solid.
      */
     getNavigableBlockBounds(

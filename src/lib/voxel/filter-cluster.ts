@@ -8,7 +8,6 @@ import {
     type VoxelFilterContext
 } from './filter-pipeline';
 import { twoLevelBFS } from './flood-fill';
-import { mortonToXYZ } from './morton';
 import {
     BLOCK_EMPTY,
     BLOCK_MIXED,
@@ -60,17 +59,14 @@ const buildInvertedGrid = (
         grid.types[lastWord] = (grid.types[lastWord] & validBits) >>> 0;
     }
 
-    const solidMortons = buffer.getSolidBlocks();
-    for (let i = 0; i < solidMortons.length; i++) {
-        const [bx, by, bz] = mortonToXYZ(solidMortons[i]);
-        const blockIdx = bx + by * grid.nbx + bz * grid.bStride;
-        grid.setBlockType(blockIdx, BLOCK_EMPTY);
+    const solidIdx = buffer.getSolidBlocks();
+    for (let i = 0; i < solidIdx.length; i++) {
+        grid.setBlockType(solidIdx[i], BLOCK_EMPTY);
     }
 
     const mixed = buffer.getMixedBlocks();
-    for (let i = 0; i < mixed.morton.length; i++) {
-        const [bx, by, bz] = mortonToXYZ(mixed.morton[i]);
-        const blockIdx = bx + by * grid.nbx + bz * grid.bStride;
+    for (let i = 0; i < mixed.blockIdx.length; i++) {
+        const blockIdx = mixed.blockIdx[i];
         grid.setBlockType(blockIdx, BLOCK_MIXED);
         grid.masks.set(blockIdx, (~mixed.masks[i * 2]) >>> 0, (~mixed.masks[i * 2 + 1]) >>> 0);
     }
@@ -269,7 +265,7 @@ const filterCluster = async (
         // Every visited voxel is originally-occupied (the BFS only traverses through them),
         // so the visited grid is a correct subset of the original buffer.
         const visitedBuffer = visitedGrid.toBuffer(0, 0, 0, nbx, nby, nbz);
-        const lookup = buildBlockLookup(visitedBuffer, grid.strideY, grid.strideZ);
+        const lookup = buildBlockLookup(visitedBuffer);
 
         if (ccSet.size === buffer.count) {
             logger.info('all blocks in one cluster, no filtering needed');

@@ -2,8 +2,15 @@ import { Vec3 } from 'playcanvas';
 
 import type { Bounds } from '../data-table';
 import { logger } from '../utils';
-import { BlockMaskBuffer } from '../voxel/block-mask-buffer';
-import { xyzToMorton, mortonToXYZ, popcount, getChildOffset } from '../voxel/morton';
+import { popcount, xyzToMorton } from '../voxel/morton';
+import {
+    BLOCK_MIXED,
+    BLOCK_SOLID,
+    BLOCKS_PER_WORD,
+    EVEN_BITS,
+    SparseVoxelGrid,
+    TYPE_MASK
+} from '../voxel/sparse-voxel-grid';
 
 /**
  * Solid leaf node marker: childMask = 0xFF, baseOffset = 0.
@@ -214,41 +221,33 @@ function lowerBoundF64(arr: Float64Array, target: number, n: number): number {
 // ============================================================================
 
 /**
- * Build a sparse octree from accumulated voxelization blocks.
+ * Build a sparse octree from a SparseVoxelGrid.
  *
- * Uses Structure-of-Arrays (SoA) representation and linear scans on sorted
- * Morton codes instead of Maps and per-node objects for performance.
+ * Walks the grid's `types` array word-by-word (skipping empty words), counts
+ * solid + mixed blocks, then emits Morton-keyed (solidStream, mixedStream,
+ * mixedMasks) typed arrays sized exactly. The streams are then sorted; this
+ * is the only place Morton encoding is paid in the post-voxelization pipeline.
  *
- * **Mutates `buffer` in place.** Phase 1 sorts the buffer's solid-morton,
- * mixed-morton, and mixed-mask typed arrays directly (no SoA copy) to keep
- * peak memory low on very large grids. After this call the buffer's blocks
- * are still semantically equivalent — same morton/mask pairs — but reordered
- * by morton ascending. Callers must not rely on insertion order being
- * preserved across this call.
- *
- * @param buffer - BlockMaskBuffer containing voxelized blocks. Mutated:
- * solid mortons, mixed mortons, and mixed masks are sorted in place.
+ * @param grid - SparseVoxelGrid containing voxelized blocks.
  * @param gridBounds - Grid bounds aligned to block boundaries
  * @param sceneBounds - Original scene bounds
  * @param voxelResolution - Size of each voxel in world units
  * @returns Sparse octree structure
  */
 function buildSparseOctree(
-    buffer: BlockMaskBuffer,
+    grid: SparseVoxelGrid,
     gridBounds: Bounds,
     sceneBounds: Bounds,
     voxelResolution: number
 ): SparseOctree {
     const tProfile = performance.now();
 
-    const mixed = buffer.getMixedBlocks();
-    const solid = buffer.getSolidBlocks();
-
-    // --- Phase 1: Sort the buffer's existing typed arrays in place ---
+    // --- Phase 1: Walk grid → emit Morton streams + sort ---
     // Level 0 (leaves) is represented as TWO sorted streams — solid mortons
-    // and mixed mortons (with paired masks). Sorting in place avoids
-    // allocating SoA copies (Float64Array+Uint8Array+Int32Array, all sized
-    // to N_solid + N_mixed); ~13 bytes per block saved at peak.
+    // and mixed mortons (with paired masks). Two passes:
+    //   1. Pre-count solid and mixed blocks (word-skip empty words).
+    //   2. Allocate and fill streams (Morton encode per non-empty block).
+    // Then sort both streams.
     //
     // We avoid `comparefn` typed-array sort because V8 routes it through a
     // regular-array path bounded by FixedArray::kMaxLength (~134M with
@@ -258,11 +257,64 @@ function buildSparseOctree(
     //   - Custom `sortMixedByMorton` for the mixed stream: iterative
     //     quicksort tailored to the (Float64 morton, Uint32×2 mask) layout.
 
-    const solidStream = solid;
-    const mixedStream = mixed.morton;
-    const mixedMasks = mixed.masks;
-    const nSolid = solid.length;
-    const nMixed = mixed.morton.length;
+    const { nbx, nby, nbz, types: gridTypes, masks: gridMasks } = grid;
+    const totalBlocks = nbx * nby * nbz;
+    const lastWordIdx = gridTypes.length - 1;
+    const lastLanes = totalBlocks - lastWordIdx * BLOCKS_PER_WORD;
+    const lastValidWordMask = lastLanes >= BLOCKS_PER_WORD ?
+        0xFFFFFFFF >>> 0 :
+        ((1 << (lastLanes * 2)) - 1) >>> 0;
+
+    // Pass 1: count.
+    let nSolid = 0;
+    let nMixed = 0;
+    for (let w = 0; w < gridTypes.length; w++) {
+        let word = gridTypes[w];
+        if (w === lastWordIdx) word = (word & lastValidWordMask) >>> 0;
+        if (word === 0) continue;
+        // Solid lanes: 0b01 = 1; Mixed lanes: 0b10 = 2.
+        const solidMask = (word & EVEN_BITS) & ~((word >>> 1) & EVEN_BITS);
+        const mixedMask = ((word >>> 1) & EVEN_BITS) & ~(word & EVEN_BITS);
+        nSolid += popcount(solidMask >>> 0);
+        nMixed += popcount(mixedMask >>> 0);
+    }
+
+    const solidStream = new Float64Array(nSolid);
+    const mixedStream = new Float64Array(nMixed);
+    const mixedMasks = new Uint32Array(nMixed * 2);
+
+    // Pass 2: fill.
+    let solidWriteIdx = 0;
+    let mixedWriteIdx = 0;
+    for (let w = 0; w < gridTypes.length; w++) {
+        let word = gridTypes[w];
+        if (w === lastWordIdx) word = (word & lastValidWordMask) >>> 0;
+        if (word === 0) continue;
+        let nonEmpty = ((word & EVEN_BITS) | ((word >>> 1) & EVEN_BITS)) >>> 0;
+        const baseIdx = w * BLOCKS_PER_WORD;
+        while (nonEmpty) {
+            const bp = 31 - Math.clz32(nonEmpty & -nonEmpty);
+            const lane = bp >>> 1;
+            nonEmpty &= nonEmpty - 1;
+            const blockIdx = baseIdx + lane;
+            if (blockIdx >= totalBlocks) break;
+            const bx = blockIdx % nbx;
+            const byBz = (blockIdx / nbx) | 0;
+            const by = byBz % nby;
+            const bz = (byBz / nby) | 0;
+            const morton = xyzToMorton(bx, by, bz);
+            const bt = (word >>> (lane << 1)) & TYPE_MASK;
+            if (bt === BLOCK_SOLID) {
+                solidStream[solidWriteIdx++] = morton;
+            } else if (bt === BLOCK_MIXED) {
+                mixedStream[mixedWriteIdx] = morton;
+                const s = gridMasks.slot(blockIdx);
+                mixedMasks[mixedWriteIdx * 2] = gridMasks.lo[s];
+                mixedMasks[mixedWriteIdx * 2 + 1] = gridMasks.hi[s];
+                mixedWriteIdx++;
+            }
+        }
+    }
 
     if (nSolid > 1) solidStream.sort();
     if (nMixed > 1) sortMixedByMorton(mixedStream, mixedMasks, nMixed);

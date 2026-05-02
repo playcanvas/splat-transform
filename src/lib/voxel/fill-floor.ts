@@ -1,4 +1,3 @@
-import { BlockMaskBuffer } from './block-mask-buffer';
 import { gpuDilate3 } from './dilation';
 import type { NavSimplifyResult } from './fill-exterior';
 import { sparseOrGrids } from './grid-ops';
@@ -6,7 +5,6 @@ import type { Bounds } from '../data-table';
 import type { GpuDilation } from '../gpu';
 import {
     BLOCK_EMPTY,
-    BLOCK_MIXED,
     BLOCK_SOLID,
     SOLID_HI,
     SOLID_LO,
@@ -41,14 +39,17 @@ import { logger } from '../utils';
  * "fill the under-side of every column up to the first solid", matching the
  * original (pre-dilation) `fillFloor` behavior.
  *
- * @param buffer - Voxelized scene data.
+ * @param grid - Voxel grid (linear-keyed) — mutated as the under-surface
+ * region is OR'd into it. The same grid instance is returned in
+ * `NavSimplifyResult.grid`.
  * @param gridBounds - Axis-aligned bounds of the voxel grid.
  * @param voxelResolution - Size of each voxel in world units.
  * @param dilation - XZ dilation radius in world units. 0 disables dilation.
- * @returns Modified buffer with under-surface regions filled.
+ * @param gpu - Reusable GPU dilation context (compiled shader + buffers).
+ * @returns Modified grid with under-surface regions filled.
  */
 const fillFloor = async (
-    buffer: BlockMaskBuffer,
+    grid: SparseVoxelGrid,
     gridBounds: Bounds,
     voxelResolution: number,
     dilation: number,
@@ -61,28 +62,16 @@ const fillFloor = async (
         throw new Error(`fillFloor: dilation must be finite and >= 0, got ${dilation}`);
     }
 
-    const nx = Math.round((gridBounds.max.x - gridBounds.min.x) / voxelResolution);
-    const ny = Math.round((gridBounds.max.y - gridBounds.min.y) / voxelResolution);
-    const nz = Math.round((gridBounds.max.z - gridBounds.min.z) / voxelResolution);
+    const { nx, ny, nz, nbx, nby, nbz, bStride } = grid;
 
     if (nx % 4 !== 0 || ny % 4 !== 0 || nz % 4 !== 0) {
         throw new Error(`Grid dimensions must be multiples of 4, got ${nx}x${ny}x${nz}`);
     }
 
-    if (buffer.count === 0) {
-        return { buffer, gridBounds };
-    }
-
-    const nbx = nx >> 2;
-    const nby = ny >> 2;
-    const nbz = nz >> 2;
-    const bStride = nbx * nby;
-
     const r = dilation > 0 ? Math.ceil(dilation / voxelResolution) : 0;
 
     logger.debug(`fill floor: ${nx}x${ny}x${nz} grid, dilation radius ${r} voxels`);
 
-    const grid = SparseVoxelGrid.fromBuffer(buffer, nx, ny, nz);
     const dilatedSolid = r > 0 ? await gpuDilate3(gpu, grid, r, 0) : grid;
 
     const foundEmpty = new SparseVoxelGrid(nx, ny, nz);
@@ -172,11 +161,7 @@ const fillFloor = async (
     const combined = sparseOrGrids(grid, dilatedFound, true, done => combineBar.update(done));
     combineBar.end();
 
-    const buildBar = logger.bar('Building buffer', nbz);
-    const result = combined.toBuffer(0, 0, 0, nbx, nby, nbz, false, done => buildBar.update(done));
-    buildBar.end();
-
-    return { buffer: result, gridBounds };
+    return { grid: combined, gridBounds };
 };
 
 export { fillFloor };
