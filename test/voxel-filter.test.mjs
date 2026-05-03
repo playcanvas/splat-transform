@@ -77,7 +77,7 @@ describe('filterAndFillBlocks', function () {
             const [lo, hi] = voxelBit(1, 1, 1);
             acc.addBlock(linearBlockIdx(0, 0, 0, 4, 4), lo, hi);
 
-            const result = filterAndFillBlocks(acc, 4, 4);
+            const result = filterAndFillBlocks(acc, 4, 4, 4);
 
             // Block should become empty and be discarded
             assert.strictEqual(result.count, 0, 'Isolated voxel should be removed');
@@ -89,7 +89,7 @@ describe('filterAndFillBlocks', function () {
             const [lo, hi] = voxelMask([1, 1, 1], [2, 1, 1]);
             acc.addBlock(linearBlockIdx(0, 0, 0, 4, 4), lo, hi);
 
-            const result = filterAndFillBlocks(acc, 4, 4);
+            const result = filterAndFillBlocks(acc, 4, 4, 4);
 
             assert.strictEqual(result.count, 1, 'Block with connected voxels should remain');
             const mixed = result.getMixedBlocks();
@@ -103,7 +103,7 @@ describe('filterAndFillBlocks', function () {
             const [lo, hi] = voxelMask([1, 1, 1], [2, 1, 1], [0, 0, 3]);
             acc.addBlock(linearBlockIdx(0, 0, 0, 4, 4), lo, hi);
 
-            const result = filterAndFillBlocks(acc, 4, 4);
+            const result = filterAndFillBlocks(acc, 4, 4, 4);
 
             const mixed = result.getMixedBlocks();
             assert.strictEqual(mixed.blockIdx.length, 1);
@@ -121,7 +121,7 @@ describe('filterAndFillBlocks', function () {
             const [lo, hi] = voxelMask([0, 0, 0], [1, 0, 0], [2, 0, 0]);
             acc.addBlock(linearBlockIdx(0, 0, 0, 4, 4), lo, hi);
 
-            const result = filterAndFillBlocks(acc, 4, 4);
+            const result = filterAndFillBlocks(acc, 4, 4, 4);
 
             const mixed = result.getMixedBlocks();
             assert.strictEqual(countVoxels(mixed.masks[0], mixed.masks[1]), 3,
@@ -144,7 +144,7 @@ describe('filterAndFillBlocks', function () {
             );
             acc.addBlock(linearBlockIdx(0, 0, 0, 4, 4), lo, hi);
 
-            const result = filterAndFillBlocks(acc, 4, 4);
+            const result = filterAndFillBlocks(acc, 4, 4, 4);
 
             const mixed = result.getMixedBlocks();
             assert.strictEqual(mixed.blockIdx.length, 1);
@@ -165,7 +165,7 @@ describe('filterAndFillBlocks', function () {
             );
             acc.addBlock(linearBlockIdx(0, 0, 0, 4, 4), lo, hi);
 
-            const result = filterAndFillBlocks(acc, 4, 4);
+            const result = filterAndFillBlocks(acc, 4, 4, 4);
 
             const mixed = result.getMixedBlocks();
             // (2,2,2) should NOT be filled since +Z neighbor is missing
@@ -188,7 +188,7 @@ describe('filterAndFillBlocks', function () {
             const acc = new BlockMaskBuffer();
             acc.addBlock(linearBlockIdx(0, 0, 0, 4, 4), SOLID_LO, SOLID_HI);
 
-            const result = filterAndFillBlocks(acc, 4, 4);
+            const result = filterAndFillBlocks(acc, 4, 4, 4);
 
             assert.strictEqual(result.solidCount, 1);
             assert.strictEqual(result.mixedCount, 0);
@@ -200,7 +200,7 @@ describe('filterAndFillBlocks', function () {
             acc.addBlock(linearBlockIdx(1, 0, 0, 4, 4), SOLID_LO, SOLID_HI);
             acc.addBlock(linearBlockIdx(0, 1, 0, 4, 4), SOLID_LO, SOLID_HI);
 
-            const result = filterAndFillBlocks(acc, 4, 4);
+            const result = filterAndFillBlocks(acc, 4, 4, 4);
 
             assert.strictEqual(result.solidCount, 3);
         });
@@ -221,7 +221,7 @@ describe('filterAndFillBlocks', function () {
             const [lo1, hi1] = voxelBit(0, 1, 1);
             acc.addBlock(linearBlockIdx(1, 0, 0, 4, 4), lo1, hi1);
 
-            const result = filterAndFillBlocks(acc, 4, 4);
+            const result = filterAndFillBlocks(acc, 4, 4, 4);
 
             // Both voxels should be preserved since they are cross-block neighbors
             assert.strictEqual(result.count, 2,
@@ -240,7 +240,7 @@ describe('filterAndFillBlocks', function () {
             const [lo2, hi2] = voxelBit(0, 1, 1);
             acc.addBlock(linearBlockIdx(2, 0, 0, 4, 4), lo2, hi2);
 
-            const result = filterAndFillBlocks(acc, 4, 4);
+            const result = filterAndFillBlocks(acc, 4, 4, 4);
 
             // Both voxels are isolated (no neighbors in any direction)
             assert.strictEqual(result.count, 0,
@@ -257,7 +257,7 @@ describe('filterAndFillBlocks', function () {
             const [lo1, hi1] = voxelBit(1, 0, 1);
             acc.addBlock(linearBlockIdx(0, 1, 0, 4, 4), lo1, hi1);
 
-            const result = filterAndFillBlocks(acc, 4, 4);
+            const result = filterAndFillBlocks(acc, 4, 4, 4);
 
             assert.strictEqual(result.count, 2,
                 'Y cross-block neighbors should be preserved');
@@ -273,7 +273,7 @@ describe('filterAndFillBlocks', function () {
             const [lo1, hi1] = voxelBit(1, 1, 0);
             acc.addBlock(linearBlockIdx(0, 0, 1, 4, 4), lo1, hi1);
 
-            const result = filterAndFillBlocks(acc, 4, 4);
+            const result = filterAndFillBlocks(acc, 4, 4, 4);
 
             assert.strictEqual(result.count, 2,
                 'Z cross-block neighbors should be preserved');
@@ -288,7 +288,7 @@ describe('filterAndFillBlocks', function () {
             const [lo1, hi1] = voxelBit(0, 2, 2);
             acc.addBlock(linearBlockIdx(1, 0, 0, 4, 4), lo1, hi1);
 
-            const result = filterAndFillBlocks(acc, 4, 4);
+            const result = filterAndFillBlocks(acc, 4, 4, 4);
 
             // The mixed voxel at (1,0,0) lx=0 has a solid neighbor from block (0,0,0)
             assert.strictEqual(result.solidCount, 1, 'Solid block should remain');
@@ -308,7 +308,7 @@ describe('filterAndFillBlocks', function () {
             const [lo, hi] = voxelBit(2, 2, 2);
             acc.addBlock(linearBlockIdx(0, 0, 0, 4, 4), lo, hi);
 
-            const result = filterAndFillBlocks(acc, 4, 4);
+            const result = filterAndFillBlocks(acc, 4, 4, 4);
 
             assert.strictEqual(result.count, 0, 'Block with only isolated voxels should be removed');
             assert.strictEqual(result.mixedCount, 0);
@@ -325,7 +325,7 @@ describe('filterAndFillBlocks', function () {
 
             acc.addBlock(linearBlockIdx(0, 0, 0, 4, 4), lo, hi);
 
-            const result = filterAndFillBlocks(acc, 4, 4);
+            const result = filterAndFillBlocks(acc, 4, 4, 4);
 
             // (2,2,2) has all 6 neighbors occupied, so it should be filled -> block becomes solid
             assert.strictEqual(result.solidCount, 1, 'Block should transition to solid');
@@ -340,7 +340,7 @@ describe('filterAndFillBlocks', function () {
     describe('edge cases', function () {
         it('should handle empty buffer', function () {
             const acc = new BlockMaskBuffer();
-            const result = filterAndFillBlocks(acc, 4, 4);
+            const result = filterAndFillBlocks(acc, 4, 4, 4);
             assert.strictEqual(result.count, 0);
         });
 
@@ -352,7 +352,7 @@ describe('filterAndFillBlocks', function () {
                 }
             }
 
-            const result = filterAndFillBlocks(acc, 4, 4);
+            const result = filterAndFillBlocks(acc, 4, 4, 4);
 
             assert.strictEqual(result.solidCount, 16, 'All solid blocks should be preserved');
             assert.strictEqual(result.mixedCount, 0);
@@ -365,7 +365,7 @@ describe('filterAndFillBlocks', function () {
             const [lo0, hi0] = voxelBit(0, 0, 0);
             acc.addBlock(linearBlockIdx(0, 0, 0, 4, 4), lo0, hi0);
 
-            const result = filterAndFillBlocks(acc, 4, 4);
+            const result = filterAndFillBlocks(acc, 4, 4, 4);
 
             assert.strictEqual(result.count, 0,
                 'Isolated corner voxel should be removed');
@@ -380,7 +380,7 @@ describe('filterAndFillBlocks', function () {
             );
             acc.addBlock(linearBlockIdx(0, 0, 0, 4, 4), lo, hi);
 
-            const result = filterAndFillBlocks(acc, 4, 4);
+            const result = filterAndFillBlocks(acc, 4, 4, 4);
 
             const mixed = result.getMixedBlocks();
             assert.strictEqual(mixed.blockIdx.length, 1);

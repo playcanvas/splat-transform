@@ -40,8 +40,6 @@ const carve = async (
     const kernelR = Math.ceil(capsuleRadius / voxelResolution);
     const yHalfExtent = Math.ceil(capsuleHeight / (2 * voxelResolution));
 
-    const blocked = await gpuDilate3(gpu, gridA, kernelR, yHalfExtent);
-
     let seedIx = Math.floor((seed.x - gridBounds.min.x) / voxelResolution);
     let seedIy = Math.floor((seed.y - gridBounds.min.y) / voxelResolution);
     let seedIz = Math.floor((seed.z - gridBounds.min.z) / voxelResolution);
@@ -50,6 +48,8 @@ const carve = async (
         logger.warn(`seed (${seed.x}, ${seed.y}, ${seed.z}) outside grid, skipping carve`);
         return { grid: gridA, gridBounds };
     }
+
+    const blocked = await gpuDilate3(gpu, gridA, kernelR, yHalfExtent);
 
     if (blocked.getVoxel(seedIx, seedIy, seedIz)) {
         const maxRadius = Math.max(kernelR, yHalfExtent) * 2;

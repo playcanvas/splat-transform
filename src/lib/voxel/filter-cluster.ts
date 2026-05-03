@@ -52,6 +52,9 @@ const buildInvertedGrid = (
     // Trim the final word so the trailing lanes (past totalBlocks) read
     // back as EMPTY rather than SOLID.
     const totalBlocks = grid.nbx * grid.nby * grid.nbz;
+    if (totalBlocks === 0) {
+        return grid;
+    }
     const lastWord = grid.types.length - 1;
     const lastLanes = totalBlocks - lastWord * BLOCKS_PER_WORD;
     if (lastLanes < BLOCKS_PER_WORD) {

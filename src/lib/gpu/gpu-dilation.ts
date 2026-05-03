@@ -773,16 +773,13 @@ class GpuDilation {
         slot.bufferA.read(0, 16, null, true).catch(() => { /* ignore */ });
 
         // X-pass: A → B
-        this.dispatchClear(slot, slot.bufferB, numWords);
         this.dispatchX(slot, slot.bufferA, slot.bufferB, numXWords, outerNy, outerNz, halfExtentXZ);
 
         // Z-pass: B → A
-        this.dispatchClear(slot, slot.bufferA, numWords);
         this.dispatchYZ(slot.dilateZCompute, slot.bufferB, slot.bufferA,
             numXWords, outerNy, outerNz, halfExtentXZ, numXWords * outerNy, outerNz);
 
         // Y-pass: A → B
-        this.dispatchClear(slot, slot.bufferB, numWords);
         this.dispatchYZ(slot.dilateYCompute, slot.bufferA, slot.bufferB,
             numXWords, outerNy, outerNz, halfExtentY, numXWords, outerNy);
 

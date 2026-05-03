@@ -83,7 +83,7 @@ describe('voxel-query', function () {
 
             const strideY = 4;
             const strideZ = 4 * 4;
-            const lookup = buildBlockLookup(buffer, strideY, strideZ);
+            const lookup = buildBlockLookup(buffer);
 
             assert.strictEqual(lookup.solidSet.size, 2);
             assert.ok(lookup.solidSet.has(0 + 0 * strideY + 0 * strideZ));
@@ -100,7 +100,7 @@ describe('voxel-query', function () {
 
             const strideY = 4;
             const strideZ = 16;
-            const lookup = buildBlockLookup(buffer, strideY, strideZ);
+            const lookup = buildBlockLookup(buffer);
 
             assert.strictEqual(lookup.solidSet.size, 0);
             assert.strictEqual(lookup.mixedMap.size, 1);
@@ -113,7 +113,7 @@ describe('voxel-query', function () {
 
         it('should handle empty buffer', function () {
             const buffer = new BlockMaskBuffer();
-            const lookup = buildBlockLookup(buffer, 4, 16);
+            const lookup = buildBlockLookup(buffer);
 
             assert.strictEqual(lookup.solidSet.size, 0);
             assert.strictEqual(lookup.mixedMap.size, 0);
@@ -127,7 +127,7 @@ describe('voxel-query', function () {
 
             const voxelRes = 0.25;
             const grid = makeGrid(4, 4, 4, voxelRes);
-            const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+            const lookup = buildBlockLookup(buffer);
 
             const result = isCenterInOccupiedVoxel(
                 1.0 * grid.blockSize + 0.5 * voxelRes,
@@ -144,7 +144,7 @@ describe('voxel-query', function () {
 
             const voxelRes = 0.25;
             const grid = makeGrid(4, 4, 4, voxelRes);
-            const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+            const lookup = buildBlockLookup(buffer);
 
             const result = isCenterInOccupiedVoxel(
                 2.0 * grid.blockSize + 0.5 * voxelRes,
@@ -161,7 +161,7 @@ describe('voxel-query', function () {
 
             const voxelRes = 0.25;
             const grid = makeGrid(4, 4, 4, voxelRes);
-            const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+            const lookup = buildBlockLookup(buffer);
 
             assert.strictEqual(isCenterInOccupiedVoxel(-1, 0, 0, grid, lookup), false);
             assert.strictEqual(isCenterInOccupiedVoxel(100, 0, 0, grid, lookup), false);
@@ -174,7 +174,7 @@ describe('voxel-query', function () {
 
             const voxelRes = 0.25;
             const grid = makeGrid(4, 4, 4, voxelRes);
-            const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+            const lookup = buildBlockLookup(buffer);
 
             const blockFilter = new Set([0]);
 
@@ -199,7 +199,7 @@ describe('voxel-query', function () {
 
             const voxelRes = 1.0;
             const grid = makeGrid(2, 2, 2, voxelRes);
-            const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+            const lookup = buildBlockLookup(buffer);
 
             assert.strictEqual(
                 isCenterInOccupiedVoxel(0.5, 0.5, 0.5, grid, lookup),
@@ -222,7 +222,7 @@ describe('voxel-query', function () {
 
             const voxelRes = 1.0;
             const grid = makeGrid(2, 2, 2, voxelRes);
-            const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+            const lookup = buildBlockLookup(buffer);
 
             const gaussianCols = {
                 posX: new Float32Array([2.0]),
@@ -251,7 +251,7 @@ describe('voxel-query', function () {
 
             const voxelRes = 1.0;
             const grid = makeGrid(2, 2, 2, voxelRes);
-            const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+            const lookup = buildBlockLookup(buffer);
 
             const gaussianCols = {
                 posX: new Float32Array([100.0]),
@@ -281,7 +281,7 @@ describe('voxel-query', function () {
 
             const voxelRes = 1.0;
             const grid = makeGrid(4, 4, 4, voxelRes);
-            const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+            const lookup = buildBlockLookup(buffer);
 
             const gaussianCols = {
                 posX: new Float32Array([2.0]),
@@ -315,7 +315,7 @@ describe('voxel-query', function () {
 
             const voxelRes = 1.0;
             const grid = makeGrid(2, 2, 2, voxelRes);
-            const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+            const lookup = buildBlockLookup(buffer);
 
             const gaussianCols = {
                 posX: new Float32Array([2.0]),
@@ -348,7 +348,7 @@ describe('voxel-query', function () {
 
             const voxelRes = 1.0;
             const grid = makeGrid(4, 4, 4, voxelRes);
-            const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+            const lookup = buildBlockLookup(buffer);
 
             const gaussianCols = {
                 posX: new Float32Array([4.0]),
@@ -386,7 +386,7 @@ describe('voxel-query', function () {
             const buffer = new BlockMaskBuffer();
             // Block at (2,1,0): world origin = (-12+8, -8+4, -4+0) = (-4, -4, -4)
             buffer.addBlock(linearBlockIdx(2, 1, 0, 8, 6), SOLID_LO, SOLID_HI);
-            const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+            const lookup = buildBlockLookup(buffer);
             const blockIdx = 2 + 1 * grid.strideY + 0 * grid.strideZ;
             const filter = new Set([blockIdx]);
 
@@ -417,7 +417,7 @@ describe('voxel-query', function () {
             const buffer = new BlockMaskBuffer();
             // Block at (0,0,0): world origin = (-20,-20,-20), covers (-20,-16) in each axis
             buffer.addBlock(linearBlockIdx(0, 0, 0, 10, 10), SOLID_LO, SOLID_HI);
-            const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+            const lookup = buildBlockLookup(buffer);
 
             assert.strictEqual(
                 isCenterInOccupiedVoxel(-19.5, -19.5, -19.5, grid, lookup),
@@ -448,7 +448,7 @@ describe('voxel-query', function () {
             buffer.addBlock(linearBlockIdx(1, 0, 0, 10, 4), SOLID_LO, SOLID_HI);
             buffer.addBlock(linearBlockIdx(5, 0, 0, 10, 4), SOLID_LO, SOLID_HI);
             buffer.addBlock(linearBlockIdx(6, 0, 0, 10, 4), SOLID_LO, SOLID_HI);
-            const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+            const lookup = buildBlockLookup(buffer);
 
             // ccSet: only cluster A
             const ccSet = new Set([
@@ -498,7 +498,7 @@ describe('voxel-query', function () {
             // Island B at blocks (7,1,1) and (8,1,1)
             buffer.addBlock(linearBlockIdx(7, 1, 1, 10, 6), SOLID_LO, SOLID_HI);
             buffer.addBlock(linearBlockIdx(8, 1, 1, 10, 6), SOLID_LO, SOLID_HI);
-            const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+            const lookup = buildBlockLookup(buffer);
 
             const ccSet = new Set([
                 1 + 1 * grid.strideY + 1 * grid.strideZ,
@@ -532,7 +532,7 @@ describe('voxel-query', function () {
             const grid = makeGrid(4, 4, 4, 1.0);
             const buffer = new BlockMaskBuffer();
             buffer.addBlock(linearBlockIdx(0, 0, 0, 4, 4), lo, hi);
-            const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+            const lookup = buildBlockLookup(buffer);
             const ccSet = new Set([0]);
 
             // Occupied voxel (0,0,0) → true
@@ -578,7 +578,7 @@ describe('voxel-query', function () {
             const grid = makeGrid(2, 2, 2, 1.0);
             const buffer = new BlockMaskBuffer();
             buffer.addBlock(linearBlockIdx(0, 0, 0, 2, 2), lo, hi);
-            const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+            const lookup = buildBlockLookup(buffer);
 
             for (let lz = 0; lz < 4; lz++) {
                 for (let ly = 0; ly < 4; ly++) {
@@ -602,7 +602,7 @@ describe('voxel-query', function () {
             const grid = makeGrid(2, 2, 2, 1.0);
             const buffer = new BlockMaskBuffer();
             buffer.addBlock(linearBlockIdx(0, 0, 0, 2, 2), lo, hi);
-            const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+            const lookup = buildBlockLookup(buffer);
 
             assert.strictEqual(
                 isCenterInOccupiedVoxel(0.5, 0.5, 2.5, grid, lookup),
@@ -638,7 +638,7 @@ describe('voxel-query', function () {
             // Block 0 and block 1 are both solid
             buffer.addBlock(linearBlockIdx(0, 0, 0, 4, 4), SOLID_LO, SOLID_HI);
             buffer.addBlock(linearBlockIdx(1, 0, 0, 4, 4), SOLID_LO, SOLID_HI);
-            const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+            const lookup = buildBlockLookup(buffer);
 
             const blockFilter0 = new Set([0]);
             const blockFilter1 = new Set([1]);
@@ -673,7 +673,7 @@ describe('voxel-query', function () {
             const buffer = new BlockMaskBuffer();
             buffer.addBlock(linearBlockIdx(0, 0, 0, 4, 4), SOLID_LO, SOLID_HI);
             buffer.addBlock(linearBlockIdx(1, 0, 0, 4, 4), SOLID_LO, SOLID_HI);
-            const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+            const lookup = buildBlockLookup(buffer);
 
             const blockFilter0 = new Set([0]);
             const blockFilter1 = new Set([1]);
@@ -709,7 +709,7 @@ describe('voxel-query', function () {
             const buffer = new BlockMaskBuffer();
             buffer.addBlock(linearBlockIdx(0, 0, 0, 8, 4), SOLID_LO, SOLID_HI);
             buffer.addBlock(linearBlockIdx(4, 0, 0, 8, 4), SOLID_LO, SOLID_HI);
-            const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+            const lookup = buildBlockLookup(buffer);
 
             const ccSet = new Set([0]); // only cluster block
 
@@ -743,7 +743,7 @@ describe('voxel-query', function () {
             const grid = makeGrid(4, 4, 4, 1.0);
             const buffer = new BlockMaskBuffer();
             buffer.addBlock(linearBlockIdx(0, 0, 0, 4, 4), SOLID_LO, SOLID_HI);
-            const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+            const lookup = buildBlockLookup(buffer);
 
             // Gaussian just outside block 0, with extent reaching into it
             const gaussianCols = {
@@ -773,7 +773,7 @@ describe('voxel-query', function () {
             const grid = makeGrid(4, 4, 4, 1.0);
             const buffer = new BlockMaskBuffer();
             buffer.addBlock(linearBlockIdx(0, 0, 0, 4, 4), SOLID_LO, SOLID_HI);
-            const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+            const lookup = buildBlockLookup(buffer);
 
             // Small Gaussian at moderate distance
             const gaussianCols = {
@@ -805,7 +805,7 @@ describe('voxel-query', function () {
             const buffer = new BlockMaskBuffer();
             // Cluster block at (1,1,1): world origin (-12,-12,-12)
             buffer.addBlock(linearBlockIdx(1, 1, 1, 8, 8), SOLID_LO, SOLID_HI);
-            const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+            const lookup = buildBlockLookup(buffer);
             const blockIdx = 1 + 1 * grid.strideY + 1 * grid.strideZ;
             const ccSet = new Set([blockIdx]);
 

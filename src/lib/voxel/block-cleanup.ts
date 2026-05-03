@@ -41,12 +41,14 @@ const SOLID_MASK = 0xFFFFFFFF >>> 0;
  * @param buffer - BlockMaskBuffer with voxelization results (linear-keyed).
  * @param nbx - Grid block dimension X (used to decode block indices).
  * @param nby - Grid block dimension Y (used to decode block indices).
+ * @param nbz - Grid block dimension Z (used for neighbor bounds checks).
  * @returns New BlockMaskBuffer with filtered/filled data.
  */
 function filterAndFillBlocks(
     buffer: BlockMaskBuffer,
     nbx: number,
-    nby: number
+    nby: number,
+    nbz: number
 ): BlockMaskBuffer {
     const mixed = buffer.getMixedBlocks();
     const solid = buffer.getSolidBlocks();
@@ -108,41 +110,41 @@ function filterAndFillBlocks(
         // --- Cross-block contributions ---
 
         // +X: our lx=3 face <- adjacent's lx=0 face (shifted left by 3)
-        addCrossFace(bx + 1, by, bz, nbx, nby, bStride, solidSet, mixedMap, masks,
+        addCrossFace(bx + 1, by, bz, nbx, nby, nbz, bStride, solidSet, mixedMap, masks,
             FACE_X3, FACE_X0, 3, true, pxLo, pxHi,
             (lo, hi) => {
                 pxLo = lo; pxHi = hi;
             });
 
         // -X: our lx=0 face <- adjacent's lx=3 face (shifted right by 3)
-        addCrossFace(bx - 1, by, bz, nbx, nby, bStride, solidSet, mixedMap, masks,
+        addCrossFace(bx - 1, by, bz, nbx, nby, nbz, bStride, solidSet, mixedMap, masks,
             FACE_X0, FACE_X3, 3, false, mxLo, mxHi,
             (lo, hi) => {
                 mxLo = lo; mxHi = hi;
             });
 
         // +Y: our ly=3 face <- adjacent's ly=0 face (shifted left by 12)
-        addCrossFace(bx, by + 1, bz, nbx, nby, bStride, solidSet, mixedMap, masks,
+        addCrossFace(bx, by + 1, bz, nbx, nby, nbz, bStride, solidSet, mixedMap, masks,
             FACE_Y3, FACE_Y0, 12, true, pyLo, pyHi,
             (lo, hi) => {
                 pyLo = lo; pyHi = hi;
             });
 
         // -Y: our ly=0 face <- adjacent's ly=3 face (shifted right by 12)
-        addCrossFace(bx, by - 1, bz, nbx, nby, bStride, solidSet, mixedMap, masks,
+        addCrossFace(bx, by - 1, bz, nbx, nby, nbz, bStride, solidSet, mixedMap, masks,
             FACE_Y0, FACE_Y3, 12, false, myLo, myHi,
             (lo, hi) => {
                 myLo = lo; myHi = hi;
             });
 
         // +Z: our lz=3 face (hi bits 16-31) <- adjacent's lz=0 face (lo bits 0-15)
-        addCrossFaceZ(bx, by, bz + 1, nbx, nby, bStride, solidSet, mixedMap, masks, true, pzLo, pzHi,
+        addCrossFaceZ(bx, by, bz + 1, nbx, nby, nbz, bStride, solidSet, mixedMap, masks, true, pzLo, pzHi,
             (lo, hi) => {
                 pzLo = lo; pzHi = hi;
             });
 
         // -Z: our lz=0 face (lo bits 0-15) <- adjacent's lz=3 face (hi bits 16-31)
-        addCrossFaceZ(bx, by, bz - 1, nbx, nby, bStride, solidSet, mixedMap, masks, false, mzLo, mzHi,
+        addCrossFaceZ(bx, by, bz - 1, nbx, nby, nbz, bStride, solidSet, mixedMap, masks, false, mzLo, mzHi,
             (lo, hi) => {
                 mzLo = lo; mzHi = hi;
             });
@@ -192,7 +194,7 @@ function filterAndFillBlocks(
 
 function addCrossFace(
     nx: number, ny: number, nz: number,
-    nbx: number, nby: number, bStride: number,
+    nbx: number, nby: number, nbz: number, bStride: number,
     solidSet: Set<number>,
     mixedMap: Map<number, number>,
     masks: Uint32Array,
@@ -203,7 +205,7 @@ function addCrossFace(
     curLo: number, curHi: number,
     write: (lo: number, hi: number) => void
 ): void {
-    if (nx < 0 || ny < 0 || nz < 0 || nx >= nbx || ny >= nby) {
+    if (nx < 0 || ny < 0 || nz < 0 || nx >= nbx || ny >= nby || nz >= nbz) {
         write(curLo, curHi);
         return;
     }
@@ -234,7 +236,7 @@ function addCrossFace(
 
 function addCrossFaceZ(
     nx: number, ny: number, nz: number,
-    nbx: number, nby: number, bStride: number,
+    nbx: number, nby: number, nbz: number, bStride: number,
     solidSet: Set<number>,
     mixedMap: Map<number, number>,
     masks: Uint32Array,
@@ -242,7 +244,7 @@ function addCrossFaceZ(
     curLo: number, curHi: number,
     write: (lo: number, hi: number) => void
 ): void {
-    if (nx < 0 || ny < 0 || nz < 0 || nx >= nbx || ny >= nby) {
+    if (nx < 0 || ny < 0 || nz < 0 || nx >= nbx || ny >= nby || nz >= nbz) {
         write(curLo, curHi);
         return;
     }

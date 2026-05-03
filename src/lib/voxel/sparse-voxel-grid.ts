@@ -310,11 +310,16 @@ class SparseVoxelGrid {
         const outNbz = cropMaxBz - cropMinBz;
         const out = new SparseVoxelGrid(outNbx * 4, outNby * 4, outNbz * 4);
         const outBStride = outNbx * outNby;
-        const totalBlocks = this.nbx * this.nby * this.nbz;
+        const { nbx, nby } = this;
+        const totalBlocks = nbx * nby * this.nbz;
         const types = this.types;
         const masks = this.masks;
         const outTypes = out.types;
         const outMasks = out.masks;
+        if (out.nbx * out.nby * out.nbz === 0) {
+            if (onProgress) onProgress(0, 0);
+            return out;
+        }
 
         const PROGRESS_INTERVAL = 1 << 13;
         let nextTick = PROGRESS_INTERVAL;
@@ -327,16 +332,27 @@ class SparseVoxelGrid {
             if (word === 0) continue;
             let nonEmpty = ((word & EVEN_BITS) | ((word >>> 1) & EVEN_BITS)) >>> 0;
             const baseIdx = w * BLOCKS_PER_WORD;
+            let bx = baseIdx % nbx;
+            const byBz = (baseIdx / nbx) | 0;
+            let by = byBz % nby;
+            let bz = (byBz / nby) | 0;
+            let coordLane = 0;
             while (nonEmpty) {
                 const bp = 31 - Math.clz32(nonEmpty & -nonEmpty);
                 const lane = bp >>> 1;
                 nonEmpty &= nonEmpty - 1;
                 const blockIdx = baseIdx + lane;
                 if (blockIdx >= totalBlocks) break;
-                const bx = blockIdx % this.nbx;
-                const byBz = (blockIdx / this.nbx) | 0;
-                const by = byBz % this.nby;
-                const bz = (byBz / this.nby) | 0;
+                bx += lane - coordLane;
+                coordLane = lane;
+                while (bx >= nbx) {
+                    bx -= nbx;
+                    by++;
+                    if (by >= nby) {
+                        by = 0;
+                        bz++;
+                    }
+                }
                 if (bx < cropMinBx || bx >= cropMaxBx ||
                     by < cropMinBy || by >= cropMaxBy ||
                     bz < cropMinBz || bz >= cropMaxBz) continue;
@@ -392,6 +408,10 @@ class SparseVoxelGrid {
         const outTotalBlocks = outNbx * outNby * outNbz;
         const outTypes = out.types;
         const outMasks = out.masks;
+        if (outTotalBlocks === 0) {
+            if (onProgress) onProgress(0, 0);
+            return out;
+        }
 
         // Default the output to SOLID everywhere (matches the source-EMPTY case).
         // Trim trailing lanes past totalBlocks back to EMPTY.
@@ -404,9 +424,10 @@ class SparseVoxelGrid {
         }
 
         // Now overwrite any non-EMPTY source block within the crop window.
+        const { nbx, nby } = this;
         const types = this.types;
         const masks = this.masks;
-        const totalBlocks = this.nbx * this.nby * this.nbz;
+        const totalBlocks = nbx * nby * this.nbz;
         const PROGRESS_INTERVAL = 1 << 13;
         let nextTick = PROGRESS_INTERVAL;
         for (let w = 0; w < types.length; w++) {
@@ -418,16 +439,27 @@ class SparseVoxelGrid {
             if (word === 0) continue;
             let nonEmpty = ((word & EVEN_BITS) | ((word >>> 1) & EVEN_BITS)) >>> 0;
             const baseIdx = w * BLOCKS_PER_WORD;
+            let bx = baseIdx % nbx;
+            const byBz = (baseIdx / nbx) | 0;
+            let by = byBz % nby;
+            let bz = (byBz / nby) | 0;
+            let coordLane = 0;
             while (nonEmpty) {
                 const bp = 31 - Math.clz32(nonEmpty & -nonEmpty);
                 const lane = bp >>> 1;
                 nonEmpty &= nonEmpty - 1;
                 const blockIdx = baseIdx + lane;
                 if (blockIdx >= totalBlocks) break;
-                const bx = blockIdx % this.nbx;
-                const byBz = (blockIdx / this.nbx) | 0;
-                const by = byBz % this.nby;
-                const bz = (byBz / this.nby) | 0;
+                bx += lane - coordLane;
+                coordLane = lane;
+                while (bx >= nbx) {
+                    bx -= nbx;
+                    by++;
+                    if (by >= nby) {
+                        by = 0;
+                        bz++;
+                    }
+                }
                 if (bx < cropMinBx || bx >= cropMaxBx ||
                     by < cropMinBy || by >= cropMaxBy ||
                     bz < cropMinBz || bz >= cropMaxBz) continue;
@@ -463,7 +495,7 @@ class SparseVoxelGrid {
         maxBx: number; maxBy: number; maxBz: number;
     } | null {
         const { nbx, nby } = this;
-        const totalBlocks = this.nbx * this.nby * this.nbz;
+        const totalBlocks = nbx * nby * this.nbz;
         let minBx = nbx, minBy = nby, minBz = this.nbz;
         let maxBx = 0, maxBy = 0, maxBz = 0;
         let found = false;
@@ -478,18 +510,30 @@ class SparseVoxelGrid {
             if (word === 0) continue;
             // Set bit at even position 2k iff lane k is non-empty.
             let nonEmpty = ((word & EVEN_BITS) | ((word >>> 1) & EVEN_BITS)) >>> 0;
+            const baseIdx = w * BLOCKS_PER_WORD;
+            let bx = baseIdx % nbx;
+            const byBz = (baseIdx / nbx) | 0;
+            let by = byBz % nby;
+            let bz = (byBz / nby) | 0;
+            let coordLane = 0;
             while (nonEmpty) {
                 const bp = 31 - Math.clz32(nonEmpty & -nonEmpty);
                 const lane = bp >>> 1;
-                const blockIdx = w * BLOCKS_PER_WORD + lane;
+                const blockIdx = baseIdx + lane;
                 if (blockIdx >= totalBlocks) {
                     nonEmpty = 0;
                     break;
                 }
-                const bx = blockIdx % nbx;
-                const byBz = (blockIdx / nbx) | 0;
-                const by = byBz % nby;
-                const bz = (byBz / nby) | 0;
+                bx += lane - coordLane;
+                coordLane = lane;
+                while (bx >= nbx) {
+                    bx -= nbx;
+                    by++;
+                    if (by >= nby) {
+                        by = 0;
+                        bz++;
+                    }
+                }
                 if (bx < minBx) minBx = bx;
                 if (bx > maxBx) maxBx = bx;
                 if (by < minBy) minBy = by;
@@ -520,7 +564,11 @@ class SparseVoxelGrid {
         maxBx: number; maxBy: number; maxBz: number;
     } | null {
         const { nbx, nby } = this;
-        const totalBlocks = this.nbx * this.nby * this.nbz;
+        const totalBlocks = nbx * nby * this.nbz;
+        if (totalBlocks === 0) {
+            if (onProgress) onProgress(0, 0);
+            return null;
+        }
         // Mask of valid lanes in the last word (in terms of even bit positions).
         const lastWordIdx = this.types.length - 1;
         const lastLanes = totalBlocks - lastWordIdx * BLOCKS_PER_WORD;
@@ -549,14 +597,25 @@ class SparseVoxelGrid {
             // For the final (possibly partial) word, drop lanes past totalBlocks.
             if (w === lastWordIdx) navMask &= lastNonEmptyMask;
 
+            const baseIdx = w * BLOCKS_PER_WORD;
+            let bx = baseIdx % nbx;
+            const byBz = (baseIdx / nbx) | 0;
+            let by = byBz % nby;
+            let bz = (byBz / nby) | 0;
+            let coordLane = 0;
             while (navMask) {
                 const bp = 31 - Math.clz32(navMask & -navMask);
                 const lane = bp >>> 1;
-                const blockIdx = w * BLOCKS_PER_WORD + lane;
-                const bx = blockIdx % nbx;
-                const byBz = (blockIdx / nbx) | 0;
-                const by = byBz % nby;
-                const bz = (byBz / nby) | 0;
+                bx += lane - coordLane;
+                coordLane = lane;
+                while (bx >= nbx) {
+                    bx -= nbx;
+                    by++;
+                    if (by >= nby) {
+                        by = 0;
+                        bz++;
+                    }
+                }
                 if (bx < minBx) minBx = bx;
                 if (bx > maxBx) maxBx = bx;
                 if (by < minBy) minBy = by;

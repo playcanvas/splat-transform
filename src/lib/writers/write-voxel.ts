@@ -379,7 +379,8 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         const filterSub = logger.group('Filtering');
         const nbxInit = Math.round((gridBounds.max.x - gridBounds.min.x) / (4 * voxelResolution));
         const nbyInit = Math.round((gridBounds.max.y - gridBounds.min.y) / (4 * voxelResolution));
-        const filteredBuffer = filterAndFillBlocks(buffer, nbxInit, nbyInit);
+        const nbzInit = Math.round((gridBounds.max.z - gridBounds.min.z) / (4 * voxelResolution));
+        const filteredBuffer = filterAndFillBlocks(buffer, nbxInit, nbyInit, nbzInit);
         buffer.clear();
         filterSub.end();
 
@@ -389,7 +390,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         const loadSub = logger.group('Loading grid');
         const nxInit = nbxInit << 2;
         const nyInit = nbyInit << 2;
-        const nzInit = Math.round((gridBounds.max.z - gridBounds.min.z) / voxelResolution);
+        const nzInit = nbzInit << 2;
         const loadBar = logger.bar('Loading grid', Math.max(1, filteredBuffer.count));
         let grid = SparseVoxelGrid.fromBuffer(
             filteredBuffer, nxInit, nyInit, nzInit,
@@ -480,4 +481,4 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     }
 };
 
-export { writeVoxel, type WriteVoxelOptions, type VoxelMetadata };
+export { writeVoxel, writeOctreeFiles, type WriteVoxelOptions, type VoxelMetadata };

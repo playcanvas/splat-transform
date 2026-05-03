@@ -1,8 +1,6 @@
 import {
     BLOCK_EMPTY,
     BLOCK_SOLID,
-    SOLID_HI,
-    SOLID_LO,
     SOLID_WORD,
     SparseVoxelGrid,
     readBlockType
