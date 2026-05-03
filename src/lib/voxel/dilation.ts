@@ -230,13 +230,20 @@ function applyChunkToDst(
 /**
  * GPU separable 3D dilation. Chunks the grid into ~1024³ inner regions plus
  * a halo on each side, runs three GPU passes per chunk, and OR's the
- * dilated inner region into a fresh destination `SparseVoxelGrid`. Mirrors
- * `sparseDilate3`'s API (returns a new grid).
+ * dilated inner region into a fresh destination `SparseVoxelGrid`.
+ *
+ * Both `halfExtentXZ` and `halfExtentY` must be 0 or a multiple of 4 — the
+ * sparse-chunk math requires the halo to be block-aligned. Callers that
+ * derive the half-extent from a real-world radius should round up to the
+ * nearest multiple of 4 voxels (the runtime cost is negligible vs. the
+ * extra dilation distance).
  *
  * @param gpu - Reusable GPU dilation context (compiled shader + buffers).
  * @param src - Input sparse grid (read-only across the call).
  * @param halfExtentXZ - Dilation half-extent in voxels along X and Z.
+ * Must be 0 or a multiple of 4.
  * @param halfExtentY - Dilation half-extent in voxels along Y.
+ * Must be 0 or a multiple of 4.
  * @returns Newly allocated dilated sparse grid.
  */
 async function gpuDilate3(

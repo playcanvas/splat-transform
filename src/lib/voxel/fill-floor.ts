@@ -21,12 +21,12 @@ import { logger } from '../utils';
  * 3D boundary BFS, and the dilations operate only in X and Z.
  *
  * Steps with `r = ceil(dilation / voxelResolution)`:
- *   1. `S_xz = sparseDilate3(S, r, 0)` closes any XZ holes in horizontal
+ *   1. `S_xz = gpuDilate3(S, r, 0)` closes any XZ holes in horizontal
  *      surfaces smaller than `2 * r`.
  *   2. For every (lx, lz), walk `y = 0` upward through `S_xz`. Mark each
  *      visited empty voxel into `foundEmpty`. Stop on the first solid voxel
  *      of `S_xz` or at the grid top.
- *   3. `dilatedFound = sparseDilate3(foundEmpty, r, 0)` spreads the found
+ *   3. `dilatedFound = gpuDilate3(foundEmpty, r, 0)` spreads the found
  *      under-surface volume back out in XZ to cover the kernel halo.
  *   4. `output = S | dilatedFound` adds the dilated under-surface region as
  *      solid on top of the original solids.
