@@ -385,8 +385,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         filterSub.end();
 
         // Buffer → grid: the single conversion in the pipeline. Every phase
-        // beyond this point operates on SparseVoxelGrid directly, avoiding
-        // the buffer/grid round-trips that previously dominated the runtime.
+        // beyond this point operates on SparseVoxelGrid directly.
         const loadSub = logger.group('Loading grid');
         const nxInit = nbxInit << 2;
         const nyInit = nbyInit << 2;

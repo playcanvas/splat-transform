@@ -544,7 +544,7 @@ const momentMatch = (
     }
 };
 
-// ====================== SORT BY VISIBILITY (legacy) ======================
+// ====================== VISIBILITY PRUNING ======================
 
 const sortByVisibility = (dataTable: DataTable, indices: Uint32Array): void => {
     const opacityCol = dataTable.getColumnByName('opacity');

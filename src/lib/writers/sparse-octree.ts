@@ -250,8 +250,8 @@ function buildSparseOctree(
     // We avoid `comparefn` typed-array sort because V8 routes it through a
     // regular-array path bounded by FixedArray::kMaxLength (~134M with
     // pointer compression) and throws past it. Instead:
-    //   - Native `Float64Array.sort()` (no comparefn) on the solid stream:
-    //     numeric sort, no fallback path, no size limit.
+    //   - Native `Float64Array.sort()` (no comparefn) on the solid stream,
+    //     avoiding V8's FixedArray comparefn path.
     //   - Custom `sortMixedByMorton` for the mixed stream: iterative
     //     quicksort tailored to the (Float64 morton, Uint32×2 mask) layout.
 
@@ -628,9 +628,8 @@ function flattenTreeFromLevels(
             const level = interiorLevels[li];
             const type = level.types[ii];
 
-            // A node is a leaf if it's Solid (at any level, collapsed or original).
-            // (Originally was also "or li === 0"; with the dual-stream split,
-            // level 0 leaves are handled via the li === -1 sentinel above.)
+            // Level-0 leaves are emitted via the `li === -1` sentinel above;
+            // any solid interior-level node here is a collapsed solid leaf.
             const isLeaf = type === BlockType.Solid;
 
             if (isLeaf) {

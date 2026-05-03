@@ -710,10 +710,9 @@ class GpuDilation {
 
     /**
      * Sparse-path submit. Reads from the previously-uploaded `src` (via
-     * `uploadSrc`), runs extract → dilate → compact entirely on the GPU,
-     * and returns Promises for the per-block `typesOut` (packed 2-bit) and
-     * `masksOut` (lo/hi pairs). Caller integrates these into `dst` directly,
-     * skipping the dense-bit hot loop that currently dominates wall time.
+     * `uploadSrc`), runs extract → dilate → compact as GPU passes, and returns
+     * Promises for the per-block `typesOut` (packed 2-bit) and `masksOut`
+     * (lo/hi pairs). Caller integrates these into `dst` directly.
      * @param slotIdx - Round-robin slot index (`0..NUM_SLOTS-1`).
      * @param minBx - Outer chunk origin block X (in `src`'s block coords).
      * @param minBy - Outer chunk origin block Y.

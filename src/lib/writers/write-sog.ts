@@ -97,8 +97,8 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     const height = Math.ceil(numRows / width / 4) * 4;
     const channels = 4;
 
-    // the layout function determines how the data is packed into the output texture.
-    const layout = identity; // rectChunks;
+    // Texture texels follow the provided or generated index order.
+    const layout = identity;
 
     const writeWebp = async (filename: string, data: Uint8Array, w = width, h = height) => {
         const pathname = zipFs ? filename : resolve(dirname(outputFilename), filename);
