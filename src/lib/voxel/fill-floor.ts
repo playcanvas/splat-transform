@@ -52,7 +52,7 @@ const fillFloor = async (
     grid: SparseVoxelGrid,
     gridBounds: Bounds,
     voxelResolution: number,
-    dilation: number,
+    dilation: number = 0,
     gpu: GpuDilation | null = null
 ): Promise<NavSimplifyResult> => {
     if (!Number.isFinite(voxelResolution) || voxelResolution <= 0) {

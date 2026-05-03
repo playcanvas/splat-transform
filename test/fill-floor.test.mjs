@@ -39,7 +39,7 @@ describe('fillFloor', function () {
         const bounds = boundsForGrid(grid);
         grid.setVoxel(2, 3, 1);
 
-        const result = await fillFloor(grid, bounds, 1, 0);
+        const result = await fillFloor(grid, bounds, 1);
 
         assert.strictEqual(result.grid, grid);
         assert.strictEqual(result.grid.getVoxel(2, 0, 1), 1);
