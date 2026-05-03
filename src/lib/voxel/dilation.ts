@@ -28,13 +28,14 @@ const CHUNK_INNER = 512;
  * blocks that overlap the chunk's outer region; returns true if every block
  * is `BLOCK_EMPTY`. Lets `gpuDilate3` skip extract / dispatch / insert for
  * chunks far from the scene's occupied region.
- * @param src
- * @param ox
- * @param oy
- * @param oz
- * @param cx
- * @param cy
- * @param cz
+ * @param src - Source sparse grid.
+ * @param ox - Outer chunk origin X in voxels (may be negative when halo extends beyond grid).
+ * @param oy - Outer chunk origin Y in voxels.
+ * @param oz - Outer chunk origin Z in voxels.
+ * @param cx - Outer chunk size X in voxels.
+ * @param cy - Outer chunk size Y in voxels.
+ * @param cz - Outer chunk size Z in voxels.
+ * @returns `true` if every block overlapping the chunk is empty.
  */
 function chunkIsEmpty(
     src: SparseVoxelGrid,
@@ -69,13 +70,14 @@ function chunkIsEmpty(
  * (so extract would produce all 1s). Dilation of an all-solid input is
  * trivially all-solid, letting the caller skip GPU dispatch and write
  * `BLOCK_SOLID` directly into the destination's inner region.
- * @param src
- * @param ox
- * @param oy
- * @param oz
- * @param cx
- * @param cy
- * @param cz
+ * @param src - Source sparse grid.
+ * @param ox - Outer chunk origin X in voxels.
+ * @param oy - Outer chunk origin Y in voxels.
+ * @param oz - Outer chunk origin Z in voxels.
+ * @param cx - Outer chunk size X in voxels.
+ * @param cy - Outer chunk size Y in voxels.
+ * @param cz - Outer chunk size Z in voxels.
+ * @returns `true` if every block in the chunk is `BLOCK_SOLID` and the chunk lies within `src`.
  */
 function chunkIsSaturated(
     src: SparseVoxelGrid,
@@ -117,13 +119,13 @@ function chunkIsSaturated(
  * via word-level writes (`SOLID_WORD = 0x55555555`) instead of millions of
  * `orBlock` calls. Chunks here are always disjoint and dst blocks empty
  * before this call, so no merge logic is needed.
- * @param dst
- * @param innerOx
- * @param innerOy
- * @param innerOz
- * @param innerCx
- * @param innerCy
- * @param innerCz
+ * @param dst - Destination sparse grid (mutated in place).
+ * @param innerOx - Inner-region origin X in voxels.
+ * @param innerOy - Inner-region origin Y in voxels.
+ * @param innerOz - Inner-region origin Z in voxels.
+ * @param innerCx - Inner-region size X in voxels.
+ * @param innerCy - Inner-region size Y in voxels.
+ * @param innerCz - Inner-region size Z in voxels.
  */
 function insertSaturatedInner(
     dst: SparseVoxelGrid,
@@ -172,15 +174,15 @@ function insertSaturatedInner(
  * the precomputed `lo`/`hi`, then writes directly into `dst.types` and
  * `dst.masks`. Replaces the dense-bit-reading hot loop with O(blocks) work
  * dominated by hash inserts for mixed blocks.
- * @param dst
- * @param typesOut
- * @param masksOut
- * @param cx
- * @param cy
- * @param cz
- * @param innerNx
- * @param innerNy
- * @param innerNz
+ * @param dst - Destination sparse grid (mutated in place).
+ * @param typesOut - GPU-produced packed 2-bit block types for the inner region.
+ * @param masksOut - GPU-produced `[lo, hi]` mask pairs per inner block.
+ * @param cx - Inner-region origin X in voxels.
+ * @param cy - Inner-region origin Y in voxels.
+ * @param cz - Inner-region origin Z in voxels.
+ * @param innerNx - Inner-region size X in voxels.
+ * @param innerNy - Inner-region size Y in voxels.
+ * @param innerNz - Inner-region size Z in voxels.
  */
 function applyChunkToDst(
     dst: SparseVoxelGrid,

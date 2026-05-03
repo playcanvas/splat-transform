@@ -28,6 +28,7 @@ import type { SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
  * lands in a single dense word at bit offset `(blockX*4) & 31`; multiple
  * blocks share the same dense word at non-overlapping bit positions, so the
  * write is `atomicOr`. Caller must clear the dense buffer first.
+ * @returns WGSL source for the extract compute shader.
  */
 const extractWgsl = () => /* wgsl */`
 struct ExtractUniforms {
@@ -131,6 +132,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
  *     Multiple threads write the same word, so atomicOr (caller clears).
  *   - `masksOut`: `[lo, hi]` pairs per inner block, indexed by inner-local
  *     block index. Always written (non-atomic; one thread per slot).
+ * @returns WGSL source for the compact compute shader.
  */
 const compactWgsl = () => /* wgsl */`
 struct CompactUniforms {
@@ -209,6 +211,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
  * so it's ordered with them on the GPU; using `queue.writeBuffer` for inter-
  * pass clears would race because writes are queued separately from encoder
  * commands and execute *all writes first*, then the command buffer.
+ * @returns WGSL source for the clear compute shader.
  */
 const clearWgsl = () => /* wgsl */`
 struct ClearUniforms {
@@ -248,6 +251,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
  *
  * Bound by the chunk's `numXWords` (= ceil(nx / 32)). Out-of-bounds neighbors
  * are read as 0.
+ * @returns WGSL source for the X-axis dilation compute shader.
  */
 const dilateXWgsl = () => /* wgsl */`
 struct DilateXUniforms {
@@ -321,6 +325,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
  * setting `stride` and `axisLen`:
  *  - Y-pass: `stride = numXWords`, `axisLen = ny`.
  *  - Z-pass: `stride = numXWords * ny`, `axisLen = nz`.
+ * @returns WGSL source for the Y/Z-axis dilation compute shader.
  */
 const dilateYZWgsl = () => /* wgsl */`
 struct DilateYZUniforms {
@@ -609,9 +614,9 @@ class GpuDilation {
      * Uses the command encoder so it's correctly ordered with subsequent
      * dilation passes (unlike `queue.writeBuffer`, which is queued separately
      * and would race against the dispatches).
-     * @param slot
-     * @param dst
-     * @param numWords
+     * @param slot - Per-chunk slot whose `clearCompute` pipeline is dispatched.
+     * @param dst - Destination buffer to zero.
+     * @param numWords - Number of leading u32 words to clear.
      */
     private dispatchClear(slot: DilationSlot, dst: StorageBuffer, numWords: number): void {
         const totalWg = Math.ceil(numWords / 256);
@@ -632,7 +637,7 @@ class GpuDilation {
      * shader. Reuses the existing buffers if they're large enough; otherwise
      * destroys and reallocates. Designed to be called once per
      * `gpuDilate3` call (the same `src` is read across all chunks).
-     * @param src
+     * @param src - Source sparse grid to upload.
      */
     uploadSrc(src: SparseVoxelGrid): void {
         const types = src.types;

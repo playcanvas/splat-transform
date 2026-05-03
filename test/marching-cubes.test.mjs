@@ -4,9 +4,22 @@ import assert from 'node:assert';
 import { Vec3 } from 'playcanvas';
 
 import { BlockMaskBuffer } from '../src/lib/voxel/block-mask-buffer.js';
-import { xyzToMorton } from '../src/lib/voxel/morton.js';
+import { SparseVoxelGrid } from '../src/lib/voxel/sparse-voxel-grid.js';
 import { marchingCubes } from '../src/lib/mesh/marching-cubes.js';
 import { coplanarMerge } from '../src/lib/mesh/coplanar-merge.js';
+
+// Linear block index: bx + by*nbx + bz*nbx*nby. The buffer stores blocks
+// keyed on this linear index now (not morton).
+function linearBlockIdx(bx, by, bz, nbx, nby) {
+    return bx + by * nbx + bz * nbx * nby;
+}
+
+// Convert a BlockMaskBuffer to a SparseVoxelGrid for the new marchingCubes API.
+// nx/ny/nz are the voxel grid dimensions (must match the bounds passed to
+// marchingCubes).
+function toGrid(buffer, nx, ny, nz) {
+    return SparseVoxelGrid.fromBuffer(buffer, nx, ny, nz);
+}
 
 const SOLID_LO = 0xFFFFFFFF >>> 0;
 const SOLID_HI = 0xFFFFFFFF >>> 0;
@@ -20,7 +33,7 @@ describe('marchingCubes', () => {
     it('should return empty mesh for empty buffer', () => {
         const buffer = new BlockMaskBuffer();
         const bounds = makeGridBounds(0, 0, 0, 4, 4, 4);
-        const mesh = marchingCubes(buffer, bounds, 1.0);
+        const mesh = marchingCubes(toGrid(buffer, 4, 4, 4), bounds, 1.0);
 
         assert.strictEqual(mesh.positions.length, 0);
         assert.strictEqual(mesh.indices.length, 0);
@@ -28,10 +41,10 @@ describe('marchingCubes', () => {
 
     it('should generate triangles for a single solid block', () => {
         const buffer = new BlockMaskBuffer();
-        buffer.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
+        buffer.addBlock(linearBlockIdx(0, 0, 0, 1, 1), SOLID_LO, SOLID_HI);
 
         const bounds = makeGridBounds(0, 0, 0, 4, 4, 4);
-        const mesh = marchingCubes(buffer, bounds, 1.0);
+        const mesh = marchingCubes(toGrid(buffer, 4, 4, 4), bounds, 1.0);
 
         assert.ok(mesh.positions.length > 0, 'should have vertices');
         assert.ok(mesh.indices.length > 0, 'should have indices');
@@ -41,10 +54,10 @@ describe('marchingCubes', () => {
 
     it('should generate a closed surface for a solid cube', () => {
         const buffer = new BlockMaskBuffer();
-        buffer.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
+        buffer.addBlock(linearBlockIdx(0, 0, 0, 1, 1), SOLID_LO, SOLID_HI);
 
         const bounds = makeGridBounds(0, 0, 0, 4, 4, 4);
-        const mesh = marchingCubes(buffer, bounds, 1.0);
+        const mesh = marchingCubes(toGrid(buffer, 4, 4, 4), bounds, 1.0);
 
         const numTriangles = mesh.indices.length / 3;
         // A 4x4x4 solid cube produces boundary triangles on all 6 faces.
@@ -56,11 +69,12 @@ describe('marchingCubes', () => {
 
     it('should place vertices within grid bounds', () => {
         const buffer = new BlockMaskBuffer();
-        buffer.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
+        buffer.addBlock(linearBlockIdx(0, 0, 0, 1, 1), SOLID_LO, SOLID_HI);
 
         const res = 0.5;
         const bounds = makeGridBounds(0, 0, 0, 2, 2, 2);
-        const mesh = marchingCubes(buffer, bounds, res);
+        // bounds 2x2x2 / res 0.5 = 4x4x4 voxels = 1x1x1 blocks
+        const mesh = marchingCubes(toGrid(buffer, 4, 4, 4), bounds, res);
 
         for (let i = 0; i < mesh.positions.length; i += 3) {
             const x = mesh.positions[i];
@@ -73,14 +87,15 @@ describe('marchingCubes', () => {
     });
 
     it('should produce more triangles for multiple blocks than one', () => {
+        // bounds 8x4x4 / res 1.0 = 8x4x4 voxels = 2x1x1 blocks
         const buffer1 = new BlockMaskBuffer();
-        buffer1.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
-        const mesh1 = marchingCubes(buffer1, makeGridBounds(0, 0, 0, 8, 4, 4), 1.0);
+        buffer1.addBlock(linearBlockIdx(0, 0, 0, 2, 1), SOLID_LO, SOLID_HI);
+        const mesh1 = marchingCubes(toGrid(buffer1, 8, 4, 4), makeGridBounds(0, 0, 0, 8, 4, 4), 1.0);
 
         const buffer2 = new BlockMaskBuffer();
-        buffer2.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
-        buffer2.addBlock(xyzToMorton(1, 0, 0), SOLID_LO, SOLID_HI);
-        const mesh2 = marchingCubes(buffer2, makeGridBounds(0, 0, 0, 8, 4, 4), 1.0);
+        buffer2.addBlock(linearBlockIdx(0, 0, 0, 2, 1), SOLID_LO, SOLID_HI);
+        buffer2.addBlock(linearBlockIdx(1, 0, 0, 2, 1), SOLID_LO, SOLID_HI);
+        const mesh2 = marchingCubes(toGrid(buffer2, 8, 4, 4), makeGridBounds(0, 0, 0, 8, 4, 4), 1.0);
 
         // Two adjacent blocks form an 8x4x4 solid. The shared face has no
         // boundary, so the total triangle count is less than 2x a single block.
@@ -93,10 +108,10 @@ describe('marchingCubes', () => {
     it('should handle a single-voxel mixed block', () => {
         const buffer = new BlockMaskBuffer();
         // Set only voxel (0,0,0): bitIdx = 0 + 0*4 + 0*16 = 0 → lo bit 0
-        buffer.addBlock(xyzToMorton(0, 0, 0), 1, 0);
+        buffer.addBlock(linearBlockIdx(0, 0, 0, 1, 1), 1, 0);
 
         const bounds = makeGridBounds(0, 0, 0, 4, 4, 4);
-        const mesh = marchingCubes(buffer, bounds, 1.0);
+        const mesh = marchingCubes(toGrid(buffer, 4, 4, 4), bounds, 1.0);
 
         assert.ok(mesh.positions.length > 0, 'should have vertices for single voxel');
         assert.ok(mesh.indices.length > 0, 'should have triangles for single voxel');
@@ -109,11 +124,12 @@ describe('marchingCubes', () => {
 
     it('should handle non-unit voxel resolution', () => {
         const buffer = new BlockMaskBuffer();
-        buffer.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
+        buffer.addBlock(linearBlockIdx(0, 0, 0, 1, 1), SOLID_LO, SOLID_HI);
 
         const res = 0.25;
         const bounds = makeGridBounds(0, 0, 0, 1, 1, 1);
-        const mesh = marchingCubes(buffer, bounds, res);
+        // bounds 1x1x1 / res 0.25 = 4x4x4 voxels = 1x1x1 blocks
+        const mesh = marchingCubes(toGrid(buffer, 4, 4, 4), bounds, res);
 
         assert.ok(mesh.positions.length > 0);
 
@@ -197,10 +213,10 @@ describe('coplanarMerge', () => {
 
     it('should fuse the flat faces of a fully-occupied 4x4x4 slab', () => {
         const buffer = new BlockMaskBuffer();
-        buffer.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
+        buffer.addBlock(linearBlockIdx(0, 0, 0, 1, 1), SOLID_LO, SOLID_HI);
 
         const bounds = makeGridBounds(0, 0, 0, 4, 4, 4);
-        const raw = marchingCubes(buffer, bounds, 1.0);
+        const raw = marchingCubes(toGrid(buffer, 4, 4, 4), bounds, 1.0);
         const merged = coplanarMerge(raw, 1.0);
 
         const rawStats = meshStats(raw);
@@ -242,10 +258,10 @@ describe('coplanarMerge', () => {
         // axis-aligned face triangles and corner / edge bevel triangles.
         // The merge pass must leave the bevels untouched.
         const buffer = new BlockMaskBuffer();
-        buffer.addBlock(xyzToMorton(0, 0, 0), 1, 0);
+        buffer.addBlock(linearBlockIdx(0, 0, 0, 1, 1), 1, 0);
 
         const bounds = makeGridBounds(0, 0, 0, 4, 4, 4);
-        const raw = marchingCubes(buffer, bounds, 1.0);
+        const raw = marchingCubes(toGrid(buffer, 4, 4, 4), bounds, 1.0);
         const merged = coplanarMerge(raw, 1.0);
 
         const rawBevels = countBevelTris(raw);
@@ -267,12 +283,13 @@ describe('coplanarMerge', () => {
         // bitIdx = lx + ly*4 + lz*16; column at (lx=0, lz=0), ly=0..3
         // gives bits 0, 4, 8, 12 -> lo = 0x0000_1111.
         const colLo = ((1 << 0) | (1 << 4) | (1 << 8) | (1 << 12)) >>> 0;
+        // bounds 4x8x4 / res 1.0 = 4x8x4 voxels = 1x2x1 blocks
         const buffer = new BlockMaskBuffer();
-        buffer.addBlock(xyzToMorton(0, 0, 0), colLo, 0);
-        buffer.addBlock(xyzToMorton(0, 1, 0), colLo, 0);
+        buffer.addBlock(linearBlockIdx(0, 0, 0, 1, 2), colLo, 0);
+        buffer.addBlock(linearBlockIdx(0, 1, 0, 1, 2), colLo, 0);
 
         const bounds = makeGridBounds(0, 0, 0, 4, 8, 4);
-        const raw = marchingCubes(buffer, bounds, 1.0);
+        const raw = marchingCubes(toGrid(buffer, 4, 8, 4), bounds, 1.0);
         const merged = coplanarMerge(raw, 1.0);
 
         const rawStats = meshStats(raw);
@@ -321,10 +338,10 @@ describe('coplanarMerge', () => {
             (1 << 2) | (1 << 6) | (1 << 10) | (1 << 14)
         ) >>> 0;
         const buffer = new BlockMaskBuffer();
-        buffer.addBlock(xyzToMorton(0, 0, 0), colMask, 0);
+        buffer.addBlock(linearBlockIdx(0, 0, 0, 1, 1), colMask, 0);
 
         const bounds = makeGridBounds(0, 0, 0, 4, 4, 4);
-        const raw = marchingCubes(buffer, bounds, 1.0);
+        const raw = marchingCubes(toGrid(buffer, 4, 4, 4), bounds, 1.0);
         const merged = coplanarMerge(raw, 1.0);
 
         const rawStats = meshStats(raw);
@@ -375,10 +392,10 @@ describe('coplanarMerge', () => {
         //   (0,0,1) → 16 → lo bit 16
         const lo = ((1 << 0) | (1 << 4) | (1 << 5) | (1 << 16)) >>> 0;
         const buffer = new BlockMaskBuffer();
-        buffer.addBlock(xyzToMorton(0, 0, 0), lo, 0);
+        buffer.addBlock(linearBlockIdx(0, 0, 0, 1, 1), lo, 0);
 
         const bounds = makeGridBounds(0, 0, 0, 4, 4, 4);
-        const raw = marchingCubes(buffer, bounds, 1.0);
+        const raw = marchingCubes(toGrid(buffer, 4, 4, 4), bounds, 1.0);
         const merged = coplanarMerge(raw, 1.0);
 
         const rawStats = meshStats(raw);

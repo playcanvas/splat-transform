@@ -7,7 +7,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { BlockMaskBuffer } from '../src/lib/voxel/block-mask-buffer.js';
-import { xyzToMorton, mortonToXYZ } from '../src/lib/voxel/morton.js';
 import {
     BLOCK_EMPTY,
     BLOCK_MIXED,
@@ -24,24 +23,45 @@ const SOLID_HI = 0xFFFFFFFF >>> 0;
 
 // -- test helpers --
 
-function bufferFromSolidBlocks(coords) {
-    const buffer = new BlockMaskBuffer();
-    for (const [bx, by, bz] of coords) {
-        buffer.addBlock(xyzToMorton(bx, by, bz), SOLID_LO, SOLID_HI);
-    }
-    return buffer;
-}
-
-function bufferFromMixedBlocks(entries) {
-    const buffer = new BlockMaskBuffer();
-    for (const { bx, by, bz, lo, hi } of entries) {
-        buffer.addBlock(xyzToMorton(bx, by, bz), lo, hi);
-    }
-    return buffer;
-}
-
 function blockIdx(bx, by, bz, nbx, nby) {
     return bx + by * nbx + bz * nbx * nby;
+}
+
+// Pick smallest grid block-dimensions that contain every coord in `coords`.
+function dimsForCoords(coords) {
+    let nbx = 1, nby = 1, nbz = 1;
+    for (const c of coords) {
+        if (c[0] + 1 > nbx) nbx = c[0] + 1;
+        if (c[1] + 1 > nby) nby = c[1] + 1;
+        if (c[2] + 1 > nbz) nbz = c[2] + 1;
+    }
+    return { nbx, nby, nbz };
+}
+
+function bufferFromSolidBlocks(coords, nbx, nby) {
+    if (nbx === undefined || nby === undefined) {
+        const d = dimsForCoords(coords);
+        nbx = nbx ?? d.nbx;
+        nby = nby ?? d.nby;
+    }
+    const buffer = new BlockMaskBuffer();
+    for (const [bx, by, bz] of coords) {
+        buffer.addBlock(blockIdx(bx, by, bz, nbx, nby), SOLID_LO, SOLID_HI);
+    }
+    return buffer;
+}
+
+function bufferFromMixedBlocks(entries, nbx, nby) {
+    if (nbx === undefined || nby === undefined) {
+        const d = dimsForCoords(entries.map(e => [e.bx, e.by, e.bz]));
+        nbx = nbx ?? d.nbx;
+        nby = nby ?? d.nby;
+    }
+    const buffer = new BlockMaskBuffer();
+    for (const { bx, by, bz, lo, hi } of entries) {
+        buffer.addBlock(blockIdx(bx, by, bz, nbx, nby), lo, hi);
+    }
+    return buffer;
 }
 
 /**
@@ -151,16 +171,22 @@ function verifyInvertedGrid(buffer, grid, nbx, nby, nbz) {
     const bStride = nbx * nby;
     const known = new Set();
     const NAMES = ['EMPTY', 'SOLID', 'MIXED'];
-    for (const m of buffer.getSolidBlocks()) {
-        const [bx, by, bz] = mortonToXYZ(m);
-        const bi = bx + by * nbx + bz * bStride;
+    // Decode a linear blockIdx back to (bx, by, bz) for diagnostic messages.
+    const decode = (bi) => {
+        const bx = bi % nbx;
+        const by = ((bi / nbx) | 0) % nby;
+        const bz = (bi / bStride) | 0;
+        return [bx, by, bz];
+    };
+    for (const bi of buffer.getSolidBlocks()) {
+        const [bx, by, bz] = decode(bi);
         known.add(bi);
         if (grid.getBlockType(bi) !== BLOCK_EMPTY) errors.push(`solid(${bx},${by},${bz}) expected EMPTY got ${NAMES[grid.getBlockType(bi)]}`);
     }
     const mixed = buffer.getMixedBlocks();
-    for (let i = 0; i < mixed.morton.length; i++) {
-        const [bx, by, bz] = mortonToXYZ(mixed.morton[i]);
-        const bi = bx + by * nbx + bz * bStride;
+    for (let i = 0; i < mixed.blockIdx.length; i++) {
+        const bi = mixed.blockIdx[i];
+        const [bx, by, bz] = decode(bi);
         known.add(bi);
         if (grid.getBlockType(bi) !== BLOCK_MIXED) {
             errors.push(`mixed(${bx},${by},${bz}) expected MIXED got ${NAMES[grid.getBlockType(bi)]}`);
@@ -182,10 +208,10 @@ function verifyInvertedGrid(buffer, grid, nbx, nby, nbz) {
 
 describe('buildInvertedGrid', () => {
     it('should map solid buffer blocks to BLOCK_EMPTY', () => {
-        const buffer = bufferFromSolidBlocks([[0, 0, 0], [1, 0, 0], [0, 1, 0]]);
         const nx = 12, ny = 12, nz = 4;
-        const grid = buildInvertedGrid(buffer, nx, ny, nz);
         const nbx = nx >> 2, nby = ny >> 2;
+        const buffer = bufferFromSolidBlocks([[0, 0, 0], [1, 0, 0], [0, 1, 0]], nbx, nby);
+        const grid = buildInvertedGrid(buffer, nx, ny, nz);
 
         assert.strictEqual(grid.getBlockType(blockIdx(0, 0, 0, nbx, nby)), BLOCK_EMPTY);
         assert.strictEqual(grid.getBlockType(blockIdx(1, 0, 0, nbx, nby)), BLOCK_EMPTY);
@@ -198,10 +224,10 @@ describe('buildInvertedGrid', () => {
     it('should map mixed buffer blocks to BLOCK_MIXED with inverted masks', () => {
         const lo = 0x000000FF >>> 0;
         const hi = 0x00000000 >>> 0;
-        const buffer = bufferFromMixedBlocks([{ bx: 1, by: 1, bz: 0, lo, hi }]);
         const nx = 12, ny = 12, nz = 4;
-        const grid = buildInvertedGrid(buffer, nx, ny, nz);
         const nbx = nx >> 2, nby = ny >> 2;
+        const buffer = bufferFromMixedBlocks([{ bx: 1, by: 1, bz: 0, lo, hi }], nbx, nby);
+        const grid = buildInvertedGrid(buffer, nx, ny, nz);
         const bi = blockIdx(1, 1, 0, nbx, nby);
 
         assert.strictEqual(grid.getBlockType(bi), BLOCK_MIXED);
@@ -211,13 +237,13 @@ describe('buildInvertedGrid', () => {
     });
 
     it('should pass verifyInvertedGrid for a mixed buffer', () => {
-        const buffer = new BlockMaskBuffer();
-        buffer.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
-        buffer.addBlock(xyzToMorton(1, 0, 0), 0x0F0F0F0F >>> 0, 0xF0F0F0F0 >>> 0);
-        buffer.addBlock(xyzToMorton(2, 1, 0), SOLID_LO, SOLID_HI);
         const nx = 16, ny = 12, nz = 4;
-        const grid = buildInvertedGrid(buffer, nx, ny, nz);
         const nbx = nx >> 2, nby = ny >> 2, nbz = nz >> 2;
+        const buffer = new BlockMaskBuffer();
+        buffer.addBlock(blockIdx(0, 0, 0, nbx, nby), SOLID_LO, SOLID_HI);
+        buffer.addBlock(blockIdx(1, 0, 0, nbx, nby), 0x0F0F0F0F >>> 0, 0xF0F0F0F0 >>> 0);
+        buffer.addBlock(blockIdx(2, 1, 0, nbx, nby), SOLID_LO, SOLID_HI);
+        const grid = buildInvertedGrid(buffer, nx, ny, nz);
 
         const errors = verifyInvertedGrid(buffer, grid, nbx, nby, nbz);
         assert.deepStrictEqual(errors, []);
@@ -263,8 +289,9 @@ describe('verifyCcSetConnectivity', () => {
 describe('findClusterVoxelFlood', () => {
 
     it('should find a single solid block', () => {
-        const buffer = bufferFromSolidBlocks([[0, 0, 0]]);
         const nx = 4, ny = 4, nz = 4;
+        const nbx = nx >> 2, nby = ny >> 2;
+        const buffer = bufferFromSolidBlocks([[0, 0, 0]], nbx, nby);
         const result = findClusterVoxelFlood(buffer, nx, ny, nz, 1, 1, 1);
         assert.ok(result);
         assert.strictEqual(result.ccSet.size, 1);
@@ -282,9 +309,9 @@ describe('findClusterVoxelFlood', () => {
                 }
             }
         }
-        const buffer = bufferFromSolidBlocks([...coordsA, ...coordsB]);
         const nx = 24, ny = 8, nz = 8;
         const nbx = nx >> 2, nby = ny >> 2;
+        const buffer = bufferFromSolidBlocks([...coordsA, ...coordsB], nbx, nby);
 
         const result = findClusterVoxelFlood(buffer, nx, ny, nz, 1, 1, 1);
         assert.ok(result);
@@ -316,9 +343,9 @@ describe('findClusterVoxelFlood', () => {
                 }
             }
         }
-        const buffer = bufferFromMixedBlocks(entries);
         const nx = 24, ny = 8, nz = 8;
         const nbx = nx >> 2, nby = ny >> 2;
+        const buffer = bufferFromMixedBlocks(entries, nbx, nby);
 
         const result = findClusterVoxelFlood(buffer, nx, ny, nz, 1, 1, 1);
         assert.ok(result);
@@ -341,9 +368,9 @@ describe('findClusterVoxelFlood', () => {
         const coords = [];
         for (let bx = 0; bx <= 3; bx++) coords.push([bx, 0, 0]);
         for (let by = 1; by <= 3; by++) coords.push([0, by, 0]);
-        const buffer = bufferFromSolidBlocks(coords);
         const nx = 16, ny = 16, nz = 4;
         const nbx = nx >> 2, nby = ny >> 2;
+        const buffer = bufferFromSolidBlocks(coords, nbx, nby);
 
         const result = findClusterVoxelFlood(buffer, nx, ny, nz, 1, 1, 1);
         assert.ok(result);
@@ -367,9 +394,9 @@ describe('findClusterVoxelFlood', () => {
             }
         }
         const bridge = [[2, 0, 0]];
-        const buffer = bufferFromSolidBlocks([...coordsA, ...bridge, ...coordsB]);
         const nx = 20, ny = 8, nz = 8;
         const nbx = nx >> 2, nby = ny >> 2;
+        const buffer = bufferFromSolidBlocks([...coordsA, ...bridge, ...coordsB], nbx, nby);
 
         const result = findClusterVoxelFlood(buffer, nx, ny, nz, 1, 1, 1);
         assert.ok(result);
@@ -388,14 +415,14 @@ describe('findClusterVoxelFlood', () => {
         const bridgeLo = 0x0000000F >>> 0;
         const bridgeHi = 0x00000000 >>> 0;
 
-        const buffer = new BlockMaskBuffer();
-        for (const [bx, by, bz] of [...coordsA, ...coordsB]) {
-            buffer.addBlock(xyzToMorton(bx, by, bz), SOLID_LO, SOLID_HI);
-        }
-        buffer.addBlock(xyzToMorton(2, 0, 0), bridgeLo, bridgeHi);
-
         const nx = 20, ny = 4, nz = 4;
         const nbx = nx >> 2, nby = ny >> 2;
+
+        const buffer = new BlockMaskBuffer();
+        for (const [bx, by, bz] of [...coordsA, ...coordsB]) {
+            buffer.addBlock(blockIdx(bx, by, bz, nbx, nby), SOLID_LO, SOLID_HI);
+        }
+        buffer.addBlock(blockIdx(2, 0, 0, nbx, nby), bridgeLo, bridgeHi);
 
         const result = findClusterVoxelFlood(buffer, nx, ny, nz, 1, 1, 1);
         assert.ok(result);
@@ -412,15 +439,15 @@ describe('findClusterVoxelFlood', () => {
         const interiorLo = (0x22222222 | 0x44444444) >>> 0;
         const interiorHi = (0x22222222 | 0x44444444) >>> 0;
 
-        const buffer = new BlockMaskBuffer();
-        buffer.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
-        buffer.addBlock(xyzToMorton(1, 0, 0), SOLID_LO, SOLID_HI);
-        buffer.addBlock(xyzToMorton(2, 0, 0), interiorLo, interiorHi);
-        buffer.addBlock(xyzToMorton(3, 0, 0), SOLID_LO, SOLID_HI);
-        buffer.addBlock(xyzToMorton(4, 0, 0), SOLID_LO, SOLID_HI);
-
         const nx = 20, ny = 4, nz = 4;
         const nbx = nx >> 2, nby = ny >> 2;
+
+        const buffer = new BlockMaskBuffer();
+        buffer.addBlock(blockIdx(0, 0, 0, nbx, nby), SOLID_LO, SOLID_HI);
+        buffer.addBlock(blockIdx(1, 0, 0, nbx, nby), SOLID_LO, SOLID_HI);
+        buffer.addBlock(blockIdx(2, 0, 0, nbx, nby), interiorLo, interiorHi);
+        buffer.addBlock(blockIdx(3, 0, 0, nbx, nby), SOLID_LO, SOLID_HI);
+        buffer.addBlock(blockIdx(4, 0, 0, nbx, nby), SOLID_LO, SOLID_HI);
 
         const result = findClusterVoxelFlood(buffer, nx, ny, nz, 1, 1, 1);
         assert.ok(result);
@@ -434,9 +461,9 @@ describe('findClusterVoxelFlood', () => {
     });
 
     it('seed in unoccupied voxel should find nearest occupied', () => {
-        const buffer = bufferFromSolidBlocks([[2, 2, 2]]);
         const nx = 16, ny = 16, nz = 16;
         const nbx = nx >> 2, nby = ny >> 2;
+        const buffer = bufferFromSolidBlocks([[2, 2, 2]], nbx, nby);
 
         const result = findClusterVoxelFlood(buffer, nx, ny, nz, 0, 0, 0);
         assert.ok(result);
@@ -463,7 +490,7 @@ describe('findClusterVoxelFlood grid dimension sweep', () => {
                 it(`two clusters in ${nx}x${ny}x${nz} grid (${nbx}x${nby}x${nbz} blocks)`, () => {
                     const coordsA = [[0, 0, 0], [1, 0, 0]];
                     const coordsB = [[nbx - 2, nby - 1, nbz - 1], [nbx - 1, nby - 1, nbz - 1]];
-                    const buffer = bufferFromSolidBlocks([...coordsA, ...coordsB]);
+                    const buffer = bufferFromSolidBlocks([...coordsA, ...coordsB], nbx, nby);
 
                     const result = findClusterVoxelFlood(buffer, nx, ny, nz, 1, 1, 1);
                     assert.ok(result, 'should find a cluster');
@@ -546,7 +573,7 @@ describe('findClusterVoxelFlood randomized layouts', () => {
             const { coordsA, coordsB } = generateDisconnectedClusters(rng, nbx, nby, nbz, 10, 3);
             if (coordsA.length === 0 || coordsB.length === 0) return;
 
-            const buffer = bufferFromSolidBlocks([...coordsA, ...coordsB]);
+            const buffer = bufferFromSolidBlocks([...coordsA, ...coordsB], nbx, nby);
             const seedCoord = coordsA[0];
             const seedVx = seedCoord[0] * 4 + 1;
             const seedVy = seedCoord[1] * 4 + 1;
@@ -599,7 +626,7 @@ describe('findClusterVoxelFlood randomized mixed blocks', () => {
                 for (let bx = 0; bx < 2; bx++) {
                     const lo = (rng() > 0.5 ? SOLID_LO : (0xFFFF0000 | Math.floor(rng() * 0xFFFF)) >>> 0);
                     const hi = (rng() > 0.5 ? SOLID_HI : (0x0000FFFF | Math.floor(rng() * 0xFFFF0000)) >>> 0);
-                    buffer.addBlock(xyzToMorton(bx, by, 0), lo, hi);
+                    buffer.addBlock(blockIdx(bx, by, 0, nbx, nby), lo, hi);
                     clusterABlocks.push([bx, by, 0]);
                 }
             }
@@ -610,7 +637,7 @@ describe('findClusterVoxelFlood randomized mixed blocks', () => {
             if (farX > 3 && farY > 3) {
                 for (let by = 0; by < 2; by++) {
                     for (let bx = 0; bx < 2; bx++) {
-                        buffer.addBlock(xyzToMorton(farX + bx, farY + by, farZ), SOLID_LO, SOLID_HI);
+                        buffer.addBlock(blockIdx(farX + bx, farY + by, farZ, nbx, nby), SOLID_LO, SOLID_HI);
                     }
                 }
             }
@@ -642,12 +669,13 @@ describe('findClusterVoxelFlood randomized mixed blocks', () => {
 
 describe('buildInvertedGrid + BFS consistency', () => {
     it('inverted grid voxels match original buffer occupancy', () => {
-        const buffer = new BlockMaskBuffer();
-        buffer.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
-        buffer.addBlock(xyzToMorton(1, 0, 0), 0xAAAAAAAA >>> 0, 0x55555555 >>> 0);
-        buffer.addBlock(xyzToMorton(0, 1, 0), 0x0F0F0F0F >>> 0, 0xF0F0F0F0 >>> 0);
-
         const nx = 12, ny = 8, nz = 4;
+        const nbx = nx >> 2, nby = ny >> 2;
+        const buffer = new BlockMaskBuffer();
+        buffer.addBlock(blockIdx(0, 0, 0, nbx, nby), SOLID_LO, SOLID_HI);
+        buffer.addBlock(blockIdx(1, 0, 0, nbx, nby), 0xAAAAAAAA >>> 0, 0x55555555 >>> 0);
+        buffer.addBlock(blockIdx(0, 1, 0, nbx, nby), 0x0F0F0F0F >>> 0, 0xF0F0F0F0 >>> 0);
+
         const grid = buildInvertedGrid(buffer, nx, ny, nz);
         const original = SparseVoxelGrid.fromBuffer(buffer, nx, ny, nz);
 
@@ -664,8 +692,9 @@ describe('buildInvertedGrid + BFS consistency', () => {
     });
 
     it('BFS visits exactly the connected occupied voxels', () => {
-        const buffer = bufferFromSolidBlocks([[0, 0, 0], [3, 0, 0]]);
         const nx = 16, ny = 4, nz = 4;
+        const nbx = nx >> 2, nby = ny >> 2;
+        const buffer = bufferFromSolidBlocks([[0, 0, 0], [3, 0, 0]], nbx, nby);
 
         const result = findClusterVoxelFlood(buffer, nx, ny, nz, 1, 1, 1);
         assert.ok(result);
@@ -680,8 +709,9 @@ describe('buildInvertedGrid + BFS consistency', () => {
 
 describe('verifyVisitedVoxelConnectivity', () => {
     it('single solid block: all 64 voxels reachable', () => {
-        const buffer = bufferFromSolidBlocks([[0, 0, 0]]);
         const nx = 4, ny = 4, nz = 4;
+        const nbx = nx >> 2, nby = ny >> 2;
+        const buffer = bufferFromSolidBlocks([[0, 0, 0]], nbx, nby);
         const result = findClusterVoxelFlood(buffer, nx, ny, nz, 1, 1, 1);
         assert.ok(result);
         const check = verifyVisitedVoxelConnectivity(result.visited, result.resolvedSeed.ix, result.resolvedSeed.iy, result.resolvedSeed.iz);
@@ -690,8 +720,9 @@ describe('verifyVisitedVoxelConnectivity', () => {
     });
 
     it('two separated solid blocks: visited voxels are connected', () => {
-        const buffer = bufferFromSolidBlocks([[0, 0, 0], [3, 0, 0]]);
         const nx = 16, ny = 4, nz = 4;
+        const nbx = nx >> 2, nby = ny >> 2;
+        const buffer = bufferFromSolidBlocks([[0, 0, 0], [3, 0, 0]], nbx, nby);
         const result = findClusterVoxelFlood(buffer, nx, ny, nz, 1, 1, 1);
         assert.ok(result);
         const check = verifyVisitedVoxelConnectivity(result.visited, result.resolvedSeed.ix, result.resolvedSeed.iy, result.resolvedSeed.iz);
@@ -700,8 +731,9 @@ describe('verifyVisitedVoxelConnectivity', () => {
     });
 
     it('two adjacent solid blocks: all 128 voxels connected', () => {
-        const buffer = bufferFromSolidBlocks([[0, 0, 0], [1, 0, 0]]);
         const nx = 8, ny = 4, nz = 4;
+        const nbx = nx >> 2, nby = ny >> 2;
+        const buffer = bufferFromSolidBlocks([[0, 0, 0], [1, 0, 0]], nbx, nby);
         const result = findClusterVoxelFlood(buffer, nx, ny, nz, 1, 1, 1);
         assert.ok(result);
         const check = verifyVisitedVoxelConnectivity(result.visited, result.resolvedSeed.ix, result.resolvedSeed.iy, result.resolvedSeed.iz);
@@ -710,12 +742,13 @@ describe('verifyVisitedVoxelConnectivity', () => {
     });
 
     it('mixed block with disconnected internal faces: BFS visits only connected voxels', () => {
-        const buffer = new BlockMaskBuffer();
-        buffer.addBlock(xyzToMorton(0, 0, 0), SOLID_LO, SOLID_HI);
-        buffer.addBlock(xyzToMorton(1, 0, 0), 0x11111111 >>> 0, 0x11111111 >>> 0);
-        buffer.addBlock(xyzToMorton(2, 0, 0), SOLID_LO, SOLID_HI);
-
         const nx = 12, ny = 4, nz = 4;
+        const nbx = nx >> 2, nby = ny >> 2;
+        const buffer = new BlockMaskBuffer();
+        buffer.addBlock(blockIdx(0, 0, 0, nbx, nby), SOLID_LO, SOLID_HI);
+        buffer.addBlock(blockIdx(1, 0, 0, nbx, nby), 0x11111111 >>> 0, 0x11111111 >>> 0);
+        buffer.addBlock(blockIdx(2, 0, 0, nbx, nby), SOLID_LO, SOLID_HI);
+
         const result = findClusterVoxelFlood(buffer, nx, ny, nz, 1, 1, 1);
         assert.ok(result);
 
@@ -723,7 +756,6 @@ describe('verifyVisitedVoxelConnectivity', () => {
         assert.strictEqual(check.totalReachable, check.totalVisited,
             `all visited voxels should be reachable, but ${check.totalVisited - check.totalReachable} are not`);
 
-        const nbx = nx >> 2, nby = ny >> 2;
         assert.ok(!result.ccSet.has(blockIdx(2, 0, 0, nbx, nby)),
             'block (2,0,0) should not be reachable through lx=0-only bridge');
     });
@@ -739,7 +771,7 @@ describe('verifyVisitedVoxelConnectivity', () => {
                 const buffer = bufferFromSolidBlocks([
                     [0, 0, 0], [1, 0, 0],
                     [nbx - 1, nby - 1, 0]
-                ]);
+                ], nbx, nby);
                 const result = findClusterVoxelFlood(buffer, nx, ny, nz, 1, 1, 1);
                 assert.ok(result);
 
