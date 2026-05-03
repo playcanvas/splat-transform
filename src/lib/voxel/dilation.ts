@@ -23,6 +23,10 @@ import { logger } from '../utils';
 /** Inner chunk size in voxels per axis (must be a multiple of 4). */
 const CHUNK_INNER = 512;
 
+const blockAlignedExtent = (halfExtent: number): number => {
+    return halfExtent === 0 ? 0 : Math.ceil(halfExtent / 4) * 4;
+};
+
 /**
  * Fast empty-chunk check. Scans only `types` (no mask reads) for the source
  * blocks that overlap the chunk's outer region; returns true if every block
@@ -230,22 +234,18 @@ function applyChunkToDst(
 }
 
 /**
- * GPU separable 3D dilation. Chunks the grid into ~1024³ inner regions plus
+ * GPU separable 3D dilation. Chunks the grid into block-aligned inner regions plus
  * a halo on each side, runs three GPU passes per chunk, and OR's the
  * dilated inner region into a fresh destination `SparseVoxelGrid`.
  *
- * Both `halfExtentXZ` and `halfExtentY` must be 0 or a multiple of 4 — the
- * sparse-chunk math requires the halo to be block-aligned. Callers that
- * derive the half-extent from a real-world radius should round up to the
- * nearest multiple of 4 voxels (the runtime cost is negligible vs. the
- * extra dilation distance).
+ * The exact requested half-extents are passed to the dilation shaders. The
+ * sparse extraction halo is rounded up to the next 4-voxel block boundary so
+ * chunk extract/compact math remains block-aligned without over-dilating.
  *
  * @param gpu - Reusable GPU dilation context (compiled shader + buffers).
  * @param src - Input sparse grid (read-only across the call).
  * @param halfExtentXZ - Dilation half-extent in voxels along X and Z.
- * Must be 0 or a multiple of 4.
  * @param halfExtentY - Dilation half-extent in voxels along Y.
- * Must be 0 or a multiple of 4.
  * @returns Newly allocated dilated sparse grid.
  */
 async function gpuDilate3(
@@ -256,21 +256,19 @@ async function gpuDilate3(
 ): Promise<SparseVoxelGrid> {
     const dst = new SparseVoxelGrid(src.nx, src.ny, src.nz);
 
-    if (halfExtentXZ % 4 !== 0 && halfExtentXZ !== 0) {
-        // Halo must be block-aligned for the sparse path's chunk math.
-        // Current callers (fill-floor 32, carve XZ 4) satisfy this; assert.
-        throw new Error(`gpuDilate3: halfExtentXZ=${halfExtentXZ} must be a multiple of 4`);
+    if (!Number.isInteger(halfExtentXZ) || halfExtentXZ < 0) {
+        throw new Error(`gpuDilate3: halfExtentXZ=${halfExtentXZ} must be a non-negative integer`);
     }
-    if (halfExtentY % 4 !== 0 && halfExtentY !== 0) {
-        throw new Error(`gpuDilate3: halfExtentY=${halfExtentY} must be a multiple of 4`);
+    if (!Number.isInteger(halfExtentY) || halfExtentY < 0) {
+        throw new Error(`gpuDilate3: halfExtentY=${halfExtentY} must be a non-negative integer`);
     }
 
-    const haloX = halfExtentXZ;
-    const haloY = halfExtentY;
-    const haloZ = halfExtentXZ;
-    const haloBx = haloX >> 2;
-    const haloBy = haloY >> 2;
-    const haloBz = haloZ >> 2;
+    const haloX = blockAlignedExtent(halfExtentXZ);
+    const haloY = blockAlignedExtent(halfExtentY);
+    const haloZ = haloX;
+    const haloBx = haloX / 4;
+    const haloBy = haloY / 4;
+    const haloBz = haloZ / 4;
 
     // Round inner chunk down to multiple of 4 (block alignment).
     const innerStep = CHUNK_INNER & ~3;
@@ -332,9 +330,9 @@ async function gpuDilate3(
                     const outerBx = outerNx >> 2;
                     const outerBy = outerNy >> 2;
                     const outerBz = outerNz >> 2;
-                    const minBx = ox >> 2;
-                    const minBy = oy >> 2;
-                    const minBz = oz >> 2;
+                    const minBx = Math.floor(ox / 4);
+                    const minBy = Math.floor(oy / 4);
+                    const minBz = Math.floor(oz / 4);
 
                     const { types: typesPromise, masks: masksPromise } = gpu.submitChunkSparse(
                         currentSlot,

@@ -242,12 +242,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
  *
  * Each thread produces one 32-bit output word at `(xWord, y, z)` and writes
  * it directly (no atomics). The output bit at relative X position `b` (in
- * `[0, 31]`) is the OR of input bits in `[xWord*32 + b - r, xWord*32 + b + r]`,
- * which lives across up to three input words: `W_prev` (xWord-1), `W` (xWord),
- * and `W_next` (xWord+1). For each shift `d` in `[1, r]` we OR in two shifted
- * views: rightward (`(W >> d) | (W_next << (32 - d))`) for `d` positive, and
- * leftward (`(W << d) | (W_prev >> (32 - d))`) for `d` negative. `d == 32`
- * is special-cased because WGSL `u32 << 32` is UB.
+ * `[0, 31]`) is the OR of input bits in `[xWord*32 + b - r, xWord*32 + b + r]`.
+ * For each distance `d` in `[1, r]`, the shader reads the source word(s)
+ * containing bits shifted by `d`, so radii can span any number of 32-bit words.
  *
  * Bound by the chunk's `numXWords` (= ceil(nx / 32)). Out-of-bounds neighbors
  * are read as 0.
@@ -265,6 +262,13 @@ struct DilateXUniforms {
 @group(0) @binding(1) var<storage, read> src: array<u32>;
 @group(0) @binding(2) var<storage, read_write> dst: array<u32>;
 
+fn readWord(rowOffset: u32, word: i32) -> u32 {
+    if (word < 0 || word >= i32(u.numXWords)) {
+        return 0u;
+    }
+    return src[rowOffset + u32(word)];
+}
+
 @compute @workgroup_size(8, 4, 8)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
     if (gid.x >= u.numXWords || gid.y >= u.ny || gid.z >= u.nz) {
@@ -278,33 +282,28 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     let planeStride = rowStride * u.ny;
     let rowOffset = y * rowStride + z * planeStride;
 
-    let W = src[rowOffset + xWord];
-    var W_prev: u32 = 0u;
-    if (xWord > 0u) {
-        W_prev = src[rowOffset + xWord - 1u];
-    }
-    var W_next: u32 = 0u;
-    if (xWord + 1u < u.numXWords) {
-        W_next = src[rowOffset + xWord + 1u];
-    }
-
-    var output: u32 = W;
-    let r = u.halfExtent;
+    var output: u32 = src[rowOffset + xWord];
+    let rowBits = u.numXWords * 32u;
+    let r = min(u.halfExtent, rowBits);
     for (var d: u32 = 1u; d <= r; d = d + 1u) {
-        // Rightward shift: bit b ← input bit b+d. Need (W >> d) | (W_next << (32-d)).
-        var shifted_pos: u32;
-        if (d >= 32u) {
-            shifted_pos = W_next;
-        } else {
-            shifted_pos = (W >> d) | (W_next << (32u - d));
+        let wordOffset = i32(d >> 5u);
+        let bitShift = d & 31u;
+        let baseWord = i32(xWord);
+
+        // Rightward shift: bit b ← input bit b+d.
+        var shifted_pos = readWord(rowOffset, baseWord + wordOffset);
+        if (bitShift != 0u) {
+            shifted_pos = (shifted_pos >> bitShift) |
+                (readWord(rowOffset, baseWord + wordOffset + 1) << (32u - bitShift));
         }
-        // Leftward shift: bit b ← input bit b-d. Need (W << d) | (W_prev >> (32-d)).
-        var shifted_neg: u32;
-        if (d >= 32u) {
-            shifted_neg = W_prev;
-        } else {
-            shifted_neg = (W << d) | (W_prev >> (32u - d));
+
+        // Leftward shift: bit b ← input bit b-d.
+        var shifted_neg = readWord(rowOffset, baseWord - wordOffset);
+        if (bitShift != 0u) {
+            shifted_neg = (shifted_neg << bitShift) |
+                (readWord(rowOffset, baseWord - wordOffset - 1) >> (32u - bitShift));
         }
+
         output = output | shifted_pos | shifted_neg;
         if (output == 0xFFFFFFFFu) {
             break;

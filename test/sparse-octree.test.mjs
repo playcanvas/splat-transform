@@ -13,8 +13,7 @@ import {
     xyzToMorton,
     popcount,
     isSolid,
-    isEmpty,
-    getChildOffset
+    isEmpty
 } from '../src/lib/voxel/morton.js';
 
 // `mortonToXYZ` was removed from src after the refactor (the buffer no
@@ -264,37 +263,6 @@ describe('Utility functions', function () {
         });
     });
 
-    describe('getChildOffset', function () {
-        it('should return 0 for first child', function () {
-            // Mask with all children: octant 0 is first
-            assert.strictEqual(getChildOffset(0xFF, 0), 0);
-        });
-
-        it('should count preceding children', function () {
-            // Mask 0b11111111 (all children): offset = octant
-            for (let octant = 0; octant < 8; octant++) {
-                assert.strictEqual(getChildOffset(0xFF, octant), octant);
-            }
-        });
-
-        it('should skip missing children', function () {
-            // Mask 0b10101010 (octants 1, 3, 5, 7 present)
-            const mask = 0b10101010;
-            assert.strictEqual(getChildOffset(mask, 1), 0); // First present
-            assert.strictEqual(getChildOffset(mask, 3), 1); // Second present
-            assert.strictEqual(getChildOffset(mask, 5), 2); // Third present
-            assert.strictEqual(getChildOffset(mask, 7), 3); // Fourth present
-        });
-
-        it('should handle sparse masks', function () {
-            // Only octant 7 present
-            assert.strictEqual(getChildOffset(0b10000000, 7), 0);
-
-            // Octants 0 and 7 present
-            assert.strictEqual(getChildOffset(0b10000001, 0), 0);
-            assert.strictEqual(getChildOffset(0b10000001, 7), 1);
-        });
-    });
 });
 
 // ============================================================================

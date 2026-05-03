@@ -61,7 +61,6 @@ const TYPE_BITS_PER_BLOCK = 2;
 const BLOCKS_PER_WORD = 32 / TYPE_BITS_PER_BLOCK; // 16
 const TYPE_MASK = (1 << TYPE_BITS_PER_BLOCK) - 1; // 0b11
 const SOLID_WORD = 0x55555555 >>> 0;             // 16 lanes, each = SOLID
-// const MIXED_WORD = 0xAAAAAAAA >>> 0;          // 16 lanes, each = MIXED (unused so far)
 const EVEN_BITS = 0x55555555 >>> 0;              // mask for even bit positions
 
 /**
@@ -248,7 +247,6 @@ class SparseVoxelGrid {
     toBuffer(
         cropMinBx: number, cropMinBy: number, cropMinBz: number,
         cropMaxBx: number, cropMaxBy: number, cropMaxBz: number,
-        defaultSolid = false,
         onProgress?: (done: number, total: number) => void
     ): BlockMaskBuffer {
         const acc = new BlockMaskBuffer();
@@ -270,51 +268,8 @@ class SparseVoxelGrid {
                         const s = this.masks.slot(blockIdx);
                         lo = this.masks.lo[s];
                         hi = this.masks.hi[s];
-                    } else if (defaultSolid) {
-                        lo = SOLID_LO;
-                        hi = SOLID_HI;
                     } else {
                         continue;
-                    }
-                    if (lo || hi) {
-                        const outIdx = (bx - cropMinBx) +
-                            (by - cropMinBy) * outNbx +
-                            (bz - cropMinBz) * outBStride;
-                        acc.addBlock(outIdx, lo, hi);
-                    }
-                }
-            }
-        }
-        if (onProgress) onProgress(totalZ, totalZ);
-        return acc;
-    }
-
-    toBufferInverted(
-        cropMinBx: number, cropMinBy: number, cropMinBz: number,
-        cropMaxBx: number, cropMaxBy: number, cropMaxBz: number,
-        onProgress?: (done: number, total: number) => void
-    ): BlockMaskBuffer {
-        const acc = new BlockMaskBuffer();
-        const outNbx = cropMaxBx - cropMinBx;
-        const outNby = cropMaxBy - cropMinBy;
-        const outBStride = outNbx * outNby;
-        const totalZ = cropMaxBz - cropMinBz;
-        for (let bz = cropMinBz; bz < cropMaxBz; bz++) {
-            if (onProgress) onProgress(bz - cropMinBz, totalZ);
-            for (let by = cropMinBy; by < cropMaxBy; by++) {
-                for (let bx = cropMinBx; bx < cropMaxBx; bx++) {
-                    const blockIdx = bx + by * this.nbx + bz * this.bStride;
-                    const bt = this.getBlockType(blockIdx);
-                    let lo: number, hi: number;
-                    if (bt === BLOCK_SOLID) {
-                        continue;
-                    } else if (bt === BLOCK_MIXED) {
-                        const s = this.masks.slot(blockIdx);
-                        lo = (~this.masks.lo[s]) >>> 0;
-                        hi = (~this.masks.hi[s]) >>> 0;
-                    } else {
-                        lo = SOLID_LO;
-                        hi = SOLID_HI;
                     }
                     if (lo || hi) {
                         const outIdx = (bx - cropMinBx) +
