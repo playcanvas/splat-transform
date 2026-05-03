@@ -77,8 +77,59 @@ function marchingCubes(
     const { nbx, nby, nbz, bStride, types, masks } = grid;
     const totalBlocks = nbx * nby * nbz;
 
-    // Vertex deduplication: edge ID -> vertex index
-    const vertexMap = new Map<number, number>();
+    // Vertex deduplication: edge ID -> vertex index. Open-addressed typed-
+    // array hash table rather than `Map<number, number>` because (1) a single
+    // V8 Map is capped at ~2^24 entries (large carved scenes blow past this),
+    // and (2) per-entry overhead in Map is ~50 bytes vs 12 bytes (Float64 key
+    // + Uint32 value) here, which matters when the table holds tens of
+    // millions of vertices.
+    //
+    // Empty slots are marked with `key === -1` (real keys are non-negative).
+    // Hash uses Fibonacci constant on the lower 32 bits of the key. The same
+    // structure is used for orphan-cell deduplication, where `vVals` is unused.
+    let vCap = 1 << 14;
+    let vMask = vCap - 1;
+    let vSize = 0;
+    let vKeys = new Float64Array(vCap).fill(-1);
+    let vVals = new Uint32Array(vCap);
+
+    const vGrow = (): void => {
+        const oldKeys = vKeys;
+        const oldVals = vVals;
+        const oldCap = vCap;
+        vCap *= 2;
+        vMask = vCap - 1;
+        vKeys = new Float64Array(vCap).fill(-1);
+        vVals = new Uint32Array(vCap);
+        for (let j = 0; j < oldCap; j++) {
+            const k = oldKeys[j];
+            if (k === -1) continue;
+            let i = (Math.imul(k | 0, 0x9E3779B9) >>> 0) & vMask;
+            while (vKeys[i] !== -1) i = (i + 1) & vMask;
+            vKeys[i] = k;
+            vVals[i] = oldVals[j];
+        }
+    };
+
+    let oCap = 1 << 14;
+    let oMask = oCap - 1;
+    let oSize = 0;
+    let oKeys = new Float64Array(oCap).fill(-1);
+
+    const oGrow = (): void => {
+        const oldKeys = oKeys;
+        const oldCap = oCap;
+        oCap *= 2;
+        oMask = oCap - 1;
+        oKeys = new Float64Array(oCap).fill(-1);
+        for (let j = 0; j < oldCap; j++) {
+            const k = oldKeys[j];
+            if (k === -1) continue;
+            let i = (Math.imul(k | 0, 0x9E3779B9) >>> 0) & oMask;
+            while (oKeys[i] !== -1) i = (i + 1) & oMask;
+            oKeys[i] = k;
+        }
+    };
 
     // Growable typed-array buffers. Capacity doubles on demand to avoid
     // the GC churn of pushing into JS number[] for huge meshes.
@@ -130,8 +181,15 @@ function marchingCubes(
         // Pack (vx, vy, vz, axis) into a single key. Offset by 1 so that
         // vx = -1 (from the boundary extension) maps to 0, keeping keys non-negative.
         const key = ((vx + 1) + (vy + 1) * strideX + (vz + 1) * strideXY) * 3 + axis;
-        const existing = vertexMap.get(key);
-        if (existing !== undefined) return existing;
+
+        // Probe for either the matching slot or the next empty one.
+        let i = (Math.imul(key | 0, 0x9E3779B9) >>> 0) & vMask;
+        while (true) {
+            const k = vKeys[i];
+            if (k === key) return vVals[i];
+            if (k === -1) break;
+            i = (i + 1) & vMask;
+        }
 
         if (posLen + 3 > posCap) {
             posCap *= 2;
@@ -153,15 +211,19 @@ function marchingCubes(
         positions[posLen++] = px;
         positions[posLen++] = py;
         positions[posLen++] = pz;
-        vertexMap.set(key, idx);
+        vKeys[i] = key;
+        vVals[i] = idx;
+        vSize++;
+        if (vSize > ((vCap * 0.7) | 0)) vGrow();
         return idx;
     };
 
-    // Track processed orphan cells to avoid duplicate triangles.
-    // When a cell's owner block doesn't exist, multiple neighboring blocks
-    // can reach it via the -1 boundary extension. The Set ensures each
-    // orphan cell is only processed once.
-    const processedOrphans = new Set<number>();
+    // Track processed orphan cells to avoid duplicate triangles. When a cell's
+    // owner block doesn't exist, multiple neighboring blocks can reach it via
+    // the -1 boundary extension. The hash table ensures each orphan cell is
+    // only processed once. Same typed-array structure as the vertex hash —
+    // see `oKeys` / `oGrow` above. Stored separately because keys collide with
+    // vertex keys (same encoding, different namespace).
 
     // Iterate non-empty blocks of the grid via word-level skipping.
     // Each block is processed once; the inner loop also handles boundary cells
@@ -187,7 +249,13 @@ function marchingCubes(
 
             // Populate the 3x3x3 neighbor table for this block. After this loop,
             // every per-cell occupancy query is a direct typed-array index.
+            //
+            // Track `allNeighborsSolid` so we can skip the entire cell loop
+            // for blocks deep inside an obstruction, where every cubeIndex is
+            // 255 and no triangles are emitted. On large carved scenes this
+            // is the bulk of SOLID blocks and dominates marching-cubes runtime.
             let currentBlockIsSolid = false;
+            let allNeighborsSolid = true;
             for (let dz = -1; dz <= 1; dz++) {
                 const nbZ = bz + dz;
                 for (let dy = -1; dy <= 1; dy++) {
@@ -198,17 +266,20 @@ function marchingCubes(
                         if (nbX < 0 || nbY < 0 || nbZ < 0 ||
                             nbX >= nbx || nbY >= nby || nbZ >= nbz) {
                             neighborEntry[slot] = NEIGHBOR_EMPTY;
+                            allNeighborsSolid = false;
                             continue;
                         }
                         const nbIdx = nbX + nbY * nbx + nbZ * bStride;
                         const bt = readBlockType(types, nbIdx);
                         if (bt === BLOCK_EMPTY) {
                             neighborEntry[slot] = NEIGHBOR_EMPTY;
+                            allNeighborsSolid = false;
                         } else if (bt === BLOCK_SOLID) {
                             neighborEntry[slot] = NEIGHBOR_SOLID;
                             if (dx === 0 && dy === 0 && dz === 0) currentBlockIsSolid = true;
                         } else {
                             neighborEntry[slot] = NEIGHBOR_MIXED;
+                            allNeighborsSolid = false;
                             const ms = masks.slot(nbIdx);
                             neighborMasks[slot * 2] = masks.lo[ms];
                             neighborMasks[slot * 2 + 1] = masks.hi[ms];
@@ -216,6 +287,10 @@ function marchingCubes(
                     }
                 }
             }
+
+            // Block is fully interior to a solid region — every cubeIndex is
+            // 255, every cell would emit 0 triangles. Skip the cell loop.
+            if (currentBlockIsSolid && allNeighborsSolid) continue;
 
             // Iterate -1..3 to include the boundary layer in the negative
             // direction. Cells at lx/ly/lz = -1 straddle the block edge and
@@ -252,8 +327,21 @@ function marchingCubes(
                             // deduplicate so only the first neighboring block to
                             // reach this cell emits triangles.
                             const cellKey = (vx + 1) + (vy + 1) * strideX + (vz + 1) * strideXY;
-                            if (processedOrphans.has(cellKey)) continue;
-                            processedOrphans.add(cellKey);
+                            let oi = (Math.imul(cellKey | 0, 0x9E3779B9) >>> 0) & oMask;
+                            let oFound = false;
+                            while (true) {
+                                const ok = oKeys[oi];
+                                if (ok === cellKey) {
+                                    oFound = true;
+                                    break;
+                                }
+                                if (ok === -1) break;
+                                oi = (oi + 1) & oMask;
+                            }
+                            if (oFound) continue;
+                            oKeys[oi] = cellKey;
+                            oSize++;
+                            if (oSize > ((oCap * 0.7) | 0)) oGrow();
                         }
 
                         // Get corner values for this cell (8 corners)

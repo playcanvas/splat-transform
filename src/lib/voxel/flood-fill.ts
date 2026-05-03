@@ -73,8 +73,14 @@ function twoLevelBFS(
     let vqTail = 0;
     let vqSize = 0;
 
+    // Power-of-two cap that fits a Uint32Array index (2^30 entries = 4GB each).
+    const QUEUE_CAP_MAX = 1 << 30;
+
     const growBlockQueue = (): void => {
-        const newCap = bqCap << 1;
+        if (bqCap >= QUEUE_CAP_MAX) {
+            throw new Error(`flood-fill: block queue exceeded ${QUEUE_CAP_MAX} entries — scene likely contains pathologically large gaussians or a connected component too large to flood-fill at this resolution. Try a coarser --filter-cluster resolution or pre-filter outliers (e.g. --filter-box).`);
+        }
+        const newCap = bqCap * 2;
         const nb = new Uint32Array(newCap);
         for (let i = 0; i < bqSize; i++) nb[i] = bqBuf[(bqHead + i) & bqMask];
         bqBuf = nb;
@@ -85,7 +91,10 @@ function twoLevelBFS(
     };
 
     const growVoxelQueue = (): void => {
-        const newCap = vqCap << 1;
+        if (vqCap >= QUEUE_CAP_MAX) {
+            throw new Error(`flood-fill: voxel queue exceeded ${QUEUE_CAP_MAX} entries — scene likely contains pathologically large gaussians or a connected component too large to flood-fill at this resolution. Try a coarser --filter-cluster resolution or pre-filter outliers (e.g. --filter-box).`);
+        }
+        const newCap = vqCap * 2;
         const nix = new Uint32Array(newCap);
         const niy = new Uint32Array(newCap);
         const niz = new Uint32Array(newCap);

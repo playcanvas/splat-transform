@@ -190,7 +190,11 @@ const filterCluster = async (
         ctx = await setupVoxelFilter(dataTable, createDevice);
 
         const clampedResolution = Math.max(0.01, voxelResolution);
-        const maxGridExtent = 8192 * clampedResolution;
+        // Per-axis cap: 4096 voxels = 1024 blocks. Total blocks <= 1024^3 = 2^30,
+        // safely under the 2^32 limit imposed by uint32 block indexing in
+        // SparseVoxelGrid (readBlockType/writeBlockType use `blockIdx >>> 4`,
+        // which truncates indices >= 2^32 and corrupts visited-state tracking).
+        const maxGridExtent = 4096 * clampedResolution;
 
         const sceneExtentX = ctx.sceneBounds.max.x - ctx.sceneBounds.min.x;
         const sceneExtentY = ctx.sceneBounds.max.y - ctx.sceneBounds.min.y;
@@ -202,19 +206,19 @@ const filterCluster = async (
             clampedResolution
         );
 
-        const clampAxis = (min: number, max: number) => {
+        const clampAxis = (min: number, max: number, seedV: number) => {
             const extent = max - min;
             if (extent > maxGridExtent) {
-                const center = (min + max) * 0.5;
                 const half = maxGridExtent * 0.5;
-                return { min: center - half, max: center + half };
+                const c = Math.max(min + half, Math.min(seedV, max - half));
+                return { min: c - half, max: c + half };
             }
             return { min, max };
         };
 
-        const cx = clampAxis(gridBounds.min.x, gridBounds.max.x);
-        const cy = clampAxis(gridBounds.min.y, gridBounds.max.y);
-        const cz = clampAxis(gridBounds.min.z, gridBounds.max.z);
+        const cx = clampAxis(gridBounds.min.x, gridBounds.max.x, seed.x);
+        const cy = clampAxis(gridBounds.min.y, gridBounds.max.y, seed.y);
+        const cz = clampAxis(gridBounds.min.z, gridBounds.max.z, seed.z);
         gridBounds.min.set(cx.min, cy.min, cz.min);
         gridBounds.max.set(cx.max, cy.max, cz.max);
 
