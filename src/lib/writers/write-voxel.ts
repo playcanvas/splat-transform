@@ -438,7 +438,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
                 grid, gridBounds, voxelResolution,
                 navCapsule!.height, navCapsule!.radius,
                 navSeed!,
-                gpuDilation
+                gpuDilation!
             );
             grid = navResult.grid;
             gridBounds = navResult.gridBounds;
