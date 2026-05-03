@@ -33,7 +33,6 @@ import type { SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
 const extractWgsl = () => /* wgsl */`
 struct ExtractUniforms {
     minBx: i32, minBy: i32, minBz: i32,
-    _pad0: u32,
 
     outerBx: u32, outerBy: u32, outerBz: u32,
     numXWords: u32,
@@ -41,8 +40,7 @@ struct ExtractUniforms {
     srcNbx: u32, srcNby: u32, srcNbz: u32,
     srcBStride: u32,
 
-    srcCapMinusOne: u32,
-    _pad1: u32, _pad2: u32, _pad3: u32
+    srcCapMinusOne: u32
 }
 
 @group(0) @binding(0) var<uniform> u: ExtractUniforms;
@@ -216,9 +214,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 const clearWgsl = () => /* wgsl */`
 struct ClearUniforms {
     clearNumWords: u32,
-    clearRowStride: u32,
-    _pad0: u32,
-    _pad1: u32
+    clearRowStride: u32
 }
 
 @group(0) @binding(0) var<uniform> u: ClearUniforms;
@@ -333,9 +329,7 @@ struct DilateYZUniforms {
     nz: u32,
     halfExtent: u32,
     stride: u32,
-    axisLen: u32,
-    _pad0: u32,
-    _pad1: u32
+    axisLen: u32
 }
 
 @group(0) @binding(0) var<uniform> u: DilateYZUniforms;
@@ -534,7 +528,6 @@ class GpuDilation {
                     new UniformFormat('minBx', UNIFORMTYPE_UINT),  // signed reinterpret
                     new UniformFormat('minBy', UNIFORMTYPE_UINT),
                     new UniformFormat('minBz', UNIFORMTYPE_UINT),
-                    new UniformFormat('_pad0', UNIFORMTYPE_UINT),
                     new UniformFormat('outerBx', UNIFORMTYPE_UINT),
                     new UniformFormat('outerBy', UNIFORMTYPE_UINT),
                     new UniformFormat('outerBz', UNIFORMTYPE_UINT),
@@ -813,7 +806,6 @@ class GpuDilation {
         c.setParameter('minBx', (minBx >>> 0));
         c.setParameter('minBy', (minBy >>> 0));
         c.setParameter('minBz', (minBz >>> 0));
-        c.setParameter('_pad0', 0);
         c.setParameter('outerBx', outerBx);
         c.setParameter('outerBy', outerBy);
         c.setParameter('outerBz', outerBz);

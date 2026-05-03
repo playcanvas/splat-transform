@@ -292,9 +292,9 @@ function marchingCubes(
             // 255, every cell would emit 0 triangles. Skip the cell loop.
             if (currentBlockIsSolid && allNeighborsSolid) continue;
 
-            // Iterate -1..3 to include the boundary layer in the negative
-            // direction. Cells at lx/ly/lz = -1 straddle the block edge and
-            // are needed to close the surface where no neighboring block exists.
+            // Iterate cell origins from -1 through 3 on each axis. The -1 and
+            // 3 layers straddle block edges and close surfaces where no
+            // neighboring block exists.
             for (let lz = -1; lz < 4; lz++) {
                 const lzInside = lz >= 0 && lz <= 2;
                 for (let ly = -1; ly < 4; ly++) {

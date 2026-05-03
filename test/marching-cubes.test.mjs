@@ -61,10 +61,8 @@ describe('marchingCubes', () => {
 
         const numTriangles = mesh.indices.length / 3;
         // A 4x4x4 solid cube produces boundary triangles on all 6 faces.
-        // Corners share edges, so the exact count depends on marching cubes
-        // table indexing. Verify it's in a reasonable range for a cube surface.
-        assert.ok(numTriangles >= 180 && numTriangles <= 200,
-            `expected ~192 triangles for solid 4x4x4 cube, got ${numTriangles}`);
+        assert.strictEqual(numTriangles, 188,
+            `expected 188 triangles for solid 4x4x4 cube, got ${numTriangles}`);
     });
 
     it('should place vertices within grid bounds', () => {

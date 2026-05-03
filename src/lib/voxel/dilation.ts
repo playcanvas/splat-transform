@@ -220,7 +220,7 @@ function applyChunkToDst(
                 const globalBlockIdx = baseGlobalIdx + bx;
                 const w = globalBlockIdx >>> 4;
                 const shift = (globalBlockIdx & 15) << 1;
-                dstTypes[w] = ((dstTypes[w] & ~(3 << shift)) | (bt << shift)) >>> 0;
+                dstTypes[w] |= bt << shift;
 
                 if (bt === 2) {  // MIXED
                     const m2 = innerIdx * 2;
