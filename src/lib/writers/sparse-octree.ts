@@ -113,7 +113,6 @@ interface InteriorWave {
     pos: Uint32Array;
     li: Uint32Array;
     ii: Uint32Array;
-    childMasks: Uint8Array;
     length: number;
 }
 
@@ -260,7 +259,6 @@ function createInteriorWave(initialCapacity: number): InteriorWave {
         pos: new Uint32Array(cap),
         li: new Uint32Array(cap),
         ii: new Uint32Array(cap),
-        childMasks: new Uint8Array(cap),
         length: 0
     };
 }
@@ -272,35 +270,29 @@ function createInteriorWave(initialCapacity: number): InteriorWave {
  * @param pos - Already-emitted node position to backfill.
  * @param li - Interior level index.
  * @param ii - Node index within the level.
- * @param childMask - Node child mask.
  */
 function pushInteriorWave(
     wave: InteriorWave,
     pos: number,
     li: number,
-    ii: number,
-    childMask: number
+    ii: number
 ): void {
     if (wave.length === wave.pos.length) {
         const cap = wave.pos.length * 2;
         const grownPos = new Uint32Array(cap);
         const grownLi = new Uint32Array(cap);
         const grownIi = new Uint32Array(cap);
-        const grownChildMasks = new Uint8Array(cap);
         grownPos.set(wave.pos);
         grownLi.set(wave.li);
         grownIi.set(wave.ii);
-        grownChildMasks.set(wave.childMasks);
         wave.pos = grownPos;
         wave.li = grownLi;
         wave.ii = grownIi;
-        wave.childMasks = grownChildMasks;
     }
     const i = wave.length++;
     wave.pos[i] = pos;
     wave.li[i] = li;
     wave.ii[i] = ii;
-    wave.childMasks[i] = childMask;
 }
 
 /**
@@ -496,7 +488,7 @@ function flattenDenseLevels(
             appendNode(SOLID_LEAF_MARKER);
         } else if (bt === BLOCK_MIXED) {
             const pos = appendNode(0);
-            pushInteriorWave(wave, pos, li, idx, 0);
+            pushInteriorWave(wave, pos, li, idx);
             numInteriorNodes++;
         }
     };
