@@ -13,7 +13,8 @@ import { GaussianBVH } from '../src/lib/spatial/gaussian-bvh.js';
 
 /**
  * Create a test DataTable with Gaussians at specified positions.
- * All Gaussians have identity rotation and unit scale (extent = 1).
+ * All Gaussians have identity rotation and unit log scale, so their
+ * generated AABB half-extents are 3.
  */
 function createTestData(positions) {
     const count = positions.length;
@@ -105,9 +106,9 @@ describe('GaussianBVH', function () {
     describe('queryOverlapping', function () {
         it('should find overlapping Gaussians', function () {
             const dataTable = createTestData([
-                [0, 0, 0],    // AABB: (-1, -1, -1) to (1, 1, 1)
-                [5, 0, 0],    // AABB: (4, -1, -1) to (6, 1, 1)
-                [10, 0, 0]    // AABB: (9, -1, -1) to (11, 1, 1)
+                [0, 0, 0],    // AABB: (-3, -3, -3) to (3, 3, 3)
+                [5, 0, 0],    // AABB: (2, -3, -3) to (8, 3, 3)
+                [10, 0, 0]    // AABB: (7, -3, -3) to (13, 3, 3)
             ]);
             const { extents } = computeGaussianExtents(dataTable);
             const bvh = new GaussianBVH(dataTable, extents);
@@ -155,15 +156,15 @@ describe('GaussianBVH', function () {
 
         it('should handle edge-touching queries', function () {
             const dataTable = createTestData([
-                [0, 0, 0]  // AABB: (-1, -1, -1) to (1, 1, 1)
+                [0, 0, 0]  // AABB: (-3, -3, -3) to (3, 3, 3)
             ]);
             const { extents } = computeGaussianExtents(dataTable);
             const bvh = new GaussianBVH(dataTable, extents);
 
             // Query box that just touches the edge
             const result = bvh.queryOverlapping(
-                new Vec3(1, 0, 0),  // Touches at x=1
-                new Vec3(2, 1, 1)
+                new Vec3(3, 0, 0),  // Touches at x=3
+                new Vec3(4, 1, 1)
             );
             assert.strictEqual(result.length, 1);
         });
@@ -184,6 +185,41 @@ describe('GaussianBVH', function () {
             assert.strictEqual(result.length, 2);
             assert.ok(result.includes(0));
             assert.ok(result.includes(1));
+        });
+
+        it('should append raw-coordinate results into a typed buffer', function () {
+            const dataTable = createTestData([
+                [0, 0, 0],
+                [5, 0, 0],
+                [10, 0, 0]
+            ]);
+            const { extents } = computeGaussianExtents(dataTable);
+            const bvh = new GaussianBVH(dataTable, extents);
+            const result = new Uint32Array([99, 99, 99, 99]);
+
+            const count = bvh.queryOverlappingRawInto(-1, -1, -1, 5, 1, 1, result, 1);
+
+            assert.strictEqual(count, 2);
+            assert.strictEqual(result[0], 99);
+            assert.deepStrictEqual([...result.slice(1, 3)].sort((a, b) => a - b), [0, 1]);
+            assert.strictEqual(result[3], 99);
+        });
+
+        it('should return the total raw-coordinate count when the typed buffer is too small', function () {
+            const dataTable = createTestData([
+                [0, 0, 0],
+                [5, 0, 0],
+                [10, 0, 0]
+            ]);
+            const { extents } = computeGaussianExtents(dataTable);
+            const bvh = new GaussianBVH(dataTable, extents);
+            const result = new Uint32Array([99, 99]);
+
+            const count = bvh.queryOverlappingRawInto(-2, -2, -2, 12, 2, 2, result, 1);
+
+            assert.strictEqual(count, 3);
+            assert.strictEqual(result[0], 99);
+            assert.ok([0, 1, 2].includes(result[1]));
         });
     });
 

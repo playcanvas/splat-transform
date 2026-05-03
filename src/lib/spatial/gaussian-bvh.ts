@@ -235,6 +235,36 @@ class GaussianBVH {
     }
 
     /**
+     * Query overlapping Gaussian indices directly into a caller-provided buffer.
+     *
+     * Returns the total number of matches even if the target buffer is too
+     * small; in that case only the prefix that fits is written and the caller
+     * can grow the buffer then retry.
+     *
+     * @param minX - Minimum X of query box
+     * @param minY - Minimum Y of query box
+     * @param minZ - Minimum Z of query box
+     * @param maxX - Maximum X of query box
+     * @param maxY - Maximum Y of query box
+     * @param maxZ - Maximum Z of query box
+     * @param result - Buffer to append matching Gaussian indices into.
+     * @param offset - Starting element offset in `result`.
+     * @returns Number of matching Gaussian indices.
+     */
+    queryOverlappingRawInto(
+        minX: number,
+        minY: number,
+        minZ: number,
+        maxX: number,
+        maxY: number,
+        maxZ: number,
+        result: Uint32Array,
+        offset: number
+    ): number {
+        return this.queryNodeInto(this.root, minX, minY, minZ, maxX, maxY, maxZ, result, offset, 0);
+    }
+
+    /**
      * Recursive query helper.
      *
      * @param node - Current BVH node to query
@@ -291,6 +321,71 @@ class GaussianBVH {
         if (node.right) {
             this.queryNode(node.right, minX, minY, minZ, maxX, maxY, maxZ, result);
         }
+    }
+
+    /**
+     * Recursive typed-buffer query helper.
+     *
+     * @param node - Current BVH node to query
+     * @param minX - Query box minimum X
+     * @param minY - Query box minimum Y
+     * @param minZ - Query box minimum Z
+     * @param maxX - Query box maximum X
+     * @param maxY - Query box maximum Y
+     * @param maxZ - Query box maximum Z
+     * @param result - Buffer to append matching indices into
+     * @param offset - Starting element offset in `result`
+     * @param count - Number of matches already found for this query
+     * @returns Updated match count
+     */
+    private queryNodeInto(
+        node: GaussianBVHNode,
+        minX: number,
+        minY: number,
+        minZ: number,
+        maxX: number,
+        maxY: number,
+        maxZ: number,
+        result: Uint32Array,
+        offset: number,
+        count: number
+    ): number {
+        if (!boundsOverlap(node.bounds, minX, minY, minZ, maxX, maxY, maxZ)) {
+            return count;
+        }
+
+        if (node.indices) {
+            const { x, y, z, extentX, extentY, extentZ } = this;
+
+            for (let i = 0; i < node.indices.length; i++) {
+                const idx = node.indices[i];
+                const gMinX = x[idx] - extentX[idx];
+                const gMinY = y[idx] - extentY[idx];
+                const gMinZ = z[idx] - extentZ[idx];
+                const gMaxX = x[idx] + extentX[idx];
+                const gMaxY = y[idx] + extentY[idx];
+                const gMaxZ = z[idx] + extentZ[idx];
+
+                if (!(gMaxX < minX || gMinX > maxX ||
+                      gMaxY < minY || gMinY > maxY ||
+                      gMaxZ < minZ || gMinZ > maxZ)) {
+                    const writeIdx = offset + count;
+                    if (writeIdx < result.length) {
+                        result[writeIdx] = idx;
+                    }
+                    count++;
+                }
+            }
+            return count;
+        }
+
+        if (node.left) {
+            count = this.queryNodeInto(node.left, minX, minY, minZ, maxX, maxY, maxZ, result, offset, count);
+        }
+        if (node.right) {
+            count = this.queryNodeInto(node.right, minX, minY, minZ, maxX, maxY, maxZ, result, offset, count);
+        }
+        return count;
     }
 
     /**
