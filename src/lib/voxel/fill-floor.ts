@@ -45,7 +45,7 @@ import { logger } from '../utils';
  * @param gridBounds - Axis-aligned bounds of the voxel grid.
  * @param voxelResolution - Size of each voxel in world units.
  * @param dilation - XZ dilation radius in world units. 0 disables dilation.
- * @param gpu - Reusable GPU dilation context (compiled shader + buffers).
+ * @param gpu - Reusable GPU dilation context. Required when dilation > 0.
  * @returns Modified grid with under-surface regions filled.
  */
 const fillFloor = async (
@@ -53,7 +53,7 @@ const fillFloor = async (
     gridBounds: Bounds,
     voxelResolution: number,
     dilation: number,
-    gpu: GpuDilation
+    gpu: GpuDilation | null = null
 ): Promise<NavSimplifyResult> => {
     if (!Number.isFinite(voxelResolution) || voxelResolution <= 0) {
         throw new Error(`fillFloor: voxelResolution must be finite and > 0, got ${voxelResolution}`);
@@ -69,10 +69,13 @@ const fillFloor = async (
     }
 
     const r = dilation > 0 ? Math.ceil(dilation / voxelResolution) : 0;
+    if (r > 0 && !gpu) {
+        throw new Error('fillFloor: gpu dilation context is required when dilation > 0');
+    }
 
     logger.debug(`fill floor: ${nx}x${ny}x${nz} grid, dilation radius ${r} voxels`);
 
-    const dilatedSolid = r > 0 ? await gpuDilate3(gpu, grid, r, 0) : grid;
+    const dilatedSolid = r > 0 ? await gpuDilate3(gpu!, grid, r, 0) : grid;
 
     const foundEmpty = new SparseVoxelGrid(nx, ny, nz);
 
@@ -151,7 +154,7 @@ const fillFloor = async (
 
     if (r > 0) dilatedSolid.clear();
 
-    const dilatedFound = r > 0 ? await gpuDilate3(gpu, foundEmpty, r, 0) : foundEmpty;
+    const dilatedFound = r > 0 ? await gpuDilate3(gpu!, foundEmpty, r, 0) : foundEmpty;
 
     // grid is the original voxelization; not read after this OR. Pass
     // consumeA=true so sparseOrGrids mutates it in place rather than

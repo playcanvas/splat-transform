@@ -405,7 +405,8 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         loadSub.end();
 
         // Reuse the same device for GPU dilation across exterior, floor, carve.
-        if (hasFillExterior || hasFloorFill || hasNav) {
+        const needsGpuDilation = hasFillExterior || hasNav || (hasFloorFill && floorFillDilation > 0);
+        if (needsGpuDilation) {
             gpuDilation = new GpuDilation(device);
         }
 

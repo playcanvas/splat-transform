@@ -70,11 +70,11 @@ const voxelizeToBuffer = async (
         batches: PendingBatch[];
     } | null = null;
 
-    const ensureSlotIndexCapacity = (slotIdx: number, needed: number): void => {
+    const ensureSlotIndexCapacity = (slotIdx: number, needed: number, preserveCount: number): void => {
         if (needed <= slotCapacities[slotIdx]) return;
         slotCapacities[slotIdx] = Math.max(slotCapacities[slotIdx] * 2, needed);
         const newArray = new Uint32Array(slotCapacities[slotIdx]);
-        newArray.set(slotIndexArrays[slotIdx].subarray(0, indexOffset));
+        newArray.set(slotIndexArrays[slotIdx].subarray(0, preserveCount));
         slotIndexArrays[slotIdx] = newArray;
     };
 
@@ -162,7 +162,7 @@ const voxelizeToBuffer = async (
 
                 const needed = indexOffset + overlappingCount;
                 if (needed > slotCapacities[currentSlot]) {
-                    ensureSlotIndexCapacity(currentSlot, needed);
+                    ensureSlotIndexCapacity(currentSlot, needed, indexOffset);
                     overlappingCount = bvh.queryOverlappingRawInto(
                         blockMinX, blockMinY, blockMinZ,
                         blockMaxX, blockMaxY, blockMaxZ,

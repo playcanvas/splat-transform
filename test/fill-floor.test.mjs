@@ -25,7 +25,7 @@ describe('fillFloor', function () {
         grid.setVoxel(1, 5, 2);
         grid.setVoxel(1, 7, 2);
 
-        const { grid: result } = await fillFloor(grid, boundsForGrid(grid), 1, 0, null);
+        const { grid: result } = await fillFloor(grid, boundsForGrid(grid), 1, 0);
 
         for (let y = 0; y <= 5; y++) {
             assert.strictEqual(result.getVoxel(1, y, 2), 1, `y=${y} should be filled`);
@@ -39,7 +39,7 @@ describe('fillFloor', function () {
         const bounds = boundsForGrid(grid);
         grid.setVoxel(2, 3, 1);
 
-        const result = await fillFloor(grid, bounds, 1, 0, null);
+        const result = await fillFloor(grid, bounds, 1, 0);
 
         assert.strictEqual(result.grid, grid);
         assert.strictEqual(result.grid.getVoxel(2, 0, 1), 1);
@@ -61,6 +61,10 @@ describe('fillFloor', function () {
         await assert.rejects(
             () => fillFloor(new SparseVoxelGrid(4, 6, 4), bounds, 1, 0, null),
             /Grid dimensions must be multiples of 4/
+        );
+        await assert.rejects(
+            () => fillFloor(grid, bounds, 1, 1),
+            /gpu dilation context is required/
         );
     });
 });
