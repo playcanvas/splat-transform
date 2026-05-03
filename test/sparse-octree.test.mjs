@@ -11,12 +11,27 @@ import { BlockMaskBuffer } from '../src/lib/voxel/block-mask-buffer.js';
 import { SparseVoxelGrid } from '../src/lib/voxel/sparse-voxel-grid.js';
 import {
     xyzToMorton,
-    mortonToXYZ,
     popcount,
     isSolid,
     isEmpty,
     getChildOffset
 } from '../src/lib/voxel/morton.js';
+
+// `mortonToXYZ` was removed from src after the refactor (the buffer no
+// longer keys on morton). Provide a local inverse so the morton-encoding
+// round-trip tests below still exercise the encoder against a known decoder.
+// Mortons can exceed 32 bits (up to ~51 bits for 17-bit coords), so use
+// floor/division rather than `>>>` for high bits.
+function mortonToXYZ(m) {
+    let x = 0, y = 0, z = 0;
+    for (let i = 0; i < 22; i++) {
+        const bitGroup = Math.floor(m / Math.pow(2, 3 * i)) & 7;
+        x |= (bitGroup & 1) << i;
+        y |= ((bitGroup >> 1) & 1) << i;
+        z |= ((bitGroup >> 2) & 1) << i;
+    }
+    return [x, y, z];
+}
 import {
     buildSparseOctree,
     SOLID_LEAF_MARKER
@@ -735,7 +750,8 @@ describe('buildSparseOctree', function () {
             const acc = new BlockMaskBuffer();
             const expectedByMorton = new Map();
             // Pick 32 (x,y,z) coords with monotonic-but-spread mortons.
-            for (let m = 31; m >= 0; m--) {
+            // Skip morton=0 (its masks would be zero -> empty, not stored).
+            for (let m = 32; m >= 1; m--) {
                 // Distinct (x,y,z) per m; well within the 8x8x8 block grid.
                 const x = m & 7;
                 const y = (m >> 3) & 3;
