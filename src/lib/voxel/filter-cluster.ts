@@ -11,7 +11,6 @@ import { twoLevelBFS } from './flood-fill';
 import {
     BLOCK_EMPTY,
     BLOCK_MIXED,
-    BLOCK_SOLID,
     BLOCKS_PER_WORD,
     EVEN_BITS,
     SOLID_WORD,

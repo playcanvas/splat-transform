@@ -240,8 +240,6 @@ function buildSparseOctree(
     sceneBounds: Bounds,
     voxelResolution: number
 ): SparseOctree {
-    const tProfile = performance.now();
-
     // --- Phase 1: Walk grid → emit Morton streams + sort ---
     // Level 0 (leaves) is represented as TWO sorted streams — solid mortons
     // and mixed mortons (with paired masks). Two passes:
@@ -318,8 +316,6 @@ function buildSparseOctree(
 
     if (nSolid > 1) solidStream.sort();
     if (nMixed > 1) sortMixedByMorton(mixedStream, mixedMasks, nMixed);
-
-    const tSort = performance.now();
 
     // --- Phase 2: Build tree bottom-up level by level using linear scan ---
     // Level 0 lives in `solidStream` + `mixedStream` (dual streams, sorted).
@@ -493,15 +489,11 @@ function buildSparseOctree(
         octreeStep++;
     }
 
-    const tBuild = performance.now();
-
     // --- Phase 3: Flatten tree to Laine-Karras format ---
     const result = flattenTreeFromLevels(
         interiorLevels, solidStream, mixedStream, mixedMasks, nSolid, nMixed,
         gridBounds, sceneBounds, voxelResolution, actualDepth
     );
-
-    const tFlatten = performance.now();
 
     bar.tick();
     bar.end();

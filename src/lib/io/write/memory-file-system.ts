@@ -86,7 +86,7 @@ class MemoryFileSystem implements FileSystem {
         });
     }
 
-    async mkdir(path: string): Promise<void> {
+    async mkdir(_path: string): Promise<void> {
         // no-op
     }
 }

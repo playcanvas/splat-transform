@@ -31,7 +31,7 @@ const logTransform = (value: number) => {
 };
 
 // no packing
-const identity = (index: number, width: number) => {
+const identity = (index: number) => {
     return index;
 };
 
@@ -126,7 +126,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
 
         for (let i = 0; i < indices.length; ++i) {
             const idx = indices[i];
-            const ti = layout(i, width);
+            const ti = layout(i);
             data[ti * channels + 0] = columns[0][idx];
             data[ti * channels + 1] = numColumns > 1 ? columns[1][idx] : 0;
             data[ti * channels + 2] = numColumns > 2 ? columns[2][idx] : 0;
@@ -151,7 +151,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
             const y = 65535 * (logTransform(row.y) - meansMinMax[1][0]) / (meansMinMax[1][1] - meansMinMax[1][0]);
             const z = 65535 * (logTransform(row.z) - meansMinMax[2][0]) / (meansMinMax[2][1] - meansMinMax[2][0]);
 
-            const ti = layout(i, width);
+            const ti = layout(i);
 
             meansL[ti * 4] = x & 0xff;
             meansL[ti * 4 + 1] = y & 0xff;
@@ -197,14 +197,14 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
 
             // invert if max component is negative
             if (q[maxComp] < 0) {
-                q.forEach((v, j) => {
+                q.forEach((_v, j) => {
                     q[j] *= -1;
                 });
             }
 
             // scale by sqrt(2) to fit in [-1, 1] range
             const sqrt2 = Math.sqrt(2);
-            q.forEach((v, j) => {
+            q.forEach((_v, j) => {
                 q[j] *= sqrt2;
             });
 
@@ -215,7 +215,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
                 [0, 1, 2]
             ][maxComp];
 
-            const ti = layout(i, width);
+            const ti = layout(i);
 
             quats[ti * 4]     = 255 * (q[idx[0]] * 0.5 + 0.5);
             quats[ti * 4 + 1] = 255 * (q[idx[1]] * 0.5 + 0.5);
@@ -297,7 +297,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
         const labelsBuf = new Uint8Array(width * height * channels);
         for (let i = 0; i < indices.length; ++i) {
             const label = labels[indices[i]];
-            const ti = layout(i, width);
+            const ti = layout(i);
 
             labelsBuf[ti * 4 + 0] = 0xff & label;
             labelsBuf[ti * 4 + 1] = 0xff & (label >> 8);

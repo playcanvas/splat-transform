@@ -65,44 +65,6 @@ const calcAverage = (dataTable: DataTable, cluster: number[], row: any) => {
     }
 };
 
-// cpu cluster
-const clusterCpu = (points: DataTable, centroids: DataTable, labels: Uint32Array) => {
-    const numColumns = points.numColumns;
-
-    const pData = points.columns.map(c => c.data);
-    const cData = centroids.columns.map(c => c.data);
-
-    const point = new Float32Array(numColumns);
-
-    const distance = (centroidIndex: number) => {
-        let result = 0;
-        for (let i = 0; i < numColumns; ++i) {
-            const v = point[i] - cData[i][centroidIndex];
-            result += v * v;
-        }
-        return result;
-    };
-
-    for (let i = 0; i < points.numRows; ++i) {
-        let mind = Infinity;
-        let mini = -1;
-
-        for (let c = 0; c < numColumns; ++c) {
-            point[c] = pData[c][i];
-        }
-
-        for (let j = 0; j < centroids.numRows; ++j) {
-            const d = distance(j);
-            if (d < mind) {
-                mind = d;
-                mini = j;
-            }
-        }
-
-        labels[i] = mini;
-    }
-};
-
 const clusterKdTreeCpu = (points: DataTable, centroids: DataTable, labels: Uint32Array) => {
     const kdTree = new KdTree(centroids);
 

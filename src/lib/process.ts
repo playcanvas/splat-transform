@@ -401,7 +401,7 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 const negInfOk = new Set(['scale_0', 'scale_1', 'scale_2']);
                 const columnNames = result.columnNames;
 
-                const predicate = (row: any, rowIndex: number) => {
+                const predicate = (row: any) => {
                     for (const key of columnNames) {
                         const value = row[key];
                         if (!isFinite(value)) {
@@ -546,7 +546,7 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                     rawRadius /= result.transform.scale;
                 }
                 const radiusSq = rawRadius * rawRadius;
-                const predicate = (row: any, rowIndex: number) => {
+                const predicate = (row: any) => {
                     const { x, y, z } = row;
                     return (x - rawCenter.x) ** 2 + (y - rawCenter.y) ** 2 + (z - rawCenter.z) ** 2 < radiusSq;
                 };
