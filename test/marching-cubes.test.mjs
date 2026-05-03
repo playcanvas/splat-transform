@@ -575,14 +575,15 @@ describe('coplanarMerge', () => {
         //   ly=3: bitIdx = 12 → lo bit 12
         const bumpLo = ((1 << 4) | (1 << 8) | (1 << 12)) >>> 0;
 
+        // bounds 8x4x8 / res 1.0 = 8x4x8 voxels = 2x1x2 blocks
         const buffer = new BlockMaskBuffer();
-        buffer.addBlock(xyzToMorton(0, 0, 0), slabLo, slabHi);
-        buffer.addBlock(xyzToMorton(1, 0, 0), slabLo, slabHi);
-        buffer.addBlock(xyzToMorton(0, 0, 1), slabLo, slabHi);
-        buffer.addBlock(xyzToMorton(1, 0, 1), (slabLo | bumpLo) >>> 0, slabHi);
+        buffer.addBlock(linearBlockIdx(0, 0, 0, 2, 1), slabLo, slabHi);
+        buffer.addBlock(linearBlockIdx(1, 0, 0, 2, 1), slabLo, slabHi);
+        buffer.addBlock(linearBlockIdx(0, 0, 1, 2, 1), slabLo, slabHi);
+        buffer.addBlock(linearBlockIdx(1, 0, 1, 2, 1), (slabLo | bumpLo) >>> 0, slabHi);
 
         const bounds = makeGridBounds(0, 0, 0, 8, 4, 8);
-        const raw = marchingCubes(buffer, bounds, 1.0);
+        const raw = marchingCubes(toGrid(buffer, 8, 4, 8), bounds, 1.0);
         const merged = coplanarMerge(raw, 1.0);
 
         const rawStats = meshStats(raw);
@@ -621,14 +622,15 @@ describe('coplanarMerge', () => {
         const slabLo = 0x000F_000F >>> 0;
         const slabHi = 0x000F_000F >>> 0;
         const bumpLo = ((1 << 4) | (1 << 8) | (1 << 12)) >>> 0;
+        // bounds 8x4x8 / res 1.0 = 8x4x8 voxels = 2x1x2 blocks
         const buffer = new BlockMaskBuffer();
-        buffer.addBlock(xyzToMorton(0, 0, 0), slabLo, slabHi);
-        buffer.addBlock(xyzToMorton(1, 0, 0), slabLo, slabHi);
-        buffer.addBlock(xyzToMorton(0, 0, 1), slabLo, slabHi);
-        buffer.addBlock(xyzToMorton(1, 0, 1), (slabLo | bumpLo) >>> 0, slabHi);
+        buffer.addBlock(linearBlockIdx(0, 0, 0, 2, 1), slabLo, slabHi);
+        buffer.addBlock(linearBlockIdx(1, 0, 0, 2, 1), slabLo, slabHi);
+        buffer.addBlock(linearBlockIdx(0, 0, 1, 2, 1), slabLo, slabHi);
+        buffer.addBlock(linearBlockIdx(1, 0, 1, 2, 1), (slabLo | bumpLo) >>> 0, slabHi);
 
         const bounds = makeGridBounds(0, 0, 0, 8, 4, 8);
-        const raw = marchingCubes(buffer, bounds, 1.0);
+        const raw = marchingCubes(toGrid(buffer, 8, 4, 8), bounds, 1.0);
         const merged = coplanarMerge(raw, 1.0);
 
         const edgeCount = new Map();
@@ -887,14 +889,15 @@ describe('coplanarMerge', () => {
         const slabLo = 0x000F_000F >>> 0;
         const slabHi = 0x000F_000F >>> 0;
         const bumpLo = ((1 << 4) | (1 << 8) | (1 << 12)) >>> 0;
+        // bounds 8x4x8 / res 1.0 = 8x4x8 voxels = 2x1x2 blocks
         const buffer = new BlockMaskBuffer();
-        buffer.addBlock(xyzToMorton(0, 0, 0), slabLo, slabHi);
-        buffer.addBlock(xyzToMorton(1, 0, 0), slabLo, slabHi);
-        buffer.addBlock(xyzToMorton(0, 0, 1), slabLo, slabHi);
-        buffer.addBlock(xyzToMorton(1, 0, 1), (slabLo | bumpLo) >>> 0, slabHi);
+        buffer.addBlock(linearBlockIdx(0, 0, 0, 2, 1), slabLo, slabHi);
+        buffer.addBlock(linearBlockIdx(1, 0, 0, 2, 1), slabLo, slabHi);
+        buffer.addBlock(linearBlockIdx(0, 0, 1, 2, 1), slabLo, slabHi);
+        buffer.addBlock(linearBlockIdx(1, 0, 1, 2, 1), (slabLo | bumpLo) >>> 0, slabHi);
 
         const bounds = makeGridBounds(0, 0, 0, 8, 4, 8);
-        const raw = marchingCubes(buffer, bounds, 1.0);
+        const raw = marchingCubes(toGrid(buffer, 8, 4, 8), bounds, 1.0);
         const merged = coplanarMerge(raw, 1.0);
 
         const rawKeys = new Set();

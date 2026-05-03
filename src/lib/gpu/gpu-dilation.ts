@@ -715,21 +715,22 @@ class GpuDilation {
      * and returns Promises for the per-block `typesOut` (packed 2-bit) and
      * `masksOut` (lo/hi pairs). Caller integrates these into `dst` directly,
      * skipping the dense-bit hot loop that currently dominates wall time.
-     * @param slotIdx
-     * @param minBx
-     * @param minBy
-     * @param minBz
-     * @param outerBx
-     * @param outerBy
-     * @param outerBz
-     * @param haloBx
-     * @param haloBy
-     * @param haloBz
-     * @param innerBx
-     * @param innerBy
-     * @param innerBz
-     * @param halfExtentXZ
-     * @param halfExtentY
+     * @param slotIdx - Round-robin slot index (`0..NUM_SLOTS-1`).
+     * @param minBx - Outer chunk origin block X (in `src`'s block coords).
+     * @param minBy - Outer chunk origin block Y.
+     * @param minBz - Outer chunk origin block Z.
+     * @param outerBx - Outer chunk size in blocks along X.
+     * @param outerBy - Outer chunk size in blocks along Y.
+     * @param outerBz - Outer chunk size in blocks along Z.
+     * @param haloBx - Halo size in blocks along X (one side).
+     * @param haloBy - Halo size in blocks along Y (one side).
+     * @param haloBz - Halo size in blocks along Z (one side).
+     * @param innerBx - Inner (output) region size in blocks along X.
+     * @param innerBy - Inner region size in blocks along Y.
+     * @param innerBz - Inner region size in blocks along Z.
+     * @param halfExtentXZ - Dilation half-extent in voxels along X and Z.
+     * @param halfExtentY - Dilation half-extent in voxels along Y.
+     * @returns Promises for the inner region's packed types and `[lo, hi]` masks.
      */
     submitChunkSparse(
         slotIdx: number,
