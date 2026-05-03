@@ -4,12 +4,15 @@ import type { Bounds } from '../data-table';
 import { logger } from '../utils';
 import { popcount, xyzToMorton } from '../voxel/morton';
 import {
+    BLOCK_EMPTY,
     BLOCK_MIXED,
     BLOCK_SOLID,
     BLOCKS_PER_WORD,
     EVEN_BITS,
     SparseVoxelGrid,
-    TYPE_MASK
+    TYPE_MASK,
+    readBlockType,
+    writeBlockType
 } from '../voxel/sparse-voxel-grid';
 
 /**
@@ -28,6 +31,8 @@ const SOLID_LEAF_MARKER = 0xFF000000 >>> 0;
  * `SOLID_LEAF_MARKER`, so the practical interior cap is 16,777,215.)
  */
 const MAX_24BIT_OFFSET = 0x00FFFFFF;
+
+const DENSE_SOLID_STREAM_THRESHOLD = 8_000_000;
 
 // ============================================================================
 // Sparse Octree Types
@@ -65,6 +70,13 @@ interface SparseOctree {
     leafData: Uint32Array;
 }
 
+interface BuildSparseOctreeOptions {
+    /** Release the input grid's backing storage after the octree has copied the data it needs. */
+    consumeGrid?: boolean;
+    /** Force dense-mip construction; intended for tests and benchmarks. */
+    dense?: boolean;
+}
+
 // ============================================================================
 // Octree Node Types (during construction)
 // ============================================================================
@@ -91,6 +103,26 @@ interface LevelData {
     types: number[];
     /** 8-bit child presence mask for each node */
     childMasks: number[];
+}
+
+/**
+ * Interior nodes waiting for child emission during BFS flattening.
+ * Children are written immediately, so this wave never contains leaves.
+ */
+interface InteriorWave {
+    pos: Uint32Array;
+    li: Uint32Array;
+    ii: Uint32Array;
+    childMasks: Uint8Array;
+    length: number;
+}
+
+interface DenseLevel {
+    types: Uint32Array;
+    nbx: number;
+    nby: number;
+    nbz: number;
+    nonEmptyCount: number;
 }
 
 // ============================================================================
@@ -216,6 +248,367 @@ function lowerBoundF64(arr: Float64Array, target: number, n: number): number {
     return lo;
 }
 
+/**
+ * Create an interior BFS wave buffer.
+ *
+ * @param initialCapacity - Initial entry capacity.
+ * @returns Empty interior wave.
+ */
+function createInteriorWave(initialCapacity: number): InteriorWave {
+    const cap = Math.max(16, initialCapacity);
+    return {
+        pos: new Uint32Array(cap),
+        li: new Uint32Array(cap),
+        ii: new Uint32Array(cap),
+        childMasks: new Uint8Array(cap),
+        length: 0
+    };
+}
+
+/**
+ * Append an interior node to a BFS wave, growing the typed arrays if needed.
+ *
+ * @param wave - Target wave.
+ * @param pos - Already-emitted node position to backfill.
+ * @param li - Interior level index.
+ * @param ii - Node index within the level.
+ * @param childMask - Node child mask.
+ */
+function pushInteriorWave(
+    wave: InteriorWave,
+    pos: number,
+    li: number,
+    ii: number,
+    childMask: number
+): void {
+    if (wave.length === wave.pos.length) {
+        const cap = wave.pos.length * 2;
+        const grownPos = new Uint32Array(cap);
+        const grownLi = new Uint32Array(cap);
+        const grownIi = new Uint32Array(cap);
+        const grownChildMasks = new Uint8Array(cap);
+        grownPos.set(wave.pos);
+        grownLi.set(wave.li);
+        grownIi.set(wave.ii);
+        grownChildMasks.set(wave.childMasks);
+        wave.pos = grownPos;
+        wave.li = grownLi;
+        wave.ii = grownIi;
+        wave.childMasks = grownChildMasks;
+    }
+    const i = wave.length++;
+    wave.pos[i] = pos;
+    wave.li[i] = li;
+    wave.ii[i] = ii;
+    wave.childMasks[i] = childMask;
+}
+
+/**
+ * Tree depth needed for the occupied grid dimensions.
+ *
+ * @param gridBounds - Grid bounds aligned to block boundaries.
+ * @param voxelResolution - Size of each voxel in world units.
+ * @returns Octree depth in 4x4x4 block levels.
+ */
+function calculateTreeDepth(gridBounds: Bounds, voxelResolution: number): number {
+    const gridSize = new Vec3(
+        gridBounds.max.x - gridBounds.min.x,
+        gridBounds.max.y - gridBounds.min.y,
+        gridBounds.max.z - gridBounds.min.z
+    );
+    const blockSize = voxelResolution * 4;
+    const blocksPerAxis = Math.max(
+        Math.ceil(gridSize.x / blockSize),
+        Math.ceil(gridSize.y / blockSize),
+        Math.ceil(gridSize.z / blockSize)
+    );
+    return Math.max(1, Math.ceil(Math.log2(blocksPerAxis)));
+}
+
+/**
+ * Dense-mip octree construction is better when the grid contains many solid
+ * blocks that will collapse. The sorted solid-leaf stream would otherwise be
+ * enormous even though those leaves mostly disappear from the final tree.
+ *
+ * @param totalBlocks - Total 4x4x4 blocks in the grid.
+ * @param nSolid - Number of solid blocks.
+ * @param nMixed - Number of mixed blocks.
+ * @returns True when dense construction is likely to use less memory.
+ */
+function shouldUseDenseMipBuild(totalBlocks: number, nSolid: number, nMixed: number): boolean {
+    return nSolid >= DENSE_SOLID_STREAM_THRESHOLD &&
+        nSolid > nMixed * 4 &&
+        nSolid > totalBlocks * 0.25;
+}
+
+/**
+ * Build dense 2-bit type mips from a SparseVoxelGrid. Level 0 is the input
+ * block grid; higher levels aggregate 2x2x2 children.
+ *
+ * @param grid - Source sparse voxel grid.
+ * @param maxDepth - Maximum octree depth to build.
+ * @returns Dense type levels from leaf blocks to root.
+ */
+function buildDenseTypeLevels(grid: SparseVoxelGrid, maxDepth: number): DenseLevel[] {
+    const levels: DenseLevel[] = [{
+        types: grid.types,
+        nbx: grid.nbx,
+        nby: grid.nby,
+        nbz: grid.nbz,
+        nonEmptyCount: 0
+    }];
+
+    for (let li = 1; li <= maxDepth; li++) {
+        const prev = levels[li - 1];
+        const nbx = Math.max(1, Math.ceil(prev.nbx / 2));
+        const nby = Math.max(1, Math.ceil(prev.nby / 2));
+        const nbz = Math.max(1, Math.ceil(prev.nbz / 2));
+        const total = nbx * nby * nbz;
+        const types = new Uint32Array((total + BLOCKS_PER_WORD - 1) >>> 4);
+        const prevStride = prev.nbx * prev.nby;
+        const stride = nbx * nby;
+        let nonEmptyCount = 0;
+
+        for (let pz = 0; pz < nbz; pz++) {
+            const childZ0 = pz << 1;
+            for (let py = 0; py < nby; py++) {
+                const childY0 = py << 1;
+                for (let px = 0; px < nbx; px++) {
+                    const childX0 = px << 1;
+                    let childMask = 0;
+                    let allSolid = true;
+                    let childCount = 0;
+
+                    for (let oct = 0; oct < 8; oct++) {
+                        const cx = childX0 + (oct & 1);
+                        const cy = childY0 + ((oct >> 1) & 1);
+                        const cz = childZ0 + ((oct >> 2) & 1);
+                        if (cx >= prev.nbx || cy >= prev.nby || cz >= prev.nbz) continue;
+                        const childIdx = cx + cy * prev.nbx + cz * prevStride;
+                        const bt = readBlockType(prev.types, childIdx);
+                        if (bt === BLOCK_EMPTY) continue;
+                        childMask |= 1 << oct;
+                        childCount++;
+                        if (bt !== BLOCK_SOLID) {
+                            allSolid = false;
+                        }
+                    }
+
+                    if (childMask !== 0) {
+                        const parentIdx = px + py * nbx + pz * stride;
+                        writeBlockType(types, parentIdx, allSolid && childCount === 8 ? BLOCK_SOLID : BLOCK_MIXED);
+                        nonEmptyCount++;
+                    }
+                }
+            }
+        }
+
+        levels.push({ types, nbx, nby, nbz, nonEmptyCount });
+
+        if (nonEmptyCount === 0) break;
+        if (nonEmptyCount === 1 && readBlockType(types, 0) !== BLOCK_EMPTY) break;
+    }
+
+    return levels;
+}
+
+/**
+ * Flatten dense type mips into Laine-Karras node and leaf data arrays.
+ *
+ * @param levels - Dense type levels from leaf blocks to root.
+ * @param grid - Original grid, used for mixed leaf masks.
+ * @param gridBounds - Grid bounds aligned to block boundaries.
+ * @param sceneBounds - Original Gaussian scene bounds.
+ * @param voxelResolution - Size of each voxel in world units.
+ * @returns Sparse octree structure.
+ */
+function flattenDenseLevels(
+    levels: Array<DenseLevel | null>,
+    grid: SparseVoxelGrid,
+    gridBounds: Bounds,
+    sceneBounds: Bounds,
+    voxelResolution: number
+): SparseOctree {
+    const treeDepth = Math.max(1, levels.length - 1);
+    const rootLi = levels.length - 1;
+    const rootLevel = levels[rootLi]!;
+    const rootType = readBlockType(rootLevel.types, 0);
+
+    if (rootType === BLOCK_EMPTY) {
+        return {
+            gridBounds,
+            sceneBounds,
+            voxelResolution,
+            leafSize: 4,
+            treeDepth,
+            numInteriorNodes: 0,
+            numMixedLeaves: 0,
+            nodes: new Uint32Array(0),
+            leafData: new Uint32Array(0)
+        };
+    }
+
+    let nodes = new Uint32Array(Math.max(1024, Math.min(MAX_24BIT_OFFSET + 1, grid.masks.size * 3)));
+    let nodeLen = 0;
+    let leafData = new Uint32Array(Math.max(1024, grid.masks.size * 2));
+    let leafDataLen = 0;
+    let numInteriorNodes = 0;
+    let numMixedLeaves = 0;
+
+    const appendNode = (value: number): number => {
+        if (nodeLen === nodes.length) {
+            const grown = new Uint32Array(nodes.length * 2);
+            grown.set(nodes);
+            nodes = grown;
+        }
+        nodes[nodeLen] = value >>> 0;
+        return nodeLen++;
+    };
+
+    const appendMixedLeaf = (blockIdx: number): void => {
+        const leafDataIndex = leafDataLen >> 1;
+        if (leafDataIndex > MAX_24BIT_OFFSET) {
+            throw new Error(
+                `Sparse octree mixed-leaf count (${leafDataIndex + 1}) exceeds the ` +
+                `Laine-Karras 24-bit baseOffset limit (${MAX_24BIT_OFFSET + 1}). ` +
+                'Reduce the grid size or split the scene.'
+            );
+        }
+        if (leafDataLen + 2 > leafData.length) {
+            const grown = new Uint32Array(leafData.length * 2);
+            grown.set(leafData);
+            leafData = grown;
+        }
+        const s = grid.masks.slot(blockIdx);
+        leafData[leafDataLen++] = grid.masks.lo[s];
+        leafData[leafDataLen++] = grid.masks.hi[s];
+        appendNode(leafDataIndex);
+        numMixedLeaves++;
+    };
+
+    let curWave = createInteriorWave(1);
+    let nextWave = createInteriorWave(1024);
+
+    const appendDenseNode = (li: number, idx: number, wave: InteriorWave): void => {
+        const level = levels[li]!;
+        const bt = readBlockType(level.types, idx);
+        if (bt === BLOCK_SOLID) {
+            appendNode(SOLID_LEAF_MARKER);
+        } else if (bt === BLOCK_MIXED) {
+            const pos = appendNode(0);
+            pushInteriorWave(wave, pos, li, idx, 0);
+            numInteriorNodes++;
+        }
+    };
+
+    appendDenseNode(rootLi, 0, curWave);
+
+    while (curWave.length > 0) {
+        nextWave.length = 0;
+        const currentLi = curWave.li[0];
+
+        for (let w = 0; w < curWave.length; w++) {
+            const li = curWave.li[w];
+            const parentLevel = levels[li]!;
+            const childLevel = levels[li - 1]!;
+            const parentIdx = curWave.ii[w];
+            const px = parentIdx % parentLevel.nbx;
+            const pyBz = (parentIdx / parentLevel.nbx) | 0;
+            const py = pyBz % parentLevel.nby;
+            const pz = (pyBz / parentLevel.nby) | 0;
+            const childX0 = px << 1;
+            const childY0 = py << 1;
+            const childZ0 = pz << 1;
+            const childStride = childLevel.nbx * childLevel.nby;
+            const childStart = nodeLen;
+            let childMask = 0;
+
+            if (childStart > MAX_24BIT_OFFSET) {
+                throw new Error(
+                    `Sparse octree node count (${childStart + 1}) exceeds the ` +
+                    `Laine-Karras 24-bit baseOffset limit (${MAX_24BIT_OFFSET + 1}). ` +
+                    'Reduce the grid size or split the scene.'
+                );
+            }
+
+            for (let oct = 0; oct < 8; oct++) {
+                const cx = childX0 + (oct & 1);
+                const cy = childY0 + ((oct >> 1) & 1);
+                const cz = childZ0 + ((oct >> 2) & 1);
+                if (cx >= childLevel.nbx || cy >= childLevel.nby || cz >= childLevel.nbz) continue;
+                const childIdx = cx + cy * childLevel.nbx + cz * childStride;
+                const bt = readBlockType(childLevel.types, childIdx);
+                if (bt === BLOCK_EMPTY) continue;
+
+                childMask |= 1 << oct;
+                if (li === 1) {
+                    if (bt === BLOCK_SOLID) {
+                        appendNode(SOLID_LEAF_MARKER);
+                    } else {
+                        appendMixedLeaf(childIdx);
+                    }
+                } else {
+                    appendDenseNode(li - 1, childIdx, nextWave);
+                }
+            }
+
+            nodes[curWave.pos[w]] = ((childMask & 0xFF) << 24) | childStart;
+        }
+
+        levels[currentLi] = null;
+        const tmp = curWave;
+        curWave = nextWave;
+        nextWave = tmp;
+    }
+
+    return {
+        gridBounds,
+        sceneBounds,
+        voxelResolution,
+        leafSize: 4,
+        treeDepth,
+        numInteriorNodes,
+        numMixedLeaves,
+        nodes: nodes.slice(0, nodeLen),
+        leafData: leafData.slice(0, leafDataLen)
+    };
+}
+
+/**
+ * Build a sparse octree from dense type mips. This avoids the sorted solid
+ * Morton stream for grids dominated by solid blocks.
+ *
+ * @param grid - Source grid.
+ * @param gridBounds - Grid bounds aligned to block boundaries.
+ * @param sceneBounds - Original Gaussian scene bounds.
+ * @param voxelResolution - Size of each voxel in world units.
+ * @param maxDepth - Maximum tree depth.
+ * @param consumeGrid - Release grid storage after flattening.
+ * @returns Sparse octree structure.
+ */
+function buildSparseOctreeDense(
+    grid: SparseVoxelGrid,
+    gridBounds: Bounds,
+    sceneBounds: Bounds,
+    voxelResolution: number,
+    maxDepth: number,
+    consumeGrid: boolean
+): SparseOctree {
+    const bar = logger.bar('Building tree', 10);
+    const levels = buildDenseTypeLevels(grid, maxDepth);
+    for (let i = 0; i < 8; i++) {
+        bar.tick();
+    }
+    const result = flattenDenseLevels(levels, grid, gridBounds, sceneBounds, voxelResolution);
+    bar.tick();
+    if (consumeGrid) {
+        grid.releaseStorage();
+    }
+    bar.tick();
+    bar.end();
+    return result;
+}
+
 // ============================================================================
 // Octree Construction
 // ============================================================================
@@ -232,13 +625,15 @@ function lowerBoundF64(arr: Float64Array, target: number, n: number): number {
  * @param gridBounds - Grid bounds aligned to block boundaries
  * @param sceneBounds - Original scene bounds
  * @param voxelResolution - Size of each voxel in world units
+ * @param options - Build options.
  * @returns Sparse octree structure
  */
 function buildSparseOctree(
     grid: SparseVoxelGrid,
     gridBounds: Bounds,
     sceneBounds: Bounds,
-    voxelResolution: number
+    voxelResolution: number,
+    options: BuildSparseOctreeOptions = {}
 ): SparseOctree {
     // --- Phase 1: Walk grid → emit Morton streams + sort ---
     // Level 0 (leaves) is represented as TWO sorted streams — solid mortons
@@ -257,6 +652,7 @@ function buildSparseOctree(
 
     const { nbx, nby, nbz, types: gridTypes, masks: gridMasks } = grid;
     const totalBlocks = nbx * nby * nbz;
+    const treeDepth = calculateTreeDepth(gridBounds, voxelResolution);
     const lastWordIdx = gridTypes.length - 1;
     const lastLanes = totalBlocks - lastWordIdx * BLOCKS_PER_WORD;
     const lastValidWordMask = lastLanes >= BLOCKS_PER_WORD ?
@@ -275,6 +671,12 @@ function buildSparseOctree(
         const mixedMask = ((word >>> 1) & EVEN_BITS) & ~(word & EVEN_BITS);
         nSolid += popcount(solidMask >>> 0);
         nMixed += popcount(mixedMask >>> 0);
+    }
+
+    if (options.dense || shouldUseDenseMipBuild(totalBlocks, nSolid, nMixed)) {
+        return buildSparseOctreeDense(
+            grid, gridBounds, sceneBounds, voxelResolution, treeDepth, !!options.consumeGrid
+        );
     }
 
     const solidStream = new Float64Array(nSolid);
@@ -314,6 +716,10 @@ function buildSparseOctree(
         }
     }
 
+    if (options.consumeGrid) {
+        grid.releaseStorage();
+    }
+
     if (nSolid > 1) solidStream.sort();
     if (nMixed > 1) sortMixedByMorton(mixedStream, mixedMasks, nMixed);
 
@@ -330,20 +736,6 @@ function buildSparseOctree(
 
     const bar = logger.bar('Building tree', 10);
     let octreeStep = 0;
-
-    // Calculate tree depth based on grid size
-    const gridSize = new Vec3(
-        gridBounds.max.x - gridBounds.min.x,
-        gridBounds.max.y - gridBounds.min.y,
-        gridBounds.max.z - gridBounds.min.z
-    );
-    const blockSize = voxelResolution * 4;
-    const blocksPerAxis = Math.max(
-        Math.ceil(gridSize.x / blockSize),
-        Math.ceil(gridSize.y / blockSize),
-        Math.ceil(gridSize.z / blockSize)
-    );
-    const treeDepth = Math.max(1, Math.ceil(Math.log2(blocksPerAxis)));
 
     const interiorLevels: LevelData[] = [];
 

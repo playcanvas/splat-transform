@@ -204,6 +204,14 @@ class SparseVoxelGrid {
         this.masks.clear();
     }
 
+    /**
+     * Release the large backing arrays once a grid has been consumed.
+     */
+    releaseStorage(): void {
+        this.types = new Uint32Array(0);
+        this.masks.releaseStorage();
+    }
+
     clone(): SparseVoxelGrid {
         const g = new SparseVoxelGrid(this.nx, this.ny, this.nz);
         g.types.set(this.types);

@@ -854,6 +854,47 @@ describe('buildSparseOctree', function () {
             }
         });
     });
+
+    describe('dense mip construction', function () {
+        it('should match the stream builder leaf set', function () {
+            const NBX = 8, NBY = 8, NBZ = 8;
+            const acc = new BlockMaskBuffer();
+            for (let z = 0; z < NBZ; z++) {
+                for (let y = 0; y < NBY; y++) {
+                    for (let x = 0; x < NBX; x++) {
+                        if (x < 4 && y < 4 && z < 4) {
+                            acc.addBlock(linearBlockIdx(x, y, z, NBX, NBY), 0xFFFFFFFF, 0xFFFFFFFF);
+                        } else if ((x + y + z) % 11 === 0) {
+                            const m = xyzToMorton(x, y, z);
+                            acc.addBlock(
+                                linearBlockIdx(x, y, z, NBX, NBY),
+                                (m * 0x45D9F3B) >>> 0,
+                                (m * 0x119DE1F3) >>> 0
+                            );
+                        }
+                    }
+                }
+            }
+
+            const gridBounds = { min: new Vec3(0, 0, 0), max: new Vec3(8, 8, 8) };
+            const streamOctree = buildSparseOctree(
+                gridFromBuffer(acc, NBX * 4, NBY * 4, NBZ * 4),
+                gridBounds, gridBounds, 0.25
+            );
+            const denseOctree = buildSparseOctree(
+                gridFromBuffer(acc, NBX * 4, NBY * 4, NBZ * 4),
+                gridBounds, gridBounds, 0.25,
+                { dense: true }
+            );
+
+            assert.strictEqual(denseOctree.treeDepth, streamOctree.treeDepth);
+            assert.strictEqual(denseOctree.numMixedLeaves, streamOctree.numMixedLeaves);
+            assert.deepStrictEqual(
+                walkLeaves(denseOctree).sort((a, b) => a.morton - b.morton),
+                walkLeaves(streamOctree).sort((a, b) => a.morton - b.morton)
+            );
+        });
+    });
 });
 
 // ============================================================================

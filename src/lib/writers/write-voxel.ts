@@ -332,10 +332,10 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         throw new Error(`writeVoxel: missing required column(s): ${missingColumns.join(', ')}`);
     }
     const delta = computeWriteTransform(dataTable.transform, Transform.IDENTITY);
-    const cols = transformColumns(dataTable, voxelColumns, delta);
-    const pcDataTable = new DataTable(voxelColumns.map(name => new Column(name, cols.get(name)!)));
+    let cols: ReturnType<typeof transformColumns> | null = transformColumns(dataTable, voxelColumns, delta);
+    let pcDataTable: DataTable | null = new DataTable(voxelColumns.map(name => new Column(name, cols!.get(name)!)));
 
-    const extentsResult = computeGaussianExtents(pcDataTable);
+    let extentsResult: ReturnType<typeof computeGaussianExtents> | null = computeGaussianExtents(pcDataTable);
     const bounds = extentsResult.sceneBounds;
 
     const g = logger.group('Build voxels');
@@ -345,11 +345,12 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     // error path are reaped by the embedder's logger.error() -> unwindAll.
     let gpuVoxelization: GpuVoxelization | null = null;
     let gpuDilation: GpuDilation | null = null;
+    let bvh: GaussianBVH | null = null;
     try {
         const bvhSub = logger.group('Building BVH');
         logger.debug(`scene extents: (${bounds.min.x.toFixed(2)},${bounds.min.y.toFixed(2)},${bounds.min.z.toFixed(2)}) - (${bounds.max.x.toFixed(2)},${bounds.max.y.toFixed(2)},${bounds.max.z.toFixed(2)})`);
 
-        const bvh = new GaussianBVH(pcDataTable, extentsResult.extents);
+        bvh = new GaussianBVH(pcDataTable, extentsResult.extents);
         bvhSub.end();
 
         const device = await createDevice();
@@ -372,6 +373,10 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         const buffer = await voxelizeToBuffer(
             bvh, gpuVoxelization, gridBounds, voxelResolution, opacityCutoff
         );
+        bvh = null;
+        pcDataTable = null;
+        extentsResult = null;
+        cols = null;
 
         gpuVoxelization.destroy();
         gpuVoxelization = null;
@@ -447,6 +452,9 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         gridBounds = finalCrop.gridBounds;
         cropSub.end();
 
+        gpuDilation?.destroy();
+        gpuDilation = null;
+
         const glbBytes = collisionMesh ?
             buildCollisionMesh(grid, gridBounds, voxelResolution) :
             null;
@@ -455,9 +463,9 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             grid,
             gridBounds,
             bounds,
-            voxelResolution
+            voxelResolution,
+            { consumeGrid: true }
         );
-        grid.clear();
 
         logger.info(`octree depth: ${octree.treeDepth}`);
         logger.info(`interior nodes: ${fmtCount(octree.numInteriorNodes)}`);
