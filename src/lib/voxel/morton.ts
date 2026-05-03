@@ -26,26 +26,6 @@ function xyzToMorton(x: number, y: number, z: number): number {
 }
 
 /**
- * Decode Morton code to block coordinates.
- *
- * @param m - Morton code
- * @returns Tuple of [x, y, z] block coordinates
- */
-function mortonToXYZ(m: number): [number, number, number] {
-    let x = 0, y = 0, z = 0;
-    let bit = 1;
-    while (m > 0) {
-        const triplet = m % 8;
-        if (triplet & 1) x |= bit;
-        if (triplet & 2) y |= bit;
-        if (triplet & 4) z |= bit;
-        bit <<= 1;
-        m = Math.trunc(m / 8);
-    }
-    return [x, y, z];
-}
-
-/**
  * Count the number of set bits in a 32-bit integer.
  *
  * @param n - 32-bit integer
@@ -80,24 +60,9 @@ function isEmpty(lo: number, hi: number): boolean {
     return lo === 0 && hi === 0;
 }
 
-/**
- * Get the offset to a child node given a parent's child mask and octant.
- * Uses popcount to count how many children come before this octant.
- *
- * @param mask - 8-bit child mask from parent node
- * @param octant - Octant index (0-7)
- * @returns Offset from base child pointer
- */
-function getChildOffset(mask: number, octant: number): number {
-    const prefix = (1 << octant) - 1;
-    return popcount(mask & prefix);
-}
-
 export {
     xyzToMorton,
-    mortonToXYZ,
     popcount,
     isSolid,
-    isEmpty,
-    getChildOffset
+    isEmpty
 };

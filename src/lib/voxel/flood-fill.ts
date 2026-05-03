@@ -32,13 +32,17 @@ import {
  * @param nx - Grid dimension X in voxels.
  * @param ny - Grid dimension Y in voxels.
  * @param nz - Grid dimension Z in voxels.
+ * @param onBlockFilled - Optional progress callback receiving the running
+ * count of whole-block fills. Throttled internally so callers can wire it
+ * directly to a progress bar without worrying about per-block overhead.
  * @returns Sparse voxel grid marking all reachable voxels.
  */
 function twoLevelBFS(
     blocked: SparseVoxelGrid,
     blockSeeds: number[],
     voxelSeeds: { ix: number; iy: number; iz: number }[],
-    nx: number, ny: number, nz: number
+    nx: number, ny: number, nz: number,
+    onBlockFilled?: (count: number) => void
 ): SparseVoxelGrid {
     const visited = new SparseVoxelGrid(nx, ny, nz);
     const nbx = nx >> 2;
@@ -69,8 +73,14 @@ function twoLevelBFS(
     let vqTail = 0;
     let vqSize = 0;
 
+    // Power-of-two cap that fits a Uint32Array index (2^30 entries = 4GB each).
+    const QUEUE_CAP_MAX = 1 << 30;
+
     const growBlockQueue = (): void => {
-        const newCap = bqCap << 1;
+        if (bqCap >= QUEUE_CAP_MAX) {
+            throw new Error(`flood-fill: block queue exceeded ${QUEUE_CAP_MAX} entries — scene likely contains pathologically large gaussians or a connected component too large to flood-fill at this resolution. Try a coarser --filter-cluster resolution or pre-filter outliers (e.g. --filter-box).`);
+        }
+        const newCap = bqCap * 2;
         const nb = new Uint32Array(newCap);
         for (let i = 0; i < bqSize; i++) nb[i] = bqBuf[(bqHead + i) & bqMask];
         bqBuf = nb;
@@ -81,7 +91,10 @@ function twoLevelBFS(
     };
 
     const growVoxelQueue = (): void => {
-        const newCap = vqCap << 1;
+        if (vqCap >= QUEUE_CAP_MAX) {
+            throw new Error(`flood-fill: voxel queue exceeded ${QUEUE_CAP_MAX} entries — scene likely contains pathologically large gaussians or a connected component too large to flood-fill at this resolution. Try a coarser --filter-cluster resolution or pre-filter outliers (e.g. --filter-box).`);
+        }
+        const newCap = vqCap * 2;
         const nix = new Uint32Array(newCap);
         const niy = new Uint32Array(newCap);
         const niz = new Uint32Array(newCap);
@@ -109,6 +122,10 @@ function twoLevelBFS(
         vqSize++;
     };
 
+    const PROGRESS_INTERVAL = 1024;
+    let blockFillCount = 0;
+    let nextProgressAt = PROGRESS_INTERVAL;
+
     const tryFillBlock = (blockIdx: number): boolean => {
         if (readBlockType(blockedTypes, blockIdx) !== BLOCK_EMPTY) return false;
         if (readBlockType(visitedTypes, blockIdx) !== BLOCK_EMPTY) return false;
@@ -117,6 +134,11 @@ function twoLevelBFS(
         bqBuf[bqTail] = blockIdx;
         bqTail = (bqTail + 1) & bqMask;
         bqSize++;
+        blockFillCount++;
+        if (onBlockFilled && blockFillCount >= nextProgressAt) {
+            onBlockFilled(blockFillCount);
+            nextProgressAt = blockFillCount + PROGRESS_INTERVAL;
+        }
         return true;
     };
 
@@ -284,6 +306,8 @@ function twoLevelBFS(
             if (iz < nz - 1) tryEnqueueVoxel(ix, iy, iz + 1);
         }
     }
+
+    if (onBlockFilled) onBlockFilled(blockFillCount);
 
     return visited;
 }

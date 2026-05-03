@@ -71,7 +71,7 @@ struct BatchInfo {
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var<storage, read> allGaussians: array<Gaussian>;
 @group(0) @binding(2) var<storage, read> indices: array<u32>;
-@group(0) @binding(3) var<storage, read_write> results: array<atomic<u32>>;
+@group(0) @binding(3) var<storage, read_write> results: array<u32>;
 @group(0) @binding(4) var<storage, read> batchInfos: array<BatchInfo>;
 
 // Shared memory for cooperative Gaussian loading.
@@ -80,6 +80,7 @@ struct BatchInfo {
 // 64 Gaussians * 64 bytes each = 4 KB (well within 16 KB WebGPU minimum).
 const tileSize = 64u;
 var<workgroup> sharedGaussians: array<Gaussian, tileSize>;
+var<workgroup> blockMasks: array<atomic<u32>, 2>;
 
 fn mortonToXYZ(m: u32) -> vec3u {
     return vec3u(
@@ -147,6 +148,11 @@ fn main(
     let blockOffset = vec3f(f32(blockX), f32(blockY), f32(blockZ)) * 4.0 * uniforms.voxelResolution;
     let voxelCenter = blockMin + blockOffset + (vec3f(localPos) + 0.5) * uniforms.voxelResolution;
     let voxelHalfSize = uniforms.voxelResolution * 0.5;
+
+    if (voxelIdx < 2u) {
+        atomicStore(&blockMasks[voxelIdx], 0u);
+    }
+    workgroupBarrier();
     
     // Extinction-based density accumulation with shared memory tiling.
     // Instead of each thread independently reading Gaussians from global memory,
@@ -188,15 +194,17 @@ fn main(
     // Determine if voxel is solid
     let isSolid = finalOpacity >= uniforms.opacityCutoff;
     
-    // Write result bit to output using linear indexing (z*16 + y*4 + x)
-    // Each batch's results are at batchIdx * maxBlocksPerBatch * 2 in the results array
+    // Accumulate this block's 64 voxel bits in workgroup memory, then write the
+    // two packed u32 result words once. Each workgroup owns one output block.
     let linearIdx = localPos.z * 16u + localPos.y * 4u + localPos.x;
-    let resultBase = batchIdx * uniforms.maxBlocksPerBatch * 2u;
-    let wordIndex = resultBase + flatBlockId * 2u + (linearIdx >> 5u);
-    let bitIndex = linearIdx & 31u;
-    
     if (isSolid) {
-        atomicOr(&results[wordIndex], 1u << bitIndex);
+        atomicOr(&blockMasks[linearIdx >> 5u], 1u << (linearIdx & 31u));
+    }
+    workgroupBarrier();
+
+    if (voxelIdx < 2u) {
+        let resultBase = batchIdx * uniforms.maxBlocksPerBatch * 2u + flatBlockId * 2u;
+        results[resultBase + voxelIdx] = atomicLoad(&blockMasks[voxelIdx]);
     }
 }
 `;
@@ -276,11 +284,11 @@ class GpuVoxelization {
 
     private totalGaussians: number = 0;
 
-    // Reusable zero buffer for clearing results (grown as needed)
-    private zeroBuffer: Uint32Array;
-
     /** Floats per Gaussian in the interleaved buffer (16 for alignment) */
     private static readonly FLOATS_PER_GAUSSIAN = 16;
+
+    /** Gaussian rows per CPU staging chunk when uploading to the shared GPU buffer. */
+    private static readonly UPLOAD_CHUNK_GAUSSIANS = 1 << 18;
 
     /** Maximum blocks per batch (16^3 = 4096 for 4x4x4 voxel blocks in a 16-block batch) */
     static readonly MAX_BLOCKS_PER_BATCH = 4096;
@@ -332,9 +340,9 @@ class GpuVoxelization {
             const indexBufferSize = 1024 * 1024 * 4;  // 1M indices = 4 MB
             const indexBuffer = new StorageBuffer(device, indexBufferSize, BUFFERUSAGE_COPY_DST);
 
-            // 64 batches × 4096 blocks × 2 u32 × 4 bytes = 2 MB
+            // Initial capacity: 64 batches × 4096 blocks × 2 u32 × 4 bytes = 2 MB
             const resultsBufferSize = 64 * GpuVoxelization.MAX_BLOCKS_PER_BATCH * 2 * 4;
-            const resultsBuffer = new StorageBuffer(device, resultsBufferSize, BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST);
+            const resultsBuffer = new StorageBuffer(device, resultsBufferSize, BUFFERUSAGE_COPY_SRC);
 
             // 64 batches × 8 fields × 4 bytes = 2 KB
             const batchInfoBufferSize = 64 * GpuVoxelization.BATCH_INFO_U32S * 4;
@@ -356,9 +364,6 @@ class GpuVoxelization {
             });
         }
 
-        // Pre-allocate zero buffer for clearing results
-        const initialResultsU32 = 64 * GpuVoxelization.MAX_BLOCKS_PER_BATCH * 2;
-        this.zeroBuffer = new Uint32Array(initialResultsU32);
     }
 
     /**
@@ -382,9 +387,6 @@ class GpuVoxelization {
 
         this.gaussianBuffer = new StorageBuffer(this.device, bufferSize, BUFFERUSAGE_COPY_DST);
 
-        // Interleave and upload all Gaussian data
-        const interleavedData = new Float32Array(numGaussians * GpuVoxelization.FLOATS_PER_GAUSSIAN);
-
         const x = dataTable.getColumnByName('x').data;
         const y = dataTable.getColumnByName('y').data;
         const z = dataTable.getColumnByName('z').data;
@@ -400,34 +402,42 @@ class GpuVoxelization {
         const extentY = extents.getColumnByName('extent_y').data;
         const extentZ = extents.getColumnByName('extent_z').data;
 
-        for (let i = 0; i < numGaussians; i++) {
-            const offset = i * GpuVoxelization.FLOATS_PER_GAUSSIAN;
-            interleavedData[offset + 0] = x[i];
-            interleavedData[offset + 1] = y[i];
-            interleavedData[offset + 2] = z[i];
-            interleavedData[offset + 3] = opacity[i];
+        const stride = GpuVoxelization.FLOATS_PER_GAUSSIAN;
+        const chunkRows = Math.min(numGaussians, GpuVoxelization.UPLOAD_CHUNK_GAUSSIANS);
+        const interleavedData = new Float32Array(chunkRows * stride);
 
-            // Normalize quaternion — the Rodrigues rotation in the shader
-            // assumes unit quaternions; non-normalized ones (common in MCMC
-            // training) would produce incorrect Mahalanobis distances.
-            const qw = rotW[i], qx = rotX[i], qy = rotY[i], qz = rotZ[i];
-            const qlen = Math.sqrt(qw * qw + qx * qx + qy * qy + qz * qz);
-            const invLen = qlen > 0 ? 1 / qlen : 0;
-            interleavedData[offset + 4] = qw * invLen;
-            interleavedData[offset + 5] = qx * invLen;
-            interleavedData[offset + 6] = qy * invLen;
-            interleavedData[offset + 7] = qz * invLen;
-            interleavedData[offset + 8] = scaleX[i];
-            interleavedData[offset + 9] = scaleY[i];
-            interleavedData[offset + 10] = scaleZ[i];
-            interleavedData[offset + 11] = extentX[i];
-            interleavedData[offset + 12] = extentY[i];
-            interleavedData[offset + 13] = extentZ[i];
-            interleavedData[offset + 14] = 0; // padding
-            interleavedData[offset + 15] = 0; // padding
+        for (let chunkStart = 0; chunkStart < numGaussians; chunkStart += chunkRows) {
+            const chunkCount = Math.min(chunkRows, numGaussians - chunkStart);
+            for (let j = 0; j < chunkCount; j++) {
+                const i = chunkStart + j;
+                const offset = j * stride;
+                interleavedData[offset + 0] = x[i];
+                interleavedData[offset + 1] = y[i];
+                interleavedData[offset + 2] = z[i];
+                interleavedData[offset + 3] = opacity[i];
+
+                // Normalize quaternion — the Rodrigues rotation in the shader
+                // assumes unit quaternions; non-normalized ones (common in MCMC
+                // training) would produce incorrect Mahalanobis distances.
+                const qw = rotW[i], qx = rotX[i], qy = rotY[i], qz = rotZ[i];
+                const qlen = Math.sqrt(qw * qw + qx * qx + qy * qy + qz * qz);
+                const invLen = qlen > 0 ? 1 / qlen : 0;
+                interleavedData[offset + 4] = qw * invLen;
+                interleavedData[offset + 5] = qx * invLen;
+                interleavedData[offset + 6] = qy * invLen;
+                interleavedData[offset + 7] = qz * invLen;
+                interleavedData[offset + 8] = scaleX[i];
+                interleavedData[offset + 9] = scaleY[i];
+                interleavedData[offset + 10] = scaleZ[i];
+                interleavedData[offset + 11] = extentX[i];
+                interleavedData[offset + 12] = extentY[i];
+                interleavedData[offset + 13] = extentZ[i];
+                interleavedData[offset + 14] = 0; // padding
+                interleavedData[offset + 15] = 0; // padding
+            }
+
+            this.gaussianBuffer.write(chunkStart * stride * 4, interleavedData, 0, chunkCount * stride);
         }
-
-        this.gaussianBuffer.write(0, interleavedData, 0, interleavedData.length);
 
         // Bind the shared Gaussian buffer to ALL slot compute instances
         for (const slot of this.slots) {
@@ -508,7 +518,7 @@ class GpuVoxelization {
         const resultsU32Count = numBatches * maxBlocks * 2;
         this.ensureSlotBuffer(
             slot, 'resultsBuffer', 'resultsBufferSize',
-            resultsU32Count * 4, BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST, 'results'
+            resultsU32Count * 4, BUFFERUSAGE_COPY_SRC, 'results'
         );
 
         const batchInfoU32Count = numBatches * GpuVoxelization.BATCH_INFO_U32S;
@@ -516,14 +526,6 @@ class GpuVoxelization {
             slot, 'batchInfoBuffer', 'batchInfoBufferSize',
             batchInfoU32Count * 4, BUFFERUSAGE_COPY_DST, 'batchInfos'
         );
-
-        // Ensure zero buffer is large enough for clearing results
-        if (this.zeroBuffer.length < resultsU32Count) {
-            this.zeroBuffer = new Uint32Array(resultsU32Count);
-        }
-
-        // Clear results buffer
-        slot.resultsBuffer.write(0, this.zeroBuffer, 0, resultsU32Count);
 
         // Upload concatenated indices
         slot.indexBuffer.write(0, concatenatedIndices, 0, totalIndices);

@@ -8,11 +8,9 @@ import {
     type VoxelFilterContext
 } from './filter-pipeline';
 import { twoLevelBFS } from './flood-fill';
-import { mortonToXYZ } from './morton';
 import {
     BLOCK_EMPTY,
     BLOCK_MIXED,
-    BLOCK_SOLID,
     BLOCKS_PER_WORD,
     EVEN_BITS,
     SOLID_WORD,
@@ -53,6 +51,9 @@ const buildInvertedGrid = (
     // Trim the final word so the trailing lanes (past totalBlocks) read
     // back as EMPTY rather than SOLID.
     const totalBlocks = grid.nbx * grid.nby * grid.nbz;
+    if (totalBlocks === 0) {
+        return grid;
+    }
     const lastWord = grid.types.length - 1;
     const lastLanes = totalBlocks - lastWord * BLOCKS_PER_WORD;
     if (lastLanes < BLOCKS_PER_WORD) {
@@ -60,17 +61,14 @@ const buildInvertedGrid = (
         grid.types[lastWord] = (grid.types[lastWord] & validBits) >>> 0;
     }
 
-    const solidMortons = buffer.getSolidBlocks();
-    for (let i = 0; i < solidMortons.length; i++) {
-        const [bx, by, bz] = mortonToXYZ(solidMortons[i]);
-        const blockIdx = bx + by * grid.nbx + bz * grid.bStride;
-        grid.setBlockType(blockIdx, BLOCK_EMPTY);
+    const solidIdx = buffer.getSolidBlocks();
+    for (let i = 0; i < solidIdx.length; i++) {
+        grid.setBlockType(solidIdx[i], BLOCK_EMPTY);
     }
 
     const mixed = buffer.getMixedBlocks();
-    for (let i = 0; i < mixed.morton.length; i++) {
-        const [bx, by, bz] = mortonToXYZ(mixed.morton[i]);
-        const blockIdx = bx + by * grid.nbx + bz * grid.bStride;
+    for (let i = 0; i < mixed.blockIdx.length; i++) {
+        const blockIdx = mixed.blockIdx[i];
         grid.setBlockType(blockIdx, BLOCK_MIXED);
         grid.masks.set(blockIdx, (~mixed.masks[i * 2]) >>> 0, (~mixed.masks[i * 2 + 1]) >>> 0);
     }
@@ -194,7 +192,11 @@ const filterCluster = async (
         ctx = await setupVoxelFilter(dataTable, createDevice);
 
         const clampedResolution = Math.max(0.01, voxelResolution);
-        const maxGridExtent = 8192 * clampedResolution;
+        // Per-axis cap: 4096 voxels = 1024 blocks. Total blocks <= 1024^3 = 2^30,
+        // safely under the 2^32 limit imposed by uint32 block indexing in
+        // SparseVoxelGrid (readBlockType/writeBlockType use `blockIdx >>> 4`,
+        // which truncates indices >= 2^32 and corrupts visited-state tracking).
+        const maxGridExtent = 4096 * clampedResolution;
 
         const sceneExtentX = ctx.sceneBounds.max.x - ctx.sceneBounds.min.x;
         const sceneExtentY = ctx.sceneBounds.max.y - ctx.sceneBounds.min.y;
@@ -206,19 +208,19 @@ const filterCluster = async (
             clampedResolution
         );
 
-        const clampAxis = (min: number, max: number) => {
+        const clampAxis = (min: number, max: number, seedV: number) => {
             const extent = max - min;
             if (extent > maxGridExtent) {
-                const center = (min + max) * 0.5;
                 const half = maxGridExtent * 0.5;
-                return { min: center - half, max: center + half };
+                const c = Math.max(min + half, Math.min(seedV, max - half));
+                return { min: c - half, max: c + half };
             }
             return { min, max };
         };
 
-        const cx = clampAxis(gridBounds.min.x, gridBounds.max.x);
-        const cy = clampAxis(gridBounds.min.y, gridBounds.max.y);
-        const cz = clampAxis(gridBounds.min.z, gridBounds.max.z);
+        const cx = clampAxis(gridBounds.min.x, gridBounds.max.x, seed.x);
+        const cy = clampAxis(gridBounds.min.y, gridBounds.max.y, seed.y);
+        const cz = clampAxis(gridBounds.min.z, gridBounds.max.z, seed.z);
         gridBounds.min.set(cx.min, cy.min, cz.min);
         gridBounds.max.set(cx.max, cy.max, cz.max);
 
@@ -269,7 +271,7 @@ const filterCluster = async (
         // Every visited voxel is originally-occupied (the BFS only traverses through them),
         // so the visited grid is a correct subset of the original buffer.
         const visitedBuffer = visitedGrid.toBuffer(0, 0, 0, nbx, nby, nbz);
-        const lookup = buildBlockLookup(visitedBuffer, grid.strideY, grid.strideZ);
+        const lookup = buildBlockLookup(visitedBuffer);
 
         if (ccSet.size === buffer.count) {
             logger.info('all blocks in one cluster, no filtering needed');

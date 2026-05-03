@@ -91,7 +91,7 @@ const filterFloaters = async (
         ctx.gpuVoxelization.destroy();
         ctx.gpuVoxelization = null;
 
-        const lookup = buildBlockLookup(buffer, grid.strideY, grid.strideZ);
+        const lookup = buildBlockLookup(buffer);
 
         logger.info(`occupied blocks: ${fmtCount(lookup.solidSet.size + lookup.mixedMap.size)} (${fmtCount(lookup.solidSet.size)} solid, ${fmtCount(lookup.mixedMap.size)} mixed)`);
 

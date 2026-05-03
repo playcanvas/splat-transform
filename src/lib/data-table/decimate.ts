@@ -111,7 +111,7 @@ const makeGaussianSamples = (n: number, seed: number): Float64Array[] => {
 // ---------- 3x3 matrix helpers (row-major, 9 floats) ----------
 
 const quatToRotmat = (qw: number, qx: number, qy: number, qz: number, out: Float64Array, o: number) => {
-    const ww = qw * qw, xx = qx * qx, yy = qy * qy, zz = qz * qz;
+    const xx = qx * qx, yy = qy * qy, zz = qz * qz;
     const wx = qw * qx, wy = qw * qy, wz = qw * qz;
     const xy = qx * qy, xz = qx * qz, yz = qy * qz;
     out[o] = 1 - 2 * (yy + zz);
@@ -266,7 +266,6 @@ interface SplatCache {
 
 const buildPerSplatCache = (
     n: number,
-    cx: any, cy: any, cz: any,
     cop: any, cs0: any, cs1: any, cs2: any,
     cr0: any, cr1: any, cr2: any, cr3: any
 ): SplatCache => {
@@ -545,7 +544,7 @@ const momentMatch = (
     }
 };
 
-// ====================== SORT BY VISIBILITY (legacy) ======================
+// ====================== VISIBILITY PRUNING ======================
 
 const sortByVisibility = (dataTable: DataTable, indices: Uint32Array): void => {
     const opacityCol = dataTable.getColumnByName('opacity');
@@ -675,7 +674,7 @@ const simplifyGaussians = (dataTable: DataTable, targetCount: number): DataTable
         const cr2 = current.getColumnByName('rot_2')!.data;
         const cr3 = current.getColumnByName('rot_3')!.data;
 
-        const cache = buildPerSplatCache(n, cx, cy, cz, cop, cs0, cs1, cs2, cr0, cr1, cr2, cr3);
+        const cache = buildPerSplatCache(n, cop, cs0, cs1, cs2, cr0, cr1, cr2, cr3);
 
         const posTable = new DataTable([
             new Column('x', cx instanceof Float32Array ? cx : new Float32Array(cx as any)),

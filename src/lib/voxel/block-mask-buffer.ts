@@ -16,26 +16,25 @@ const growUint32 = (src: Uint32Array, newCap: number): Uint32Array => {
 
 /**
  * Append-only buffer for streaming voxelization results.
- * Stores block masks using Morton codes for efficient octree construction.
+ * Stores (linear blockIdx, voxel mask) pairs for non-empty 4x4x4 blocks.
  *
- * Backed by typed arrays that grow geometrically. Morton codes use
- * Float64Array (51 bits of precision needed; exceeds Smi range), and
- * voxel masks use Uint32Array. This raises the per-buffer capacity well
- * above V8's regular-array backing-store limit so very large grids can
- * round-trip without throwing `RangeError: Invalid array length`.
+ * Block keys are linear block indices `bx + by*nbx + bz*nbx*nby` in the
+ * producer's grid coordinate system. Producers and consumers must agree
+ * on the grid dimensions; the buffer itself is dimension-agnostic.
  *
- * Buffers start at length 0 and the first `addBlock` allocates
- * `INITIAL_CAPACITY` entries; subsequent grows double. A freshly cleared
- * instance therefore retains no allocations until it is reused.
+ * Backed by typed arrays that grow geometrically. Keys use Float64Array so
+ * the per-buffer capacity exceeds V8's regular-array backing-store limit
+ * (large grids exceed Smi range and would throw `RangeError: Invalid array
+ * length` with a regular array).
  */
 class BlockMaskBuffer {
-    /** Morton codes for solid blocks (mask is implicitly all 1s) */
-    private _solidMorton: Float64Array = new Float64Array(0);
+    /** Linear block indices for solid blocks (mask is implicitly all 1s) */
+    private _solidIdx: Float64Array = new Float64Array(0);
     private _solidCount = 0;
     private _solidCap = 0;
 
-    /** Morton codes for mixed blocks */
-    private _mixedMorton: Float64Array = new Float64Array(0);
+    /** Linear block indices for mixed blocks */
+    private _mixedIdx: Float64Array = new Float64Array(0);
     private _mixedCount = 0;
     private _mixedCap = 0;
 
@@ -46,11 +45,11 @@ class BlockMaskBuffer {
      * Add a non-empty block to the buffer.
      * Automatically classifies as solid or mixed based on mask values.
      *
-     * @param morton - Morton code encoding block position
+     * @param blockIdx - Linear block index (`bx + by*nbx + bz*nbx*nby`)
      * @param lo - Lower 32 bits of voxel mask
      * @param hi - Upper 32 bits of voxel mask
      */
-    addBlock(morton: number, lo: number, hi: number): void {
+    addBlock(blockIdx: number, lo: number, hi: number): void {
         if (isEmpty(lo, hi)) {
             return;
         }
@@ -59,16 +58,16 @@ class BlockMaskBuffer {
             if (this._solidCount === this._solidCap) {
                 // First grow: 0 → INITIAL_CAPACITY. Subsequent: double.
                 this._solidCap = this._solidCap === 0 ? INITIAL_CAPACITY : this._solidCap * 2;
-                this._solidMorton = growFloat64(this._solidMorton, this._solidCap);
+                this._solidIdx = growFloat64(this._solidIdx, this._solidCap);
             }
-            this._solidMorton[this._solidCount++] = morton;
+            this._solidIdx[this._solidCount++] = blockIdx;
         } else {
             if (this._mixedCount === this._mixedCap) {
                 this._mixedCap = this._mixedCap === 0 ? INITIAL_CAPACITY : this._mixedCap * 2;
-                this._mixedMorton = growFloat64(this._mixedMorton, this._mixedCap);
+                this._mixedIdx = growFloat64(this._mixedIdx, this._mixedCap);
                 this._mixedMasks = growUint32(this._mixedMasks, this._mixedCap * 2);
             }
-            this._mixedMorton[this._mixedCount] = morton;
+            this._mixedIdx[this._mixedCount] = blockIdx;
             this._mixedMasks[this._mixedCount * 2] = lo;
             this._mixedMasks[this._mixedCount * 2 + 1] = hi;
             this._mixedCount++;
@@ -77,13 +76,13 @@ class BlockMaskBuffer {
 
     /**
      * Get all mixed blocks as views into the underlying buffers.
-     * Index `i` of `morton` corresponds to mask pair `(masks[i*2], masks[i*2+1])`.
+     * Index `i` of `blockIdx` corresponds to mask pair `(masks[i*2], masks[i*2+1])`.
      *
-     * @returns Object with morton codes and interleaved masks
+     * @returns Object with linear block indices and interleaved masks
      */
-    getMixedBlocks(): { morton: Float64Array; masks: Uint32Array } {
+    getMixedBlocks(): { blockIdx: Float64Array; masks: Uint32Array } {
         return {
-            morton: this._mixedMorton.subarray(0, this._mixedCount),
+            blockIdx: this._mixedIdx.subarray(0, this._mixedCount),
             masks: this._mixedMasks.subarray(0, this._mixedCount * 2)
         };
     }
@@ -91,10 +90,10 @@ class BlockMaskBuffer {
     /**
      * Get all solid blocks as a view into the underlying buffer.
      *
-     * @returns Array of Morton codes
+     * @returns Array of linear block indices
      */
     getSolidBlocks(): Float64Array {
-        return this._solidMorton.subarray(0, this._solidCount);
+        return this._solidIdx.subarray(0, this._solidCount);
     }
 
     /**
@@ -130,11 +129,11 @@ class BlockMaskBuffer {
      * to `INITIAL_CAPACITY`.
      */
     clear(): void {
-        this._solidMorton = new Float64Array(0);
+        this._solidIdx = new Float64Array(0);
         this._solidCount = 0;
         this._solidCap = 0;
 
-        this._mixedMorton = new Float64Array(0);
+        this._mixedIdx = new Float64Array(0);
         this._mixedMasks = new Uint32Array(0);
         this._mixedCount = 0;
         this._mixedCap = 0;

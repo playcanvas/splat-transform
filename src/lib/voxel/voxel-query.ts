@@ -1,5 +1,4 @@
 import { BlockMaskBuffer } from './block-mask-buffer';
-import { mortonToXYZ } from './morton';
 import {
     computeGaussianInverse,
     evaluateGaussianAt,
@@ -32,29 +31,25 @@ interface BlockGridParams {
 }
 
 /**
- * Build block lookup structures from the buffer's Morton codes.
+ * Build block lookup structures from the buffer's linear block indices.
+ * The buffer's keys are already linear block indices, so this is a direct
+ * copy into a Set / Map for O(1) random access.
  *
  * @param buffer - Block mask buffer containing voxelized blocks.
- * @param strideY - numBlocksX (stride for Y dimension).
- * @param strideZ - numBlocksX * numBlocksY (stride for Z dimension).
  * @returns Solid block set, mixed block map (linear index to masks array index), and masks.
  */
 const buildBlockLookup = (
-    buffer: BlockMaskBuffer,
-    strideY: number,
-    strideZ: number
+    buffer: BlockMaskBuffer
 ): BlockLookup => {
     const solidSet = new Set<number>();
-    const solidMortons = buffer.getSolidBlocks();
-    for (let i = 0; i < solidMortons.length; i++) {
-        const [bx, by, bz] = mortonToXYZ(solidMortons[i]);
-        solidSet.add(bx + by * strideY + bz * strideZ);
+    const solidIdx = buffer.getSolidBlocks();
+    for (let i = 0; i < solidIdx.length; i++) {
+        solidSet.add(solidIdx[i]);
     }
     const mixed = buffer.getMixedBlocks();
     const mixedMap = new Map<number, number>();
-    for (let i = 0; i < mixed.morton.length; i++) {
-        const [bx, by, bz] = mortonToXYZ(mixed.morton[i]);
-        mixedMap.set(bx + by * strideY + bz * strideZ, i);
+    for (let i = 0; i < mixed.blockIdx.length; i++) {
+        mixedMap.set(mixed.blockIdx[i], i);
     }
     return { solidSet, mixedMap, masks: mixed.masks };
 };

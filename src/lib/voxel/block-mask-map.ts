@@ -128,6 +128,19 @@ class BlockMaskMap {
         this._size = 0;
     }
 
+    /**
+     * Release all backing storage. The map should not be used again except by
+     * replacing it with a new instance.
+     */
+    releaseStorage(): void {
+        this.keys = new Int32Array(0);
+        this.lo = new Uint32Array(0);
+        this.hi = new Uint32Array(0);
+        this._size = 0;
+        this._capacity = 0;
+        this._mask = 0;
+    }
+
     forEach(fn: (key: number, lo: number, hi: number) => void): void {
         const keys = this.keys;
         const cap = this._capacity;

@@ -78,18 +78,26 @@ function computeEmptyGrid(visited: SparseVoxelGrid, blocked: SparseVoxelGrid): S
  * @param consumeA - If true, `a` is mutated in place and returned. The
  * caller must not subsequently read `a` as an independent value
  * (the returned grid IS `a`).
+ * @param onProgress - Optional progress callback over `b.types` words.
  * @returns Grid containing the union of both inputs. Equal to `a` when
  * `consumeA=true`, otherwise a freshly cloned grid.
  */
 function sparseOrGrids(
     a: SparseVoxelGrid,
     b: SparseVoxelGrid,
-    consumeA: boolean = false
+    consumeA: boolean = false,
+    onProgress?: (done: number, total: number) => void
 ): SparseVoxelGrid {
     const result = consumeA ? a : a.clone();
     const totalBlocks = b.nbx * b.nby * b.nbz;
     const bTypes = b.types;
+    const PROGRESS_INTERVAL = 1 << 13;
+    let nextTick = PROGRESS_INTERVAL;
     for (let w = 0; w < bTypes.length; w++) {
+        if (onProgress && w >= nextTick) {
+            onProgress(w, bTypes.length);
+            nextTick = w + PROGRESS_INTERVAL;
+        }
         const word = bTypes[w];
         if (word === 0) continue;
         let nonEmpty = ((word & EVEN_BITS) | ((word >>> 1) & EVEN_BITS)) >>> 0;
@@ -112,6 +120,7 @@ function sparseOrGrids(
             nonEmpty &= nonEmpty - 1;
         }
     }
+    if (onProgress) onProgress(bTypes.length, bTypes.length);
     return result;
 }
 

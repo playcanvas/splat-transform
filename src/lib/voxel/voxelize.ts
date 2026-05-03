@@ -1,7 +1,6 @@
 import { Vec3 } from 'playcanvas';
 
 import { BlockMaskBuffer } from './block-mask-buffer';
-import { xyzToMorton } from './morton';
 import type { Bounds } from '../data-table';
 import {
     GpuVoxelization,
@@ -46,6 +45,7 @@ const voxelizeToBuffer = async (
     const numBlocksZ = Math.round((gridBounds.max.z - gridBounds.min.z) / blockSize);
 
     const buffer = new BlockMaskBuffer();
+    const bStride = numBlocksX * numBlocksY;
     const batchSize = 16;
 
     const MEGA_MAX_BATCHES = 512;
@@ -70,6 +70,14 @@ const voxelizeToBuffer = async (
         batches: PendingBatch[];
     } | null = null;
 
+    const ensureSlotIndexCapacity = (slotIdx: number, needed: number, preserveCount: number): void => {
+        if (needed <= slotCapacities[slotIdx]) return;
+        slotCapacities[slotIdx] = Math.max(slotCapacities[slotIdx] * 2, needed);
+        const newArray = new Uint32Array(slotCapacities[slotIdx]);
+        newArray.set(slotIndexArrays[slotIdx].subarray(0, preserveCount));
+        slotIndexArrays[slotIdx] = newArray;
+    };
+
     const processResults = (masks: Uint32Array, batches: PendingBatch[]): void => {
         for (let b = 0; b < batches.length; b++) {
             const batch = batches[b];
@@ -90,8 +98,8 @@ const voxelizeToBuffer = async (
                 const absBlockY = batch.by + localY;
                 const absBlockZ = batch.bz + localZ;
 
-                const morton = xyzToMorton(absBlockX, absBlockY, absBlockZ);
-                buffer.addBlock(morton, maskLo, maskHi);
+                const idx = absBlockX + absBlockY * numBlocksX + absBlockZ * bStride;
+                buffer.addBlock(idx, maskLo, maskHi);
             }
         }
     };
@@ -141,28 +149,31 @@ const voxelizeToBuffer = async (
                 const blockMaxY = blockMinY + currBatchY * blockSize;
                 const blockMaxZ = blockMinZ + currBatchZ * blockSize;
 
-                const overlapping = bvh.queryOverlappingRaw(
+                let overlappingCount = bvh.queryOverlappingRawInto(
                     blockMinX, blockMinY, blockMinZ,
-                    blockMaxX, blockMaxY, blockMaxZ
+                    blockMaxX, blockMaxY, blockMaxZ,
+                    slotIndexArrays[currentSlot],
+                    indexOffset
                 );
 
-                if (overlapping.length === 0) {
+                if (overlappingCount === 0) {
                     continue;
                 }
 
-                const needed = indexOffset + overlapping.length;
+                const needed = indexOffset + overlappingCount;
                 if (needed > slotCapacities[currentSlot]) {
-                    slotCapacities[currentSlot] = Math.max(slotCapacities[currentSlot] * 2, needed);
-                    const newArray = new Uint32Array(slotCapacities[currentSlot]);
-                    newArray.set(slotIndexArrays[currentSlot].subarray(0, indexOffset));
-                    slotIndexArrays[currentSlot] = newArray;
+                    ensureSlotIndexCapacity(currentSlot, needed, indexOffset);
+                    overlappingCount = bvh.queryOverlappingRawInto(
+                        blockMinX, blockMinY, blockMinZ,
+                        blockMaxX, blockMaxY, blockMaxZ,
+                        slotIndexArrays[currentSlot],
+                        indexOffset
+                    );
                 }
-
-                slotIndexArrays[currentSlot].set(overlapping, indexOffset);
 
                 pendingBatches.push({
                     indexOffset,
-                    indexCount: overlapping.length,
+                    indexCount: overlappingCount,
                     blockMin: { x: blockMinX, y: blockMinY, z: blockMinZ },
                     numBlocksX: currBatchX,
                     numBlocksY: currBatchY,
@@ -172,7 +183,7 @@ const voxelizeToBuffer = async (
                     bz
                 });
 
-                indexOffset += overlapping.length;
+                indexOffset += overlappingCount;
 
                 if (pendingBatches.length >= MEGA_MAX_BATCHES || indexOffset >= MEGA_MAX_INDICES) {
                     await flushPendingBatches();

@@ -1,25 +1,26 @@
 import { Vec3 } from 'playcanvas';
 
-import { BlockMaskBuffer } from './block-mask-buffer';
-import { sparseDilate3 } from './dilation';
+import { gpuDilate3 } from './dilation';
 import type { NavSeed, NavSimplifyResult } from './fill-exterior';
 import { twoLevelBFS } from './flood-fill';
 import { computeEmptyGrid } from './grid-ops';
 import type { Bounds } from '../data-table';
+import type { GpuDilation } from '../gpu';
 import {
     BLOCK_EMPTY,
     SparseVoxelGrid
 } from './sparse-voxel-grid';
 import { logger } from '../utils';
 
-const carve = (
-    buffer: BlockMaskBuffer,
+const carve = async (
+    gridA: SparseVoxelGrid,
     gridBounds: Bounds,
     voxelResolution: number,
     capsuleHeight: number,
     capsuleRadius: number,
-    seed: NavSeed
-): NavSimplifyResult => {
+    seed: NavSeed,
+    gpu: GpuDilation
+): Promise<NavSimplifyResult> => {
     if (!Number.isFinite(voxelResolution) || voxelResolution <= 0) {
         throw new Error(`carve: voxelResolution must be finite and > 0, got ${voxelResolution}`);
     }
@@ -30,28 +31,14 @@ const carve = (
         throw new Error(`carve: capsuleRadius must be finite and >= 0, got ${capsuleRadius}`);
     }
 
-    const nx = Math.round((gridBounds.max.x - gridBounds.min.x) / voxelResolution);
-    const ny = Math.round((gridBounds.max.y - gridBounds.min.y) / voxelResolution);
-    const nz = Math.round((gridBounds.max.z - gridBounds.min.z) / voxelResolution);
+    const { nx, ny, nz, nbx, nby, nbz } = gridA;
 
     if (nx % 4 !== 0 || ny % 4 !== 0 || nz % 4 !== 0) {
         throw new Error(`Grid dimensions must be multiples of 4, got ${nx}x${ny}x${nz}`);
     }
 
-    if (buffer.count === 0) {
-        return { buffer, gridBounds };
-    }
-
     const kernelR = Math.ceil(capsuleRadius / voxelResolution);
     const yHalfExtent = Math.ceil(capsuleHeight / (2 * voxelResolution));
-    const nbx = nx >> 2;
-    const nby = ny >> 2;
-    const nbz = nz >> 2;
-
-    const gridA = SparseVoxelGrid.fromBuffer(buffer, nx, ny, nz);
-
-    // gridA is read only by this dilate; consume it as scratch.
-    const blocked = sparseDilate3(gridA, kernelR, yHalfExtent, true);
 
     let seedIx = Math.floor((seed.x - gridBounds.min.x) / voxelResolution);
     let seedIy = Math.floor((seed.y - gridBounds.min.y) / voxelResolution);
@@ -59,15 +46,17 @@ const carve = (
 
     if (seedIx < 0 || seedIx >= nx || seedIy < 0 || seedIy >= ny || seedIz < 0 || seedIz >= nz) {
         logger.warn(`seed (${seed.x}, ${seed.y}, ${seed.z}) outside grid, skipping carve`);
-        return { buffer, gridBounds };
+        return { grid: gridA, gridBounds };
     }
+
+    const blocked = await gpuDilate3(gpu, gridA, kernelR, yHalfExtent);
 
     if (blocked.getVoxel(seedIx, seedIy, seedIz)) {
         const maxRadius = Math.max(kernelR, yHalfExtent) * 2;
         const found = SparseVoxelGrid.findNearestFreeCell(blocked, seedIx, seedIy, seedIz, maxRadius);
         if (!found) {
             logger.warn(`seed (${seed.x}, ${seed.y}, ${seed.z}) blocked after dilation, no free cell within ${maxRadius} voxels, skipping carve`);
-            return { buffer, gridBounds };
+            return { grid: gridA, gridBounds };
         }
         seedIx = found.ix;
         seedIy = found.iy;
@@ -78,19 +67,29 @@ const carve = (
     const seedBt = blocked.getBlockType(seedBlockIdx);
     const bSeeds = seedBt === BLOCK_EMPTY ? [seedBlockIdx] : [];
     const vSeeds = seedBt === BLOCK_EMPTY ? [] : [{ ix: seedIx, iy: seedIy, iz: seedIz }];
-    const visited = twoLevelBFS(blocked, bSeeds, vSeeds, nx, ny, nz);
+
+    // Approximate total: nbx*nby*nbz is an upper bound on whole-block fills,
+    // so the bar usually finishes shy of 100% (mixed/solid blocks aren't
+    // counted). Good enough for visual feedback on a long BFS.
+    const bfsBar = logger.bar('BFS', nbx * nby * nbz);
+    const visited = twoLevelBFS(
+        blocked, bSeeds, vSeeds, nx, ny, nz,
+        count => bfsBar.update(count)
+    );
+    bfsBar.end();
 
     const emptyGrid = computeEmptyGrid(visited, blocked);
 
-    // emptyGrid is read only by this dilate; consume it as scratch.
-    const navRegion = sparseDilate3(emptyGrid, kernelR, yHalfExtent, true);
+    const navRegion = await gpuDilate3(gpu, emptyGrid, kernelR, yHalfExtent);
 
-    const navBounds = navRegion.getOccupiedBlockBounds();
+    const boundsBar = logger.bar('Scanning bounds', navRegion.types.length);
+    const navBounds = navRegion.getOccupiedBlockBounds(done => boundsBar.update(done));
+    boundsBar.end();
 
     if (!navBounds) {
         logger.warn('no navigable cells remain after carve, returning empty result');
         return {
-            buffer: new BlockMaskBuffer(),
+            grid: new SparseVoxelGrid(0, 0, 0),
             gridBounds: { min: gridBounds.min.clone(), max: gridBounds.min.clone() }
         };
     }
@@ -118,11 +117,16 @@ const carve = (
         )
     };
 
+    const buildBar = logger.bar('Building grid', navRegion.types.length);
+    const outGrid = navRegion.cropToInverted(
+        cropMinBx, cropMinBy, cropMinBz,
+        cropMaxBx, cropMaxBy, cropMaxBz,
+        done => buildBar.update(done)
+    );
+    buildBar.end();
+
     return {
-        buffer: navRegion.toBufferInverted(
-            cropMinBx, cropMinBy, cropMinBz,
-            cropMaxBx, cropMaxBy, cropMaxBz
-        ),
+        grid: outGrid,
         gridBounds: croppedBounds
     };
 };

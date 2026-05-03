@@ -1,9 +1,5 @@
 import { BlockMaskBuffer } from './block-mask-buffer';
-import {
-    xyzToMorton,
-    mortonToXYZ,
-    popcount
-} from './morton';
+import { popcount } from './morton';
 import { logger } from '../utils';
 
 // ============================================================================
@@ -42,13 +38,22 @@ const SOLID_MASK = 0xFFFFFFFF >>> 0;
  *
  * Blocks that become empty or solid as a consequence are handled automatically.
  *
- * @param buffer - BlockMaskBuffer with voxelization results
- * @returns New BlockMaskBuffer with filtered/filled data
+ * @param buffer - BlockMaskBuffer with voxelization results (linear-keyed).
+ * @param nbx - Grid block dimension X (used to decode block indices).
+ * @param nby - Grid block dimension Y (used to decode block indices).
+ * @param nbz - Grid block dimension Z (used for neighbor bounds checks).
+ * @returns New BlockMaskBuffer with filtered/filled data.
  */
-function filterAndFillBlocks(buffer: BlockMaskBuffer): BlockMaskBuffer {
+function filterAndFillBlocks(
+    buffer: BlockMaskBuffer,
+    nbx: number,
+    nby: number,
+    nbz: number
+): BlockMaskBuffer {
     const mixed = buffer.getMixedBlocks();
     const solid = buffer.getSolidBlocks();
     const masks = mixed.masks;
+    const bStride = nbx * nby;
 
     // Build lookup structures from original (unmodified) data
     const solidSet = new Set<number>();
@@ -57,8 +62,8 @@ function filterAndFillBlocks(buffer: BlockMaskBuffer): BlockMaskBuffer {
     }
 
     const mixedMap = new Map<number, number>();
-    for (let i = 0; i < mixed.morton.length; i++) {
-        mixedMap.set(mixed.morton[i], i);
+    for (let i = 0; i < mixed.blockIdx.length; i++) {
+        mixedMap.set(mixed.blockIdx[i], i);
     }
 
     // New masks array (snapshot: cross-block lookups always read the original masks)
@@ -66,12 +71,15 @@ function filterAndFillBlocks(buffer: BlockMaskBuffer): BlockMaskBuffer {
     let voxelsRemoved = 0;
     let voxelsFilled = 0;
 
-    for (let i = 0; i < mixed.morton.length; i++) {
-        const morton = mixed.morton[i];
+    for (let i = 0; i < mixed.blockIdx.length; i++) {
+        const idx = mixed.blockIdx[i];
         const origLo = masks[i * 2];
         const origHi = masks[i * 2 + 1];
 
-        const [bx, by, bz] = mortonToXYZ(morton);
+        const bx = idx % nbx;
+        const byBz = (idx / nbx) | 0;
+        const by = byBz % nby;
+        const bz = (byBz / nby) | 0;
 
         // --- In-block per-direction occupancy masks ---
 
@@ -102,41 +110,41 @@ function filterAndFillBlocks(buffer: BlockMaskBuffer): BlockMaskBuffer {
         // --- Cross-block contributions ---
 
         // +X: our lx=3 face <- adjacent's lx=0 face (shifted left by 3)
-        addCrossFace(bx + 1, by, bz, solidSet, mixedMap, masks,
+        addCrossFace(bx + 1, by, bz, nbx, nby, nbz, bStride, solidSet, mixedMap, masks,
             FACE_X3, FACE_X0, 3, true, pxLo, pxHi,
             (lo, hi) => {
                 pxLo = lo; pxHi = hi;
             });
 
         // -X: our lx=0 face <- adjacent's lx=3 face (shifted right by 3)
-        addCrossFace(bx - 1, by, bz, solidSet, mixedMap, masks,
+        addCrossFace(bx - 1, by, bz, nbx, nby, nbz, bStride, solidSet, mixedMap, masks,
             FACE_X0, FACE_X3, 3, false, mxLo, mxHi,
             (lo, hi) => {
                 mxLo = lo; mxHi = hi;
             });
 
         // +Y: our ly=3 face <- adjacent's ly=0 face (shifted left by 12)
-        addCrossFace(bx, by + 1, bz, solidSet, mixedMap, masks,
+        addCrossFace(bx, by + 1, bz, nbx, nby, nbz, bStride, solidSet, mixedMap, masks,
             FACE_Y3, FACE_Y0, 12, true, pyLo, pyHi,
             (lo, hi) => {
                 pyLo = lo; pyHi = hi;
             });
 
         // -Y: our ly=0 face <- adjacent's ly=3 face (shifted right by 12)
-        addCrossFace(bx, by - 1, bz, solidSet, mixedMap, masks,
+        addCrossFace(bx, by - 1, bz, nbx, nby, nbz, bStride, solidSet, mixedMap, masks,
             FACE_Y0, FACE_Y3, 12, false, myLo, myHi,
             (lo, hi) => {
                 myLo = lo; myHi = hi;
             });
 
         // +Z: our lz=3 face (hi bits 16-31) <- adjacent's lz=0 face (lo bits 0-15)
-        addCrossFaceZ(bx, by, bz + 1, solidSet, mixedMap, masks, true, pzLo, pzHi,
+        addCrossFaceZ(bx, by, bz + 1, nbx, nby, nbz, bStride, solidSet, mixedMap, masks, true, pzLo, pzHi,
             (lo, hi) => {
                 pzLo = lo; pzHi = hi;
             });
 
         // -Z: our lz=0 face (lo bits 0-15) <- adjacent's lz=3 face (hi bits 16-31)
-        addCrossFaceZ(bx, by, bz - 1, solidSet, mixedMap, masks, false, mzLo, mzHi,
+        addCrossFaceZ(bx, by, bz - 1, nbx, nby, nbz, bStride, solidSet, mixedMap, masks, false, mzLo, mzHi,
             (lo, hi) => {
                 mzLo = lo; mzHi = hi;
             });
@@ -165,10 +173,10 @@ function filterAndFillBlocks(buffer: BlockMaskBuffer): BlockMaskBuffer {
     // Rebuild buffer with state transitions (mixed->empty, mixed->solid)
     const result = new BlockMaskBuffer();
 
-    for (let i = 0; i < mixed.morton.length; i++) {
+    for (let i = 0; i < mixed.blockIdx.length; i++) {
         const lo = newMasks[i * 2];
         const hi = newMasks[i * 2 + 1];
-        result.addBlock(mixed.morton[i], lo, hi);
+        result.addBlock(mixed.blockIdx[i], lo, hi);
     }
 
     for (let i = 0; i < solid.length; i++) {
@@ -186,6 +194,7 @@ function filterAndFillBlocks(buffer: BlockMaskBuffer): BlockMaskBuffer {
 
 function addCrossFace(
     nx: number, ny: number, nz: number,
+    nbx: number, nby: number, nbz: number, bStride: number,
     solidSet: Set<number>,
     mixedMap: Map<number, number>,
     masks: Uint32Array,
@@ -196,21 +205,25 @@ function addCrossFace(
     curLo: number, curHi: number,
     write: (lo: number, hi: number) => void
 ): void {
-    const adjMorton = xyzToMorton(nx, ny, nz);
+    if (nx < 0 || ny < 0 || nz < 0 || nx >= nbx || ny >= nby || nz >= nbz) {
+        write(curLo, curHi);
+        return;
+    }
+    const adjIdx = nx + ny * nbx + nz * bStride;
 
-    if (solidSet.has(adjMorton)) {
+    if (solidSet.has(adjIdx)) {
         write(curLo | ourFaceMask, curHi | ourFaceMask);
         return;
     }
 
-    const adjIdx = mixedMap.get(adjMorton);
-    if (adjIdx === undefined) {
+    const mIdx = mixedMap.get(adjIdx);
+    if (mIdx === undefined) {
         write(curLo, curHi);
         return;
     }
 
-    const adjLo = masks[adjIdx * 2];
-    const adjHi = masks[adjIdx * 2 + 1];
+    const adjLo = masks[mIdx * 2];
+    const adjHi = masks[mIdx * 2 + 1];
     const faceLo = adjLo & adjFaceMask;
     const faceHi = adjHi & adjFaceMask;
 
@@ -223,6 +236,7 @@ function addCrossFace(
 
 function addCrossFaceZ(
     nx: number, ny: number, nz: number,
+    nbx: number, nby: number, nbz: number, bStride: number,
     solidSet: Set<number>,
     mixedMap: Map<number, number>,
     masks: Uint32Array,
@@ -230,9 +244,13 @@ function addCrossFaceZ(
     curLo: number, curHi: number,
     write: (lo: number, hi: number) => void
 ): void {
-    const adjMorton = xyzToMorton(nx, ny, nz);
+    if (nx < 0 || ny < 0 || nz < 0 || nx >= nbx || ny >= nby || nz >= nbz) {
+        write(curLo, curHi);
+        return;
+    }
+    const adjIdx = nx + ny * nbx + nz * bStride;
 
-    if (solidSet.has(adjMorton)) {
+    if (solidSet.has(adjIdx)) {
         if (plusZ) {
             write(curLo, curHi | FACE_Z3_HI);
         } else {
@@ -241,14 +259,14 @@ function addCrossFaceZ(
         return;
     }
 
-    const adjIdx = mixedMap.get(adjMorton);
-    if (adjIdx === undefined) {
+    const mIdx = mixedMap.get(adjIdx);
+    if (mIdx === undefined) {
         write(curLo, curHi);
         return;
     }
 
-    const adjLo = masks[adjIdx * 2];
-    const adjHi = masks[adjIdx * 2 + 1];
+    const adjLo = masks[mIdx * 2];
+    const adjHi = masks[mIdx * 2 + 1];
 
     if (plusZ) {
         write(curLo, curHi | ((adjLo & FACE_Z0_LO) << 16));

@@ -171,7 +171,8 @@ class Transform {
 
     /**
      * PLY coordinate convention: 180-degree rotation around Z.
-     * Used by PLY, splat, KSplat, SPZ, and legacy SOG formats.
+     * Used by formats that store Gaussian data in PLY-style coordinates:
+     * PLY, splat, KSplat, SPZ, and SOG.
      */
     static PLY = Transform.freeze(new Transform().fromEulers(0, 0, 180));
 }
