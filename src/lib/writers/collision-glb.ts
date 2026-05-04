@@ -1,5 +1,5 @@
 import type { Bounds } from '../data-table';
-import { coplanarMerge, marchingCubes, voxelFaces, type Mesh } from '../mesh';
+import { marchingCubesMerged, voxelFaces, type Mesh } from '../mesh';
 import type { CollisionMeshShape } from '../types';
 import { fmtCount, logger } from '../utils';
 import { SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
@@ -152,21 +152,11 @@ const buildCollisionMesh = (
         logger.info(`triangles: ${fmtCount(finalMesh.indices.length / 3)}`);
         extractSub.end();
     } else {
-        const extractSub = logger.group('Extracting');
-        const preMergedMesh = marchingCubes(grid, gridBounds, voxelResolution, { mergeFlatFaces: true });
-        logger.info(`pre-merged vertices: ${fmtCount(preMergedMesh.positions.length / 3)}`);
-        logger.info(`pre-merged triangles: ${fmtCount(preMergedMesh.indices.length / 3)}`);
-        const preMergedIndexCount = preMergedMesh.indices.length;
+        const extractSub = logger.group('Extracting merged marching cubes');
+        finalMesh = marchingCubesMerged(grid, gridBounds, voxelResolution);
+        logger.info(`vertices: ${fmtCount(finalMesh.positions.length / 3)}`);
+        logger.info(`triangles: ${fmtCount(finalMesh.indices.length / 3)}`);
         extractSub.end();
-
-        const mergeSub = logger.group('Merging coplanar faces');
-        finalMesh = coplanarMerge(preMergedMesh, voxelResolution);
-
-        const reduction = (1 - finalMesh.indices.length / preMergedIndexCount) * 100;
-        logger.info(`merged vertices: ${fmtCount(finalMesh.positions.length / 3)}`);
-        logger.info(`merged triangles: ${fmtCount(finalMesh.indices.length / 3)}`);
-        logger.info(`reduction: ${reduction.toFixed(0)}%`);
-        mergeSub.end();
     }
 
     if (finalMesh.indices.length < 3) {
