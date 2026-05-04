@@ -97,6 +97,60 @@ describe('marchingCubes', () => {
         }
     });
 
+    it('should merge straight binary-MC bevel strips during extraction', () => {
+        const nx = 8;
+        const nz = 8;
+        const nbx = nx / 4;
+        const nby = 1;
+        const nbz = nz / 4;
+        const slabLo = 0x000F_000F >>> 0;
+        const slabHi = 0x000F_000F >>> 0;
+        const buffer = new BlockMaskBuffer();
+        for (let bz = 0; bz < nbz; bz++) {
+            for (let bx = 0; bx < nbx; bx++) {
+                buffer.addBlock(linearBlockIdx(bx, 0, bz, nbx, nby), slabLo, slabHi);
+            }
+        }
+
+        const bounds = makeGridBounds(0, 0, 0, nx, 4, nz);
+        const grid = toGrid(buffer, nx, 4, nz);
+        const raw = marchingCubes(grid, bounds, 1.0);
+        const fast = marchingCubes(grid, bounds, 1.0, { mergeFlatFaces: true });
+        const rawMerged = coplanarMerge(raw, 1.0);
+
+        const fastStats = meshStats(fast);
+        const rawMergedStats = meshStats(rawMerged);
+        assert.ok(fastStats.tris < raw.indices.length / 3 * 0.2,
+            `expected direct MC merge to remove most slab tris; raw=${raw.indices.length / 3}, fast=${fastStats.tris}`);
+        assert.strictEqual(fastStats.tris, rawMergedStats.tris);
+        assert.strictEqual(fastStats.verts, rawMergedStats.verts);
+        assertClosedTriangleEdges(fast);
+    });
+
+    it('should keep merged MC rectangles watertight next to raw feature triangles', () => {
+        const slabLo = 0x000F_000F >>> 0;
+        const slabHi = 0x000F_000F >>> 0;
+        const bumpLo = ((1 << 4) | (1 << 8) | (1 << 12)) >>> 0;
+        const buffer = new BlockMaskBuffer();
+        buffer.addBlock(linearBlockIdx(0, 0, 0, 2, 1), slabLo, slabHi);
+        buffer.addBlock(linearBlockIdx(1, 0, 0, 2, 1), slabLo, slabHi);
+        buffer.addBlock(linearBlockIdx(0, 0, 1, 2, 1), slabLo, slabHi);
+        buffer.addBlock(linearBlockIdx(1, 0, 1, 2, 1), (slabLo | bumpLo) >>> 0, slabHi);
+
+        const bounds = makeGridBounds(0, 0, 0, 8, 4, 8);
+        const grid = toGrid(buffer, 8, 4, 8);
+        const raw = marchingCubes(grid, bounds, 1.0);
+        const fast = marchingCubes(grid, bounds, 1.0, { mergeFlatFaces: true });
+        const rawMerged = coplanarMerge(raw, 1.0);
+        const fastMerged = coplanarMerge(fast, 1.0);
+
+        assert.ok(fast.indices.length < raw.indices.length * 0.25,
+            `expected direct MC merge to shrink slab+bump mesh; raw=${raw.indices.length / 3}, fast=${fast.indices.length / 3}`);
+        assertClosedTriangleEdges(fast);
+        assert.strictEqual(fastMerged.indices.length, rawMerged.indices.length);
+        assert.strictEqual(fastMerged.positions.length, rawMerged.positions.length);
+    });
+
     it('should place vertices within grid bounds', () => {
         const buffer = new BlockMaskBuffer();
         buffer.addBlock(linearBlockIdx(0, 0, 0, 1, 1), SOLID_LO, SOLID_HI);
