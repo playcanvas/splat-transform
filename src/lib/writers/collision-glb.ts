@@ -126,11 +126,11 @@ function encodeGlb(positions: Float32Array, indices: Uint32Array): Uint8Array {
 /**
  * Extract a collision mesh from voxel data and encode it as a GLB file.
  *
- * Runs marching cubes on the voxel surface, then a lossless coplanar-merge
- * pass that fuses the redundant axis-aligned triangles inside each
- * voxel-face plane into greedy-style quads while leaving the corner-cutting
- * bevel triangles untouched. The output surface is identical to the raw MC
- * surface but typically has 1-2 orders of magnitude fewer triangles.
+ * Runs marching cubes on the voxel surface with exact full-face pre-merging
+ * enabled, then a lossless coplanar-merge pass that fuses the remaining
+ * redundant coplanar triangles while leaving corner-cutting bevel triangles
+ * untouched. The output surface is identical to the raw MC surface but avoids
+ * constructing most of the raw flat-surface tessellation.
  *
  * @param grid - Voxel grid after filtering / nav phases
  * @param gridBounds - Grid bounds aligned to block boundaries
@@ -145,11 +145,12 @@ const buildCollisionMesh = (
     const g = logger.group('Collision mesh');
 
     const extractSub = logger.group('Extracting');
-    const rawMesh = marchingCubes(grid, gridBounds, voxelResolution);
-    logger.info(`raw vertices: ${fmtCount(rawMesh.positions.length / 3)}`);
-    logger.info(`raw triangles: ${fmtCount(rawMesh.indices.length / 3)}`);
+    const preMergedMesh = marchingCubes(grid, gridBounds, voxelResolution, { mergeFlatFaces: true });
+    logger.info(`pre-merged vertices: ${fmtCount(preMergedMesh.positions.length / 3)}`);
+    logger.info(`pre-merged triangles: ${fmtCount(preMergedMesh.indices.length / 3)}`);
+    const preMergedIndexCount = preMergedMesh.indices.length;
 
-    if (rawMesh.indices.length < 3) {
+    if (preMergedMesh.indices.length < 3) {
         logger.warn('no triangles generated, skipping GLB output');
         extractSub.end();
         g.end();
@@ -158,9 +159,9 @@ const buildCollisionMesh = (
     extractSub.end();
 
     const mergeSub = logger.group('Merging coplanar faces');
-    const finalMesh = coplanarMerge(rawMesh, voxelResolution);
+    const finalMesh = coplanarMerge(preMergedMesh, voxelResolution);
 
-    const reduction = (1 - finalMesh.indices.length / rawMesh.indices.length) * 100;
+    const reduction = (1 - finalMesh.indices.length / preMergedIndexCount) * 100;
     logger.info(`merged vertices: ${fmtCount(finalMesh.positions.length / 3)}`);
     logger.info(`merged triangles: ${fmtCount(finalMesh.indices.length / 3)}`);
     logger.info(`reduction: ${reduction.toFixed(0)}%`);

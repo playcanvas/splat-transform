@@ -24,6 +24,18 @@ interface Mesh {
  */
 type MarchingCubesMesh = Mesh;
 
+/**
+ * Options for marching cubes extraction.
+ */
+interface MarchingCubesOptions {
+    /**
+     * Pre-merge exact full-face cells on flat axis-aligned regions before
+     * creating the mesh. Ambiguous and bevel cases still use normal marching
+     * cubes, so coplanarMerge can apply the final lossless optimization.
+     */
+    mergeFlatFaces?: boolean;
+}
+
 // ============================================================================
 // Voxel bit helpers
 // ============================================================================
@@ -67,15 +79,18 @@ const NEIGHBOR_SOLID = -1;
  * @param grid - Voxel grid (after filtering / nav phases)
  * @param gridBounds - Grid bounds aligned to block boundaries
  * @param voxelResolution - Size of each voxel in world units
+ * @param options - Optional extraction settings
  * @returns Mesh with positions and indices
  */
 function marchingCubes(
     grid: SparseVoxelGrid,
     gridBounds: Bounds,
-    voxelResolution: number
+    voxelResolution: number,
+    options: MarchingCubesOptions = {}
 ): MarchingCubesMesh {
     const { nbx, nby, nbz, bStride, types, masks } = grid;
     const totalBlocks = nbx * nby * nbz;
+    const mergeFlatFaces = options.mergeFlatFaces === true;
 
     // Vertex deduplication: edge ID -> vertex index. Open-addressed typed-
     // array hash table rather than `Map<number, number>` because (1) a single
@@ -144,10 +159,14 @@ function marchingCubes(
     const originY = gridBounds.min.y;
     const originZ = gridBounds.min.z;
 
+    const gridNx = Math.round((gridBounds.max.x - gridBounds.min.x) / voxelResolution);
+    const gridNy = Math.round((gridBounds.max.y - gridBounds.min.y) / voxelResolution);
+    const gridNz = Math.round((gridBounds.max.z - gridBounds.min.z) / voxelResolution);
+
     // Compute strides from actual grid dimensions (+3 for the -1 boundary
     // extension, the far edge +1, and one extra for safety).
-    const strideX = Math.round((gridBounds.max.x - gridBounds.min.x) / voxelResolution) + 3;
-    const strideXY = strideX * (Math.round((gridBounds.max.y - gridBounds.min.y) / voxelResolution) + 3);
+    const strideX = gridNx + 3;
+    const strideXY = strideX * (gridNy + 3);
 
     // Per-block 3x3x3 neighbor lookup table populated once per processed block.
     // Index = (dx+1) + (dy+1)*3 + (dz+1)*9, dx/dy/dz in {-1, 0, 1}.
@@ -175,6 +194,38 @@ function marchingCubes(
         return isVoxelSet(lo, hi, cx & 3, cy & 3, cz & 3);
     };
 
+    const addPosition = (px: number, py: number, pz: number): number => {
+        if (posLen + 3 > posCap) {
+            posCap *= 2;
+            const grown = new Float32Array(posCap);
+            grown.set(positions);
+            positions = grown;
+        }
+
+        const idx = posLen / 3;
+        positions[posLen++] = px;
+        positions[posLen++] = py;
+        positions[posLen++] = pz;
+        return idx;
+    };
+
+    const ensureIndexCapacity = (additional: number): void => {
+        if (idxLen + additional <= idxCap) return;
+        while (idxLen + additional > idxCap) {
+            idxCap *= 2;
+        }
+        const grown = new Uint32Array(idxCap);
+        grown.set(indices);
+        indices = grown;
+    };
+
+    const appendTri = (a: number, b: number, c: number): void => {
+        ensureIndexCapacity(3);
+        indices[idxLen++] = a;
+        indices[idxLen++] = b;
+        indices[idxLen++] = c;
+    };
+
     // Get or create a vertex at the midpoint of an edge.
     // Edge is identified by the lower corner voxel coordinate and axis (0=x, 1=y, 2=z).
     const getVertex = (vx: number, vy: number, vz: number, axis: number): number => {
@@ -191,14 +242,6 @@ function marchingCubes(
             i = (i + 1) & vMask;
         }
 
-        if (posLen + 3 > posCap) {
-            posCap *= 2;
-            const grown = new Float32Array(posCap);
-            grown.set(positions);
-            positions = grown;
-        }
-
-        const idx = posLen / 3;
         let px = originX + vx * voxelResolution;
         let py = originY + vy * voxelResolution;
         let pz = originZ + vz * voxelResolution;
@@ -208,14 +251,269 @@ function marchingCubes(
         else if (axis === 1) py += voxelResolution * 0.5;
         else pz += voxelResolution * 0.5;
 
-        positions[posLen++] = px;
-        positions[posLen++] = py;
-        positions[posLen++] = pz;
+        const idx = addPosition(px, py, pz);
         vKeys[i] = key;
         vVals[i] = idx;
         vSize++;
         if (vSize > ((vCap * 0.7) | 0)) vGrow();
         return idx;
+    };
+
+    // Full-face MC cases can be merged before vertex creation. Encode each
+    // unit face cell as a sortable integer in Float64: bucket / plane / u / v,
+    // where bucket = axis*2 + positiveNormalBit and coordinates are offset by
+    // +1 to cover the -1 boundary extension.
+    const faceCoordStride = Math.max(gridNx, gridNy, gridNz) + 3;
+    let faceCellCap = 0;
+    let faceCellLen = 0;
+    let faceCellKeys = new Float64Array(0);
+
+    const addFaceCell = (bucket: number, p: number, u: number, v: number): void => {
+        if (faceCellLen === faceCellCap) {
+            faceCellCap = faceCellCap === 0 ? 1024 : faceCellCap * 2;
+            const grown = new Float64Array(faceCellCap);
+            grown.set(faceCellKeys);
+            faceCellKeys = grown;
+        }
+        faceCellKeys[faceCellLen++] =
+            (((bucket * faceCoordStride + (p + 1)) * faceCoordStride + (u + 1)) *
+                faceCoordStride + (v + 1));
+    };
+
+    const collectFlatFace = (cubeIndex: number, vx: number, vy: number, vz: number): boolean => {
+        if (!mergeFlatFaces) return false;
+
+        switch (cubeIndex) {
+            case 153: // low-X corners occupied, high-X corners empty => +X normal
+                addFaceCell(1, vx, vy, vz);
+                return true;
+            case 102: // high-X occupied => -X normal
+                addFaceCell(0, vx, vy, vz);
+                return true;
+            case 51: // low-Y occupied => +Y normal
+                addFaceCell(3, vy, vx, vz);
+                return true;
+            case 204: // high-Y occupied => -Y normal
+                addFaceCell(2, vy, vx, vz);
+                return true;
+            case 15: // low-Z occupied => +Z normal
+                addFaceCell(5, vz, vx, vy);
+                return true;
+            case 240: // high-Z occupied => -Z normal
+                addFaceCell(4, vz, vx, vy);
+                return true;
+            default:
+                return false;
+        }
+    };
+
+    const getFaceVertex = (axis: number, p: number, u: number, v: number): number => {
+        if (axis === 0) return getVertex(p, u, v, 0);
+        if (axis === 1) return getVertex(u, p, v, 1);
+        return getVertex(u, v, p, 2);
+    };
+
+    const addFaceCenter = (axis: number, p: number, u: number, v: number): number => {
+        if (axis === 0) {
+            return addPosition(
+                originX + (p + 0.5) * voxelResolution,
+                originY + u * voxelResolution,
+                originZ + v * voxelResolution
+            );
+        }
+        if (axis === 1) {
+            return addPosition(
+                originX + u * voxelResolution,
+                originY + (p + 0.5) * voxelResolution,
+                originZ + v * voxelResolution
+            );
+        }
+        return addPosition(
+            originX + u * voxelResolution,
+            originY + v * voxelResolution,
+            originZ + (p + 0.5) * voxelResolution
+        );
+    };
+
+    const emitFaceQuad = (axis: number, positive: boolean, p: number, u: number, v: number): void => {
+        const a = getFaceVertex(axis, p, u, v);
+        const b = getFaceVertex(axis, p, u + 1, v);
+        const c = getFaceVertex(axis, p, u + 1, v + 1);
+        const d = getFaceVertex(axis, p, u, v + 1);
+        const localCcwIsPositive = axis !== 1;
+        if (positive === localCcwIsPositive) {
+            appendTri(a, b, c);
+            appendTri(a, c, d);
+        } else {
+            appendTri(a, c, b);
+            appendTri(a, d, c);
+        }
+    };
+
+    const emitFaceRectangle = (
+        bucket: number,
+        p: number,
+        u0: number,
+        v0: number,
+        width: number,
+        height: number
+    ): void => {
+        const rawTriCount = width * height * 2;
+        const fanTriCount = (width + height) * 2;
+        const axis = bucket >> 1;
+        const positive = (bucket & 1) === 1;
+
+        if (fanTriCount >= rawTriCount) {
+            for (let dv = 0; dv < height; dv++) {
+                for (let du = 0; du < width; du++) {
+                    emitFaceQuad(axis, positive, p, u0 + du, v0 + dv);
+                }
+            }
+            return;
+        }
+
+        const u1 = u0 + width;
+        const v1 = v0 + height;
+        const center = addFaceCenter(axis, p, u0 + width * 0.5, v0 + height * 0.5);
+        const localCcwIsPositive = axis !== 1;
+        const useLocalCcw = positive === localCcwIsPositive;
+        const perimeterCount = fanTriCount;
+        const perimeter = new Uint32Array(perimeterCount);
+        let n = 0;
+
+        for (let u = u0; u <= u1; u++) {
+            perimeter[n++] = getFaceVertex(axis, p, u, v0);
+        }
+        for (let v = v0 + 1; v <= v1; v++) {
+            perimeter[n++] = getFaceVertex(axis, p, u1, v);
+        }
+        for (let u = u1 - 1; u >= u0; u--) {
+            perimeter[n++] = getFaceVertex(axis, p, u, v1);
+        }
+        for (let v = v1 - 1; v > v0; v--) {
+            perimeter[n++] = getFaceVertex(axis, p, u0, v);
+        }
+
+        ensureIndexCapacity(perimeterCount * 3);
+        if (useLocalCcw) {
+            for (let i = 0; i < perimeterCount; i++) {
+                indices[idxLen++] = center;
+                indices[idxLen++] = perimeter[i];
+                indices[idxLen++] = perimeter[(i + 1) % perimeterCount];
+            }
+        } else {
+            for (let i = perimeterCount - 1; i >= 0; i--) {
+                indices[idxLen++] = center;
+                indices[idxLen++] = perimeter[i];
+                indices[idxLen++] = perimeter[(i - 1 + perimeterCount) % perimeterCount];
+            }
+        }
+    };
+
+    const flushFaceCells = (): void => {
+        if (faceCellLen === 0) return;
+
+        const keys = faceCellKeys.slice(0, faceCellLen);
+        keys.sort();
+
+        const decodeGroup = (key: number): { bucket: number; pOff: number } => {
+            let q = Math.floor(key / faceCoordStride);
+            q = Math.floor(q / faceCoordStride);
+            const pOff = q % faceCoordStride;
+            const bucket = Math.floor(q / faceCoordStride);
+            return { bucket, pOff };
+        };
+
+        const decodeUvKey = (key: number): number => {
+            const vOff = key % faceCoordStride;
+            const q = Math.floor(key / faceCoordStride);
+            const uOff = q % faceCoordStride;
+            return uOff * faceCoordStride + vOff;
+        };
+
+        let start = 0;
+        while (start < keys.length) {
+            const { bucket, pOff } = decodeGroup(keys[start]);
+            let end = start + 1;
+            while (end < keys.length) {
+                const g = decodeGroup(keys[end]);
+                if (g.bucket !== bucket || g.pOff !== pOff) break;
+                end++;
+            }
+
+            const count = end - start;
+            let hCap = 1;
+            while (hCap < count / 0.7) hCap *= 2;
+            const hMask = hCap - 1;
+            const hKeys = new Float64Array(hCap).fill(-1);
+            const hVals = new Int32Array(hCap);
+
+            const hash = (key: number): number => {
+                const hi = (key / 0x100000000) | 0;
+                return (Math.imul((key | 0) ^ hi, 0x9E3779B9) >>> 0) & hMask;
+            };
+
+            for (let i = 0; i < count; i++) {
+                const uvKey = decodeUvKey(keys[start + i]);
+                let h = hash(uvKey);
+                while (hKeys[h] !== -1) h = (h + 1) & hMask;
+                hKeys[h] = uvKey;
+                hVals[h] = i;
+            }
+
+            const lookup = (uvKey: number): number => {
+                let h = hash(uvKey);
+                while (true) {
+                    const k = hKeys[h];
+                    if (k === uvKey) return hVals[h];
+                    if (k === -1) return -1;
+                    h = (h + 1) & hMask;
+                }
+            };
+
+            const visited = new Uint8Array(count);
+            const uvKeyOf = (uOff: number, vOff: number): number => uOff * faceCoordStride + vOff;
+            const p = pOff - 1;
+
+            for (let i = 0; i < count; i++) {
+                if (visited[i]) continue;
+                const uvKey = decodeUvKey(keys[start + i]);
+                const uOff = Math.floor(uvKey / faceCoordStride);
+                const vOff = uvKey % faceCoordStride;
+
+                let width = 1;
+                while (true) {
+                    const idx = lookup(uvKeyOf(uOff + width, vOff));
+                    if (idx === -1 || visited[idx]) break;
+                    width++;
+                }
+
+                let height = 1;
+                while (true) {
+                    let canGrow = true;
+                    for (let du = 0; du < width; du++) {
+                        const idx = lookup(uvKeyOf(uOff + du, vOff + height));
+                        if (idx === -1 || visited[idx]) {
+                            canGrow = false;
+                            break;
+                        }
+                    }
+                    if (!canGrow) break;
+                    height++;
+                }
+
+                for (let dv = 0; dv < height; dv++) {
+                    for (let du = 0; du < width; du++) {
+                        const idx = lookup(uvKeyOf(uOff + du, vOff + dv));
+                        visited[idx] = 1;
+                    }
+                }
+
+                emitFaceRectangle(bucket, p, uOff - 1, vOff - 1, width, height);
+            }
+
+            start = end;
+        }
     };
 
     // Track processed orphan cells to avoid duplicate triangles. When a cell's
@@ -361,6 +659,8 @@ function marchingCubes(
 
                         if (cubeIndex === 0 || cubeIndex === 255) continue;
 
+                        if (collectFlatFace(cubeIndex, vx, vy, vz)) continue;
+
                         const edges = EDGE_TABLE[cubeIndex]; // eslint-disable-line no-use-before-define
                         if (edges === 0) continue;
 
@@ -381,14 +681,7 @@ function marchingCubes(
                         // Emit triangles (reversed winding to face outward)
                         const triRow = TRI_TABLE[cubeIndex]; // eslint-disable-line no-use-before-define
                         const triLen = triRow.length;
-                        if (idxLen + triLen > idxCap) {
-                            while (idxLen + triLen > idxCap) {
-                                idxCap *= 2;
-                            }
-                            const grown = new Uint32Array(idxCap);
-                            grown.set(indices);
-                            indices = grown;
-                        }
+                        ensureIndexCapacity(triLen);
                         for (let t = 0; t < triLen; t += 3) {
                             indices[idxLen++] = edgeVerts[triRow[t]];
                             indices[idxLen++] = edgeVerts[triRow[t + 2]];
@@ -399,6 +692,8 @@ function marchingCubes(
             }
         }
     }
+
+    flushFaceCells();
 
     return {
         positions: positions.slice(0, posLen),
@@ -708,4 +1003,4 @@ const TRI_TABLE: number[][] = [
 ];
 
 export { marchingCubes };
-export type { Mesh, MarchingCubesMesh };
+export type { Mesh, MarchingCubesMesh, MarchingCubesOptions };

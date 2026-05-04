@@ -65,6 +65,37 @@ describe('marchingCubes', () => {
             `expected 188 triangles for solid 4x4x4 cube, got ${numTriangles}`);
     });
 
+    it('should pre-merge exact flat face cells when requested', () => {
+        const buffer = new BlockMaskBuffer();
+        buffer.addBlock(linearBlockIdx(0, 0, 0, 1, 1), SOLID_LO, SOLID_HI);
+
+        const bounds = makeGridBounds(0, 0, 0, 4, 4, 4);
+        const grid = toGrid(buffer, 4, 4, 4);
+        const raw = marchingCubes(grid, bounds, 1.0);
+        const fast = marchingCubes(grid, bounds, 1.0, { mergeFlatFaces: true });
+
+        assert.strictEqual(raw.indices.length / 3, 188,
+            'default marchingCubes output should remain the raw MC mesh');
+        assert.ok(fast.indices.length < raw.indices.length,
+            `expected flat-face pre-merge to reduce triangles; raw=${raw.indices.length / 3}, fast=${fast.indices.length / 3}`);
+
+        const rawMerged = coplanarMerge(raw, 1.0);
+        const fastMerged = coplanarMerge(fast, 1.0);
+        const rawStats = meshStats(rawMerged);
+        const fastStats = meshStats(fastMerged);
+
+        assert.strictEqual(fastStats.tris, rawStats.tris,
+            'final coplanar merge should reach the same triangle count');
+        assert.strictEqual(fastStats.verts, rawStats.verts,
+            'final coplanar merge should reach the same vertex count');
+        for (let a = 0; a < 3; a++) {
+            assert.strictEqual(fastStats.min[a], rawStats.min[a],
+                `min[${a}] changed: ${rawStats.min[a]} -> ${fastStats.min[a]}`);
+            assert.strictEqual(fastStats.max[a], rawStats.max[a],
+                `max[${a}] changed: ${rawStats.max[a]} -> ${fastStats.max[a]}`);
+        }
+    });
+
     it('should place vertices within grid bounds', () => {
         const buffer = new BlockMaskBuffer();
         buffer.addBlock(linearBlockIdx(0, 0, 0, 1, 1), SOLID_LO, SOLID_HI);
