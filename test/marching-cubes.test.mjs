@@ -5,7 +5,7 @@ import { Vec3 } from 'playcanvas';
 
 import { BlockMaskBuffer } from '../src/lib/voxel/block-mask-buffer.js';
 import { SparseVoxelGrid } from '../src/lib/voxel/sparse-voxel-grid.js';
-import { marchingCubes, marchingCubesMerged } from '../src/lib/mesh/marching-cubes.js';
+import { marchingCubes } from '../src/lib/mesh/marching-cubes.js';
 import { coplanarMerge } from '../src/lib/mesh/coplanar-merge.js';
 import { voxelFaces } from '../src/lib/mesh/voxel-faces.js';
 
@@ -171,59 +171,6 @@ describe('marchingCubes', () => {
     });
 });
 
-describe('marchingCubesMerged', () => {
-    it('should merge flat MC face regions without changing the surface', () => {
-        const buffer = new BlockMaskBuffer();
-        for (let bz = 0; bz < 2; bz++) {
-            for (let by = 0; by < 2; by++) {
-                for (let bx = 0; bx < 2; bx++) {
-                    buffer.addBlock(linearBlockIdx(bx, by, bz, 2, 2), SOLID_LO, SOLID_HI);
-                }
-            }
-        }
-
-        const bounds = makeGridBounds(0, 0, 0, 8, 8, 8);
-        const grid = toGrid(buffer, 8, 8, 8);
-        const raw = marchingCubes(grid, bounds, 1.0);
-        const merged = marchingCubesMerged(grid, bounds, 1.0);
-
-        assert.ok(merged.indices.length < raw.indices.length,
-            `expected direct merged MC to reduce triangles; raw=${raw.indices.length / 3}, merged=${merged.indices.length / 3}`);
-        assert.ok(Math.abs(surfaceArea(merged) - surfaceArea(raw)) < 1e-9);
-        assertClosedTriangleEdges(merged);
-    });
-
-    it('should preserve topology for all 2x2x2 occupancy masks', () => {
-        const bounds = makeGridBounds(0, 0, 0, 4, 4, 4);
-
-        for (let mask = 0; mask < 256; mask++) {
-            let lo = 0;
-            for (let z = 0; z < 2; z++) {
-                for (let y = 0; y < 2; y++) {
-                    for (let x = 0; x < 2; x++) {
-                        const compactBit = x + y * 2 + z * 4;
-                        if ((mask & (1 << compactBit)) !== 0) {
-                            lo |= 1 << (x + y * 4 + z * 16);
-                        }
-                    }
-                }
-            }
-
-            const buffer = new BlockMaskBuffer();
-            if (lo !== 0) {
-                buffer.addBlock(linearBlockIdx(0, 0, 0, 1, 1), lo >>> 0, 0);
-            }
-            const grid = toGrid(buffer, 4, 4, 4);
-            const raw = marchingCubes(grid, bounds, 1.0);
-            const merged = marchingCubesMerged(grid, bounds, 1.0);
-
-            assert.ok(Math.abs(surfaceArea(merged) - surfaceArea(raw)) < 1e-9,
-                `surface area changed for occupancy mask ${mask}`);
-            assertClosedTriangleEdges(merged);
-        }
-    });
-});
-
 /**
  * Compute triangle count, vertex count, and AABB for a mesh.
  *
@@ -283,34 +230,6 @@ const countBevelTris = (mesh) => {
         if (m < 1 - 1e-3) count++;
     }
     return count;
-};
-
-/**
- * Compute triangle surface area.
- *
- * @param {{ positions: Float32Array, indices: Uint32Array }} mesh - The mesh
- *   to scan.
- * @returns {number} Total triangle area.
- */
-const surfaceArea = (mesh) => {
-    const { positions, indices } = mesh;
-    let area = 0;
-    for (let i = 0; i < indices.length; i += 3) {
-        const ia = indices[i] * 3;
-        const ib = indices[i + 1] * 3;
-        const ic = indices[i + 2] * 3;
-        const ax = positions[ib] - positions[ia];
-        const ay = positions[ib + 1] - positions[ia + 1];
-        const az = positions[ib + 2] - positions[ia + 2];
-        const bx = positions[ic] - positions[ia];
-        const by = positions[ic + 1] - positions[ia + 1];
-        const bz = positions[ic + 2] - positions[ia + 2];
-        const cx = ay * bz - az * by;
-        const cy = az * bx - ax * bz;
-        const cz = ax * by - ay * bx;
-        area += 0.5 * Math.hypot(cx, cy, cz);
-    }
-    return area;
 };
 
 /**
