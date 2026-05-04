@@ -405,7 +405,11 @@ const voxelFaces = (
     let indices = new Uint32Array(idxCap);
     const vertexMap = new Map<number, number>();
     let perimeterScratch = new Uint32Array(16);
+    let perimeterU = new Int32Array(16);
+    let perimeterV = new Int32Array(16);
     let perimeterLen = 0;
+    let triPrev = new Int32Array(16);
+    let triNext = new Int32Array(16);
 
     const addPosition = (x: number, y: number, z: number): number => {
         if (posLen + 3 > posCap) {
@@ -434,11 +438,6 @@ const voxelFaces = (
         return idx;
     };
 
-    const addCenterVertex = (axis: number, p: number, u: number, v: number): number => {
-        const [x, y, z] = globalPoint(axis, p, u, v);
-        return addPosition(x, y, z);
-    };
-
     const ensureIndexCapacity = (additional: number): void => {
         if (idxLen + additional <= idxCap) return;
         while (idxLen + additional > idxCap) idxCap *= 2;
@@ -458,17 +457,32 @@ const voxelFaces = (
         perimeterLen = 0;
     };
 
-    const addPerimeterVertex = (v: number): void => {
+    const localUv = (axis: number, x: number, y: number, z: number): [number, number] => {
+        if (axis === 0) return [y, z];
+        if (axis === 1) return [x, z];
+        return [x, y];
+    };
+
+    const addPerimeterVertex = (v: number, u: number, pv: number): void => {
         if (perimeterLen > 0 && perimeterScratch[perimeterLen - 1] === v) return;
         if (perimeterLen === perimeterScratch.length) {
             const grown = new Uint32Array(perimeterScratch.length * 2);
             grown.set(perimeterScratch);
             perimeterScratch = grown;
+            const grownU = new Int32Array(perimeterU.length * 2);
+            grownU.set(perimeterU);
+            perimeterU = grownU;
+            const grownV = new Int32Array(perimeterV.length * 2);
+            grownV.set(perimeterV);
+            perimeterV = grownV;
         }
         perimeterScratch[perimeterLen++] = v;
+        perimeterU[perimeterLen - 1] = u;
+        perimeterV[perimeterLen - 1] = pv;
     };
 
     const addEdgeVertices = (
+        axis: number,
         x0: number, y0: number, z0: number,
         x1: number, y1: number, z1: number
     ): void => {
@@ -497,10 +511,9 @@ const voxelFaces = (
         const hi = Math.max(start, end);
         const forward = start <= end;
 
-        const emitPoint = (t: number): void => {
-            if (varAxis === 0) addPerimeterVertex(getVertex(t, y0, z0));
-            else if (varAxis === 1) addPerimeterVertex(getVertex(x0, t, z0));
-            else addPerimeterVertex(getVertex(x0, y0, t));
+        const emitPoint = (x: number, y: number, z: number): void => {
+            const [u, v] = localUv(axis, x, y, z);
+            addPerimeterVertex(getVertex(x, y, z), u, v);
         };
 
         if (forward) {
@@ -508,14 +521,96 @@ const voxelFaces = (
                 const t = points[i];
                 if (t < lo) continue;
                 if (t > hi) break;
-                emitPoint(t);
+                if (varAxis === 0) emitPoint(t, y0, z0);
+                else if (varAxis === 1) emitPoint(x0, t, z0);
+                else emitPoint(x0, y0, t);
             }
         } else {
             for (let i = points.length - 1; i >= 0; i--) {
                 const t = points[i];
                 if (t > hi) continue;
                 if (t < lo) break;
-                emitPoint(t);
+                if (varAxis === 0) emitPoint(t, y0, z0);
+                else if (varAxis === 1) emitPoint(x0, t, z0);
+                else emitPoint(x0, y0, t);
+            }
+        }
+    };
+
+    const isConvexEar = (prev: number, curr: number, next: number): boolean => {
+        const ax = perimeterU[curr] - perimeterU[prev];
+        const ay = perimeterV[curr] - perimeterV[prev];
+        const bx = perimeterU[next] - perimeterU[prev];
+        const by = perimeterV[next] - perimeterV[prev];
+        return ax * by - ay * bx > 0;
+    };
+
+    const isNonDegenerateTri = (a: number, b: number, c: number): boolean => {
+        const ax = perimeterU[b] - perimeterU[a];
+        const ay = perimeterV[b] - perimeterV[a];
+        const bx = perimeterU[c] - perimeterU[a];
+        const by = perimeterV[c] - perimeterV[a];
+        return ax * by - ay * bx > 0;
+    };
+
+    const appendOrientedTri = (a: number, b: number, c: number, useLocalCcw: boolean): void => {
+        if (useLocalCcw) appendTri(a, b, c);
+        else appendTri(a, c, b);
+    };
+
+    const triangulatePerimeter = (useLocalCcw: boolean): void => {
+        if (perimeterLen < 3) return;
+
+        if (perimeterLen > triPrev.length) {
+            let cap = triPrev.length;
+            while (perimeterLen > cap) cap *= 2;
+            triPrev = new Int32Array(cap);
+            triNext = new Int32Array(cap);
+        }
+
+        for (let i = 0; i < perimeterLen; i++) {
+            triPrev[i] = i === 0 ? perimeterLen - 1 : i - 1;
+            triNext[i] = i === perimeterLen - 1 ? 0 : i + 1;
+        }
+
+        let remaining = perimeterLen;
+        let current = 0;
+        let attempts = 0;
+
+        while (remaining > 3 && attempts < remaining) {
+            const prev = triPrev[current];
+            const next = triNext[current];
+            const next2 = triNext[next];
+            const keepsArea = remaining !== 4 || isNonDegenerateTri(prev, next, next2);
+            if (keepsArea && isConvexEar(prev, current, next)) {
+                appendOrientedTri(
+                    perimeterScratch[prev],
+                    perimeterScratch[current],
+                    perimeterScratch[next],
+                    useLocalCcw
+                );
+                triNext[prev] = next;
+                triPrev[next] = prev;
+                current = next;
+                remaining--;
+                attempts = 0;
+            } else {
+                current = next;
+                attempts++;
+            }
+        }
+
+        if (remaining === 3) {
+            const a = current;
+            const b = triNext[a];
+            const c = triNext[b];
+            if (isConvexEar(a, b, c)) {
+                appendOrientedTri(
+                    perimeterScratch[a],
+                    perimeterScratch[b],
+                    perimeterScratch[c],
+                    useLocalCcw
+                );
             }
         }
     };
@@ -535,10 +630,10 @@ const voxelFaces = (
         const d = globalPoint(axis, p, u0, v1);
 
         resetPerimeter();
-        addEdgeVertices(a[0], a[1], a[2], b[0], b[1], b[2]);
-        addEdgeVertices(b[0], b[1], b[2], c[0], c[1], c[2]);
-        addEdgeVertices(c[0], c[1], c[2], d[0], d[1], d[2]);
-        addEdgeVertices(d[0], d[1], d[2], a[0], a[1], a[2]);
+        addEdgeVertices(axis, a[0], a[1], a[2], b[0], b[1], b[2]);
+        addEdgeVertices(axis, b[0], b[1], b[2], c[0], c[1], c[2]);
+        addEdgeVertices(axis, c[0], c[1], c[2], d[0], d[1], d[2]);
+        addEdgeVertices(axis, d[0], d[1], d[2], a[0], a[1], a[2]);
         if (perimeterLen > 1 && perimeterScratch[0] === perimeterScratch[perimeterLen - 1]) {
             perimeterLen--;
         }
@@ -547,26 +642,7 @@ const voxelFaces = (
         const localCcwIsPositive = axis !== 1;
         const useLocalCcw = positive === localCcwIsPositive;
 
-        if (perimeterLen === 4) {
-            const p0 = perimeterScratch[0];
-            const p1 = perimeterScratch[1];
-            const p2 = perimeterScratch[2];
-            const p3 = perimeterScratch[3];
-            if (useLocalCcw) {
-                appendTri(p0, p1, p2);
-                appendTri(p0, p2, p3);
-            } else {
-                appendTri(p0, p2, p1);
-                appendTri(p0, p3, p2);
-            }
-        } else {
-            const center = addCenterVertex(axis, p, (u0 + u1) * 0.5, (v0 + v1) * 0.5);
-            for (let i = 0; i < perimeterLen; i++) {
-                const j = (i + 1) % perimeterLen;
-                if (useLocalCcw) appendTri(center, perimeterScratch[i], perimeterScratch[j]);
-                else appendTri(center, perimeterScratch[j], perimeterScratch[i]);
-            }
-        }
+        triangulatePerimeter(useLocalCcw);
     }
 
     return {

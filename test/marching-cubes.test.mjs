@@ -259,6 +259,28 @@ const assertClosedTriangleEdges = (mesh) => {
     }
 };
 
+/**
+ * Assert every vertex lands exactly on a voxel-grid corner.
+ *
+ * @param {{ positions: Float32Array, indices: Uint32Array }} mesh - The mesh
+ *   to scan.
+ * @param {{ min: Vec3, max: Vec3 }} bounds - Grid bounds.
+ * @param {number} voxelResolution - Voxel resolution.
+ */
+const assertVoxelGridCorners = (mesh, bounds, voxelResolution) => {
+    for (let i = 0; i < mesh.positions.length; i += 3) {
+        const x = (mesh.positions[i] - bounds.min.x) / voxelResolution;
+        const y = (mesh.positions[i + 1] - bounds.min.y) / voxelResolution;
+        const z = (mesh.positions[i + 2] - bounds.min.z) / voxelResolution;
+        assert.ok(Math.abs(x - Math.round(x)) < 1e-6,
+            `x=${mesh.positions[i]} is not on a voxel grid corner`);
+        assert.ok(Math.abs(y - Math.round(y)) < 1e-6,
+            `y=${mesh.positions[i + 1]} is not on a voxel grid corner`);
+        assert.ok(Math.abs(z - Math.round(z)) < 1e-6,
+            `z=${mesh.positions[i + 2]} is not on a voxel grid corner`);
+    }
+};
+
 describe('voxelFaces', () => {
     it('should return an empty mesh for an empty grid', () => {
         const buffer = new BlockMaskBuffer();
@@ -337,6 +359,7 @@ describe('voxelFaces', () => {
         const mesh = voxelFaces(toGrid(buffer, 4, 4, 4), bounds, 1.0);
 
         assert.ok(mesh.indices.length > 0);
+        assertVoxelGridCorners(mesh, bounds, 1.0);
         assertClosedTriangleEdges(mesh);
     });
 });
