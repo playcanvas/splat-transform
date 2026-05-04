@@ -1,5 +1,6 @@
 import type { Bounds } from '../data-table';
-import { coplanarMerge, marchingCubes } from '../mesh';
+import { coplanarMerge, marchingCubes, voxelFaces, type Mesh } from '../mesh';
+import type { CollisionMeshShape } from '../types';
 import { fmtCount, logger } from '../utils';
 import { SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
 
@@ -126,46 +127,53 @@ function encodeGlb(positions: Float32Array, indices: Uint32Array): Uint8Array {
 /**
  * Extract a collision mesh from voxel data and encode it as a GLB file.
  *
- * Runs marching cubes on the voxel surface with exact full-face pre-merging
- * enabled, then a lossless coplanar-merge pass that fuses the remaining
- * redundant coplanar triangles while leaving corner-cutting bevel triangles
- * untouched. The output surface is identical to the raw MC surface but avoids
- * constructing most of the raw flat-surface tessellation.
+ * Generates collision geometry from voxel data using either the smooth
+ * marching-cubes path or a direct watertight voxel-face mesh.
  *
  * @param grid - Voxel grid after filtering / nav phases
  * @param gridBounds - Grid bounds aligned to block boundaries
  * @param voxelResolution - Size of each voxel in world units
+ * @param shape - Collision mesh shape to generate
  * @returns GLB bytes, or null if no triangles were generated
  */
 const buildCollisionMesh = (
     grid: SparseVoxelGrid,
     gridBounds: Bounds,
-    voxelResolution: number
+    voxelResolution: number,
+    shape: CollisionMeshShape = 'smooth'
 ): Uint8Array | null => {
     const g = logger.group('Collision mesh');
 
-    const extractSub = logger.group('Extracting');
-    const preMergedMesh = marchingCubes(grid, gridBounds, voxelResolution, { mergeFlatFaces: true });
-    logger.info(`pre-merged vertices: ${fmtCount(preMergedMesh.positions.length / 3)}`);
-    logger.info(`pre-merged triangles: ${fmtCount(preMergedMesh.indices.length / 3)}`);
-    const preMergedIndexCount = preMergedMesh.indices.length;
-
-    if (preMergedMesh.indices.length < 3) {
-        logger.warn('no triangles generated, skipping GLB output');
+    let finalMesh: Mesh;
+    if (shape === 'faces') {
+        const extractSub = logger.group('Extracting voxel faces');
+        finalMesh = voxelFaces(grid, gridBounds, voxelResolution);
+        logger.info(`vertices: ${fmtCount(finalMesh.positions.length / 3)}`);
+        logger.info(`triangles: ${fmtCount(finalMesh.indices.length / 3)}`);
         extractSub.end();
+    } else {
+        const extractSub = logger.group('Extracting');
+        const preMergedMesh = marchingCubes(grid, gridBounds, voxelResolution, { mergeFlatFaces: true });
+        logger.info(`pre-merged vertices: ${fmtCount(preMergedMesh.positions.length / 3)}`);
+        logger.info(`pre-merged triangles: ${fmtCount(preMergedMesh.indices.length / 3)}`);
+        const preMergedIndexCount = preMergedMesh.indices.length;
+        extractSub.end();
+
+        const mergeSub = logger.group('Merging coplanar faces');
+        finalMesh = coplanarMerge(preMergedMesh, voxelResolution);
+
+        const reduction = (1 - finalMesh.indices.length / preMergedIndexCount) * 100;
+        logger.info(`merged vertices: ${fmtCount(finalMesh.positions.length / 3)}`);
+        logger.info(`merged triangles: ${fmtCount(finalMesh.indices.length / 3)}`);
+        logger.info(`reduction: ${reduction.toFixed(0)}%`);
+        mergeSub.end();
+    }
+
+    if (finalMesh.indices.length < 3) {
+        logger.warn('no triangles generated, skipping GLB output');
         g.end();
         return null;
     }
-    extractSub.end();
-
-    const mergeSub = logger.group('Merging coplanar faces');
-    const finalMesh = coplanarMerge(preMergedMesh, voxelResolution);
-
-    const reduction = (1 - finalMesh.indices.length / preMergedIndexCount) * 100;
-    logger.info(`merged vertices: ${fmtCount(finalMesh.positions.length / 3)}`);
-    logger.info(`merged triangles: ${fmtCount(finalMesh.indices.length / 3)}`);
-    logger.info(`reduction: ${reduction.toFixed(0)}%`);
-    mergeSub.end();
 
     g.end();
     return encodeGlb(finalMesh.positions, finalMesh.indices);

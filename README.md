@@ -126,7 +126,7 @@ Actions can be repeated and applied in any order:
     --voxel-carve [h,r]                 Carve navigable space using capsule flood fill from seed.
                                           Default: height=1.6, radius=0.2
     --seed-pos         <x,y,z>          Seed position for voxel processing and --filter-cluster. Default: 0,0,0
--K, --collision-mesh                    Generate collision mesh (.collision.glb) from the voxel output.
+-K, --collision-mesh [smooth|faces]     Generate collision mesh (.collision.glb). Default shape: smooth.
 ```
 
 > [!NOTE]
@@ -258,6 +258,9 @@ splat-transform --voxel-external-fill --voxel-carve input.ply output.voxel.json
 
 # Generate voxel data with custom seed position and carve parameters
 splat-transform --seed-pos 1,0,0 --voxel-carve 2.0,0.3 input.ply output.voxel.json
+
+# Generate voxel data with a watertight voxel-face collision mesh
+splat-transform -K faces input.ply output.voxel.json
 ```
 
 ### Device Selection for SOG Compression

@@ -7,6 +7,7 @@ import { BlockMaskBuffer } from '../src/lib/voxel/block-mask-buffer.js';
 import { SparseVoxelGrid } from '../src/lib/voxel/sparse-voxel-grid.js';
 import { marchingCubes } from '../src/lib/mesh/marching-cubes.js';
 import { coplanarMerge } from '../src/lib/mesh/coplanar-merge.js';
+import { voxelFaces } from '../src/lib/mesh/voxel-faces.js';
 
 // Linear block index: bx + by*nbx + bz*nbx*nby. The buffer stores blocks
 // keyed on this linear index now (not morton).
@@ -230,6 +231,115 @@ const countBevelTris = (mesh) => {
     }
     return count;
 };
+
+/**
+ * Assert every triangle edge has exactly two incident triangles.
+ *
+ * @param {{ positions: Float32Array, indices: Uint32Array }} mesh - The mesh
+ *   to scan.
+ */
+const assertClosedTriangleEdges = (mesh) => {
+    const edgeCount = new Map();
+    const indices = mesh.indices;
+    for (let i = 0; i < indices.length; i += 3) {
+        const a = indices[i];
+        const b = indices[i + 1];
+        const c = indices[i + 2];
+        const addEdge = (u, v) => {
+            const key = u < v ? `${u},${v}` : `${v},${u}`;
+            edgeCount.set(key, (edgeCount.get(key) ?? 0) + 1);
+        };
+        addEdge(a, b);
+        addEdge(b, c);
+        addEdge(c, a);
+    }
+    for (const [key, count] of edgeCount) {
+        assert.strictEqual(count, 2,
+            `edge ${key} has ${count} incident tris (T-junction, boundary, or non-manifold edge)`);
+    }
+};
+
+describe('voxelFaces', () => {
+    it('should return an empty mesh for an empty grid', () => {
+        const buffer = new BlockMaskBuffer();
+        const bounds = makeGridBounds(0, 0, 0, 4, 4, 4);
+        const mesh = voxelFaces(toGrid(buffer, 4, 4, 4), bounds, 1.0);
+
+        assert.strictEqual(mesh.positions.length, 0);
+        assert.strictEqual(mesh.indices.length, 0);
+    });
+
+    it('should mesh a solid block as shared voxel-boundary faces', () => {
+        const buffer = new BlockMaskBuffer();
+        buffer.addBlock(linearBlockIdx(0, 0, 0, 1, 1), SOLID_LO, SOLID_HI);
+
+        const bounds = makeGridBounds(0, 0, 0, 4, 4, 4);
+        const mesh = voxelFaces(toGrid(buffer, 4, 4, 4), bounds, 1.0);
+        const stats = meshStats(mesh);
+
+        assert.strictEqual(stats.verts, 8);
+        assert.strictEqual(stats.tris, 12);
+        assert.deepStrictEqual(stats.min, [0, 0, 0]);
+        assert.deepStrictEqual(stats.max, [4, 4, 4]);
+        assertClosedTriangleEdges(mesh);
+    });
+
+    it('should not emit faces between adjacent solid blocks', () => {
+        const buffer = new BlockMaskBuffer();
+        buffer.addBlock(linearBlockIdx(0, 0, 0, 2, 1), SOLID_LO, SOLID_HI);
+        buffer.addBlock(linearBlockIdx(1, 0, 0, 2, 1), SOLID_LO, SOLID_HI);
+
+        const bounds = makeGridBounds(0, 0, 0, 8, 4, 4);
+        const mesh = voxelFaces(toGrid(buffer, 8, 4, 4), bounds, 1.0);
+        const stats = meshStats(mesh);
+
+        assert.strictEqual(stats.verts, 8);
+        assert.strictEqual(stats.tris, 12);
+        assert.deepStrictEqual(stats.min, [0, 0, 0]);
+        assert.deepStrictEqual(stats.max, [8, 4, 4]);
+        for (let i = 0; i < mesh.positions.length; i += 3) {
+            assert.notStrictEqual(mesh.positions[i], 4,
+                'shared block boundary at x=4 should not be emitted as surface geometry');
+        }
+        assertClosedTriangleEdges(mesh);
+    });
+
+    it('should mesh a single mixed-block voxel on voxel boundaries', () => {
+        const buffer = new BlockMaskBuffer();
+        buffer.addBlock(linearBlockIdx(0, 0, 0, 1, 1), 1, 0);
+
+        const bounds = makeGridBounds(0, 0, 0, 4, 4, 4);
+        const mesh = voxelFaces(toGrid(buffer, 4, 4, 4), bounds, 1.0);
+        const stats = meshStats(mesh);
+
+        assert.strictEqual(stats.verts, 8);
+        assert.strictEqual(stats.tris, 12);
+        assert.deepStrictEqual(stats.min, [0, 0, 0]);
+        assert.deepStrictEqual(stats.max, [1, 1, 1]);
+        assertClosedTriangleEdges(mesh);
+    });
+
+    it('should split greedy rectangle edges to avoid T-junctions', () => {
+        // One-voxel-thick L shape on z=0. The +Z plane greedily contains
+        // a 3x1 rectangle adjacent to a 1x1 rectangle along only part of
+        // the larger rectangle's edge; a naive greedy mesh leaves a
+        // T-junction there.
+        const lo = (
+            (1 << 0) | // (0,0,0)
+            (1 << 1) | // (1,0,0)
+            (1 << 2) | // (2,0,0)
+            (1 << 4)   // (0,1,0)
+        ) >>> 0;
+        const buffer = new BlockMaskBuffer();
+        buffer.addBlock(linearBlockIdx(0, 0, 0, 1, 1), lo, 0);
+
+        const bounds = makeGridBounds(0, 0, 0, 4, 4, 4);
+        const mesh = voxelFaces(toGrid(buffer, 4, 4, 4), bounds, 1.0);
+
+        assert.ok(mesh.indices.length > 0);
+        assertClosedTriangleEdges(mesh);
+    });
+});
 
 describe('coplanarMerge', () => {
     it('should return an empty mesh when given an empty mesh', () => {

@@ -7,7 +7,7 @@ import { Column, DataTable, computeGaussianExtents, computeWriteTransform, trans
 import { GpuDilation, GpuVoxelization } from '../gpu';
 import { type FileSystem, writeFile } from '../io/write';
 import { GaussianBVH } from '../spatial';
-import type { DeviceCreator } from '../types';
+import type { CollisionMeshShape, DeviceCreator } from '../types';
 import { fmtCount, logger, Transform } from '../utils';
 import { buildSparseOctree, type SparseOctree } from './sparse-octree';
 import {
@@ -55,8 +55,8 @@ type WriteVoxelOptions = {
     /** When `floorFill` is enabled, dilation radius in world units used to identify "interior" XZ columns to patch. Empty XZ areas larger than `2 * floorFillDilation` from any solid column are treated as exterior and left empty. Default: 0 (patch every empty column). */
     floorFillDilation?: number;
 
-    /** When `true`, a collision mesh (.collision.glb) is generated alongside the voxel output, using marching cubes followed by lossless coplanar merge. */
-    collisionMesh?: boolean;
+    /** When set, a collision mesh (.collision.glb) is generated alongside the voxel output. `true` is equivalent to `smooth`. */
+    collisionMesh?: boolean | CollisionMeshShape;
 };
 
 /**
@@ -269,7 +269,7 @@ const writeOctreeFiles = async (
  * and outputs two or three files:
  * - `filename` (.voxel.json) - JSON metadata including bounds, resolution, and array sizes
  * - Corresponding .voxel.bin - Binary octree data (nodes + leafData as Uint32 arrays)
- * - Corresponding .collision.glb - Triangle mesh extracted via marching cubes (GLB format, optional)
+ * - Corresponding .collision.glb - Triangle mesh extracted from the voxel output (GLB format, optional)
  *
  * The binary file layout is:
  * - Bytes 0 to (nodeCount * 4 - 1): nodes array (Uint32, little-endian)
@@ -311,6 +311,13 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     if (!createDevice) {
         throw new Error('writeVoxel requires a createDevice function for GPU voxelization');
     }
+
+    const collisionMeshShape = (() => {
+        if (collisionMesh === false || collisionMesh === undefined) return null;
+        if (collisionMesh === true) return 'smooth';
+        if (collisionMesh === 'smooth' || collisionMesh === 'faces') return collisionMesh;
+        throw new Error(`Invalid collisionMesh value: ${String(collisionMesh)}. Expected true, false, "smooth", or "faces"`);
+    })();
 
     if (navCapsule && !navSeed) {
         logger.warn('navCapsule requires navSeed for nav carving, skipping nav carving');
@@ -456,8 +463,8 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         gpuDilation?.destroy();
         gpuDilation = null;
 
-        const glbBytes = collisionMesh ?
-            buildCollisionMesh(grid, gridBounds, voxelResolution) :
+        const glbBytes = collisionMeshShape ?
+            buildCollisionMesh(grid, gridBounds, voxelResolution, collisionMeshShape) :
             null;
 
         const octree = buildSparseOctree(
