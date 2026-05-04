@@ -74,7 +74,8 @@ const NEIGHBOR_SOLID = -1;
  *
  * Each voxel is treated as a cell in the marching cubes grid. Corner values
  * are binary (0 = empty, 1 = occupied) with a 0.5 threshold. Vertices are
- * placed at edge midpoints, producing a mesh that follows voxel boundaries.
+ * placed at edge midpoints, producing the binary-field isosurface between
+ * occupied and empty samples.
  *
  * @param grid - Voxel grid (after filtering / nav phases)
  * @param gridBounds - Grid bounds aligned to block boundaries
@@ -848,7 +849,7 @@ function marchingCubes(
     const flushFaceCells = (): void => {
         if (faceCellLen === 0 && diagCellLen === 0) return;
 
-        const keys = faceCellLen > 0 ? faceCellKeys.slice(0, faceCellLen) : new Float64Array(0);
+        const keys = faceCellKeys.subarray(0, faceCellLen);
         faceCellKeys = new Float64Array(0);
         keys.sort();
 

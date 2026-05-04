@@ -8,6 +8,7 @@ import { SparseVoxelGrid } from '../src/lib/voxel/sparse-voxel-grid.js';
 import { marchingCubes } from '../src/lib/mesh/marching-cubes.js';
 import { coplanarMerge } from '../src/lib/mesh/coplanar-merge.js';
 import { voxelFaces } from '../src/lib/mesh/voxel-faces.js';
+import { buildCollisionMesh } from '../src/lib/writers/collision-glb.js';
 
 // Linear block index: bx + by*nbx + bz*nbx*nby. The buffer stores blocks
 // keyed on this linear index now (not morton).
@@ -415,6 +416,16 @@ describe('voxelFaces', () => {
         assert.ok(mesh.indices.length > 0);
         assertVoxelGridCorners(mesh, bounds, 1.0);
         assertClosedTriangleEdges(mesh);
+    });
+});
+
+describe('buildCollisionMesh', () => {
+    it('should skip smooth GLB output for an empty grid', () => {
+        const buffer = new BlockMaskBuffer();
+        const bounds = makeGridBounds(0, 0, 0, 4, 4, 4);
+        const bytes = buildCollisionMesh(toGrid(buffer, 4, 4, 4), bounds, 1.0, 'smooth');
+
+        assert.strictEqual(bytes, null);
     });
 });
 

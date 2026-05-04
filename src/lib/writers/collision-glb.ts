@@ -159,14 +159,18 @@ const buildCollisionMesh = (
         const preMergedIndexCount = preMergedMesh.indices.length;
         extractSub.end();
 
-        const mergeSub = logger.group('Merging coplanar faces');
-        finalMesh = coplanarMerge(preMergedMesh, voxelResolution);
+        if (preMergedIndexCount < 3) {
+            finalMesh = preMergedMesh;
+        } else {
+            const mergeSub = logger.group('Merging coplanar faces');
+            finalMesh = coplanarMerge(preMergedMesh, voxelResolution);
 
-        const reduction = (1 - finalMesh.indices.length / preMergedIndexCount) * 100;
-        logger.info(`merged vertices: ${fmtCount(finalMesh.positions.length / 3)}`);
-        logger.info(`merged triangles: ${fmtCount(finalMesh.indices.length / 3)}`);
-        logger.info(`reduction: ${reduction.toFixed(0)}%`);
-        mergeSub.end();
+            const reduction = (1 - finalMesh.indices.length / preMergedIndexCount) * 100;
+            logger.info(`merged vertices: ${fmtCount(finalMesh.positions.length / 3)}`);
+            logger.info(`merged triangles: ${fmtCount(finalMesh.indices.length / 3)}`);
+            logger.info(`reduction: ${reduction.toFixed(0)}%`);
+            mergeSub.end();
+        }
     }
 
     if (finalMesh.indices.length < 3) {

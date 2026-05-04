@@ -225,7 +225,7 @@ const voxelFaces = (
         rectLen++;
     };
 
-    const keys = faceKeys.slice(0, faceLen);
+    const keys = faceKeys.subarray(0, faceLen);
     faceKeys = new Float64Array(0);
     keys.sort();
 
