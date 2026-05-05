@@ -1,4 +1,12 @@
 /**
+ * Collision mesh shape generated alongside voxel output.
+ *
+ * - `smooth` - marching cubes with lossless coplanar merge.
+ * - `faces` - direct watertight voxel-boundary faces.
+ */
+type CollisionMeshShape = 'smooth' | 'faces';
+
+/**
  * Options for read/write operations.
  */
 type Options = {
@@ -41,8 +49,8 @@ type Options = {
     /** Seed position in world space for exterior fill and carve flood fill. */
     navSeed?: { x: number; y: number; z: number };
 
-    /** When `true`, a collision mesh (.collision.glb) is generated alongside the voxel output, using marching cubes followed by lossless coplanar merge. */
-    collisionMesh?: boolean;
+    /** When set, a collision mesh (.collision.glb) is generated alongside the voxel output. `true` is equivalent to `smooth`. */
+    collisionMesh?: boolean | CollisionMeshShape;
 };
 
 /**
@@ -64,4 +72,4 @@ type Param = {
  */
 type DeviceCreator = () => Promise<import('playcanvas').GraphicsDevice>;
 
-export type { Options, Param, DeviceCreator };
+export type { CollisionMeshShape, Options, Param, DeviceCreator };

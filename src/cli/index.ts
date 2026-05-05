@@ -27,6 +27,7 @@ import {
     type FilterFloaters,
     type FilterCluster,
     type Options as LibOptions,
+    type CollisionMeshShape,
     type ReadFileSystem,
     logger
 } from '../lib';
@@ -136,7 +137,7 @@ const cliOptionsConfig = {
     'voxel-floor-fill': { type: 'string' },
     'voxel-carve': { type: 'string' },
     'seed-pos': { type: 'string', default: '' },
-    'collision-mesh': { type: 'boolean', short: 'K' },
+    'collision-mesh': { type: 'string', short: 'K' },
 
     // per-file options
     translate: { type: 'string', short: 't', multiple: true },
@@ -162,6 +163,7 @@ const stringOptionNames = new Set(Object.entries(cliOptionsConfig)
 );
 
 const isNumericValue = (s: string) => /^-?\d[\d.,e+-]*$/.test(s);
+const isCollisionMeshShape = (s: string) => /^(?:smooth|faces)$/i.test(s);
 
 // Options that may appear without a value. The predicate gates whether the
 // next argv token is consumed as the value; when omitted (or rejected) the
@@ -175,7 +177,9 @@ const optionalValueOptions: Map<string, OptionalValueValidator> = new Map([
     ['--voxel-external-fill', isNumericValue],
     ['--voxel-floor-fill', isNumericValue],
     ['--voxel-carve', isNumericValue],
-    ['--voxel-params', isNumericValue]
+    ['--voxel-params', isNumericValue],
+    ['--collision-mesh', isCollisionMeshShape],
+    ['-K', isCollisionMeshShape]
 ]);
 
 const shortToLong = new Map<string, string>(
@@ -254,6 +258,14 @@ const parseArguments = async () => {
             throw new Error(`Expected ${count} comma-separated values, got ${parts.length}: ${value}`);
         }
         return parts;
+    };
+
+    const parseCollisionMesh = (value: string | undefined): false | CollisionMeshShape => {
+        if (value === undefined) return false;
+        if (value === '') return 'smooth';
+        const normalized = value.toLowerCase();
+        if (normalized === 'smooth' || normalized === 'faces') return normalized;
+        throw new Error(`Invalid collision mesh shape: ${value}. Expected smooth or faces.`);
     };
 
     const parseComparator = (value: string): 'lt' | 'lte' | 'gt' | 'gte' | 'eq' | 'neq' => {
@@ -345,7 +357,7 @@ const parseArguments = async () => {
         navSeed = { x: 0, y: 0, z: 0 };
     }
 
-    const collisionMesh = v['collision-mesh'];
+    const collisionMesh = parseCollisionMesh(v['collision-mesh']);
 
     const options: CliOptions = {
         overwrite: v.overwrite,
@@ -641,7 +653,7 @@ GLOBAL OPTIONS
         --voxel-floor-fill [size]           Fill below-floor voxels by upward column walk from bottom. Default size: 1.6
         --voxel-carve [h,r]                 Carve navigable space using capsule flood fill from seed. Default: 1.6,0.2
         --seed-pos         <x,y,z>          Seed position for voxel processing and --filter-cluster. Default: 0,0,0
-    -K, --collision-mesh                    Generate collision mesh (.collision.glb) from the voxel output
+    -K, --collision-mesh   [smooth|faces]   Generate collision mesh (.collision.glb). Default shape: smooth
 
 EXAMPLES
     # Scale then translate
@@ -664,6 +676,9 @@ EXAMPLES
 
     # Generate voxel data with collision mesh
     splat-transform -K input.ply output.voxel.json
+
+    # Generate voxel data with voxel-face collision mesh
+    splat-transform -K faces input.ply output.voxel.json
 
     # Generate voxel data with custom resolution and opacity threshold
     splat-transform --voxel-params 0.1,0.3 input.ply output.voxel.json

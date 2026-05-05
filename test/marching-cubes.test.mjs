@@ -7,6 +7,8 @@ import { BlockMaskBuffer } from '../src/lib/voxel/block-mask-buffer.js';
 import { SparseVoxelGrid } from '../src/lib/voxel/sparse-voxel-grid.js';
 import { marchingCubes } from '../src/lib/mesh/marching-cubes.js';
 import { coplanarMerge } from '../src/lib/mesh/coplanar-merge.js';
+import { voxelFaces } from '../src/lib/mesh/voxel-faces.js';
+import { buildCollisionMesh } from '../src/lib/writers/collision-glb.js';
 
 // Linear block index: bx + by*nbx + bz*nbx*nby. The buffer stores blocks
 // keyed on this linear index now (not morton).
@@ -63,6 +65,91 @@ describe('marchingCubes', () => {
         // A 4x4x4 solid cube produces boundary triangles on all 6 faces.
         assert.strictEqual(numTriangles, 188,
             `expected 188 triangles for solid 4x4x4 cube, got ${numTriangles}`);
+    });
+
+    it('should pre-merge exact flat face cells when requested', () => {
+        const buffer = new BlockMaskBuffer();
+        buffer.addBlock(linearBlockIdx(0, 0, 0, 1, 1), SOLID_LO, SOLID_HI);
+
+        const bounds = makeGridBounds(0, 0, 0, 4, 4, 4);
+        const grid = toGrid(buffer, 4, 4, 4);
+        const raw = marchingCubes(grid, bounds, 1.0);
+        const fast = marchingCubes(grid, bounds, 1.0, { mergeFlatFaces: true });
+
+        assert.strictEqual(raw.indices.length / 3, 188,
+            'default marchingCubes output should remain the raw MC mesh');
+        assert.ok(fast.indices.length < raw.indices.length,
+            `expected flat-face pre-merge to reduce triangles; raw=${raw.indices.length / 3}, fast=${fast.indices.length / 3}`);
+
+        const rawMerged = coplanarMerge(raw, 1.0);
+        const fastMerged = coplanarMerge(fast, 1.0);
+        const rawStats = meshStats(rawMerged);
+        const fastStats = meshStats(fastMerged);
+
+        assert.strictEqual(fastStats.tris, rawStats.tris,
+            'final coplanar merge should reach the same triangle count');
+        assert.strictEqual(fastStats.verts, rawStats.verts,
+            'final coplanar merge should reach the same vertex count');
+        for (let a = 0; a < 3; a++) {
+            assert.strictEqual(fastStats.min[a], rawStats.min[a],
+                `min[${a}] changed: ${rawStats.min[a]} -> ${fastStats.min[a]}`);
+            assert.strictEqual(fastStats.max[a], rawStats.max[a],
+                `max[${a}] changed: ${rawStats.max[a]} -> ${fastStats.max[a]}`);
+        }
+    });
+
+    it('should merge straight binary-MC bevel strips during extraction', () => {
+        const nx = 8;
+        const nz = 8;
+        const nbx = nx / 4;
+        const nby = 1;
+        const nbz = nz / 4;
+        const slabLo = 0x000F_000F >>> 0;
+        const slabHi = 0x000F_000F >>> 0;
+        const buffer = new BlockMaskBuffer();
+        for (let bz = 0; bz < nbz; bz++) {
+            for (let bx = 0; bx < nbx; bx++) {
+                buffer.addBlock(linearBlockIdx(bx, 0, bz, nbx, nby), slabLo, slabHi);
+            }
+        }
+
+        const bounds = makeGridBounds(0, 0, 0, nx, 4, nz);
+        const grid = toGrid(buffer, nx, 4, nz);
+        const raw = marchingCubes(grid, bounds, 1.0);
+        const fast = marchingCubes(grid, bounds, 1.0, { mergeFlatFaces: true });
+        const rawMerged = coplanarMerge(raw, 1.0);
+
+        const fastStats = meshStats(fast);
+        const rawMergedStats = meshStats(rawMerged);
+        assert.ok(fastStats.tris < raw.indices.length / 3 * 0.2,
+            `expected direct MC merge to remove most slab tris; raw=${raw.indices.length / 3}, fast=${fastStats.tris}`);
+        assert.strictEqual(fastStats.tris, rawMergedStats.tris);
+        assert.strictEqual(fastStats.verts, rawMergedStats.verts);
+        assertClosedTriangleEdges(fast);
+    });
+
+    it('should keep merged MC rectangles watertight next to raw feature triangles', () => {
+        const slabLo = 0x000F_000F >>> 0;
+        const slabHi = 0x000F_000F >>> 0;
+        const bumpLo = ((1 << 4) | (1 << 8) | (1 << 12)) >>> 0;
+        const buffer = new BlockMaskBuffer();
+        buffer.addBlock(linearBlockIdx(0, 0, 0, 2, 1), slabLo, slabHi);
+        buffer.addBlock(linearBlockIdx(1, 0, 0, 2, 1), slabLo, slabHi);
+        buffer.addBlock(linearBlockIdx(0, 0, 1, 2, 1), slabLo, slabHi);
+        buffer.addBlock(linearBlockIdx(1, 0, 1, 2, 1), (slabLo | bumpLo) >>> 0, slabHi);
+
+        const bounds = makeGridBounds(0, 0, 0, 8, 4, 8);
+        const grid = toGrid(buffer, 8, 4, 8);
+        const raw = marchingCubes(grid, bounds, 1.0);
+        const fast = marchingCubes(grid, bounds, 1.0, { mergeFlatFaces: true });
+        const rawMerged = coplanarMerge(raw, 1.0);
+        const fastMerged = coplanarMerge(fast, 1.0);
+
+        assert.ok(fast.indices.length < raw.indices.length * 0.25,
+            `expected direct MC merge to shrink slab+bump mesh; raw=${raw.indices.length / 3}, fast=${fast.indices.length / 3}`);
+        assertClosedTriangleEdges(fast);
+        assert.strictEqual(fastMerged.indices.length, rawMerged.indices.length);
+        assert.strictEqual(fastMerged.positions.length, rawMerged.positions.length);
     });
 
     it('should place vertices within grid bounds', () => {
@@ -199,6 +286,148 @@ const countBevelTris = (mesh) => {
     }
     return count;
 };
+
+/**
+ * Assert every triangle edge has exactly two incident triangles.
+ *
+ * @param {{ positions: Float32Array, indices: Uint32Array }} mesh - The mesh
+ *   to scan.
+ */
+const assertClosedTriangleEdges = (mesh) => {
+    const edgeCount = new Map();
+    const indices = mesh.indices;
+    for (let i = 0; i < indices.length; i += 3) {
+        const a = indices[i];
+        const b = indices[i + 1];
+        const c = indices[i + 2];
+        const addEdge = (u, v) => {
+            const key = u < v ? `${u},${v}` : `${v},${u}`;
+            edgeCount.set(key, (edgeCount.get(key) ?? 0) + 1);
+        };
+        addEdge(a, b);
+        addEdge(b, c);
+        addEdge(c, a);
+    }
+    for (const [key, count] of edgeCount) {
+        assert.strictEqual(count, 2,
+            `edge ${key} has ${count} incident tris (T-junction, boundary, or non-manifold edge)`);
+    }
+};
+
+/**
+ * Assert every vertex lands exactly on a voxel-grid corner.
+ *
+ * @param {{ positions: Float32Array, indices: Uint32Array }} mesh - The mesh
+ *   to scan.
+ * @param {{ min: Vec3, max: Vec3 }} bounds - Grid bounds.
+ * @param {number} voxelResolution - Voxel resolution.
+ */
+const assertVoxelGridCorners = (mesh, bounds, voxelResolution) => {
+    for (let i = 0; i < mesh.positions.length; i += 3) {
+        const x = (mesh.positions[i] - bounds.min.x) / voxelResolution;
+        const y = (mesh.positions[i + 1] - bounds.min.y) / voxelResolution;
+        const z = (mesh.positions[i + 2] - bounds.min.z) / voxelResolution;
+        assert.ok(Math.abs(x - Math.round(x)) < 1e-6,
+            `x=${mesh.positions[i]} is not on a voxel grid corner`);
+        assert.ok(Math.abs(y - Math.round(y)) < 1e-6,
+            `y=${mesh.positions[i + 1]} is not on a voxel grid corner`);
+        assert.ok(Math.abs(z - Math.round(z)) < 1e-6,
+            `z=${mesh.positions[i + 2]} is not on a voxel grid corner`);
+    }
+};
+
+describe('voxelFaces', () => {
+    it('should return an empty mesh for an empty grid', () => {
+        const buffer = new BlockMaskBuffer();
+        const bounds = makeGridBounds(0, 0, 0, 4, 4, 4);
+        const mesh = voxelFaces(toGrid(buffer, 4, 4, 4), bounds, 1.0);
+
+        assert.strictEqual(mesh.positions.length, 0);
+        assert.strictEqual(mesh.indices.length, 0);
+    });
+
+    it('should mesh a solid block as shared voxel-boundary faces', () => {
+        const buffer = new BlockMaskBuffer();
+        buffer.addBlock(linearBlockIdx(0, 0, 0, 1, 1), SOLID_LO, SOLID_HI);
+
+        const bounds = makeGridBounds(0, 0, 0, 4, 4, 4);
+        const mesh = voxelFaces(toGrid(buffer, 4, 4, 4), bounds, 1.0);
+        const stats = meshStats(mesh);
+
+        assert.strictEqual(stats.verts, 8);
+        assert.strictEqual(stats.tris, 12);
+        assert.deepStrictEqual(stats.min, [0, 0, 0]);
+        assert.deepStrictEqual(stats.max, [4, 4, 4]);
+        assertClosedTriangleEdges(mesh);
+    });
+
+    it('should not emit faces between adjacent solid blocks', () => {
+        const buffer = new BlockMaskBuffer();
+        buffer.addBlock(linearBlockIdx(0, 0, 0, 2, 1), SOLID_LO, SOLID_HI);
+        buffer.addBlock(linearBlockIdx(1, 0, 0, 2, 1), SOLID_LO, SOLID_HI);
+
+        const bounds = makeGridBounds(0, 0, 0, 8, 4, 4);
+        const mesh = voxelFaces(toGrid(buffer, 8, 4, 4), bounds, 1.0);
+        const stats = meshStats(mesh);
+
+        assert.strictEqual(stats.verts, 8);
+        assert.strictEqual(stats.tris, 12);
+        assert.deepStrictEqual(stats.min, [0, 0, 0]);
+        assert.deepStrictEqual(stats.max, [8, 4, 4]);
+        for (let i = 0; i < mesh.positions.length; i += 3) {
+            assert.notStrictEqual(mesh.positions[i], 4,
+                'shared block boundary at x=4 should not be emitted as surface geometry');
+        }
+        assertClosedTriangleEdges(mesh);
+    });
+
+    it('should mesh a single mixed-block voxel on voxel boundaries', () => {
+        const buffer = new BlockMaskBuffer();
+        buffer.addBlock(linearBlockIdx(0, 0, 0, 1, 1), 1, 0);
+
+        const bounds = makeGridBounds(0, 0, 0, 4, 4, 4);
+        const mesh = voxelFaces(toGrid(buffer, 4, 4, 4), bounds, 1.0);
+        const stats = meshStats(mesh);
+
+        assert.strictEqual(stats.verts, 8);
+        assert.strictEqual(stats.tris, 12);
+        assert.deepStrictEqual(stats.min, [0, 0, 0]);
+        assert.deepStrictEqual(stats.max, [1, 1, 1]);
+        assertClosedTriangleEdges(mesh);
+    });
+
+    it('should split greedy rectangle edges to avoid T-junctions', () => {
+        // One-voxel-thick L shape on z=0. The +Z plane greedily contains
+        // a 3x1 rectangle adjacent to a 1x1 rectangle along only part of
+        // the larger rectangle's edge; a naive greedy mesh leaves a
+        // T-junction there.
+        const lo = (
+            (1 << 0) | // (0,0,0)
+            (1 << 1) | // (1,0,0)
+            (1 << 2) | // (2,0,0)
+            (1 << 4)   // (0,1,0)
+        ) >>> 0;
+        const buffer = new BlockMaskBuffer();
+        buffer.addBlock(linearBlockIdx(0, 0, 0, 1, 1), lo, 0);
+
+        const bounds = makeGridBounds(0, 0, 0, 4, 4, 4);
+        const mesh = voxelFaces(toGrid(buffer, 4, 4, 4), bounds, 1.0);
+
+        assert.ok(mesh.indices.length > 0);
+        assertVoxelGridCorners(mesh, bounds, 1.0);
+        assertClosedTriangleEdges(mesh);
+    });
+});
+
+describe('buildCollisionMesh', () => {
+    it('should skip smooth GLB output for an empty grid', () => {
+        const buffer = new BlockMaskBuffer();
+        const bounds = makeGridBounds(0, 0, 0, 4, 4, 4);
+        const bytes = buildCollisionMesh(toGrid(buffer, 4, 4, 4), bounds, 1.0, 'smooth');
+
+        assert.strictEqual(bytes, null);
+    });
+});
 
 describe('coplanarMerge', () => {
     it('should return an empty mesh when given an empty mesh', () => {
