@@ -163,6 +163,9 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
     // converts to Transform.PLY). Without this, view-dependent streaming
     // built on tree.bound picks the wrong chunks because the bounds are
     // 180°-Z-rotated relative to the splat positions inside them.
+    // This intentionally mutates the input tables to avoid doubling peak
+    // memory during LOD export. Callers should treat writeLod as consuming its
+    // DataTable inputs.
     const dataTable = convertToSpace(options.dataTable, Transform.PLY, true);
     const envDataTable = options.envDataTable ? convertToSpace(options.envDataTable, Transform.PLY, true) : null;
 
