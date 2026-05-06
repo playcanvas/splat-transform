@@ -158,8 +158,13 @@ type WriteLodOptions = {
 const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
     const { filename, iterations, createDevice, chunkCount, chunkExtent } = options;
 
-    const dataTable = convertToSpace(options.dataTable, Transform.IDENTITY, true);
-    const envDataTable = options.envDataTable ? convertToSpace(options.envDataTable, Transform.IDENTITY, true) : null;
+    // Operate in PLY space so per-leaf bounds in tree.bound are in the same
+    // coordinate frame as the SOG chunk data emitted by writeSog (which also
+    // converts to Transform.PLY). Without this, view-dependent streaming
+    // built on tree.bound picks the wrong chunks because the bounds are
+    // 180°-Z-rotated relative to the splat positions inside them.
+    const dataTable = convertToSpace(options.dataTable, Transform.PLY, true);
+    const envDataTable = options.envDataTable ? convertToSpace(options.envDataTable, Transform.PLY, true) : null;
 
     const outputDir = dirname(filename);
 
