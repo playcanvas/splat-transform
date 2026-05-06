@@ -607,96 +607,66 @@ SUPPORTED OUTPUTS
 
 ACTIONS (can be repeated, in any order)
     -t, --translate        <x,y,z>          Translate Gaussians by (x, y, z)
-    -r, --rotate           <x,y,z>          Rotate Gaussians by Euler angles (x, y, z), in degrees
+    -r, --rotate           <x,y,z>          Rotate Gaussians by Euler angles, in degrees
     -s, --scale            <factor>         Uniformly scale Gaussians by factor
     -H, --filter-harmonics <0|1|2|3>        Remove spherical harmonic bands > n
-    -N, --filter-nan                        Remove Gaussians with NaN values and most Inf values;
-                                              retains +Infinity in opacity and -Infinity in scale_*
+    -N, --filter-nan                        Remove Gaussians with NaN/Inf values
     -B, --filter-box       <x,y,z,X,Y,Z>    Remove Gaussians outside box (min, max corners)
-    -S, --filter-sphere    <x,y,z,radius>   Remove Gaussians outside sphere (center, radius)
-    -V, --filter-value     <name,cmp,value> Keep Gaussians where <name> <cmp> <value>
+    -S, --filter-sphere    <x,y,z,radius>   Remove Gaussians outside sphere
+    -V, --filter-value     <name,cmp,value> Keep Gaussians where <name> <cmp> <value>;
                                               cmp ∈ {lt,lte,gt,gte,eq,neq}
-                                              opacity, scale_*, f_dc_* use transformed values
-                                              (linear opacity 0-1, linear scale, linear color 0-1).
-                                              Append _raw for raw PLY values (e.g. opacity_raw).
-    -F, --decimate         <n|n%>           Simplify to n Gaussians via progressive pairwise merging
-                                              Use n% to keep a percentage of Gaussians
-    -G, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel.
-                                              Evaluates each Gaussian at occupied voxel centers.
-                                              Default: size=0.05, opacity=0.1, min=0.004 (1/255)
-    -D, --filter-cluster   [res,op,min]     Keep only the connected cluster at --seed-pos.
-                                              GPU-voxelizes at coarse resolution (res world units/voxel).
-                                              Default: res=1.0, opacity=0.999, min=0.1
+    -F, --decimate         <n|n%>           Simplify to n (or n%) Gaussians via pairwise merging
+    -G, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel
+    -D, --filter-cluster   [res,op,min]     Keep only the connected cluster at --seed-pos
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
     -l, --lod              <n>              Specify the level of detail, n >= 0
     -m, --summary                           Print per-column statistics to stdout
     -M, --morton-order                      Reorder Gaussians by Morton code (Z-order curve)
 
-GLOBAL OPTIONS
+GENERAL
     -h, --help                              Show this help and exit
     -v, --version                           Show version and exit
     -q, --quiet                             Suppress non-error output
         --verbose                           Show debug-level diagnostics
         --mem                               Show peak memory in progress output
-        --tty                               Interactive bar rendering (default on a TTY; --no-tty to disable)
+        --tty                               Interactive bar rendering (--no-tty to disable)
     -w, --overwrite                         Overwrite output file if it exists
-    -i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10
+
+SOG COMPRESSION (.sog, meta.json, lod-meta.json, .html outputs)
+    -i, --iterations       <n>              SH compression iterations (more=better). Default: 10
     -L, --list-gpus                         List available GPU adapters and exit
-    -g, --gpu              <n|cpu>          Select device for SOG compression: GPU adapter index | 'cpu'
+    -g, --gpu              <n|cpu>          Compression device: GPU adapter index | 'cpu'
+
+HTML VIEWER OUTPUT (.html)
     -E, --viewer-settings  <settings.json>  HTML viewer settings JSON file
     -U, --unbundled                         Generate unbundled HTML viewer with separate files
-    -O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC input
-    -C, --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
-    -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
-        --voxel-params     [size,opacity]   Voxel size and opacity threshold for .voxel.json. Default: 0.05,0.1
-        --voxel-external-fill [size]        Fill exterior voxels by dilation from seed. Default size: 1.6
-        --voxel-floor-fill [size]           Fill below-floor voxels by upward column walk from bottom. Default size: 1.6
-        --voxel-carve [h,r]                 Carve navigable space using capsule flood fill from seed. Default: 1.6,0.2
-        --seed-pos         <x,y,z>          Seed position for voxel processing and --filter-cluster. Default: 0,0,0
-    -K, --collision-mesh   [smooth|faces]   Generate collision mesh (.collision.glb). Default shape: smooth
+
+LCC INPUT (.lcc)
+    -O, --lod-select       <n,n,...>        Comma-separated LOD levels to read
+
+LOD OUTPUT (lod-meta.json)
+    -C, --lod-chunk-count  <n>              Approximate Gaussians per LOD chunk in K. Default: 512
+    -X, --lod-chunk-extent <n>              Approximate LOD chunk size in world units. Default: 16
+
+VOXEL OUTPUT (.voxel.json)
+        --voxel-params     [size,opacity]   Voxel size + opacity threshold. Default: 0.05,0.1
+        --voxel-external-fill [size]        Fill exterior voxels by dilation from seed (interior scenes). Default: 1.6
+        --voxel-floor-fill [radius]         Fill columns upward from bottom (exterior scenes). Default: 1.6
+        --voxel-carve      [h,r]            Carve navigable space via capsule flood fill from seed. Default: 1.6,0.2
+        --seed-pos         <x,y,z>          Seed position for voxel fill/carve and --filter-cluster. Default: 0,0,0
+    -K, --collision-mesh   [smooth|faces]   Generate collision mesh (.collision.glb). Default: smooth
 
 EXAMPLES
-    # Scale then translate
-    splat-transform bunny.ply -s 0.5 -t 0,0,10 bunny-scaled.ply
+    # Convert formats
+    splat-transform input.ply output.sog
 
-    # Merge two files with transforms and compress to SOG format
-    splat-transform -w cloudA.ply -r 0,90,0 cloudB.ply -s 2 merged.sog
+    # Merge files with transforms
+    splat-transform -w a.ply -r 0,90,0 b.ply -s 2 merged.sog
 
-    # Generate unbundled HTML viewer with separate CSS, JS and SOG files
-    splat-transform -U bunny.ply bunny-viewer.html
+    # Generate voxel collision data
+    splat-transform input.ply --filter-cluster output.voxel.json
 
-    # Generate synthetic splats using a generator script
-    splat-transform gen-grid.mjs -p width=500,height=500,scale=0.1 grid.ply
-
-    # Generate LOD with custom chunk size and node split size
-    splat-transform -O 0,1,2 -C 1024 -X 32 input.lcc output/lod-meta.json
-
-    # Generate voxel data
-    splat-transform input.ply output.voxel.json
-
-    # Generate voxel data with collision mesh
-    splat-transform -K input.ply output.voxel.json
-
-    # Generate voxel data with voxel-face collision mesh
-    splat-transform -K faces input.ply output.voxel.json
-
-    # Generate voxel data with custom resolution and opacity threshold
-    splat-transform --voxel-params 0.1,0.3 input.ply output.voxel.json
-
-    # Generate voxel data with exterior fill and carve
-    splat-transform --voxel-external-fill --voxel-carve input.ply output.voxel.json
-
-    # Generate voxel data with custom seed position and carve parameters
-    splat-transform --seed-pos 1,0,0 --voxel-carve 2.0,0.3 input.ply output.voxel.json
-
-    # Print statistical summary, then write output
-    splat-transform bunny.ply --summary output.ply
-
-    # Print summary without writing a file (discard output)
-    splat-transform bunny.ply -m null
-
-    # Read input from a URL and write to a local file
-    splat-transform https://example.com/scene.ply scene.sog
+    More examples: https://github.com/playcanvas/splat-transform#examples
 `;
 
 const main = async () => {
