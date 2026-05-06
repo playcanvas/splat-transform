@@ -650,7 +650,7 @@ LOD OUTPUT (lod-meta.json)
 
 VOXEL OUTPUT (.voxel.json)
         --voxel-params     [size,opacity]   Voxel size + opacity threshold. Default: 0.05,0.1
-        --voxel-external-fill [size]        Fill exterior voxels by dilation from seed (interior scenes). Default: 1.6
+        --voxel-external-fill [size]        Seal exterior voxels via boundary flood fill (interior scenes). Default: 1.6
         --voxel-floor-fill [radius]         Fill columns upward from bottom (exterior scenes). Default: 1.6
         --voxel-carve      [h,r]            Carve navigable space via capsule flood fill from seed. Default: 1.6,0.2
         --seed-pos         <x,y,z>          Seed position for voxel fill/carve and --filter-cluster. Default: 0,0,0

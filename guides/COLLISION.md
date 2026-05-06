@@ -57,7 +57,13 @@ After voxelization, the surface is typically a thin shell with holes. Filling cl
 
 ### Interior scenes — `--voxel-external-fill`
 
-For room scans, where the camera was *inside* the volume you want to navigate. The pass dilates outward from `--seed-pos` (which must be inside the room) until it meets the wall surface, then marks everything *outside* the room as solid. The unmarked interior becomes the carve target.
+For room scans, where you want a closed interior volume that carve can flood. The pass:
+
+1. Dilates the solid grid by `[size]` voxels to bridge small holes in the walls.
+2. Flood-fills empty space inward from the bounding-box boundary — every voxel reachable from outside is marked as exterior.
+3. Marks the exterior region as solid in the output, leaving only the enclosed interior as empty space for carve.
+
+`--seed-pos` is used as a sanity check: if the seed ends up reachable from outside (i.e. the volume isn't actually enclosed at the seed), the fill is skipped and the original grid is returned.
 
 ```none
 --voxel-external-fill [size]    Default size: 1.6

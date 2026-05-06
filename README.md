@@ -69,7 +69,7 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 
 ## Actions
 
-Actions are applied per-file in the order they appear. They can be repeated and used in any order:
+Actions execute in the order specified and can be repeated. Any action may appear after any input or output file:
 
 ```none
 -t, --translate        <x,y,z>          Translate Gaussians by (x, y, z)
@@ -156,7 +156,12 @@ Apply when writing `.voxel.json` (sparse voxel octree for collision detection). 
 
 ```none
     --voxel-params     [size,opacity]   Voxel size and opacity threshold. Default: 0.05,0.1
-    --voxel-external-fill [size]        Fill exterior voxels by dilation from seed (interior scenes).
+    --voxel-external-fill [size]        Seal exterior voxels via boundary flood fill (interior scenes).
+                                          [size] (world units) is the dilation distance applied
+                                          before the flood fill to bridge small wall gaps.
+                                          --seed-pos is used to verify the volume is enclosed at
+                                          the seed; the fill is skipped if the seed is reachable
+                                          from outside.
                                           Default size: 1.6
     --voxel-floor-fill [radius]         Fill each column upward from bottom until hitting solid (exterior scenes).
                                           Optional radius (world units): only patch XZ areas surrounded by floor
