@@ -180,34 +180,46 @@ const cropToNavigable = (
     }
 
     const { minBx, minBy, minBz, maxBx, maxBy, maxBz } = navBounds;
-    const cropMaxBx = maxBx + 1;
-    const cropMaxBy = maxBy + 1;
-    const cropMaxBz = maxBz + 1;
 
-    if (minBx === 0 && minBy === 0 && minBz === 0 &&
+    // Pad by 1 block on each side so the cropped grid retains the solid wall
+    // blocks immediately surrounding the navigable cavity. Matches the
+    // MARGIN = 1 pattern used by carve() before this re-crop strips it. The
+    // collision-mesh extractors treat out-of-grid as empty, so without this
+    // padding the mesh has holes wherever the cavity reaches the cropped
+    // boundary; with it, the mesh extractor sees a real SOLID→EMPTY
+    // transition at the cavity edge and emits a sealed wall there.
+    const MARGIN = 1;
+    const cropMinBx = Math.max(0, minBx - MARGIN);
+    const cropMinBy = Math.max(0, minBy - MARGIN);
+    const cropMinBz = Math.max(0, minBz - MARGIN);
+    const cropMaxBx = Math.min(nbx, maxBx + 1 + MARGIN);
+    const cropMaxBy = Math.min(nby, maxBy + 1 + MARGIN);
+    const cropMaxBz = Math.min(nbz, maxBz + 1 + MARGIN);
+
+    if (cropMinBx === 0 && cropMinBy === 0 && cropMinBz === 0 &&
         cropMaxBx === nbx && cropMaxBy === nby && cropMaxBz === nbz) {
         return { grid, gridBounds };
     }
 
     const cropBar = logger.bar('Cropping grid', grid.types.length);
     const croppedGrid = grid.cropTo(
-        minBx, minBy, minBz, cropMaxBx, cropMaxBy, cropMaxBz,
+        cropMinBx, cropMinBy, cropMinBz, cropMaxBx, cropMaxBy, cropMaxBz,
         done => cropBar.update(done)
     );
     cropBar.end();
 
     const blockSize = 4 * voxelResolution;
     const croppedMin = new Vec3(
-        gridBounds.min.x + minBx * blockSize,
-        gridBounds.min.y + minBy * blockSize,
-        gridBounds.min.z + minBz * blockSize
+        gridBounds.min.x + cropMinBx * blockSize,
+        gridBounds.min.y + cropMinBy * blockSize,
+        gridBounds.min.z + cropMinBz * blockSize
     );
     const croppedBounds: Bounds = {
         min: croppedMin,
         max: new Vec3(
-            croppedMin.x + (cropMaxBx - minBx) * blockSize,
-            croppedMin.y + (cropMaxBy - minBy) * blockSize,
-            croppedMin.z + (cropMaxBz - minBz) * blockSize
+            croppedMin.x + (cropMaxBx - cropMinBx) * blockSize,
+            croppedMin.y + (cropMaxBy - cropMinBy) * blockSize,
+            croppedMin.z + (cropMaxBz - cropMinBz) * blockSize
         )
     };
 
@@ -365,15 +377,29 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         gpuVoxelization.uploadAllGaussians(pcDataTable, extentsResult.extents);
 
         // Align grid bounds to block boundaries BEFORE voxelization so the
-        // block coordinates used during voxelization match what the reader expects.
-        // When fillExterior runs, pad by halfExtent + 1 voxels per side so the
-        // boundary-face flood seeds survive the dilation (notably below the floor).
+        // block coordinates used during voxelization match what the reader
+        // expects. fillExterior and fillFloor both need a margin of empty
+        // voxels outside the splat's tight 3-sigma extents to do their job:
+        // fillExterior so the boundary-face flood seeds survive its dilation
+        // (notably below the floor), fillFloor so its column walk has empty
+        // XZ columns to convert into wall pillars and the dilation halo to
+        // extend the floor footprint outward.
+        //
+        // Lateral pad combines both as `dilation_radius + 1` voxels per side.
+        // Vertical pad is only contributed by exteriorPad — fillFloor's
+        // dilation is XZ-only, and Y padding would extend the wall pillars
+        // above the splat's natural ceiling and below its floor.
         const exteriorPad = hasFillExterior ?
             (Math.ceil(navExteriorRadius! / voxelResolution) + 1) * voxelResolution :
             0;
+        const floorPad = hasFloorFill ?
+            (Math.ceil(floorFillDilation / voxelResolution) + 1) * voxelResolution :
+            0;
+        const padXZ = Math.max(exteriorPad, floorPad);
+        const padY = exteriorPad;
         let gridBounds = alignGridBounds(
-            bounds.min.x - exteriorPad, bounds.min.y - exteriorPad, bounds.min.z - exteriorPad,
-            bounds.max.x + exteriorPad, bounds.max.y + exteriorPad, bounds.max.z + exteriorPad,
+            bounds.min.x - padXZ, bounds.min.y - padY, bounds.min.z - padXZ,
+            bounds.max.x + padXZ, bounds.max.y + padY, bounds.max.z + padXZ,
             voxelResolution
         );
 
