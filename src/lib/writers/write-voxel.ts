@@ -377,15 +377,29 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         gpuVoxelization.uploadAllGaussians(pcDataTable, extentsResult.extents);
 
         // Align grid bounds to block boundaries BEFORE voxelization so the
-        // block coordinates used during voxelization match what the reader expects.
-        // When fillExterior runs, pad by halfExtent + 1 voxels per side so the
-        // boundary-face flood seeds survive the dilation (notably below the floor).
+        // block coordinates used during voxelization match what the reader
+        // expects. fillExterior and fillFloor both need a margin of empty
+        // voxels outside the splat's tight 3-sigma extents to do their job:
+        // fillExterior so the boundary-face flood seeds survive its dilation
+        // (notably below the floor), fillFloor so its column walk has empty
+        // XZ columns to convert into wall pillars and the dilation halo to
+        // extend the floor footprint outward.
+        //
+        // Lateral pad combines both as `dilation_radius + 1` voxels per side.
+        // Vertical pad is only contributed by exteriorPad — fillFloor's
+        // dilation is XZ-only, and Y padding would extend the wall pillars
+        // above the splat's natural ceiling and below its floor.
         const exteriorPad = hasFillExterior ?
             (Math.ceil(navExteriorRadius! / voxelResolution) + 1) * voxelResolution :
             0;
+        const floorPad = hasFloorFill ?
+            (Math.ceil(floorFillDilation / voxelResolution) + 1) * voxelResolution :
+            0;
+        const padXZ = Math.max(exteriorPad, floorPad);
+        const padY = exteriorPad;
         let gridBounds = alignGridBounds(
-            bounds.min.x - exteriorPad, bounds.min.y - exteriorPad, bounds.min.z - exteriorPad,
-            bounds.max.x + exteriorPad, bounds.max.y + exteriorPad, bounds.max.z + exteriorPad,
+            bounds.min.x - padXZ, bounds.min.y - padY, bounds.min.z - padXZ,
+            bounds.max.x + padXZ, bounds.max.y + padY, bounds.max.z + padXZ,
             voxelResolution
         );
 
