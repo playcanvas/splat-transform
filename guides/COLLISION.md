@@ -59,7 +59,7 @@ After voxelization, the surface is typically a thin shell with holes. Filling cl
 
 For room scans, where you want a closed interior volume that carve can flood. The pass:
 
-1. Dilates the solid grid by `[size]` voxels to bridge small holes in the walls.
+1. Dilates the solid grid by `[size]` world units (converted internally to a voxel half-extent) to bridge small holes in the walls.
 2. Flood-fills empty space inward from the bounding-box boundary — every voxel reachable from outside is marked as exterior.
 3. Marks the exterior region as solid in the output, leaving only the enclosed interior as empty space for carve.
 
@@ -69,7 +69,7 @@ For room scans, where you want a closed interior volume that carve can flood. Th
 --voxel-external-fill [size]    Default size: 1.6
 ```
 
-The optional `size` controls the dilation distance used to seal small wall gaps — increase if walls have noisy holes the fill leaks through.
+The optional `size` (world units) controls the dilation distance used to seal small wall gaps — increase if walls have noisy holes the fill leaks through.
 
 ![external-fill: cross-section of a room before/after, showing void around the room marked solid](images/external-fill.png)
 <!-- TODO: illustration -->
