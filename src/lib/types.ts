@@ -28,6 +28,9 @@ type Options = {
     /** Approximate size of an LOD chunk in world units (meters). Default: 16 */
     lodChunkExtent: number;
 
+    /** SPZ format version to write. Default: 4. */
+    spzVersion?: 3 | 4;
+
     /** Size of each voxel in world units for voxel output. Default: 0.05 */
     voxelResolution?: number;
 

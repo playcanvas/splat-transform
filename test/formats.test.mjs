@@ -24,6 +24,7 @@ import {
     writePly,
     writeCompressedPly,
     writeSog,
+    writeSpz,
     writeCsv,
     MemoryReadFileSystem,
     MemoryFileSystem,
@@ -32,7 +33,7 @@ import {
 } from '../src/lib/index.js';
 
 import { compareSummaries, compareDataTables } from './helpers/summary-compare.mjs';
-import { createMinimalTestData, encodePlyBinary } from './helpers/test-utils.mjs';
+import { createMinimalTestData, createTestDataTable, encodePlyBinary } from './helpers/test-utils.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(__dirname, 'fixtures', 'splat');
@@ -89,80 +90,59 @@ class BufferReadStream {
     }
 }
 
-// Hardcoded packed uint32 values for known quaternions, verified against the
-// reference C++ smallest-three encoder in nianticlabs/spz.
-// Using hardcoded values avoids re-implementing the packing logic in tests,
-// which could mask spec/bit-layout bugs if both encoder and decoder share
-// the same mistake.
-const SPZ_V3_PACKED_QUATERNIONS = {
-    // Identity [x=0, y=0, z=0, w=1]: largestIndex=3 (w), all others zero
-    identity: 0xC0000000,
-    // 45-deg Z rotation [x=0, y=0, z=sin(pi/4), w=cos(pi/4)]: largestIndex=2 (z), w encodes as mag=511
-    rotate45Z: 0x800001FF
-};
+const createSpzTestData = ({ shDegree = 0 } = {}) => {
+    const dataTable = createTestDataTable(2, {
+        includeSH: shDegree > 0 && shDegree <= 3,
+        shBands: Math.min(shDegree, 3)
+    });
+    dataTable.transform = Transform.PLY.clone();
 
-const createSpzV3Fixture = () => {
-    const count = 2;
-    const HEADER_SIZE = 16;
-    const positionsByteSize = count * 3 * 3;
-    const alphasByteSize = count;
-    const colorsByteSize = count * 3;
-    const scalesByteSize = count * 3;
-    const rotationsByteSize = count * 4;
-    const totalSize = HEADER_SIZE + positionsByteSize + alphasByteSize + colorsByteSize + scalesByteSize + rotationsByteSize;
+    const rot0 = dataTable.getColumnByName('rot_0').data;
+    const rot1 = dataTable.getColumnByName('rot_1').data;
+    const rot2 = dataTable.getColumnByName('rot_2').data;
+    const rot3 = dataTable.getColumnByName('rot_3').data;
 
-    const buffer = new ArrayBuffer(totalSize);
-    const view = new DataView(buffer);
-    const bytes = new Uint8Array(buffer);
+    rot0[1] = Math.cos(Math.PI / 4);
+    rot1[1] = 0;
+    rot2[1] = 0;
+    rot3[1] = Math.sin(Math.PI / 4);
 
-    view.setUint32(0, 0x5053474E, true);
-    view.setUint32(4, 3, true);
-    view.setUint32(8, count, true);
-    view.setUint8(12, 0);
-    view.setUint8(13, 8);
-    view.setUint8(14, 0);
-    view.setUint8(15, 0);
-
-    let offset = HEADER_SIZE;
-    const positions = [
-        [0, 0, 0],
-        [1, 0, 0]
-    ];
-    for (let i = 0; i < count; i++) {
-        const values = positions[i].map(value => (Math.round(value * 256) & 0xFFFFFF) >>> 0);
-        const posOffset = offset + i * 9;
-        for (let j = 0; j < 3; j++) {
-            bytes[posOffset + j * 3 + 0] = values[j] & 0xFF;
-            bytes[posOffset + j * 3 + 1] = (values[j] >> 8) & 0xFF;
-            bytes[posOffset + j * 3 + 2] = (values[j] >> 16) & 0xFF;
+    if (shDegree === 4) {
+        for (let i = 0; i < 72; i++) {
+            dataTable.columns.push(new Column(`f_rest_${i}`, new Float32Array(dataTable.numRows)));
         }
     }
-    offset += positionsByteSize;
 
-    bytes[offset + 0] = 230;
-    bytes[offset + 1] = 230;
-    offset += alphasByteSize;
+    return dataTable;
+};
 
-    bytes[offset + 0] = 180;
-    bytes[offset + 1] = 90;
-    bytes[offset + 2] = 128;
-    bytes[offset + 3] = 90;
-    bytes[offset + 4] = 180;
-    bytes[offset + 5] = 128;
-    offset += colorsByteSize;
+const addSpzV4HeaderExtensions = (bytes, extensionBytes) => {
+    const headerSize = 32;
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const originalTocByteOffset = view.getUint32(16, true);
+    const result = new Uint8Array(bytes.length + extensionBytes.length);
 
-    const encodedScale = Math.round((Math.log(0.1) + 10) * 16);
-    for (let i = 0; i < count; i++) {
-        bytes[offset + i * 3 + 0] = encodedScale;
-        bytes[offset + i * 3 + 1] = encodedScale;
-        bytes[offset + i * 3 + 2] = encodedScale;
-    }
-    offset += scalesByteSize;
+    result.set(bytes.subarray(0, headerSize), 0);
+    result.set(extensionBytes, headerSize);
+    result.set(bytes.subarray(originalTocByteOffset), originalTocByteOffset + extensionBytes.length);
 
-    view.setUint32(offset, SPZ_V3_PACKED_QUATERNIONS.identity, true);
-    view.setUint32(offset + 4, SPZ_V3_PACKED_QUATERNIONS.rotate45Z, true);
+    const resultView = new DataView(result.buffer);
+    resultView.setUint8(14, resultView.getUint8(14) | 0x2);
+    resultView.setUint32(16, originalTocByteOffset + extensionBytes.length, true);
 
-    return new Uint8Array(buffer);
+    return result;
+};
+
+const createSpzFixture = async ({ version = 4, shDegree = 0, extensionBytes = null } = {}) => {
+    const writeFs = new MemoryFileSystem();
+    await writeSpz({
+        filename: 'fixture.spz',
+        dataTable: createSpzTestData({ shDegree }),
+        version
+    }, writeFs);
+
+    const bytes = writeFs.results.get('fixture.spz');
+    return extensionBytes ? addSpzV4HeaderExtensions(bytes, extensionBytes) : bytes;
 };
 
 describe('PLY Format', () => {
@@ -403,8 +383,8 @@ describe('KSPLAT Format (Input Only)', () => {
 });
 
 describe('SPZ Format (Input Only)', () => {
-    it('should read .spz file', async () => {
-        const spzData = await fsReadFile(join(fixturesDir, 'minimal.spz'));
+    it('should read .spz v2 fixture file', async () => {
+        const spzData = await fsReadFile(join(fixturesDir, 'minimal-v2.spz'));
         const source = new BufferReadSource(spzData);
         const dataTable = await readSpz(source);
 
@@ -429,8 +409,34 @@ describe('SPZ Format (Input Only)', () => {
         }
     });
 
+    it('should read .spz v4 fixture file', async () => {
+        const spzData = await fsReadFile(join(fixturesDir, 'minimal-v4.spz'));
+        const source = new BufferReadSource(spzData);
+        const dataTable = await readSpz(source);
+
+        assert.strictEqual(dataTable.numRows, 4);
+
+        const summary = computeSummary(dataTable);
+        for (const [name, stats] of Object.entries(summary.columns)) {
+            assert.strictEqual(stats.nanCount, 0, `${name} has NaN values`);
+        }
+    });
+
+    it('should read .spz v3 fixture file', async () => {
+        const spzData = await fsReadFile(join(fixturesDir, 'minimal-v3.spz'));
+        const source = new BufferReadSource(spzData);
+        const dataTable = await readSpz(source);
+
+        assert.strictEqual(dataTable.numRows, 4);
+
+        const summary = computeSummary(dataTable);
+        for (const [name, stats] of Object.entries(summary.columns)) {
+            assert.strictEqual(stats.nanCount, 0, `${name} has NaN values`);
+        }
+    });
+
     it('should read .spz v3 file with correct quaternion decoding', async () => {
-        const spzData = createSpzV3Fixture();
+        const spzData = await createSpzFixture({ version: 3 });
         const source = new BufferReadSource(spzData);
         const dataTable = await readSpz(source);
 
@@ -462,10 +468,149 @@ describe('SPZ Format (Input Only)', () => {
         assert(Math.abs(rot2[0]) < 1e-6);
         assert(Math.abs(rot3[0]) < 1e-6);
 
-        assert(Math.abs(rot0[1] - Math.cos(Math.PI / 4)) < 0.01);
+        assert(Math.abs(Math.abs(rot0[1]) - Math.cos(Math.PI / 4)) < 0.01);
         assert(Math.abs(rot1[1]) < 0.01);
         assert(Math.abs(rot2[1]) < 0.01);
-        assert(Math.abs(rot3[1] - Math.sin(Math.PI / 4)) < 0.01);
+        assert(Math.abs(Math.abs(rot3[1]) - Math.sin(Math.PI / 4)) < 0.01);
+    });
+
+    it('should read .spz v4 file with shDegree=0', async () => {
+        const spzData = await createSpzFixture({ version: 4, shDegree: 0 });
+        const source = new BufferReadSource(spzData);
+        const dataTable = await readSpz(source);
+
+        assert.strictEqual(dataTable.numRows, 2);
+
+        const summary = computeSummary(dataTable);
+        for (const [name, stats] of Object.entries(summary.columns)) {
+            assert.strictEqual(stats.nanCount, 0, `${name} has NaN values`);
+        }
+
+        const rot0 = dataTable.getColumnByName('rot_0').data;
+        const rot1 = dataTable.getColumnByName('rot_1').data;
+        const rot2 = dataTable.getColumnByName('rot_2').data;
+        const rot3 = dataTable.getColumnByName('rot_3').data;
+
+        assert(Math.abs(rot0[0] - 1.0) < 1e-6);
+        assert(Math.abs(rot1[0]) < 1e-6);
+        assert(Math.abs(rot2[0]) < 1e-6);
+        assert(Math.abs(rot3[0]) < 1e-6);
+
+        assert(Math.abs(Math.abs(rot0[1]) - Math.cos(Math.PI / 4)) < 0.01);
+        assert(Math.abs(rot1[1]) < 0.01);
+        assert(Math.abs(rot2[1]) < 0.01);
+        assert(Math.abs(Math.abs(rot3[1]) - Math.sin(Math.PI / 4)) < 0.01);
+    });
+
+    it('should read .spz v4 file with shDegree=4', async () => {
+        const spzData = await createSpzFixture({ version: 4, shDegree: 4 });
+        const source = new BufferReadSource(spzData);
+        const dataTable = await readSpz(source);
+
+        assert.strictEqual(dataTable.numRows, 2);
+        for (let i = 0; i < 72; i++) {
+            assert(dataTable.hasColumn(`f_rest_${i}`));
+        }
+
+        for (let i = 0; i < 72; i++) {
+            const col = dataTable.getColumnByName(`f_rest_${i}`).data;
+            assert(Math.abs(col[0]) < 1e-6);
+            assert(Math.abs(col[1]) < 1e-6);
+        }
+    });
+
+    it('should return an empty table for v4 files with mismatched stream count', async () => {
+        const spzData = await createSpzFixture({ version: 4, shDegree: 0 });
+        spzData[15] = 4;
+        const source = new BufferReadSource(spzData);
+        const dataTable = await readSpz(source);
+        assert.strictEqual(dataTable.numRows, 0);
+    });
+
+    it('should return an empty table for v4 files with TOC past end of file', async () => {
+        const spzData = await createSpzFixture({ version: 4, shDegree: 0 });
+        const view = new DataView(spzData.buffer);
+        view.setUint32(16, spzData.length + 100, true);
+        const source = new BufferReadSource(spzData);
+        const dataTable = await readSpz(source);
+        assert.strictEqual(dataTable.numRows, 0);
+    });
+
+    it('should read .spz v4 file with header extensions', async () => {
+        const spzData = await createSpzFixture({
+            version: 4,
+            shDegree: 0,
+            extensionBytes: new Uint8Array([
+                0x02, 0x00, 0xBE, 0xAD,
+                0x04, 0x00, 0x00, 0x00,
+                0xDE, 0xAD, 0xFA, 0xCE
+            ])
+        });
+        const source = new BufferReadSource(spzData);
+        const dataTable = await readSpz(source);
+
+        assert.strictEqual(dataTable.numRows, 2);
+
+        const summary = computeSummary(dataTable);
+        for (const [name, stats] of Object.entries(summary.columns)) {
+            assert.strictEqual(stats.nanCount, 0, `${name} has NaN values`);
+        }
+    });
+});
+
+describe('SPZ Format (Output)', () => {
+    let testData;
+
+    before(() => {
+        testData = createMinimalTestData();
+        testData.transform = Transform.PLY.clone();
+    });
+
+    it('should write .spz and read it back', async () => {
+        const writeFs = new MemoryFileSystem();
+        await writeSpz({
+            filename: 'test.spz',
+            dataTable: testData
+        }, writeFs);
+
+        const writtenSpz = writeFs.results.get('test.spz');
+        assert(writtenSpz, 'SPZ file should be written');
+        assert(writtenSpz.length > 0, 'SPZ file should not be empty');
+
+        const header = new DataView(writtenSpz.buffer, writtenSpz.byteOffset, 16);
+        assert.strictEqual(header.getUint32(0, true), 0x5053474E);
+        assert.strictEqual(header.getUint32(4, true), 4);
+
+        const source = new BufferReadSource(writtenSpz);
+        const readBack = await readSpz(source);
+
+        assert.strictEqual(readBack.numRows, testData.numRows);
+        assert.strictEqual(readBack.transform.equals(Transform.PLY), true);
+
+        const actualSummary = computeSummary(readBack);
+        const expectedSummary = computeSummary(testData);
+        compareSummaries(actualSummary, expectedSummary, {
+            tolerance: 0.15,
+            allowExtraColumns: true
+        });
+    });
+
+    it('should write legacy SPZ3 when requested', async () => {
+        const writeFs = new MemoryFileSystem();
+        await writeSpz({
+            filename: 'test-v3.spz',
+            dataTable: testData,
+            version: 3
+        }, writeFs);
+
+        const writtenSpz = writeFs.results.get('test-v3.spz');
+        assert(writtenSpz, 'SPZ file should be written');
+        assert.strictEqual(writtenSpz[0], 0x1f);
+        assert.strictEqual(writtenSpz[1], 0x8b);
+
+        const readBack = await readSpz(new BufferReadSource(writtenSpz));
+        assert.strictEqual(readBack.numRows, testData.numRows);
+        assert.strictEqual(readBack.transform.equals(Transform.PLY), true);
     });
 });
 

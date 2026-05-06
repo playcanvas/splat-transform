@@ -58,7 +58,7 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 | `.lcc` | ✅ | ❌ | LCC file format (XGRIDS) |
 | `.ksplat` | ✅ | ❌ | Compressed splat format (mkkellogg format) |
 | `.splat` | ✅ | ❌ | Compressed splat format (antimatter15 format) |
-| `.spz` | ✅ | ❌ | Compressed splat format (Niantic format) |
+| `.spz` | ✅ | ✅ | Compressed splat format (Niantic format, v2–4) |
 | `.mjs` | ✅ | ❌ | Generate a scene using an mjs script (Beta) |
 | `.glb` | ❌ | ✅ | Binary glTF with [KHR_gaussian_splatting](https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_gaussian_splatting) extension |
 | `.csv` | ❌ | ✅ | Comma-separated values spreadsheet |
