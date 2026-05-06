@@ -619,7 +619,7 @@ ACTIONS (can be repeated, in any order)
     -G, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel
     -D, --filter-cluster   [res,op,min]     Keep only the connected cluster at --seed-pos
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
-    -l, --lod              <n>              Specify the level of detail, n >= 0
+    -l, --lod              <n>              Tag the Gaussians with LOD level n (n >= 0)
     -m, --summary                           Print per-column statistics to stdout
     -M, --morton-order                      Reorder Gaussians by Morton code (Z-order curve)
 

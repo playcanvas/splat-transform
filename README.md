@@ -94,7 +94,7 @@ Actions are applied per-file in the order they appear. They can be repeated and 
                                           GPU-voxelizes at coarse resolution (res world units/voxel).
                                           Default: res=1.0, opacity=0.999, min=0.1
 -p, --params           <key=val,...>    Pass parameters to .mjs generator script
--l, --lod              <n>              Specify the level of detail, n >= 0
+-l, --lod              <n>              Tag the Gaussians with LOD level n (n >= 0)
 -m, --summary                           Print per-column statistics to stdout
 -M, --morton-order                      Reorder Gaussians by Morton code (Z-order curve)
 ```
