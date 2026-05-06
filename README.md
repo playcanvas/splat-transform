@@ -89,10 +89,12 @@ Actions execute in the order specified and can be repeated. Any action may appea
                                           Use n% to keep a percentage of Gaussians
 -G, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel.
                                           Evaluates each Gaussian at occupied voxel centers.
-                                          Default: size=0.05, opacity=0.1, min=0.004 (1/255)
+                                          Default: size=0.05, opacity=0.1, min=0.004 (1/255).
+                                          Bare flag (no value) uses all defaults.
 -D, --filter-cluster   [res,op,min]     Keep only the connected cluster at --seed-pos.
                                           GPU-voxelizes at coarse resolution (res world units/voxel).
-                                          Default: res=1.0, opacity=0.999, min=0.1
+                                          Default: res=1.0, opacity=0.999, min=0.1.
+                                          Bare flag (no value) uses all defaults.
 -p, --params           <key=val,...>    Pass parameters to .mjs generator script
 -l, --lod              <n>              Tag the Gaussians with LOD level n (n >= 0)
 -m, --summary                           Print per-column statistics to stdout
@@ -111,14 +113,23 @@ Actions execute in the order specified and can be repeated. Any action may appea
 -w, --overwrite                         Overwrite output file if it exists
 ```
 
+## GPU Options
+
+Used by SOG compression and GPU voxelization (`--filter-cluster`, `--filter-floaters`, `.voxel.json` output).
+
+```none
+-L, --list-gpus                         List available GPU adapters and exit
+-g, --gpu              <n|cpu>          Device for GPU operations: GPU adapter index | 'cpu'
+                                          ('cpu' disables GPU and is incompatible with
+                                          GPU-only features like --filter-cluster)
+```
+
 ## SOG Compression Options
 
 Apply when writing `.sog`, `meta.json`, `lod-meta.json`, or `.html` outputs.
 
 ```none
 -i, --iterations       <n>              Iterations for SH compression (more=better). Default: 10
--L, --list-gpus                         List available GPU adapters and exit
--g, --gpu              <n|cpu>          Compression device: GPU adapter index | 'cpu'
 ```
 
 ## HTML Viewer Output Options

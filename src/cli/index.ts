@@ -605,7 +605,7 @@ SUPPORTED INPUTS
 SUPPORTED OUTPUTS
     .ply   .compressed.ply   .sog   meta.json   lod-meta.json   .glb   .csv   .html   .voxel.json   null
 
-ACTIONS (can be repeated, in any order)
+ACTIONS (executed in order; can be repeated)
     -t, --translate        <x,y,z>          Translate Gaussians by (x, y, z)
     -r, --rotate           <x,y,z>          Rotate Gaussians by Euler angles, in degrees
     -s, --scale            <factor>         Uniformly scale Gaussians by factor
@@ -616,8 +616,8 @@ ACTIONS (can be repeated, in any order)
     -V, --filter-value     <name,cmp,value> Keep Gaussians where <name> <cmp> <value>;
                                               cmp ∈ {lt,lte,gt,gte,eq,neq}
     -F, --decimate         <n|n%>           Simplify to n (or n%) Gaussians via pairwise merging
-    -G, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel
-    -D, --filter-cluster   [res,op,min]     Keep only the connected cluster at --seed-pos
+    -G, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel. Default: 0.05,0.1,0.004
+    -D, --filter-cluster   [res,op,min]     Keep only the connected cluster at --seed-pos. Default: 1.0,0.999,0.1
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
     -l, --lod              <n>              Tag the Gaussians with LOD level n (n >= 0)
     -m, --summary                           Print per-column statistics to stdout
@@ -632,10 +632,13 @@ GENERAL
         --tty                               Interactive bar rendering (--no-tty to disable)
     -w, --overwrite                         Overwrite output file if it exists
 
+GPU (used by SOG compression and GPU voxelization: --filter-cluster, --filter-floaters, .voxel.json output)
+    -L, --list-gpus                         List available GPU adapters and exit
+    -g, --gpu              <n|cpu>          Device for GPU operations: GPU adapter index | 'cpu'
+                                              ('cpu' disables GPU and is incompatible with GPU-only features)
+
 SOG COMPRESSION (.sog, meta.json, lod-meta.json, .html outputs)
     -i, --iterations       <n>              SH compression iterations (more=better). Default: 10
-    -L, --list-gpus                         List available GPU adapters and exit
-    -g, --gpu              <n|cpu>          Compression device: GPU adapter index | 'cpu'
 
 HTML VIEWER OUTPUT (.html)
     -E, --viewer-settings  <settings.json>  HTML viewer settings JSON file
