@@ -69,7 +69,7 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 
 ## Actions
 
-Actions can be repeated and applied in any order:
+Actions execute in the order specified and can be repeated. Any action may appear after any input or output file:
 
 ```none
 -t, --translate        <x,y,z>          Translate Gaussians by (x, y, z)
@@ -89,17 +89,19 @@ Actions can be repeated and applied in any order:
                                           Use n% to keep a percentage of Gaussians
 -G, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel.
                                           Evaluates each Gaussian at occupied voxel centers.
-                                          Default: size=0.05, opacity=0.1, min=0.004 (1/255)
+                                          Default: size=0.05, opacity=0.1, min=0.004 (1/255).
+                                          Bare flag (no value) uses all defaults.
 -D, --filter-cluster   [res,op,min]     Keep only the connected cluster at --seed-pos.
                                           GPU-voxelizes at coarse resolution (res world units/voxel).
-                                          Default: res=1.0, opacity=0.999, min=0.1
+                                          Default: res=1.0, opacity=0.999, min=0.1.
+                                          Bare flag (no value) uses all defaults.
 -p, --params           <key=val,...>    Pass parameters to .mjs generator script
--l, --lod              <n>              Specify the level of detail, n >= 0
+-l, --lod              <n>              Tag the Gaussians with LOD level n (n >= 0)
 -m, --summary                           Print per-column statistics to stdout
 -M, --morton-order                      Reorder Gaussians by Morton code (Z-order curve)
 ```
 
-## Global Options
+## General Options
 
 ```none
 -h, --help                              Show this help and exit
@@ -109,28 +111,79 @@ Actions can be repeated and applied in any order:
     --mem                               Show memory usage in progress output
     --tty                               Interactive bar rendering (default on a TTY; --no-tty to disable)
 -w, --overwrite                         Overwrite output file if it exists
--i, --iterations       <n>              Iterations for SOG SH compression (more=better). Default: 10
+```
+
+## GPU Options
+
+Used by SOG compression and GPU voxelization (`--filter-cluster`, `--filter-floaters`, `.voxel.json` output).
+
+```none
 -L, --list-gpus                         List available GPU adapters and exit
--g, --gpu              <n|cpu>          Select device for SOG compression: GPU adapter index | 'cpu'
+-g, --gpu              <n|cpu>          Device for GPU operations: GPU adapter index | 'cpu'
+                                          ('cpu' disables GPU and is incompatible with
+                                          GPU-only features like --filter-cluster)
+```
+
+## SOG Compression Options
+
+Apply when writing `.sog`, `meta.json`, `lod-meta.json`, or `.html` outputs.
+
+```none
+-i, --iterations       <n>              Iterations for SH compression (more=better). Default: 10
+```
+
+## HTML Viewer Output Options
+
+Apply when writing `.html` outputs.
+
+```none
 -E, --viewer-settings  <settings.json>  HTML viewer settings JSON file
 -U, --unbundled                         Generate unbundled HTML viewer with separate files
--O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC input
--C, --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
--X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
-    --voxel-params     [size,opacity]   Voxel size and opacity threshold for .voxel.json. Default: 0.05,0.1
-    --voxel-external-fill [size]        Fill exterior voxels by dilation from seed. Default size: 1.6
-    --voxel-floor-fill [radius]         Fill each column upward from bottom until hitting solid (runs before carve).
-                                          Optional radius (world units): only patch XZ areas surrounded by floor
-                                          within 2*radius; large empty exterior areas are left alone.
-                                          Default radius: 1.6
-    --voxel-carve [h,r]                 Carve navigable space using capsule flood fill from seed.
-                                          Default: height=1.6, radius=0.2
-    --seed-pos         <x,y,z>          Seed position for voxel processing and --filter-cluster. Default: 0,0,0
--K, --collision-mesh [smooth|faces]     Generate collision mesh (.collision.glb). Default shape: smooth.
 ```
 
 > [!NOTE]
 > See the [SuperSplat Viewer Settings Schema](https://github.com/playcanvas/supersplat-viewer?tab=readme-ov-file#settings-schema) for details on how to pass data to the `-E` option.
+
+## LCC Input Options
+
+Apply when reading `.lcc` files.
+
+```none
+-O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC input
+```
+
+## LOD Output Options
+
+Apply when writing `lod-meta.json` (multi-LOD streaming SOG bundle).
+
+```none
+-C, --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
+-X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
+```
+
+## Voxel Output Options
+
+Apply when writing `.voxel.json` (sparse voxel octree for collision detection). See the [Collision Mesh Guide](guides/COLLISION.md) for a deep dive on each step and tuning.
+
+```none
+    --voxel-params     [size,opacity]   Voxel size and opacity threshold. Default: 0.05,0.1
+    --voxel-external-fill [size]        Seal exterior voxels via boundary flood fill (interior scenes).
+                                          [size] (world units) is the dilation distance applied
+                                          before the flood fill to bridge small wall gaps.
+                                          --seed-pos is used to verify the volume is enclosed at
+                                          the seed; the fill is skipped if the seed is reachable
+                                          from outside.
+                                          Default size: 1.6
+    --voxel-floor-fill [radius]         Fill each column upward from bottom until hitting solid (exterior scenes).
+                                          Optional radius (world units): only patch XZ areas surrounded by floor
+                                          within 2*radius; large empty exterior areas are left alone.
+                                          Default radius: 1.6
+    --voxel-carve      [h,r]            Carve navigable space using capsule flood fill from seed.
+                                          Default: height=1.6, radius=0.2
+    --seed-pos         <x,y,z>          Seed position for voxel fill/carve and --filter-cluster.
+                                          Default: 0,0,0
+-K, --collision-mesh   [smooth|faces]   Generate collision mesh (.collision.glb). Default: smooth
+```
 
 ## Examples
 
@@ -244,22 +297,54 @@ splat-transform gen-grid.mjs -p width=10,height=10,scale=10,color=0.1 scenes/gri
 
 ### Voxel Format
 
-The voxel format stores sparse voxel octree data for collision detection. It consists of two files: `.voxel.json` (metadata) and `.voxel.bin` (binary octree data).
+The voxel format stores sparse voxel octree data for collision detection. It consists of two files: `.voxel.json` (metadata) and `.voxel.bin` (binary octree data). Pass `-K` to also emit a `.collision.glb` mesh derived from the voxel grid.
+
+For a step-by-step walkthrough of each option (with illustrations), see the [Collision Mesh Guide](guides/COLLISION.md).
+
+#### Recommended pipeline
 
 ```bash
-# Generate voxel collision data from a splat file
-splat-transform input.ply output.voxel.json
+splat-transform input.ply \
+    --filter-cluster --seed-pos x,y,z \
+    [--voxel-external-fill | --voxel-floor-fill] [--voxel-carve] \
+    [-K [smooth|faces]] \
+    output.voxel.json
+```
 
-# Generate voxel data with custom resolution and opacity threshold
+`--filter-cluster` isolates the central scene and discards stray floaters before voxelization. `--seed-pos` is shared by `--filter-cluster` and the voxel fill/carve passes — set it once to a known-walkable point inside the scene.
+
+#### Interior scenes (rooms, indoor scans)
+
+Use `--voxel-external-fill` to seal the void around the room interior, then `--voxel-carve` to hollow out the navigable space:
+
+```bash
+splat-transform room.ply \
+    --filter-cluster --seed-pos 0,1,0 \
+    --voxel-external-fill --voxel-carve \
+    -K room.voxel.json
+```
+
+#### Exterior scenes (outdoor objects, terrain)
+
+Use `--voxel-floor-fill` to fill the ground beneath surfaces, optionally followed by `--voxel-carve`:
+
+```bash
+splat-transform terrain.ply \
+    --filter-cluster --seed-pos 0,0,0 \
+    --voxel-floor-fill \
+    -K terrain.voxel.json
+```
+
+#### Other examples
+
+```bash
+# Voxelize with custom resolution and opacity threshold
 splat-transform --voxel-params 0.1,0.3 input.ply output.voxel.json
 
-# Generate voxel data with exterior fill and carve
-splat-transform --voxel-external-fill --voxel-carve input.ply output.voxel.json
-
-# Generate voxel data with custom seed position and carve parameters
+# Custom carve capsule (height, radius)
 splat-transform --seed-pos 1,0,0 --voxel-carve 2.0,0.3 input.ply output.voxel.json
 
-# Generate voxel data with a watertight voxel-face collision mesh
+# Watertight voxel-face collision mesh
 splat-transform -K faces input.ply output.voxel.json
 ```
 
