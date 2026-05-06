@@ -3,35 +3,33 @@
  * Tests round-trip conversions and input-only format reading.
  */
 
-import { describe, it, before } from 'node:test';
 import assert from 'node:assert';
 import { readFile as fsReadFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
+
 
 import {
     Column,
     DataTable,
-    Transform,
-    computeSummary,
-    getInputFormat,
-    readFile,
-    readPly,
-    readSplat,
-    readKsplat,
-    readSpz,
-    readSog,
-    writePly,
-    writeCompressedPly,
-    writeSog,
-    writeCsv,
-    MemoryReadFileSystem,
     MemoryFileSystem,
+    MemoryReadFileSystem,
+    Transform,
+    WebPCodec,
     ZipReadFileSystem,
-    WebPCodec
+    computeSummary,
+    readKsplat,
+    readPly,
+    readSog,
+    readSplat,
+    readSpz,
+    writeCompressedPly,
+    writeCsv,
+    writePly,
+    writeSog
 } from '../src/lib/index.js';
-
-import { compareSummaries, compareDataTables } from './helpers/summary-compare.mjs';
+import { compareDataTables, compareSummaries } from './helpers/summary-compare.mjs';
 import { createMinimalTestData, encodePlyBinary } from './helpers/test-utils.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -161,6 +159,112 @@ const createSpzV3Fixture = () => {
 
     view.setUint32(offset, SPZ_V3_PACKED_QUATERNIONS.identity, true);
     view.setUint32(offset + 4, SPZ_V3_PACKED_QUATERNIONS.rotate45Z, true);
+
+    return new Uint8Array(buffer);
+};
+
+// Wraps raw bytes in a minimal valid ZSTD frame using a single Raw block (block_type=0).
+// This avoids requiring a JS ZSTD encoder; fzstd's decoder accepts raw blocks per RFC 8478.
+const wrapZstdRaw = (data) => {
+    const len = data.length;
+    if (len > 0x1FFFFF) throw new Error(`Raw block too large: ${len}`);
+    const out = new Uint8Array(4 + 1 + 4 + 3 + len);
+    const view = new DataView(out.buffer);
+    view.setUint32(0, 0xFD2FB528, true);          // ZSTD magic
+    out[4] = 0xA0;                                 // FHD
+    view.setUint32(5, len, true);                  // Frame_Content_Size (4 bytes LE)
+    const blockHeader = (len << 3) | 0b001;        // Block_Size << 3 | Block_Type=0 | Last_Block=1
+    out[9]  = blockHeader & 0xFF;
+    out[10] = (blockHeader >>> 8) & 0xFF;
+    out[11] = (blockHeader >>> 16) & 0xFF;
+    out.set(data, 12);
+    return out;
+};
+
+const SPZ_V4_HARMONICS_COMPONENT_COUNT = [0, 9, 24, 45, 72];
+
+const createSpzV4Fixture = ({ shDegree = 0 } = {}) => {
+    const count = 2;
+    const HEADER_SIZE = 32;
+
+    const positions = new Uint8Array(count * 9);
+    const alphas = new Uint8Array(count);
+    const colors = new Uint8Array(count * 3);
+    const scales = new Uint8Array(count * 3);
+    const rotations = new Uint8Array(count * 4);
+
+    const positionValues = [
+        [0, 0, 0],
+        [1, 0, 0]
+    ];
+    for (let i = 0; i < count; i++) {
+        const values = positionValues[i].map(value => (Math.round(value * 256) & 0xFFFFFF) >>> 0);
+        for (let j = 0; j < 3; j++) {
+            positions[i * 9 + j * 3 + 0] = values[j] & 0xFF;
+            positions[i * 9 + j * 3 + 1] = (values[j] >> 8) & 0xFF;
+            positions[i * 9 + j * 3 + 2] = (values[j] >> 16) & 0xFF;
+        }
+    }
+
+    alphas[0] = 230;
+    alphas[1] = 230;
+
+    colors.set([180, 90, 128, 90, 180, 128]);
+
+    const encodedScale = Math.round((Math.log(0.1) + 10) * 16);
+    for (let i = 0; i < count; i++) {
+        scales[i * 3 + 0] = encodedScale;
+        scales[i * 3 + 1] = encodedScale;
+        scales[i * 3 + 2] = encodedScale;
+    }
+
+    // Reuse the v3-verified packed quaternions — v4 packing is identical per spec.
+    const rotView = new DataView(rotations.buffer);
+    rotView.setUint32(0, SPZ_V3_PACKED_QUATERNIONS.identity, true);
+    rotView.setUint32(4, SPZ_V3_PACKED_QUATERNIONS.rotate45Z, true);
+
+    const streams = [positions, alphas, colors, scales, rotations];
+    if (shDegree > 0) {
+        const sh = new Uint8Array(count * SPZ_V4_HARMONICS_COMPONENT_COUNT[shDegree]);
+        sh.fill(128);
+        streams.push(sh);
+    }
+
+    const compressed = streams.map(wrapZstdRaw);
+    const numStreams = compressed.length;
+    const tocSize = numStreams * 16;
+    const tocByteOffset = HEADER_SIZE;
+    const totalDataSize = compressed.reduce((sum, c) => sum + c.length, 0);
+    const totalSize = HEADER_SIZE + tocSize + totalDataSize;
+
+    const buffer = new ArrayBuffer(totalSize);
+    const view = new DataView(buffer);
+    const bytes = new Uint8Array(buffer);
+
+    const SPZ_VERSION = 4;
+    const FRACTIONAL_BITS = 12;
+
+    view.setUint32(0, 0x5053474E, true);  // NGSP Magic Number
+    view.setUint32(4, SPZ_VERSION, true);  // Version
+    view.setUint32(8, count, true);
+    view.setUint8(12, shDegree);
+    view.setUint8(13, FRACTIONAL_BITS);
+    view.setUint8(14, 0);
+    view.setUint8(15, numStreams);
+    view.setUint32(16, tocByteOffset, true);
+
+    let tocOffset = HEADER_SIZE;
+    for (let i = 0; i < numStreams; i++) {
+        view.setBigUint64(tocOffset, BigInt(compressed[i].length), true);
+        view.setBigUint64(tocOffset + 8, BigInt(streams[i].length), true);
+        tocOffset += 16;
+    }
+
+    let dataOffset = HEADER_SIZE + tocSize;
+    for (const c of compressed) {
+        bytes.set(c, dataOffset);
+        dataOffset += c.length;
+    }
 
     return new Uint8Array(buffer);
 };
@@ -466,6 +570,71 @@ describe('SPZ Format (Input Only)', () => {
         assert(Math.abs(rot1[1]) < 0.01);
         assert(Math.abs(rot2[1]) < 0.01);
         assert(Math.abs(rot3[1] - Math.sin(Math.PI / 4)) < 0.01);
+    });
+
+    it('should read .spz v4 file with shDegree=0 (5 streams, no SH)', async () => {
+        const spzData = createSpzV4Fixture({ shDegree: 0 });
+        const source = new BufferReadSource(spzData);
+        const dataTable = await readSpz(source);
+
+        assert.strictEqual(dataTable.numRows, 2);
+
+        const summary = computeSummary(dataTable);
+        for (const [name, stats] of Object.entries(summary.columns)) {
+            assert.strictEqual(stats.nanCount, 0, `${name} has NaN values`);
+        }
+
+        // v4 quaternion packing must match v3: same hardcoded packed values must decode identically.
+        const rot0 = dataTable.getColumnByName('rot_0').data;
+        const rot1 = dataTable.getColumnByName('rot_1').data;
+        const rot2 = dataTable.getColumnByName('rot_2').data;
+        const rot3 = dataTable.getColumnByName('rot_3').data;
+
+        assert(Math.abs(rot0[0] - 1.0) < 1e-6);
+        assert(Math.abs(rot1[0]) < 1e-6);
+        assert(Math.abs(rot2[0]) < 1e-6);
+        assert(Math.abs(rot3[0]) < 1e-6);
+
+        assert(Math.abs(rot0[1] - Math.cos(Math.PI / 4)) < 0.01);
+        assert(Math.abs(rot1[1]) < 0.01);
+        assert(Math.abs(rot2[1]) < 0.01);
+        assert(Math.abs(rot3[1] - Math.sin(Math.PI / 4)) < 0.01);
+    });
+
+    it('should read .spz v4 file with shDegree=4 (6 streams with SH)', async () => {
+        const spzData = createSpzV4Fixture({ shDegree: 4 });
+        const source = new BufferReadSource(spzData);
+        const dataTable = await readSpz(source);
+
+        assert.strictEqual(dataTable.numRows, 2);
+        // Degree 1 = 9 SH coefficients per point → f_rest_0..f_rest_8 columns
+        for (let i = 0; i < 72; i++) {
+            assert(dataTable.hasColumn(`f_rest_${i}`));
+        }
+
+        // SH bytes were all 128, which decodes to (128 - 128) / 128 = 0
+        for (let i = 0; i < 72; i++) {
+            const col = dataTable.getColumnByName(`f_rest_${i}`).data;
+            assert.strictEqual(col[0], 0);
+            assert.strictEqual(col[1], 0);
+        }
+    });
+
+    it('should reject v4 file with mismatched stream count', async () => {
+        const spzData = createSpzV4Fixture({ shDegree: 0 });
+        // Corrupt numStreams: spec says shDegree=0 must have 5 streams, claim 4.
+        spzData[15] = 4;
+        const source = new BufferReadSource(spzData);
+        await assert.rejects(readSpz(source), /stream count/i);
+    });
+
+    it('should reject v4 file with TOC past end of file', async () => {
+        const spzData = createSpzV4Fixture({ shDegree: 0 });
+        const view = new DataView(spzData.buffer);
+        // Push tocByteOffset past end of file.
+        view.setUint32(16, spzData.length + 100, true);
+        const source = new BufferReadSource(spzData);
+        await assert.rejects(readSpz(source), /TOC/i);
     });
 });
 

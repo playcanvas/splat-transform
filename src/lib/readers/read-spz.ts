@@ -1,4 +1,6 @@
-import { Column, DataTable } from '../data-table';
+import { decompress as decompressZstd } from 'fzstd';
+
+import { Column, DataTable } from '../data-table/data-table';
 import { ReadSource } from '../io/read';
 import { logger, Transform } from '../utils';
 
@@ -33,7 +35,7 @@ function getFixed24(positionsView: DataView, elementIndex: number, memberIndex: 
     return fixed32;
 }
 
-const HARMONICS_COMPONENT_COUNT = [0, 9, 24, 45];
+const HARMONICS_COMPONENT_COUNT = [0, 9, 24, 45, 72];
 
 // Reusable scratch array for smallest-three quaternion decoding (avoids per-splat allocations)
 const tmpQuat = [0.0, 0.0, 0.0, 0.0];
@@ -41,8 +43,8 @@ const tmpQuat = [0.0, 0.0, 0.0, 0.0];
 /**
  * Reads a .spz file containing Niantic Labs compressed Gaussian splat data.
  *
- * The .spz format uses GZIP compression and fixed-point encoding to achieve
- * compact file sizes. Supports version 2 and 3 of the format for SH degrees 0-3.
+ * The .spz format uses either GZIP (v2/v3) or per-stream ZSTD (v4) compression and
+ * fixed-point encoding to achieve compact file sizes. Supports SH degrees 0-4.
  *
  * @see https://github.com/nianticlabs/spz
  *
@@ -54,7 +56,7 @@ const readSpz = async (source: ReadSource): Promise<DataTable> => {
     // Load complete file
     let fileBuffer = await source.read().readAll();
 
-    // Check if file is GZip compressed
+    // Check if file is GZip compressed (legacy v2/v3 format)
     const magicSize = 4;
     let magicView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset, magicSize);
 
@@ -69,21 +71,29 @@ const readSpz = async (source: ReadSource): Promise<DataTable> => {
         throw new Error('invalid file header');
     }
 
-    const HEADER_SIZE = 16;
     const totalSize = fileBuffer.length;
 
+    // v2/v3: 16-byte header, single gzip stream (already decompressed above)
+    // v4 and later:    32-byte plaintext header with ZSTD streams
+    const MIN_SPZ_VERSION = 2;
+    const LATEST_SPZ_VERSION = 4;
+    const SPZ_VERSION_INTRODUCED_ZSTD = 4;
+    const MIN_HEADER_SIZE = 16;
+
+    if (totalSize < MIN_HEADER_SIZE) {
+        throw new Error('File too small to be valid .spz format');
+    }
+    const version = new DataView(fileBuffer.buffer, fileBuffer.byteOffset, MIN_HEADER_SIZE).getUint32(4, true);
+    if (version < MIN_SPZ_VERSION || version > LATEST_SPZ_VERSION) {
+        throw new Error(`Unsupported version ${version}`);
+    }
+
+    const HEADER_SIZE = version >= SPZ_VERSION_INTRODUCED_ZSTD ? 32 : MIN_HEADER_SIZE;
     if (totalSize < HEADER_SIZE) {
         throw new Error('File too small to be valid .spz format');
     }
 
-    // Parse header
     const header = new DataView(fileBuffer.buffer, fileBuffer.byteOffset, HEADER_SIZE);
-
-    const version = header.getUint32(4, true);
-    if (!(version === 2 || version === 3)) {
-        throw new Error(`Unsupported version ${version}`);
-    }
-
     const numSplats = header.getUint32(8, true);
     const shDegree = header.getUint8(12);
     const fractionalBits = header.getUint8(13);
@@ -91,24 +101,98 @@ const readSpz = async (source: ReadSource): Promise<DataTable> => {
         throw new Error(`Unsupported SH degree ${shDegree}`);
     }
 
-    const positionsByteSize = numSplats * 3 * 3; // 3 * 24bit values
-    const alphasByteSize = numSplats; // u8
-    const colorsByteSize = numSplats * 3; // u8 * 3
-    const scalesByteSize = numSplats * 3; // u8 * 3
-    const rotationsByteSize = numSplats * (version === 2 ? 3 : 4);
     const harmonicsComponentCount = HARMONICS_COMPONENT_COUNT[shDegree];
-    const shByteSize = numSplats * harmonicsComponentCount;
-    const requiredSize = HEADER_SIZE + positionsByteSize + alphasByteSize + colorsByteSize + scalesByteSize + rotationsByteSize + shByteSize;
-    if (totalSize < requiredSize) {
-        throw new Error(`File too small for SPZ payload: expected at least ${requiredSize} bytes, got ${totalSize}`);
-    }
 
-    const positionsView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset + HEADER_SIZE, positionsByteSize);
-    const alphasView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset + HEADER_SIZE + positionsByteSize, alphasByteSize);
-    const colorsView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset + HEADER_SIZE + positionsByteSize + alphasByteSize, colorsByteSize);
-    const scalesView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset + HEADER_SIZE + positionsByteSize + alphasByteSize + colorsByteSize, scalesByteSize);
-    const rotationsView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset + HEADER_SIZE + positionsByteSize + alphasByteSize + colorsByteSize + scalesByteSize, rotationsByteSize);
-    const shView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset + HEADER_SIZE + positionsByteSize + alphasByteSize + colorsByteSize + scalesByteSize + rotationsByteSize, shByteSize);
+    // Byte sizes of each attribute block
+    const positionsByteSize = numSplats * 9;                      // 3 × uint24
+    const alphasByteSize = numSplats;                             // u8
+    const colorsByteSize = numSplats * 3;                        // u8 × 3
+    const scalesByteSize = numSplats * 3;                        // u8 × 3
+    const rotationsByteSize = numSplats * (version === MIN_SPZ_VERSION ? 3 : 4);
+    const shByteSize = numSplats * harmonicsComponentCount;
+
+    let positionsView: DataView;
+    let alphasView: DataView;
+    let colorsView: DataView;
+    let scalesView: DataView;
+    let rotationsView: DataView;
+    let shView: DataView;
+
+    if (version >= SPZ_VERSION_INTRODUCED_ZSTD && version <= LATEST_SPZ_VERSION) {
+        // 32-byte plaintext header, followed by optional extensions, then TOC, then ZSTD streams.
+        const numStreams = header.getUint8(15);
+        const tocByteOffset = header.getUint32(16, true);
+
+        const expectedNumStreams = shDegree === 0 ? 5 : 6;
+        if (numStreams !== expectedNumStreams) {
+            throw new Error(`Unexpected stream count for shDegree ${shDegree}: expected ${expectedNumStreams}, got ${numStreams}`);
+        }
+
+        if (tocByteOffset < HEADER_SIZE) {
+            throw new Error(`Invalid tocByteOffset ${tocByteOffset}: must be >= ${HEADER_SIZE}`);
+        }
+
+        const tocSize = numStreams * 16;
+        const dataStart = tocByteOffset + tocSize;
+        if (dataStart > totalSize) {
+            throw new Error('File too small: TOC exceeds file bounds');
+        }
+
+        const expectedSizes = [positionsByteSize, alphasByteSize, colorsByteSize, scalesByteSize, rotationsByteSize];
+        if (shDegree > 0) {
+            expectedSizes.push(shByteSize);
+        }
+
+        const streams: DataView[] = [];
+        let dataOffset = dataStart;
+        for (let i = 0; i < numStreams; i++) {
+            const tocBase = tocByteOffset + i * 16;
+            const tocView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset + tocBase, 16);
+            const compressedSizeBig = tocView.getBigUint64(0, true);
+            const uncompressedSizeBig = tocView.getBigUint64(8, true);
+            if (compressedSizeBig > BigInt(Number.MAX_SAFE_INTEGER) || uncompressedSizeBig > BigInt(Number.MAX_SAFE_INTEGER)) {
+                throw new Error(`Stream ${i} size exceeds Number.MAX_SAFE_INTEGER`);
+            }
+            const compressedSize = Number(compressedSizeBig);
+            const uncompressedSize = Number(uncompressedSizeBig);
+
+            if (uncompressedSize !== expectedSizes[i]) {
+                throw new Error(`Stream ${i} uncompressed size mismatch: expected ${expectedSizes[i]}, got ${uncompressedSize}`);
+            }
+            if (dataOffset + compressedSize > totalSize) {
+                throw new Error(`Stream ${i} extends past end of file (offset ${dataOffset} + ${compressedSize} > ${totalSize})`);
+            }
+
+            const compressed = fileBuffer.subarray(dataOffset, dataOffset + compressedSize);
+            const decompressed = decompressZstd(compressed);
+            if (decompressed.byteLength !== uncompressedSize) {
+                throw new Error(`Stream ${i} decompressed size mismatch: expected ${uncompressedSize}, got ${decompressed.byteLength}`);
+            }
+            streams.push(new DataView(decompressed.buffer, decompressed.byteOffset, decompressed.byteLength));
+            dataOffset += compressedSize;
+        }
+
+        positionsView = streams[0];
+        alphasView = streams[1];
+        colorsView = streams[2];
+        scalesView = streams[3];
+        rotationsView = streams[4];
+        shView = numStreams > 5 ? streams[5] : new DataView(new ArrayBuffer(0));
+    } else {
+        // v2/v3: single buffer already decompressed from gzip, attributes laid out sequentially.
+        const requiredSize = HEADER_SIZE + positionsByteSize + alphasByteSize + colorsByteSize + scalesByteSize + rotationsByteSize + shByteSize;
+        if (totalSize < requiredSize) {
+            throw new Error(`File too small for SPZ payload: expected at least ${requiredSize} bytes, got ${totalSize}`);
+        }
+
+        let offset = fileBuffer.byteOffset + HEADER_SIZE;
+        positionsView = new DataView(fileBuffer.buffer, offset, positionsByteSize); offset += positionsByteSize;
+        alphasView = new DataView(fileBuffer.buffer, offset, alphasByteSize); offset += alphasByteSize;
+        colorsView = new DataView(fileBuffer.buffer, offset, colorsByteSize); offset += colorsByteSize;
+        scalesView = new DataView(fileBuffer.buffer, offset, scalesByteSize); offset += scalesByteSize;
+        rotationsView = new DataView(fileBuffer.buffer, offset, rotationsByteSize); offset += rotationsByteSize;
+        shView = new DataView(fileBuffer.buffer, offset, shByteSize);
+    }
 
     // Create columns for the standard Gaussian splat data
     const columns = [
@@ -164,13 +248,13 @@ const readSpz = async (source: ReadSource): Promise<DataTable> => {
         let rot1Norm = 0.0;
         let rot2Norm = 0.0;
         let rot3Norm = 0.0;
-        if (version === 2) {
+        if (version === MIN_SPZ_VERSION) {
             rot1Norm = (rotationsView.getUint8(splatIndex * 3 + 0) / 127.5) - 1.0;
             rot2Norm = (rotationsView.getUint8(splatIndex * 3 + 1) / 127.5) - 1.0;
             rot3Norm = (rotationsView.getUint8(splatIndex * 3 + 2) / 127.5) - 1.0;
             const dot = rot1Norm * rot1Norm + rot2Norm * rot2Norm + rot3Norm * rot3Norm;
             rot0Norm = Math.sqrt(Math.max(0.0, 1.0 - dot));
-        } else if (version === 3) {
+        } else if (version >= 3 && version <= LATEST_SPZ_VERSION) {
             // Smallest-three quaternion decode from packed uint32
             // SPZ stores as [x, y, z, w] (indices 0-3)
             tmpQuat[0] = tmpQuat[1] = tmpQuat[2] = tmpQuat[3] = 0.0;

@@ -9,7 +9,7 @@ import { Options, Param } from './types';
  * - `ply` - PLY format (standard 3DGS training output)
  * - `splat` - Antimatter15 splat format
  * - `ksplat` - Kevin Kwok's compressed splat format
- * - `spz` - Niantic Labs compressed format
+ * - `spz` - Niantic Spatial compressed format
  * - `sog` - PlayCanvas SOG format (WebP-compressed)
  * - `lcc` - XGrids LCC format
  * - `mjs` - JavaScript module generator
