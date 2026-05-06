@@ -637,6 +637,7 @@ GENERAL
         --mem                               Show peak memory in progress output
         --tty                               Interactive bar rendering (--no-tty to disable)
     -w, --overwrite                         Overwrite output file if it exists
+        --spz-version      <3|4>            SPZ format version to write. Default: 4
 
 GPU (used by SOG compression and GPU voxelization: --filter-cluster, --filter-floaters, .voxel.json output)
     -L, --list-gpus                         List available GPU adapters and exit
@@ -656,7 +657,6 @@ LCC INPUT (.lcc)
 LOD OUTPUT (lod-meta.json)
     -C, --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
     -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
-        --spz-version      <3|4>            SPZ format version to write. Default: 4
 
 VOXEL OUTPUT (.voxel.json)
         --voxel-params     [size,opacity]   Voxel size and opacity threshold for .voxel.json. Default: 0.05,0.1

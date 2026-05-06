@@ -45,6 +45,7 @@
     "lib/"
   ],
   "dependencies": {
+    "@adobe/spz": "0.2.1",
     "webgpu": "0.4.0"
   },
   "devDependencies": {
@@ -79,7 +80,7 @@
     "lint:fix": "eslint src --fix",
     "publint": "publint",
     "watch": "rollup -c -w",
-    "test": "node --import tsx/esm --test test/*.test.mjs",
+    "test": "node --import tsx --test test/*.test.mjs",
     "test:fixtures": "node test/fixtures/create-fixtures.mjs"
   },
   "engines": {

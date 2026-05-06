@@ -4,9 +4,6 @@ import tsParser from '@typescript-eslint/parser';
 import globals from 'globals';
 
 export default [
-    {
-        ignores: ['src/lib/vendor/**']
-    },
     ...playcanvasConfig,
     {
         files: ['**/*.ts'],

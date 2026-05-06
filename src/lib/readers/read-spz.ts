@@ -15,7 +15,10 @@ import { gaussianCloudToDataTable, getSpzModule } from '../spz-module';
 const readSpz = async (source: ReadSource): Promise<DataTable> => {
     const spz = await getSpzModule();
     const fileBuffer = await source.read().readAll();
-    const cloud = await spz.loadSpzFromBuffer(fileBuffer, {
+    const spzBuffer = fileBuffer.byteOffset === 0 && fileBuffer.byteLength === fileBuffer.buffer.byteLength ?
+        fileBuffer :
+        fileBuffer.slice();
+    const cloud = await spz.loadSpzFromBuffer(spzBuffer, {
         to: spz.CoordinateSystem.RDF
     });
 

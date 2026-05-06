@@ -16,7 +16,7 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
-import createSpzModule from '../../src/lib/vendor/adobe-spz.mjs';
+import createSpzModule from '@adobe/spz';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const outputDir = join(__dirname, 'splat');

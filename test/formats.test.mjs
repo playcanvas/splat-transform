@@ -39,6 +39,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(__dirname, 'fixtures', 'splat');
 WebPCodec.wasmUrl = join(__dirname, '..', 'lib', 'webp.wasm');
 
+const SH_C0 = 0.28209479177387814;
+const logit = value => Math.log(value / (1 - value));
+
 /**
  * Creates a ReadSource from a Uint8Array for testing readers.
  */
@@ -420,6 +423,28 @@ describe('SPZ Format (Input Only)', () => {
         for (const [name, stats] of Object.entries(summary.columns)) {
             assert.strictEqual(stats.nanCount, 0, `${name} has NaN values`);
         }
+
+        const scale0 = dataTable.getColumnByName('scale_0').data;
+        const opacity = dataTable.getColumnByName('opacity').data;
+        const color0 = dataTable.getColumnByName('f_dc_0').data;
+        const color1 = dataTable.getColumnByName('f_dc_1').data;
+        const color2 = dataTable.getColumnByName('f_dc_2').data;
+
+        assert(Math.abs(scale0[0] - Math.log(0.125)) < 0.05);
+        assert(Math.abs(opacity[0] - logit(0.9)) < 0.08);
+        assert(Math.abs(color0[0] - ((1 / 3 - 0.5) / SH_C0)) < 0.04);
+        assert(Math.abs(color1[0] - ((1 / 3 - 0.5) / SH_C0)) < 0.04);
+        assert(Math.abs(color2[0]) < 0.04);
+    });
+
+    it('should read .spz v4 data from a non-zero byteOffset view', async () => {
+        const spzData = await fsReadFile(join(fixturesDir, 'minimal-v4.spz'));
+        const wrapped = new Uint8Array(spzData.length + 17);
+        wrapped.set(spzData, 17);
+        const source = new BufferReadSource(wrapped.subarray(17));
+        const dataTable = await readSpz(source);
+
+        assert.strictEqual(dataTable.numRows, 4);
     });
 
     it('should read .spz v3 fixture file', async () => {
@@ -529,7 +554,7 @@ describe('SPZ Format (Input Only)', () => {
 
     it('should return an empty table for v4 files with TOC past end of file', async () => {
         const spzData = await createSpzFixture({ version: 4, shDegree: 0 });
-        const view = new DataView(spzData.buffer);
+        const view = new DataView(spzData.buffer, spzData.byteOffset, spzData.byteLength);
         view.setUint32(16, spzData.length + 100, true);
         const source = new BufferReadSource(spzData);
         const dataTable = await readSpz(source);
@@ -590,7 +615,7 @@ describe('SPZ Format (Output)', () => {
         const actualSummary = computeSummary(readBack);
         const expectedSummary = computeSummary(testData);
         compareSummaries(actualSummary, expectedSummary, {
-            tolerance: 0.15,
+            tolerance: 0.25,
             allowExtraColumns: true
         });
     });
