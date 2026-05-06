@@ -766,7 +766,6 @@ class GpuDilation {
         // intra-encoder synchronization without issue. Verified raw Dawn
         // synchronizes this case correctly, so the bug is somewhere in
         // PlayCanvas's compute dispatch / bind-group path.
-        // TODO(#issue): file upstream and remove once fixed.
         (this.device as unknown as { submit: () => void }).submit();
 
         // X-pass: A → B

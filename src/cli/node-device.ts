@@ -121,9 +121,11 @@ const createDevice = async (adapterName?: string): Promise<GraphicsDevice> => {
     // Surface Dawn's device-lost reason directly. PlayCanvas logs this only via
     // Debug.warn (debug builds) and then attempts to recreate the device, which
     // can fail noisily (e.g. DXGI_ERROR_DEVICE_REMOVED on D3D12 TDR) and bury
-    // the original cause.
+    // the original cause. Skip the `destroyed` reason — that fires on intentional
+    // device.destroy() during normal shutdown.
     // @ts-ignore - wgpu is private on WebgpuGraphicsDevice but exposed in practice
     (graphicsDevice.wgpu as any)?.lost?.then((info: any) => {
+        if (info?.reason === 'destroyed') return;
         logger.error(`WebGPU device was lost: reason=${info.reason || 'unknown'}, message=${info.message || '(none)'}`);
     });
 
