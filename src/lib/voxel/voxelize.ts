@@ -48,8 +48,14 @@ const voxelizeToBuffer = async (
     const bStride = numBlocksX * numBlocksY;
     const batchSize = 16;
 
-    const MEGA_MAX_BATCHES = 512;
-    const MEGA_MAX_INDICES = 4 * 1024 * 1024;
+    // Caps for one mega-flush. Sized to keep a single compute dispatch's
+    // wall-clock comfortably under Windows D3D12 TDR (~2s watchdog) on slower
+    // GPUs without materially affecting throughput on fast GPUs (the
+    // double-buffered slots keep the GPU fed across the extra flushes).
+    // Output is bit-identical regardless: each batch's full Gaussian list rides
+    // with it, and slot buffers grow on demand to accommodate any oversize batch.
+    const MEGA_MAX_BATCHES = 256;
+    const MEGA_MAX_INDICES = 2 * 1024 * 1024;
 
     const maxBlocks = GpuVoxelization.MAX_BLOCKS_PER_BATCH;
     const numSlots = GpuVoxelization.NUM_SLOTS;

@@ -756,13 +756,18 @@ class GpuDilation {
         this.dispatchClear(slot, slot.bufferA, numWords);
         this.dispatchExtract(slot, minBx, minBy, minBz, outerBx, outerBy, outerBz, numXWords);
 
-        // Tiny throwaway readback forces a queue submit between extract
-        // and dilate. WITHOUT this, atomicOr writes from the extract pass
-        // aren't reliably visible to the next dilate pass (apparent
-        // missing memory barrier in PlayCanvas/Dawn for cross-pass atomic
-        // writes). Promise is intentionally not awaited — only the
-        // implicit submit+barrier matters. 16 bytes ≈ negligible PCIe.
-        slot.bufferA.read(0, 16, null, true).catch(() => { /* ignore */ });
+        // Force a queue submission boundary between the extract pass (which
+        // writes bufferA via atomicOr — bound as `storage, read_write` with
+        // `array<atomic<u32>>`) and the dilate-X pass (which reads bufferA
+        // bound as `storage, read` with `array<u32>`). Without this, the
+        // atomic writes are not reliably visible to the next pass — dilation
+        // produces empty output. Other inter-pass transitions in this
+        // pipeline (clear→extract, dilateX→Z→Y, Y→compact) rely on automatic
+        // intra-encoder synchronization without issue. Verified raw Dawn
+        // synchronizes this case correctly, so the bug is somewhere in
+        // PlayCanvas's compute dispatch / bind-group path.
+        // TODO(#issue): file upstream and remove once fixed.
+        (this.device as unknown as { submit: () => void }).submit();
 
         // X-pass: A → B
         this.dispatchX(slot, slot.bufferA, slot.bufferB, numXWords, outerNy, outerNz, halfExtentXZ);
