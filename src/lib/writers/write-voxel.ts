@@ -180,34 +180,46 @@ const cropToNavigable = (
     }
 
     const { minBx, minBy, minBz, maxBx, maxBy, maxBz } = navBounds;
-    const cropMaxBx = maxBx + 1;
-    const cropMaxBy = maxBy + 1;
-    const cropMaxBz = maxBz + 1;
 
-    if (minBx === 0 && minBy === 0 && minBz === 0 &&
+    // Pad by 1 block on each side so the cropped grid retains the solid wall
+    // blocks immediately surrounding the navigable cavity. Matches the
+    // MARGIN = 1 pattern used by carve() before this re-crop strips it. The
+    // collision-mesh extractors treat out-of-grid as empty, so without this
+    // padding the mesh has holes wherever the cavity reaches the cropped
+    // boundary; with it, the mesh extractor sees a real SOLID→EMPTY
+    // transition at the cavity edge and emits a sealed wall there.
+    const MARGIN = 1;
+    const cropMinBx = Math.max(0, minBx - MARGIN);
+    const cropMinBy = Math.max(0, minBy - MARGIN);
+    const cropMinBz = Math.max(0, minBz - MARGIN);
+    const cropMaxBx = Math.min(nbx, maxBx + 1 + MARGIN);
+    const cropMaxBy = Math.min(nby, maxBy + 1 + MARGIN);
+    const cropMaxBz = Math.min(nbz, maxBz + 1 + MARGIN);
+
+    if (cropMinBx === 0 && cropMinBy === 0 && cropMinBz === 0 &&
         cropMaxBx === nbx && cropMaxBy === nby && cropMaxBz === nbz) {
         return { grid, gridBounds };
     }
 
     const cropBar = logger.bar('Cropping grid', grid.types.length);
     const croppedGrid = grid.cropTo(
-        minBx, minBy, minBz, cropMaxBx, cropMaxBy, cropMaxBz,
+        cropMinBx, cropMinBy, cropMinBz, cropMaxBx, cropMaxBy, cropMaxBz,
         done => cropBar.update(done)
     );
     cropBar.end();
 
     const blockSize = 4 * voxelResolution;
     const croppedMin = new Vec3(
-        gridBounds.min.x + minBx * blockSize,
-        gridBounds.min.y + minBy * blockSize,
-        gridBounds.min.z + minBz * blockSize
+        gridBounds.min.x + cropMinBx * blockSize,
+        gridBounds.min.y + cropMinBy * blockSize,
+        gridBounds.min.z + cropMinBz * blockSize
     );
     const croppedBounds: Bounds = {
         min: croppedMin,
         max: new Vec3(
-            croppedMin.x + (cropMaxBx - minBx) * blockSize,
-            croppedMin.y + (cropMaxBy - minBy) * blockSize,
-            croppedMin.z + (cropMaxBz - minBz) * blockSize
+            croppedMin.x + (cropMaxBx - cropMinBx) * blockSize,
+            croppedMin.y + (cropMaxBy - cropMinBy) * blockSize,
+            croppedMin.z + (cropMaxBz - cropMinBz) * blockSize
         )
     };
 
