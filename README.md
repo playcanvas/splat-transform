@@ -11,8 +11,8 @@
 
 SplatTransform is an open source library and CLI tool for converting and editing Gaussian splats. It can:
 
-📥 Read PLY, Compressed PLY, SOG, SPLAT, KSPLAT, SPZ and LCC formats  
-📤 Write PLY, Compressed PLY, SOG, GLB, CSV, HTML Viewer, LOD and Voxel formats  
+📥 Read PLY, Compressed PLY, SOG, SPZ, SPLAT, KSPLAT and LCC formats  
+📤 Write PLY, Compressed PLY, SOG, SPZ, GLB, CSV, HTML Viewer, LOD and Voxel formats  
 📊 Generate statistical summaries for data analysis  
 🔗 Merge multiple splats  
 🔄 Apply transformations to input splats  
@@ -132,6 +132,14 @@ Apply when writing `.sog`, `meta.json`, `lod-meta.json`, or `.html` outputs.
 -i, --iterations       <n>              Iterations for SH compression (more=better). Default: 10
 ```
 
+## SPZ Output Options
+
+Apply when writing `.spz` outputs.
+
+```none
+    --spz-version      <3|4>            The SPZ format version to write. Default: 4
+```
+
 ## HTML Viewer Output Options
 
 Apply when writing `.html` outputs.
@@ -174,10 +182,10 @@ Apply when writing `.voxel.json` (sparse voxel octree for collision detection). 
                                           the seed; the fill is skipped if the seed is reachable
                                           from outside.
                                           Default size: 1.6
-    --voxel-floor-fill [radius]         Fill each column upward from bottom until hitting solid (exterior scenes).
-                                          Optional radius (world units): only patch XZ areas surrounded by floor
-                                          within 2*radius; large empty exterior areas are left alone.
-                                          Default radius: 1.6
+    --voxel-floor-fill [size]           Fill each column upward from bottom until hitting solid (exterior scenes).
+                                          Optional size (world units): only patch XZ areas surrounded by floor
+                                          within 2*size; large empty exterior areas are left alone.
+                                          Default size: 1.6
     --voxel-carve      [h,r]            Carve navigable space using capsule flood fill from seed.
                                           Default: height=1.6, radius=0.2
     --seed-pos         <x,y,z>          Seed position for voxel fill/carve and --filter-cluster.

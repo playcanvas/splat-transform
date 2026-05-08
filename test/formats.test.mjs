@@ -430,7 +430,7 @@ describe('SPZ Format (Input Only)', () => {
         const color1 = dataTable.getColumnByName('f_dc_1').data;
         const color2 = dataTable.getColumnByName('f_dc_2').data;
 
-        assert(Math.abs(scale0[0] - Math.log(0.125)) < 0.05);
+        assert(Math.abs(scale0[0] - Math.log(0.1)) < 0.05);
         assert(Math.abs(opacity[0] - logit(0.9)) < 0.08);
         assert(Math.abs(color0[0] - ((1 / 3 - 0.5) / SH_C0)) < 0.04);
         assert(Math.abs(color1[0] - ((1 / 3 - 0.5) / SH_C0)) < 0.04);

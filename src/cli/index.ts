@@ -603,13 +603,13 @@ USAGE
   • Use 'null' as output to discard file output.
 
 SUPPORTED INPUTS
-    .ply   .compressed.ply   .sog   meta.json   .ksplat   .splat   .spz   .mjs   .lcc
+    .ply   .compressed.ply   .sog   .spz   meta.json   .ksplat   .splat   .mjs   .lcc
 
     Input filenames may also be http(s):// URLs (downloaded on demand;
     .mjs generators are local-only).
 
 SUPPORTED OUTPUTS
-    .ply   .compressed.ply   .spz   .sog   meta.json   lod-meta.json   .glb   .csv   .html   .voxel.json   null
+    .ply   .compressed.ply   .sog   .spz   meta.json   lod-meta.json   .glb   .csv   .html   .voxel.json   null
 
 ACTIONS (executed in order; can be repeated)
     -t, --translate        <x,y,z>          Translate Gaussians by (x, y, z)
@@ -637,7 +637,6 @@ GENERAL
         --mem                               Show peak memory in progress output
         --tty                               Interactive bar rendering (--no-tty to disable)
     -w, --overwrite                         Overwrite output file if it exists
-        --spz-version      <3|4>            SPZ format version to write. Default: 4
 
 GPU (used by SOG compression and GPU voxelization: --filter-cluster, --filter-floaters, .voxel.json output)
     -L, --list-gpus                         List available GPU adapters and exit
@@ -646,6 +645,9 @@ GPU (used by SOG compression and GPU voxelization: --filter-cluster, --filter-fl
 
 SOG COMPRESSION (.sog, meta.json, lod-meta.json, .html outputs)
     -i, --iterations       <n>              SH compression iterations (more=better). Default: 10
+
+SPZ OUTPUT (.spz)
+        --spz-version      <3|4>            The SPZ format version to write. Default: 4
 
 HTML VIEWER OUTPUT (.html)
     -E, --viewer-settings  <settings.json>  HTML viewer settings JSON file
@@ -660,8 +662,8 @@ LOD OUTPUT (lod-meta.json)
 
 VOXEL OUTPUT (.voxel.json)
         --voxel-params     [size,opacity]   Voxel size and opacity threshold for .voxel.json. Default: 0.05,0.1
-        --voxel-external-fill [size]        Fill exterior voxels by dilation from seed. Default size: 1.6
-        --voxel-floor-fill [size]           Fill below-floor voxels by upward column walk from bottom. Default size: 1.6
+        --voxel-external-fill [size]        Fill exterior voxels via boundary flood fill (interior scenes). Default: 1.6
+        --voxel-floor-fill [size]           Fill columns upward from bottom (exterior scenes). Default: 1.6
         --voxel-carve [h,r]                 Carve navigable space using capsule flood fill from seed. Default: 1.6,0.2
         --seed-pos         <x,y,z>          Seed position for voxel processing and --filter-cluster. Default: 0,0,0
     -K, --collision-mesh   [smooth|faces]   Generate collision mesh (.collision.glb). Default shape: smooth

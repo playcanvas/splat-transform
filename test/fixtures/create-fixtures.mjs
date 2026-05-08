@@ -16,7 +16,8 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
-import createSpzModule from '@adobe/spz';
+
+const { default: createSpzModule } = await import('@adobe/spz');
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const outputDir = join(__dirname, 'splat');
@@ -293,17 +294,28 @@ function createSpzV2Fixture(count = 4) {
     return new Uint8Array(gzipSync(createSpzRawFixture(count)));
 }
 
-async function createSpzV4Fixture(count = 4) {
+// `@adobe/spz`'s GaussianCloud uses PLY-native conventions: scales are log-space,
+// alphas are pre-sigmoid (logit), colors are SH DC coefficients. Convert from
+// human-friendly "rendered" units to PLY-space before passing to saveSpzToBuffer.
+const SH_C0 = 0.28209479177387814;
+const logit = (value) => Math.log(value / (1 - value));
+const linearColorToDc = (value) => (value - 0.5) / SH_C0;
+
+async function createSpzCloud(count, version) {
     const spz = await createSpzModule();
     const gridSize = Math.ceil(Math.sqrt(count));
     const spacing = 1.0;
-    const scale = 0.1;
+    const renderedScale = 0.1;
+    const renderedAlpha = 0.9;
 
     const positions = new Float32Array(count * 3);
     const scales = new Float32Array(count * 3);
     const rotations = new Float32Array(count * 4);
     const alphas = new Float32Array(count);
     const colors = new Float32Array(count * 3);
+
+    const scaleLog = Math.log(renderedScale);
+    const alphaLogit = logit(renderedAlpha);
 
     for (let i = 0; i < count; i++) {
         const gx = i % gridSize;
@@ -315,19 +327,19 @@ async function createSpzV4Fixture(count = 4) {
         positions[i3 + 1] = 0;
         positions[i3 + 2] = (gz - gridSize / 2) * spacing;
 
-        scales[i3] = scale;
-        scales[i3 + 1] = scale;
-        scales[i3 + 2] = scale;
+        scales[i3] = scaleLog;
+        scales[i3 + 1] = scaleLog;
+        scales[i3 + 2] = scaleLog;
 
         rotations[i4] = 0;
         rotations[i4 + 1] = 0;
         rotations[i4 + 2] = 0;
         rotations[i4 + 3] = 1;
 
-        alphas[i] = 0.9;
-        colors[i3] = (gx + 1) / (gridSize + 1);
-        colors[i3 + 1] = (gz + 1) / (gridSize + 1);
-        colors[i3 + 2] = 0.5;
+        alphas[i] = alphaLogit;
+        colors[i3] = linearColorToDc((gx + 1) / (gridSize + 1));
+        colors[i3 + 1] = linearColorToDc((gz + 1) / (gridSize + 1));
+        colors[i3 + 2] = linearColorToDc(0.5);
     }
 
     return spz.saveSpzToBuffer({
@@ -342,68 +354,15 @@ async function createSpzV4Fixture(count = 4) {
         colors,
         sh: new Float32Array(0)
     }, {
-        version: 4,
+        version,
         from: spz.CoordinateSystem.RDF,
         sh1Bits: 5,
         shRestBits: 4
     });
 }
 
-async function createSpzV3Fixture(count = 4) {
-    const spz = await createSpzModule();
-    const gridSize = Math.ceil(Math.sqrt(count));
-    const spacing = 1.0;
-    const scale = 0.1;
-
-    const positions = new Float32Array(count * 3);
-    const scales = new Float32Array(count * 3);
-    const rotations = new Float32Array(count * 4);
-    const alphas = new Float32Array(count);
-    const colors = new Float32Array(count * 3);
-
-    for (let i = 0; i < count; i++) {
-        const gx = i % gridSize;
-        const gz = Math.floor(i / gridSize);
-        const i3 = i * 3;
-        const i4 = i * 4;
-
-        positions[i3] = (gx - gridSize / 2) * spacing;
-        positions[i3 + 1] = 0;
-        positions[i3 + 2] = (gz - gridSize / 2) * spacing;
-
-        scales[i3] = scale;
-        scales[i3 + 1] = scale;
-        scales[i3 + 2] = scale;
-
-        rotations[i4] = 0;
-        rotations[i4 + 1] = 0;
-        rotations[i4 + 2] = 0;
-        rotations[i4 + 3] = 1;
-
-        alphas[i] = 0.9;
-        colors[i3] = (gx + 1) / (gridSize + 1);
-        colors[i3 + 1] = (gz + 1) / (gridSize + 1);
-        colors[i3 + 2] = 0.5;
-    }
-
-    return spz.saveSpzToBuffer({
-        numPoints: count,
-        shDegree: 0,
-        antialiased: false,
-        extensions: [],
-        positions,
-        scales,
-        rotations,
-        alphas,
-        colors,
-        sh: new Float32Array(0)
-    }, {
-        version: 3,
-        from: spz.CoordinateSystem.RDF,
-        sh1Bits: 5,
-        shRestBits: 4
-    });
-}
+const createSpzV4Fixture = (count = 4) => createSpzCloud(count, 4);
+const createSpzV3Fixture = (count = 4) => createSpzCloud(count, 3);
 
 async function main() {
     console.log('Creating test fixtures...');

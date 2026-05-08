@@ -5,8 +5,9 @@ import { gaussianCloudToDataTable, getSpzModule } from '../spz-module';
 /**
  * Reads a .spz file using the official SPZ WebAssembly backend.
  *
- * Data is decoded to RDF/PLY space so the returned DataTable matches the
- * rest of splat-transform's coordinate conventions.
+ * Decodes to RDF (PLY) space — splat-transform's SPZ pipeline writes with
+ * `from: RDF` and reads with `to: RDF`, treating SPZ on-disk as the spec'd
+ * RUB form.
  *
  * @param source - The read source providing access to the .spz file data.
  * @returns Promise resolving to a DataTable containing the splat data.

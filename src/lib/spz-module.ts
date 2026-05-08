@@ -39,27 +39,13 @@ type SpzModule = {
 type CreateSpzModule = () => Promise<SpzModule>;
 
 const SPZ_SH_COMPONENTS = [0, 9, 24, 45, 72] as const;
-const SH_C0 = 0.28209479177387814;
-const EPSILON = 1e-6;
 
 let spzModulePromise: Promise<SpzModule> | null = null;
 
-const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
-
-const sigmoid = (value: number) => 1 / (1 + Math.exp(-value));
-
-const logit = (value: number) => {
-    const clamped = clamp(value, EPSILON, 1 - EPSILON);
-    return Math.log(clamped / (1 - clamped));
-};
-
-const linearScaleToRaw = (value: number) => Math.log(Math.max(value, EPSILON));
-
-const rawScaleToLinear = (value: number) => Math.exp(value);
-
-const linearColorToDc = (value: number) => (clamp(value, 0, 1) - 0.5) / SH_C0;
-
-const dcToLinearColor = (value: number) => clamp(0.5 + value * SH_C0, 0, 1);
+// `@adobe/spz`'s GaussianCloud uses PLY-native conventions for scales/colors/alphas:
+// scales are log-space, colors are SH DC coefficients, alphas are pre-sigmoid (logit).
+// The wasm packer applies (s+10)*16, c*0.15+0.5, sigmoid(a) internally; the unpacker inverts.
+// So we pass these fields straight through and only reorder the quaternion (xyzw <-> wxyz).
 
 const getCreateSpzModule = async () => {
     const { default: createModule } = await import('@adobe/spz');
@@ -142,15 +128,15 @@ const gaussianCloudToDataTable = (cloud: GaussianCloud) => {
         y[i] = cloud.positions[i3 + 1];
         z[i] = cloud.positions[i3 + 2];
 
-        scale0[i] = linearScaleToRaw(cloud.scales[i3]);
-        scale1[i] = linearScaleToRaw(cloud.scales[i3 + 1]);
-        scale2[i] = linearScaleToRaw(cloud.scales[i3 + 2]);
+        scale0[i] = cloud.scales[i3];
+        scale1[i] = cloud.scales[i3 + 1];
+        scale2[i] = cloud.scales[i3 + 2];
 
-        color0[i] = linearColorToDc(cloud.colors[i3]);
-        color1[i] = linearColorToDc(cloud.colors[i3 + 1]);
-        color2[i] = linearColorToDc(cloud.colors[i3 + 2]);
+        color0[i] = cloud.colors[i3];
+        color1[i] = cloud.colors[i3 + 1];
+        color2[i] = cloud.colors[i3 + 2];
 
-        opacity[i] = logit(cloud.alphas[i]);
+        opacity[i] = cloud.alphas[i];
 
         rot0[i] = cloud.rotations[i4 + 3];
         rot1[i] = cloud.rotations[i4];
@@ -210,15 +196,15 @@ const dataTableToGaussianCloud = (dataTable: DataTable): GaussianCloud => {
         positions[i3 + 1] = y[i];
         positions[i3 + 2] = z[i];
 
-        scales[i3] = rawScaleToLinear(scale0[i]);
-        scales[i3 + 1] = rawScaleToLinear(scale1[i]);
-        scales[i3 + 2] = rawScaleToLinear(scale2[i]);
+        scales[i3] = scale0[i];
+        scales[i3 + 1] = scale1[i];
+        scales[i3 + 2] = scale2[i];
 
-        colors[i3] = dcToLinearColor(color0[i]);
-        colors[i3 + 1] = dcToLinearColor(color1[i]);
-        colors[i3 + 2] = dcToLinearColor(color2[i]);
+        colors[i3] = color0[i];
+        colors[i3 + 1] = color1[i];
+        colors[i3 + 2] = color2[i];
 
-        alphas[i] = clamp(sigmoid(opacity[i]), 0, 1);
+        alphas[i] = opacity[i];
 
         rotations[i4] = rot1[i];
         rotations[i4 + 1] = rot2[i];
@@ -247,6 +233,12 @@ const dataTableToGaussianCloud = (dataTable: DataTable): GaussianCloud => {
     };
 };
 
+// splat-transform treats SPZ as RDF on both sides: data is converted to PLY/RDF
+// space before saving (wasm flips RDF→RUB to produce a spec-compliant on-disk file),
+// and the reader requests `to: RDF` to flip back. The SPZ format itself stores no
+// coordinate-system metadata (see NgspFileHeader in the spec), so the convention is
+// purely by agreement; this matches the Niantic spec and lets splat-transform's
+// SPZ readers/writers round-trip through PLY losslessly.
 const makeSpzPackOptions = async (overrides: Partial<PackOptions> = {}): Promise<PackOptions> => {
     const spz = await getSpzModule();
     return {
