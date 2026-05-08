@@ -1,13 +1,14 @@
 import { DataTable } from './data-table';
 import { type FileSystem } from './io/write';
 import { type DeviceCreator, type Options } from './types';
-import { writeCompressedPly, writeCsv, writeGlb, writeHtml, writeLod, writePly, writeSog, writeVoxel } from './writers';
+import { writeCompressedPly, writeCsv, writeGlb, writeHtml, writeLod, writePly, writeSog, writeSpz, writeVoxel } from './writers';
 
 /**
  * Supported output file formats for Gaussian splat data.
  *
  * - `ply` - Standard PLY format
  * - `compressed-ply` - Compressed PLY format
+ * - `spz` - Niantic Labs SPZ format
  * - `glb` - Binary glTF with KHR_gaussian_splatting extension
  * - `csv` - CSV text format (for debugging/analysis)
  * - `sog` - PlayCanvas SOG format (separate files)
@@ -17,7 +18,7 @@ import { writeCompressedPly, writeCsv, writeGlb, writeHtml, writeLod, writePly, 
  * - `html-bundle` - Self-contained HTML viewer (all assets embedded)
  * - `voxel` - Sparse voxel octree format for collision detection
  */
-type OutputFormat = 'csv' | 'sog' | 'sog-bundle' | 'lod' | 'compressed-ply' | 'ply' | 'glb' | 'html' | 'html-bundle' | 'voxel';
+type OutputFormat = 'csv' | 'sog' | 'sog-bundle' | 'lod' | 'compressed-ply' | 'ply' | 'spz' | 'glb' | 'html' | 'html-bundle' | 'voxel';
 
 /**
  * Options for writing a Gaussian splat file.
@@ -68,6 +69,8 @@ const getOutputFormat = (filename: string, options: Options): OutputFormat => {
         return 'compressed-ply';
     } else if (lowerFilename.endsWith('.ply')) {
         return 'ply';
+    } else if (lowerFilename.endsWith('.spz')) {
+        return 'spz';
     } else if (lowerFilename.endsWith('.glb')) {
         return 'glb';
     } else if (lowerFilename.endsWith('.html')) {
@@ -141,6 +144,13 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
                         dataTable
                     }]
                 }
+            }, fs);
+            break;
+        case 'spz':
+            await writeSpz({
+                filename,
+                dataTable,
+                version: options.spzVersion ?? 4
             }, fs);
             break;
         case 'glb':

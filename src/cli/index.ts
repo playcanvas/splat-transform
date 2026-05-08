@@ -131,6 +131,7 @@ const cliOptionsConfig = {
     'viewer-settings': { type: 'string', short: 'E', default: '' },
     'lod-chunk-count': { type: 'string', short: 'C', default: '512' },
     'lod-chunk-extent': { type: 'string', short: 'X', default: '16' },
+    'spz-version': { type: 'string', default: '4' },
     unbundled: { type: 'boolean', short: 'U', default: false },
     'voxel-params': { type: 'string', default: '' },
     'voxel-external-fill': { type: 'string' },
@@ -358,6 +359,10 @@ const parseArguments = async () => {
     }
 
     const collisionMesh = parseCollisionMesh(v['collision-mesh']);
+    const spzVersion = parseInteger(v['spz-version']);
+    if (spzVersion !== 3 && spzVersion !== 4) {
+        throw new Error(`Invalid spz-version value: ${v['spz-version']}. Must be 3 or 4.`);
+    }
 
     const options: CliOptions = {
         overwrite: v.overwrite,
@@ -375,6 +380,7 @@ const parseArguments = async () => {
         unbundled: v.unbundled,
         lodChunkCount: parseInteger(v['lod-chunk-count']),
         lodChunkExtent: parseInteger(v['lod-chunk-extent']),
+        spzVersion: spzVersion as 3 | 4,
         voxelResolution,
         opacityCutoff,
         navExteriorRadius,
@@ -597,13 +603,13 @@ USAGE
   • Use 'null' as output to discard file output.
 
 SUPPORTED INPUTS
-    .ply   .compressed.ply   .sog   meta.json   .ksplat   .splat   .spz   .mjs   .lcc
+    .ply   .compressed.ply   .sog   .spz   meta.json   .ksplat   .splat   .mjs   .lcc
 
     Input filenames may also be http(s):// URLs (downloaded on demand;
     .mjs generators are local-only).
 
 SUPPORTED OUTPUTS
-    .ply   .compressed.ply   .sog   meta.json   lod-meta.json   .glb   .csv   .html   .voxel.json   null
+    .ply   .compressed.ply   .sog   .spz   meta.json   lod-meta.json   .glb   .csv   .html   .voxel.json   null
 
 ACTIONS (executed in order; can be repeated)
     -t, --translate        <x,y,z>          Translate Gaussians by (x, y, z)
@@ -640,24 +646,27 @@ GPU (used by SOG compression and GPU voxelization: --filter-cluster, --filter-fl
 SOG COMPRESSION (.sog, meta.json, lod-meta.json, .html outputs)
     -i, --iterations       <n>              SH compression iterations (more=better). Default: 10
 
+SPZ OUTPUT (.spz)
+        --spz-version      <3|4>            The SPZ format version to write. Default: 4
+
 HTML VIEWER OUTPUT (.html)
     -E, --viewer-settings  <settings.json>  HTML viewer settings JSON file
     -U, --unbundled                         Generate unbundled HTML viewer with separate files
 
 LCC INPUT (.lcc)
-    -O, --lod-select       <n,n,...>        Comma-separated LOD levels to read
+    -O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC input
 
 LOD OUTPUT (lod-meta.json)
-    -C, --lod-chunk-count  <n>              Approximate Gaussians per LOD chunk in K. Default: 512
-    -X, --lod-chunk-extent <n>              Approximate LOD chunk size in world units. Default: 16
+    -C, --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
+    -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
 
 VOXEL OUTPUT (.voxel.json)
-        --voxel-params     [size,opacity]   Voxel size + opacity threshold. Default: 0.05,0.1
-        --voxel-external-fill [size]        Seal exterior voxels via boundary flood fill (interior scenes). Default: 1.6
-        --voxel-floor-fill [radius]         Fill columns upward from bottom (exterior scenes). Default: 1.6
-        --voxel-carve      [h,r]            Carve navigable space via capsule flood fill from seed. Default: 1.6,0.2
-        --seed-pos         <x,y,z>          Seed position for voxel fill/carve and --filter-cluster. Default: 0,0,0
-    -K, --collision-mesh   [smooth|faces]   Generate collision mesh (.collision.glb). Default: smooth
+        --voxel-params     [size,opacity]   Voxel size and opacity threshold for .voxel.json. Default: 0.05,0.1
+        --voxel-external-fill [size]        Fill exterior voxels via boundary flood fill (interior scenes). Default: 1.6
+        --voxel-floor-fill [size]           Fill columns upward from bottom (exterior scenes). Default: 1.6
+        --voxel-carve [h,r]                 Carve navigable space using capsule flood fill from seed. Default: 1.6,0.2
+        --seed-pos         <x,y,z>          Seed position for voxel processing and --filter-cluster. Default: 0,0,0
+    -K, --collision-mesh   [smooth|faces]   Generate collision mesh (.collision.glb). Default shape: smooth
 
 EXAMPLES
     # Convert formats

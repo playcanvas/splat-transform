@@ -6,12 +6,18 @@
  * This generates:
  * - minimal.splat - A .splat file with known values
  * - minimal.ksplat - A .ksplat file (compression mode 0)
- * - minimal.spz - A .spz file (if feasible)
+ * - minimal-raw.spz - A historical raw legacy SPZ payload (non-spec fixture)
+ * - minimal-v2.spz - A legacy gzipped SPZ v2 file
+ * - minimal-v3.spz - A legacy gzipped SPZ v3 file
+ * - minimal-v4.spz - A modern NGSP SPZ v4 file
  */
 
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gzipSync } from 'node:zlib';
+
+const { default: createSpzModule } = await import('@adobe/spz');
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const outputDir = join(__dirname, 'splat');
@@ -175,10 +181,10 @@ function createKsplatFixture(count = 4) {
 }
 
 /**
- * Creates a minimal .spz file (Niantic format, version 2).
+ * Creates a minimal raw legacy SPZ payload (historical non-spec fixture).
  * Format: 16-byte header + position/alpha/color/scale/rotation data
  */
-function createSpzFixture(count = 4) {
+function createSpzRawFixture(count = 4) {
     const HEADER_SIZE = 16;
     const positionsByteSize = count * 3 * 3; // 3 * 24-bit values
     const alphasByteSize = count;
@@ -281,19 +287,111 @@ function createSpzFixture(count = 4) {
     return new Uint8Array(buffer);
 }
 
-// Generate fixtures
-console.log('Creating test fixtures...');
+/**
+ * Creates a minimal gzipped .spz file (Niantic format, version 2).
+ */
+function createSpzV2Fixture(count = 4) {
+    return new Uint8Array(gzipSync(createSpzRawFixture(count)));
+}
 
-const splatData = createSplatFixture(4);
-writeFileSync(join(outputDir, 'minimal.splat'), splatData);
-console.log(`Created minimal.splat (${splatData.length} bytes, 4 splats)`);
+// `@adobe/spz`'s GaussianCloud uses PLY-native conventions: scales are log-space,
+// alphas are pre-sigmoid (logit), colors are SH DC coefficients. Convert from
+// human-friendly "rendered" units to PLY-space before passing to saveSpzToBuffer.
+const SH_C0 = 0.28209479177387814;
+const logit = (value) => Math.log(value / (1 - value));
+const linearColorToDc = (value) => (value - 0.5) / SH_C0;
 
-const ksplatData = createKsplatFixture(4);
-writeFileSync(join(outputDir, 'minimal.ksplat'), ksplatData);
-console.log(`Created minimal.ksplat (${ksplatData.length} bytes, 4 splats)`);
+async function createSpzCloud(count, version) {
+    const spz = await createSpzModule();
+    const gridSize = Math.ceil(Math.sqrt(count));
+    const spacing = 1.0;
+    const renderedScale = 0.1;
+    const renderedAlpha = 0.9;
 
-const spzData = createSpzFixture(4);
-writeFileSync(join(outputDir, 'minimal.spz'), spzData);
-console.log(`Created minimal.spz (${spzData.length} bytes, 4 splats)`);
+    const positions = new Float32Array(count * 3);
+    const scales = new Float32Array(count * 3);
+    const rotations = new Float32Array(count * 4);
+    const alphas = new Float32Array(count);
+    const colors = new Float32Array(count * 3);
 
-console.log('Done!');
+    const scaleLog = Math.log(renderedScale);
+    const alphaLogit = logit(renderedAlpha);
+
+    for (let i = 0; i < count; i++) {
+        const gx = i % gridSize;
+        const gz = Math.floor(i / gridSize);
+        const i3 = i * 3;
+        const i4 = i * 4;
+
+        positions[i3] = (gx - gridSize / 2) * spacing;
+        positions[i3 + 1] = 0;
+        positions[i3 + 2] = (gz - gridSize / 2) * spacing;
+
+        scales[i3] = scaleLog;
+        scales[i3 + 1] = scaleLog;
+        scales[i3 + 2] = scaleLog;
+
+        rotations[i4] = 0;
+        rotations[i4 + 1] = 0;
+        rotations[i4 + 2] = 0;
+        rotations[i4 + 3] = 1;
+
+        alphas[i] = alphaLogit;
+        colors[i3] = linearColorToDc((gx + 1) / (gridSize + 1));
+        colors[i3 + 1] = linearColorToDc((gz + 1) / (gridSize + 1));
+        colors[i3 + 2] = linearColorToDc(0.5);
+    }
+
+    return spz.saveSpzToBuffer({
+        numPoints: count,
+        shDegree: 0,
+        antialiased: false,
+        extensions: [],
+        positions,
+        scales,
+        rotations,
+        alphas,
+        colors,
+        sh: new Float32Array(0)
+    }, {
+        version,
+        from: spz.CoordinateSystem.RDF,
+        sh1Bits: 5,
+        shRestBits: 4
+    });
+}
+
+const createSpzV4Fixture = (count = 4) => createSpzCloud(count, 4);
+const createSpzV3Fixture = (count = 4) => createSpzCloud(count, 3);
+
+async function main() {
+    console.log('Creating test fixtures...');
+
+    const splatData = createSplatFixture(4);
+    writeFileSync(join(outputDir, 'minimal.splat'), splatData);
+    console.log(`Created minimal.splat (${splatData.length} bytes, 4 splats)`);
+
+    const ksplatData = createKsplatFixture(4);
+    writeFileSync(join(outputDir, 'minimal.ksplat'), ksplatData);
+    console.log(`Created minimal.ksplat (${ksplatData.length} bytes, 4 splats)`);
+
+    const spzRawData = createSpzRawFixture(4);
+    writeFileSync(join(outputDir, 'minimal-raw.spz'), spzRawData);
+    console.log(`Created minimal-raw.spz (${spzRawData.length} bytes, 4 splats)`);
+
+    const spzV2Data = createSpzV2Fixture(4);
+    writeFileSync(join(outputDir, 'minimal-v2.spz'), spzV2Data);
+    console.log(`Created minimal-v2.spz (${spzV2Data.length} bytes, 4 splats)`);
+
+    const spzV3Data = await createSpzV3Fixture(4);
+    writeFileSync(join(outputDir, 'minimal-v3.spz'), spzV3Data);
+    console.log(`Created minimal-v3.spz (${spzV3Data.length} bytes, 4 splats)`);
+
+    const spzV4Data = await createSpzV4Fixture(4);
+    writeFileSync(join(outputDir, 'minimal-v4.spz'), spzV4Data);
+    console.log(`Created minimal-v4.spz (${spzV4Data.length} bytes, 4 splats)`);
+
+    console.log('Done!');
+}
+
+await main();
