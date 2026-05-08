@@ -36,6 +36,8 @@ For library usage, install as a dependency:
 npm install @playcanvas/splat-transform
 ```
 
+For running on a backend with Docker (including GPU/Vulkan setup), see the [Docker Backend Guide](guides/DOCKER.md).
+
 ## CLI Usage
 
 ```bash
