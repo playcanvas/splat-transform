@@ -4,7 +4,7 @@ This guide explains how to run `splat-transform` as a containerised backend serv
 
 ## When you need this
 
-`splat-transform` is a Node.js CLI and the published npm package runs anywhere Node 18+ runs — Docker is not strictly required.
+`splat-transform` is a Node.js CLI and the published npm package runs anywhere Node 22+ runs — Docker is not strictly required.
 
 A few features are **GPU-only** and will not run without WebGPU:
 
@@ -26,43 +26,76 @@ If you don't need the GPU-only features and you're happy paying the CPU cost for
 These must be configured on the host machine — they cannot be installed from inside a container, because the container reuses the host's NVIDIA driver and Vulkan ICD.
 
 1. **NVIDIA GPU** with a driver that exposes a Vulkan ICD (most consumer drivers do; some headless cloud drivers do not by default).
-2. **Docker Engine** with the **[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)** installed and configured. This is what makes `--gpus all` work and what mounts the host's NVIDIA Vulkan loader into the container.
-3. **Vulkan loader and tools on the host** (used by the toolkit when projecting Vulkan into the container).
+2. **Docker Engine** with the **[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)** installed and configured. This is what makes `--gpus all` work and what projects the host's NVIDIA driver libraries (including the Vulkan ICD JSON) into the container at runtime.
+3. **(Optional) `vulkan-tools` on the host** — useful for sanity-checking the driver from outside Docker (e.g. `vulkaninfo --summary` on the host before launching containers). The container brings its own Vulkan loader via the `vulkan-tools` apt package installed in the Dockerfile below.
 
 ### AWS GPU instances
 
-On AWS GPU instances (`g4dn`, `g5`, `g6`, etc.) running Amazon Linux 2023, the default driver is the *compute-only* Tesla driver and does not include Vulkan. To use any of the WebGPU paths you need:
+On AWS GPU instances (`g4dn`, `g5`, `g6`, etc.) running Amazon Linux 2023 the default driver is the *compute-only* Tesla driver and does not include Vulkan. To use any of the WebGPU paths you need to install the **NVIDIA GRID Driver v19.2 or newer** on the host — the GRID driver ships the Vulkan ICD that the Tesla driver lacks.
 
-- **NVIDIA GRID Driver v19.2 or newer** (this is the variant that ships the Vulkan ICD). Install it on the host following AWS's [NVIDIA driver installation instructions](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/install-nvidia-driver.html) and pick the *GRID* driver, not the *Tesla* one.
-- **Vulkan packages on the host OS**:
+NVIDIA hosts the GRID installer in an S3 bucket, so the EC2 instance role must have the `AmazonS3ReadOnlyAccess` policy attached.
 
-  ```bash
-  sudo dnf install vulkan vulkan-tools libXext
-  ```
+Update and reboot first:
 
-This step is *below* Docker — it lives on the EC2 instance itself. The container in the next section assumes both have already been done.
+```bash
+sudo dnf update -y
+sudo reboot
+```
+
+After the reboot, install the driver and reboot again:
+
+```bash
+sudo aws s3 cp --recursive s3://ec2-linux-nvidia-drivers/grid-19.2/ .   # installs v580.x.x
+sudo chmod +x NVIDIA-Linux-x86_64*.run
+sudo ./NVIDIA-Linux-x86_64*.run
+sudo reboot
+```
+
+Install the Vulkan loader, tools, and `libXext` (which `vulkaninfo` links against):
+
+```bash
+sudo dnf install vulkan vulkan-tools libXext
+```
+
+Verify the driver and Vulkan ICD from the host:
+
+```bash
+nvidia-smi             # driver version, GPU model
+vulkaninfo --summary   # NVIDIA Vulkan ICD with a physical device
+```
+
+This is host/OS level — it cannot be done from inside the container. The Dockerfile in the next section assumes the driver and Vulkan packages are already installed on the host.
 
 ## Minimal Dockerfile
 
-A minimal single-stage Dockerfile that installs the published CLI on top of an NVIDIA CUDA + Vulkan base image:
+A minimal multi-stage Dockerfile that installs the published CLI on top of an NVIDIA CUDA + Vulkan base image:
 
 ```dockerfile
 # syntax=docker/dockerfile:1.4
+
+# Pull Node.js from the official image rather than piping a remote
+# install script to bash.
+FROM node:22-slim AS node
+
 FROM nvidia/cuda:12.8.1-devel-ubuntu22.04
 
 # Expose compute + graphics + utility caps so the NVIDIA Container Toolkit
-# mounts the host's Vulkan ICD into the container at runtime.
+# projects the host's NVIDIA driver libraries and Vulkan ICD into the
+# container at runtime.
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,graphics,utility
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates curl gnupg \
+        ca-certificates \
         vulkan-tools \
         libgl1 libglvnd0 libglx0 libegl1 libxext6 \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && npm install -g @playcanvas/splat-transform \
     && rm -rf /var/lib/apt/lists/*
+
+# Bring in Node.js and npm from the official image.
+COPY --from=node /usr/local/bin/ /usr/local/bin/
+COPY --from=node /usr/local/lib/node_modules/ /usr/local/lib/node_modules/
+
+RUN npm install -g @playcanvas/splat-transform
 
 RUN useradd --create-home --uid 2000 splat
 USER splat
@@ -73,10 +106,11 @@ ENTRYPOINT ["splat-transform"]
 
 A few notes on what each part is doing:
 
-- `nvidia/cuda:...-devel-ubuntu22.04` — gives you a CUDA-aware base image that the NVIDIA Container Toolkit recognises. The CUDA toolkit itself is not used by `splat-transform`; we just need a base where `--gpus all` projects the host driver and Vulkan loader correctly.
+- `nvidia/cuda:...-devel-ubuntu22.04` — gives you a CUDA-aware base image that the NVIDIA Container Toolkit recognises. The CUDA toolkit itself is not used by `splat-transform`; we just need a base where `--gpus all` projects the host's NVIDIA driver and Vulkan ICD correctly.
 - `NVIDIA_DRIVER_CAPABILITIES=compute,graphics,utility` — `graphics` is the important one; without it the toolkit will not mount the Vulkan ICD.
-- `vulkan-tools` — provides `vulkaninfo`, useful for debugging.
+- `vulkan-tools` — provides `vulkaninfo` (useful for debugging) and pulls in the Vulkan loader the container needs.
 - `libgl1`, `libglvnd0`, `libglx0`, `libegl1`, `libxext6` — runtime libraries Vulkan/EGL drivers depend on.
+- `node:22-slim` stage + `COPY --from=node` — provides Node.js and npm without piping a third-party install script to `bash`.
 - `npm install -g @playcanvas/splat-transform` — installs the published CLI on the `PATH`.
 - The non-root `splat` user is a good default for batch workers and means files written into a host-mounted directory aren't owned by root.
 
