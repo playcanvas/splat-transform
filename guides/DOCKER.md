@@ -95,6 +95,15 @@ docker run --rm --gpus all -v "$PWD":/work splat-transform \
     input.ply output.sog
 ```
 
+The image runs as a non-root user (UID 2000), so any files written into a host-mounted directory will be owned by UID 2000 rather than your host user, and the container will fail to write at all if the host directory isn't writable by UID 2000. The portable fix is to pass `--user "$(id -u):$(id -g)"`:
+
+```bash
+docker run --rm --gpus all --user "$(id -u):$(id -g)" \
+    -v "$PWD":/work splat-transform input.ply output.sog
+```
+
+The remaining examples omit `--user` for brevity — add it to any invocation that mounts a host directory.
+
 Any normal `splat-transform` invocation works — see the [README](../README.md) for the full CLI surface. For example:
 
 ```bash
@@ -146,6 +155,8 @@ Run it without `--gpus`:
 docker run --rm -v "$PWD":/work splat-transform input.ply output.ply
 ```
 
+Unlike the GPU image, `node:22-slim` runs as root by default, so without `--user` the files written into a bind-mounted host directory will be owned by root on the host. Pass `--user "$(id -u):$(id -g)"` (as described in [Build and run](#build-and-run)), or add a non-root `USER` line to the Dockerfile if this image is for shared use.
+
 If you keep the GPU image but want to force CPU mode for a single run, pass `-g cpu`:
 
 ```bash
@@ -160,5 +171,6 @@ Note that `-g cpu` is incompatible with the GPU-only features (`--filter-cluster
 - **`vulkaninfo` reports `Could not find a Vulkan ICD`.** The host NVIDIA driver does not expose Vulkan. On AWS, switch from the Tesla driver to the GRID driver (v19.2+) and reinstall, then install `vulkan vulkan-tools libXext` on the host.
 - **`vulkaninfo` segfaults or fails to load `libXext.so.6`.** `libxext6` is missing from the image — make sure the `apt-get install` line in the Dockerfile includes it (and on AWS, that `libXext` is also installed on the host).
 - **`docker: Error response from daemon: could not select device driver "" with capabilities: [[gpu]]`.** The NVIDIA Container Toolkit is not installed or the Docker daemon has not picked up its config. Reinstall the toolkit and restart Docker.
-- **Output files are written as root and cannot be deleted from the host.** The image runs as UID 2000. Either `chown` the output directory to UID 2000 before mounting, or pass `--user "$(id -u):$(id -g)"` to `docker run`.
+- **Outputs in the bind-mounted directory aren't owned by my host user.** The container's default user (UID 2000 in the GPU image, root in the slim image) doesn't match your host UID. Pass `--user "$(id -u):$(id -g)"` to `docker run` to align them, or `chown` the output directory to the container UID before mounting.
+- **`Permission denied` writing to the bind-mounted directory.** The container's default user has no write access to the host directory. Use `--user "$(id -u):$(id -g)"`, or `chown` the host directory so the container user can write.
 - **`splat-transform: command not found` inside the container.** Make sure `npm install -g @playcanvas/splat-transform` ran successfully during the build. The default entrypoint already invokes the binary, so `docker run <image> --help` should work without specifying `splat-transform`.
