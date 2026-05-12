@@ -167,12 +167,13 @@ const readSog = async (fileSystem: ReadFileSystem, filename: string): Promise<Da
     for (let i = 0; i < count; i++) {
         const o = i * 4;
         const tag = qr[o + 3];
-        if (tag < 252 || tag > 255) {
-            r0[i] = 0; r1[i] = 0; r2[i] = 0; r3[i] = 1;
+        if (tag < 252 || tag > 255) { // invalid tag, default to identity (rot_0 = w)
+            r0[i] = 1; r1[i] = 0; r2[i] = 0; r3[i] = 0;
             continue;
         }
-        const [x, y, z, wq] = unpackQuat(qr[o], qr[o + 1], qr[o + 2], tag);
-        r0[i] = x; r1[i] = y; r2[i] = z; r3[i] = wq;
+        // unpackQuat returns components in (w, x, y, z) order; rot_0..rot_3 map to (w, x, y, z).
+        const [w, x, y, z] = unpackQuat(qr[o], qr[o + 1], qr[o + 2], tag);
+        r0[i] = w; r1[i] = x; r2[i] = y; r3[i] = z;
     }
     tickPass();
 
