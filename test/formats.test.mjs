@@ -351,7 +351,7 @@ describe('SOG Format (V1 Legacy)', () => {
 
         // Identity quaternion (w largest, mode 0): a=b=c=0 -> bytes 127 with
         // tag 252 (= mode 0). The decoder's unpackQuat call then produces
-        // (0,0,0, ~1).
+        // a quat with w ~= 1 and x/y/z ~= 0 (column convention: rot_0 = w).
         const quatBytes = new Uint8Array(2 * 4);
         for (let i = 0; i < count; i++) {
             quatBytes[i * 4 + 0] = 127;

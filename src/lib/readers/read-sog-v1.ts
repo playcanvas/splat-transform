@@ -219,10 +219,19 @@ const readSogV1 = async (fileSystem: ReadFileSystem, baseDir: string, meta: Meta
         const centroidsWebp = await load(meta.shN.files[0]);
         const labelsWebp = await load(meta.shN.files[1]);
         const { rgba: centroidsRGBA, width: cW, height: cH } = decoder.decodeRGBA(centroidsWebp);
-        const { rgba: labelsRGBA } = decoder.decodeRGBA(labelsWebp);
+        const { rgba: labelsRGBA, width: lW, height: lH } = decoder.decodeRGBA(labelsWebp);
 
+        // Validate label texture size up-front: out-of-bounds typed-array reads
+        // coerce to 0 via the bitwise ops below, which would silently map many
+        // splats to centroid 0 instead of failing.
+        if (lW * lH < count) throw new Error('SOG shN labels texture too small for count');
+
+        // Centroids width determines the band count (palette packs 64 entries
+        // per row, each shCoeffs pixels wide). An unrecognized width means the
+        // shN payload is malformed; throw rather than silently skipping.
         const bands = v1ShBandsWidths[cW] ?? 0;
         const shCoeffs = [0, 3, 8, 15][bands];
+        if (bands === 0) throw new Error(`SOG shN centroids texture has unrecognized width ${cW}, expected one of 192 / 512 / 960`);
 
         if (shCoeffs > 0) {
             const shMin = meta.shN.mins;

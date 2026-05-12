@@ -84,14 +84,22 @@ const readSog = async (fileSystem: ReadFileSystem, filename: string): Promise<Da
     const resolve = (name: string) => (baseDir ? join(baseDir, name) : name);
 
     const metaBytes = await readFile(fileSystem, resolve(metaName));
-    const rawMeta = JSON.parse(new TextDecoder().decode(metaBytes)) as MetaV2 | MetaV1;
+    const rawMeta = JSON.parse(new TextDecoder().decode(metaBytes)) as MetaV2 | (MetaV1 & { version?: number });
 
-    // Dispatch to the legacy reader for any meta without `version: 2`.
-    const isV2 = (m: MetaV2 | MetaV1): m is MetaV2 => (m as MetaV2).version === 2;
-    if (!isV2(rawMeta)) {
-        return readSogV1(fileSystem, baseDir, rawMeta);
+    // Dispatch:
+    //   - V1 (legacy) has no `version` field        -> readSogV1
+    //   - V2 (current) has `version: 2`             -> handled inline below
+    //   - any other (future/unknown) version        -> hard error rather than
+    //     silently mis-routing to V1, which would surface as confusing
+    //     downstream failures (missing `means.shape`, etc.).
+    const version = rawMeta.version;
+    if (version === undefined) {
+        return readSogV1(fileSystem, baseDir, rawMeta as MetaV1);
     }
-    const meta = rawMeta;
+    if (version !== 2) {
+        throw new Error(`Unsupported SOG meta version: ${version}`);
+    }
+    const meta = rawMeta as MetaV2;
 
     const decoder = await WebPCodec.create();
     const count = meta.count;
@@ -222,7 +230,14 @@ const readSog = async (fileSystem: ReadFileSystem, filename: string): Promise<Da
             const centroidsWebp = await load(meta.shN.files[0]);
             const labelsWebp = await load(meta.shN.files[1]);
             const { rgba: centroidsRGBA, width: cW, height: cH } = decoder.decodeRGBA(centroidsWebp);
-            const { rgba: labelsRGBA } = decoder.decodeRGBA(labelsWebp);
+            const { rgba: labelsRGBA, width: lW, height: lH } = decoder.decodeRGBA(labelsWebp);
+
+            // Validate texture geometry up-front: missing guards would let
+            // truncated textures silently produce zeros (out-of-bounds typed-
+            // array reads coerce to 0 via the bitwise ops below) instead of
+            // failing like the means/quats/scales/sh0 passes do.
+            if (lW * lH < count) throw new Error('SOG shN labels texture too small for count');
+            if (cW !== 64 * shCoeffs) throw new Error(`SOG shN centroids texture width ${cW} does not match expected ${64 * shCoeffs} for ${bands}-band palette`);
 
             const baseIdx = columns.length;
             for (let i = 0; i < shCoeffs * 3; i++) {
