@@ -324,6 +324,188 @@ describe('SOG Format (Unbundled)', () => {
     });
 });
 
+describe('SOG Format (V1 Legacy)', () => {
+    // Build a tiny synthetic V1 SOG fixture (2 splats, no SH) by encoding the
+    // textures with the V1 quantization scheme: linear lerp between per-axis
+    // mins/maxs. This mirrors the layout published by older PlayCanvas tools
+    // (e.g. https://d8dooaaq2ugo3.cloudfront.net/4e05290d/v1/meta.json) and
+    // verifies that readSog still decodes it correctly.
+    const buildV1Fixture = async () => {
+        const codec = await WebPCodec.create();
+        const count = 2;
+
+        // Pick simple ground-truth values that survive quantization.
+        const positions = [
+            [0.5, -0.25, 1.0],
+            [-0.5, 0.25, -1.0]
+        ];
+        const scales = [
+            [Math.log(0.1), Math.log(0.2), Math.log(0.05)],
+            [Math.log(0.05), Math.log(0.1), Math.log(0.2)]
+        ];
+        const colors = [
+            [0.2, 0.4, 0.6],
+            [-0.2, -0.4, -0.6]
+        ];
+        const opacities = [1.0, -1.5]; // logit values stored directly in V1
+
+        // Identity quaternion (w largest, mode 0): a=b=c=0 -> bytes 127 with
+        // tag 252 (= mode 0). The decoder's unpackQuat call then produces
+        // a quat with w ~= 1 and x/y/z ~= 0 (column convention: rot_0 = w).
+        const quatBytes = new Uint8Array(2 * 4);
+        for (let i = 0; i < count; i++) {
+            quatBytes[i * 4 + 0] = 127;
+            quatBytes[i * 4 + 1] = 127;
+            quatBytes[i * 4 + 2] = 127;
+            quatBytes[i * 4 + 3] = 252;
+        }
+
+        // Means: per-axis mins/maxs span the actual value range; bytes encode
+        // a logTransform'd position (sign(x) * ln(|x|+1)) packed into 16 bits
+        // across two textures.
+        const logT = v => Math.sign(v) * Math.log(Math.abs(v) + 1);
+        const means = {
+            mins: [0, 0, 0].map((_, k) => Math.min(logT(positions[0][k]), logT(positions[1][k]))),
+            maxs: [0, 0, 0].map((_, k) => Math.max(logT(positions[0][k]), logT(positions[1][k])))
+        };
+        const meansLo = new Uint8Array(count * 4);
+        const meansHi = new Uint8Array(count * 4);
+        for (let i = 0; i < count; i++) {
+            for (let k = 0; k < 3; k++) {
+                const lv = logT(positions[i][k]);
+                const span = means.maxs[k] - means.mins[k] || 1;
+                const u16 = Math.round(((lv - means.mins[k]) / span) * 65535);
+                meansLo[i * 4 + k] = u16 & 0xff;
+                meansHi[i * 4 + k] = (u16 >> 8) & 0xff;
+            }
+            meansLo[i * 4 + 3] = 255;
+            meansHi[i * 4 + 3] = 255;
+        }
+
+        // Scales: per-axis mins/maxs, single 8-bit lerp.
+        const scaleMeta = {
+            mins: [0, 0, 0].map((_, k) => Math.min(scales[0][k], scales[1][k])),
+            maxs: [0, 0, 0].map((_, k) => Math.max(scales[0][k], scales[1][k]))
+        };
+        const scaleBytes = new Uint8Array(count * 4);
+        for (let i = 0; i < count; i++) {
+            for (let k = 0; k < 3; k++) {
+                const span = scaleMeta.maxs[k] - scaleMeta.mins[k] || 1;
+                scaleBytes[i * 4 + k] = Math.round(((scales[i][k] - scaleMeta.mins[k]) / span) * 255);
+            }
+            scaleBytes[i * 4 + 3] = 255;
+        }
+
+        // sh0: 4-element mins/maxs (rgb + opacity logit), 8-bit lerp per channel.
+        const sh0Meta = {
+            mins: [
+                Math.min(colors[0][0], colors[1][0]),
+                Math.min(colors[0][1], colors[1][1]),
+                Math.min(colors[0][2], colors[1][2]),
+                Math.min(opacities[0], opacities[1])
+            ],
+            maxs: [
+                Math.max(colors[0][0], colors[1][0]),
+                Math.max(colors[0][1], colors[1][1]),
+                Math.max(colors[0][2], colors[1][2]),
+                Math.max(opacities[0], opacities[1])
+            ]
+        };
+        const sh0Bytes = new Uint8Array(count * 4);
+        for (let i = 0; i < count; i++) {
+            for (let k = 0; k < 3; k++) {
+                const span = sh0Meta.maxs[k] - sh0Meta.mins[k] || 1;
+                sh0Bytes[i * 4 + k] = Math.round(((colors[i][k] - sh0Meta.mins[k]) / span) * 255);
+            }
+            const opSpan = sh0Meta.maxs[3] - sh0Meta.mins[3] || 1;
+            sh0Bytes[i * 4 + 3] = Math.round(((opacities[i] - sh0Meta.mins[3]) / opSpan) * 255);
+        }
+
+        // Encode each texture as a 1-row WebP. Encoder requires a non-zero
+        // height; using width=count, height=1 packs all entries on one row.
+        const meansLoWebp = codec.encodeLosslessRGBA(meansLo, count, 1);
+        const meansHiWebp = codec.encodeLosslessRGBA(meansHi, count, 1);
+        const quatsWebp = codec.encodeLosslessRGBA(quatBytes, count, 1);
+        const scalesWebp = codec.encodeLosslessRGBA(scaleBytes, count, 1);
+        const sh0Webp = codec.encodeLosslessRGBA(sh0Bytes, count, 1);
+
+        const meta = {
+            // No `version` field => V1
+            means: {
+                shape: [count, 3],
+                mins: means.mins,
+                maxs: means.maxs,
+                files: ['means_l.webp', 'means_u.webp']
+            },
+            scales: {
+                shape: [count, 3],
+                mins: scaleMeta.mins,
+                maxs: scaleMeta.maxs,
+                files: ['scales.webp']
+            },
+            quats: {
+                shape: [count, 4],
+                files: ['quats.webp']
+            },
+            sh0: {
+                shape: [count, 1, 4],
+                mins: sh0Meta.mins,
+                maxs: sh0Meta.maxs,
+                files: ['sh0.webp']
+            }
+        };
+
+        const fs = new MemoryReadFileSystem();
+        fs.set('meta.json', new TextEncoder().encode(JSON.stringify(meta)));
+        fs.set('means_l.webp', meansLoWebp);
+        fs.set('means_u.webp', meansHiWebp);
+        fs.set('quats.webp', quatsWebp);
+        fs.set('scales.webp', scalesWebp);
+        fs.set('sh0.webp', sh0Webp);
+
+        return { fs, count, positions, scales, colors, opacities };
+    };
+
+    it('should decode V1 meta.json (no version field, mins/maxs lerp)', async () => {
+        const { fs, count, positions, scales, colors, opacities } = await buildV1Fixture();
+
+        const dataTable = await readSog(fs, 'meta.json');
+
+        assert.strictEqual(dataTable.numRows, count);
+        assert(dataTable.hasColumn('x'));
+        assert(dataTable.hasColumn('opacity'));
+
+        const get = name => dataTable.getColumnByName(name).data;
+        for (let i = 0; i < count; i++) {
+            // Position uses a 16-bit lerp + invLogTransform; tolerance accounts
+            // for that quantization round-trip.
+            assert(Math.abs(get('x')[i] - positions[i][0]) < 1e-3, `x[${i}]`);
+            assert(Math.abs(get('y')[i] - positions[i][1]) < 1e-3, `y[${i}]`);
+            assert(Math.abs(get('z')[i] - positions[i][2]) < 1e-3, `z[${i}]`);
+
+            // Scales / colors / opacity use 8-bit lerp; ~1/255 of the span.
+            for (let k = 0; k < 3; k++) {
+                const sSpan = Math.abs(scales[0][k] - scales[1][k]) + 1e-6;
+                assert(Math.abs(get(`scale_${k}`)[i] - scales[i][k]) < sSpan / 200, `scale_${k}[${i}]`);
+
+                const cSpan = Math.abs(colors[0][k] - colors[1][k]) + 1e-6;
+                assert(Math.abs(get(`f_dc_${k}`)[i] - colors[i][k]) < cSpan / 200, `f_dc_${k}[${i}]`);
+            }
+            const oSpan = Math.abs(opacities[0] - opacities[1]) + 1e-6;
+            assert(Math.abs(get('opacity')[i] - opacities[i]) < oSpan / 200, `opacity[${i}]`);
+
+            // Quat encoded with mode 0 (w is the max component) and byte 127
+            // for x/y/z; byte 127 maps to ~-0.0039 not exactly 0, so the
+            // reconstructed w is ~1 and the smallest components are ~-0.003.
+            // Engine convention: rot_0 = w, rot_1..3 = x,y,z.
+            assert(Math.abs(get('rot_0')[i] - 1) < 5e-3, `rot_0[${i}] = ${get('rot_0')[i]}`);
+            assert(Math.abs(get('rot_1')[i]) < 5e-3, `rot_1[${i}]`);
+            assert(Math.abs(get('rot_2')[i]) < 5e-3, `rot_2[${i}]`);
+            assert(Math.abs(get('rot_3')[i]) < 5e-3, `rot_3[${i}]`);
+        }
+    });
+});
+
 describe('SPLAT Format (Input Only)', () => {
     it('should read .splat file', async () => {
         const splatData = await fsReadFile(join(fixturesDir, 'minimal.splat'));
