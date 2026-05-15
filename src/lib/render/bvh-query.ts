@@ -55,10 +55,8 @@ const computeGroupFrustumPlanes = (
     out[0] = fx; out[1] = fy; out[2] = fz; out[3] = fxe + near;
 
     // Far plane: forward · (p − eye) ≤ far
-    //   -forward · (p − eye) ≥ -far
-    //   n = -forward, d = -(forward·eye) - far... no: n · p ≥ d
-    //   ⇒ -fx*p − fy*p − fz*p ≥ -fxe − far
-    //   ⇒ n = (-fx, -fy, -fz), d = -fxe - far
+    //   ⇒ -forward · (p − eye) ≥ -far
+    //   ⇒ n = -forward, d = -forward·eye - far
     out[4] = -fx; out[5] = -fy; out[6] = -fz; out[7] = -fxe - far;
 
     // Left plane: cx ≥ txMin · cz

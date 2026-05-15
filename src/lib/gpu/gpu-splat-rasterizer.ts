@@ -51,8 +51,6 @@ interface SplatRasterizerOptions {
     imageHeight: number;
     /** Near plane distance in world units. */
     near: number;
-    /** Far plane distance (only used for diagnostics / future motion blur). */
-    far: number;
     /** Camera basis: rows are (right, down, forward) of the world→camera rotation. */
     rightX: number; rightY: number; rightZ: number;
     downX: number; downY: number; downZ: number;
@@ -86,7 +84,7 @@ struct Uniforms {
     downX: f32, downY: f32, downZ: f32, _p1: f32,
     forwardX: f32, forwardY: f32, forwardZ: f32, _p2: f32,
     eyeX: f32, eyeY: f32, eyeZ: f32, _p3: f32,
-    focalX: f32, focalY: f32, near: f32, far: f32,
+    focalX: f32, focalY: f32, near: f32, _p4: f32,
     imageWidth: u32, imageHeight: u32, splatStride: u32, chunkSize: u32,
     groupPixelMinX: u32, groupPixelMinY: u32, groupPixelMaxX: u32, groupPixelMaxY: u32,
     groupTilesX: u32, groupTilesY: u32, groupPixelOriginX: u32, groupPixelOriginY: u32,
@@ -346,7 +344,7 @@ struct Uniforms {
     downX: f32, downY: f32, downZ: f32, _p1: f32,
     forwardX: f32, forwardY: f32, forwardZ: f32, _p2: f32,
     eyeX: f32, eyeY: f32, eyeZ: f32, _p3: f32,
-    focalX: f32, focalY: f32, near: f32, far: f32,
+    focalX: f32, focalY: f32, near: f32, _p4: f32,
     imageWidth: u32, imageHeight: u32, splatStride: u32, chunkSize: u32,
     groupPixelMinX: u32, groupPixelMinY: u32, groupPixelMaxX: u32, groupPixelMaxY: u32,
     groupTilesX: u32, groupTilesY: u32, groupPixelOriginX: u32, groupPixelOriginY: u32,
@@ -411,7 +409,7 @@ struct Uniforms {
     downX: f32, downY: f32, downZ: f32, _p1: f32,
     forwardX: f32, forwardY: f32, forwardZ: f32, _p2: f32,
     eyeX: f32, eyeY: f32, eyeZ: f32, _p3: f32,
-    focalX: f32, focalY: f32, near: f32, far: f32,
+    focalX: f32, focalY: f32, near: f32, _p4: f32,
     imageWidth: u32, imageHeight: u32, splatStride: u32, chunkSize: u32,
     groupPixelMinX: u32, groupPixelMinY: u32, groupPixelMaxX: u32, groupPixelMaxY: u32,
     groupTilesX: u32, groupTilesY: u32, groupPixelOriginX: u32, groupPixelOriginY: u32,
@@ -453,10 +451,9 @@ fn main(
  * All three shaders share the same uniform layout so a single
  * UniformBufferFormat description suffices (we instantiate it per shader).
  *
- * @param device - GraphicsDevice the UniformFormats will be associated with.
  * @returns Array of UniformFormat entries in declaration order.
  */
-const uniformFormatEntries = (device: GraphicsDevice): UniformFormat[] => [
+const uniformFormatEntries = (): UniformFormat[] => [
     new UniformFormat('rightX', UNIFORMTYPE_FLOAT),
     new UniformFormat('rightY', UNIFORMTYPE_FLOAT),
     new UniformFormat('rightZ', UNIFORMTYPE_FLOAT),
@@ -476,7 +473,7 @@ const uniformFormatEntries = (device: GraphicsDevice): UniformFormat[] => [
     new UniformFormat('focalX', UNIFORMTYPE_FLOAT),
     new UniformFormat('focalY', UNIFORMTYPE_FLOAT),
     new UniformFormat('near', UNIFORMTYPE_FLOAT),
-    new UniformFormat('far', UNIFORMTYPE_FLOAT),
+    new UniformFormat('_p4', UNIFORMTYPE_FLOAT),
     new UniformFormat('imageWidth', UNIFORMTYPE_UINT),
     new UniformFormat('imageHeight', UNIFORMTYPE_UINT),
     new UniformFormat('splatStride', UNIFORMTYPE_UINT),
@@ -492,9 +489,7 @@ const uniformFormatEntries = (device: GraphicsDevice): UniformFormat[] => [
     new UniformFormat('bgR', UNIFORMTYPE_FLOAT),
     new UniformFormat('bgG', UNIFORMTYPE_FLOAT),
     new UniformFormat('bgB', UNIFORMTYPE_FLOAT),
-    new UniformFormat('bgA', UNIFORMTYPE_FLOAT),
-    // silence "unused" by referencing
-    ...(device ? [] : [])
+    new UniformFormat('bgA', UNIFORMTYPE_FLOAT)
 ];
 
 interface Slot {
@@ -505,12 +500,6 @@ interface Slot {
     projectCompute: Compute;
     rasterizeCompute: Compute;
     finalizeCompute: Compute;
-
-    pendingReadback: Promise<Uint8Array> | null;
-    pendingGroupX: number;
-    pendingGroupY: number;
-    pendingGroupTilesX: number;
-    pendingGroupTilesY: number;
 }
 
 /**
@@ -587,7 +576,7 @@ class GpuSplatRasterizer {
             cshader: source,
             // @ts-ignore - computeUniformBufferFormats / computeBindGroupFormat are not in public Shader types.
             computeUniformBufferFormats: {
-                uniforms: new UniformBufferFormat(device, uniformFormatEntries(device))
+                uniforms: new UniformBufferFormat(device, uniformFormatEntries())
             },
             // @ts-ignore
             computeBindGroupFormat: bgFormat
@@ -630,12 +619,7 @@ class GpuSplatRasterizer {
                 outputBuffer,
                 projectCompute,
                 rasterizeCompute,
-                finalizeCompute,
-                pendingReadback: null,
-                pendingGroupX: 0,
-                pendingGroupY: 0,
-                pendingGroupTilesX: 0,
-                pendingGroupTilesY: 0
+                finalizeCompute
             });
         }
 
@@ -681,7 +665,7 @@ class GpuSplatRasterizer {
             c.setParameter('eyeX', o.eyeX); c.setParameter('eyeY', o.eyeY); c.setParameter('eyeZ', o.eyeZ);
             c.setParameter('_p3', 0);
             c.setParameter('focalX', o.focalX); c.setParameter('focalY', o.focalY);
-            c.setParameter('near', o.near); c.setParameter('far', o.far);
+            c.setParameter('near', o.near); c.setParameter('_p4', 0);
             c.setParameter('imageWidth', o.imageWidth); c.setParameter('imageHeight', o.imageHeight);
             c.setParameter('splatStride', this.inputStride);
             // chunkSize set per-dispatch

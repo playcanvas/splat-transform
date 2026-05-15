@@ -91,7 +91,6 @@ const renderTileStream = async (
         const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
         if (d > far) far = d;
     }
-    far = Math.max(far, camera.near * 100);
     bvhGroup.end();
 
     // ---- Image tile grid ----
@@ -113,7 +112,6 @@ const renderTileStream = async (
         imageWidth: width,
         imageHeight: height,
         near: camera.near,
-        far,
         rightX: basis.right.x,
         rightY: basis.right.y,
         rightZ: basis.right.z,

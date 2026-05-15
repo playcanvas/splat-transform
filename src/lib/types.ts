@@ -73,7 +73,7 @@ type Options = {
     /** Output image height in pixels. Default: 720. */
     renderHeight?: number;
 
-    /** Near clip distance for image output. Default: 0.01. */
+    /** Near clip distance for image output. Default: 0.2. */
     renderNear?: number;
 
     /** RGBA background (each channel in [0, 1]) for image output. Default: (0, 0, 0, 1). */
