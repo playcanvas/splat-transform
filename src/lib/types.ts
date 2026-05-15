@@ -54,6 +54,30 @@ type Options = {
 
     /** When set, a collision mesh (.collision.glb) is generated alongside the voxel output. `true` is equivalent to `smooth`. */
     collisionMesh?: boolean | CollisionMeshShape;
+
+    /** Camera position (world space) for image output. Default: (2, 1, -2). */
+    renderCameraPosition?: { x: number; y: number; z: number };
+
+    /** Camera look-at target (world space) for image output. Default: (0, 0, 0). */
+    renderLookAt?: { x: number; y: number; z: number };
+
+    /** World-space up vector for image output. Default: (0, 1, 0). */
+    renderUp?: { x: number; y: number; z: number };
+
+    /** Vertical field of view in degrees for image output. Default: 60. */
+    renderFov?: number;
+
+    /** Output image width in pixels. Default: 1280. */
+    renderWidth?: number;
+
+    /** Output image height in pixels. Default: 720. */
+    renderHeight?: number;
+
+    /** Near clip distance for image output. Default: 0.01. */
+    renderNear?: number;
+
+    /** RGBA background (each channel in [0, 1]) for image output. Default: (0, 0, 0, 1). */
+    renderBackground?: { r: number; g: number; b: number; a: number };
 };
 
 /**

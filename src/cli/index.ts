@@ -139,6 +139,13 @@ const cliOptionsConfig = {
     'voxel-carve': { type: 'string' },
     'seed-pos': { type: 'string', default: '' },
     'collision-mesh': { type: 'string', short: 'K' },
+    'camera': { type: 'string' },
+    'look-at': { type: 'string' },
+    'up': { type: 'string' },
+    'fov': { type: 'string' },
+    'resolution': { type: 'string' },
+    'near': { type: 'string' },
+    'background': { type: 'string' },
 
     // per-file options
     translate: { type: 'string', short: 't', multiple: true },
@@ -364,6 +371,44 @@ const parseArguments = async () => {
         throw new Error(`Invalid spz-version value: ${v['spz-version']}. Must be 3 or 4.`);
     }
 
+    // Image render options (apply when output is .webp).
+    let renderCameraPosition: { x: number; y: number; z: number } | undefined;
+    if (v.camera !== undefined) {
+        const [cx, cy, cz] = parseVec(v.camera, 3);
+        renderCameraPosition = { x: cx, y: cy, z: cz };
+    }
+    let renderLookAt: { x: number; y: number; z: number } | undefined;
+    if (v['look-at'] !== undefined) {
+        const [lx, ly, lz] = parseVec(v['look-at'], 3);
+        renderLookAt = { x: lx, y: ly, z: lz };
+    }
+    let renderUp: { x: number; y: number; z: number } | undefined;
+    if (v.up !== undefined) {
+        const [ux, uy, uz] = parseVec(v.up, 3);
+        renderUp = { x: ux, y: uy, z: uz };
+    }
+    const renderFov = v.fov !== undefined ? parseNumber(v.fov, 0) : undefined;
+    let renderWidth: number | undefined;
+    let renderHeight: number | undefined;
+    if (v.resolution !== undefined) {
+        const m = v.resolution.match(/^(\d+)x(\d+)$/i);
+        if (!m) {
+            throw new Error(`Invalid resolution: ${v.resolution}. Expected WxH (e.g., 1920x1080).`);
+        }
+        renderWidth = parseInteger(m[1]);
+        renderHeight = parseInteger(m[2]);
+    }
+    const renderNear = v.near !== undefined ? parseNumber(v.near, 0) : undefined;
+    let renderBackground: { r: number; g: number; b: number; a: number } | undefined;
+    if (v.background !== undefined) {
+        const parts = v.background.split(',').map((p: string) => parseNumber(p.trim()));
+        if (parts.length === 3) parts.push(1);
+        if (parts.length !== 4) {
+            throw new Error(`Invalid background: ${v.background}. Expected r,g,b or r,g,b,a.`);
+        }
+        renderBackground = { r: parts[0], g: parts[1], b: parts[2], a: parts[3] };
+    }
+
     const options: CliOptions = {
         overwrite: v.overwrite,
         help: v.help,
@@ -388,7 +433,15 @@ const parseArguments = async () => {
         floorFillDilation,
         navCapsule,
         navSeed,
-        collisionMesh
+        collisionMesh,
+        renderCameraPosition,
+        renderLookAt,
+        renderUp,
+        renderFov,
+        renderWidth,
+        renderHeight,
+        renderNear,
+        renderBackground
     };
 
     for (const t of tokens) {
@@ -609,7 +662,7 @@ SUPPORTED INPUTS
     .mjs generators are local-only).
 
 SUPPORTED OUTPUTS
-    .ply   .compressed.ply   .sog   .spz   meta.json   lod-meta.json   .glb   .csv   .html   .voxel.json   null
+    .ply   .compressed.ply   .sog   .spz   meta.json   lod-meta.json   .glb   .csv   .html   .voxel.json   .webp   null
 
 ACTIONS (executed in order; can be repeated)
     -t, --translate        <x,y,z>          Translate Gaussians by (x, y, z)
@@ -659,6 +712,15 @@ LCC INPUT (.lcc)
 LOD OUTPUT (lod-meta.json)
     -C, --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
     -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
+
+IMAGE OUTPUT (.webp) — lossless WebP rendered via GPU rasterizer
+        --camera           <x,y,z>          Camera position in world space. Default: 2,1,-2
+        --look-at          <x,y,z>          Camera target point. Default: 0,0,0
+        --up               <x,y,z>          World up vector. Default: 0,1,0
+        --fov              <degrees>        Vertical field of view in degrees. Default: 60
+        --resolution       <WxH>            Output resolution, e.g. 1920x1080. Default: 1280x720
+        --near             <n>              Near clip distance. Default: 0.01
+        --background       <r,g,b[,a]>      Background color in [0,1]. Default: 0,0,0,1
 
 VOXEL OUTPUT (.voxel.json)
         --voxel-params     [size,opacity]   Voxel size and opacity threshold for .voxel.json. Default: 0.05,0.1

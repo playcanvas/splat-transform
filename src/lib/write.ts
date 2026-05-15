@@ -1,7 +1,7 @@
 import { DataTable } from './data-table';
 import { type FileSystem } from './io/write';
 import { type DeviceCreator, type Options } from './types';
-import { writeCompressedPly, writeCsv, writeGlb, writeHtml, writeLod, writePly, writeSog, writeSpz, writeVoxel } from './writers';
+import { writeCompressedPly, writeCsv, writeGlb, writeHtml, writeImage, writeLod, writePly, writeSog, writeSpz, writeVoxel } from './writers';
 
 /**
  * Supported output file formats for Gaussian splat data.
@@ -17,8 +17,9 @@ import { writeCompressedPly, writeCsv, writeGlb, writeHtml, writeLod, writePly, 
  * - `html` - Self-contained HTML viewer (separate assets)
  * - `html-bundle` - Self-contained HTML viewer (all assets embedded)
  * - `voxel` - Sparse voxel octree format for collision detection
+ * - `image` - Rasterized RGBA image (lossless WebP) rendered from a camera view
  */
-type OutputFormat = 'csv' | 'sog' | 'sog-bundle' | 'lod' | 'compressed-ply' | 'ply' | 'spz' | 'glb' | 'html' | 'html-bundle' | 'voxel';
+type OutputFormat = 'csv' | 'sog' | 'sog-bundle' | 'lod' | 'compressed-ply' | 'ply' | 'spz' | 'glb' | 'html' | 'html-bundle' | 'voxel' | 'image';
 
 /**
  * Options for writing a Gaussian splat file.
@@ -75,6 +76,8 @@ const getOutputFormat = (filename: string, options: Options): OutputFormat => {
         return 'glb';
     } else if (lowerFilename.endsWith('.html')) {
         return options.unbundled ? 'html' : 'html-bundle';
+    } else if (lowerFilename.endsWith('.webp')) {
+        return 'image';
     }
 
     throw new Error(`Unsupported output file type: ${filename}`);
@@ -179,6 +182,21 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
                 navCapsule: options.navCapsule,
                 navSeed: options.navSeed,
                 collisionMesh: options.collisionMesh,
+                createDevice
+            }, fs);
+            break;
+        case 'image':
+            await writeImage({
+                filename,
+                dataTable,
+                cameraPosition: options.renderCameraPosition,
+                lookAt: options.renderLookAt,
+                up: options.renderUp,
+                fov: options.renderFov,
+                width: options.renderWidth,
+                height: options.renderHeight,
+                near: options.renderNear,
+                background: options.renderBackground,
                 createDevice
             }, fs);
             break;
