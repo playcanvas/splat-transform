@@ -724,6 +724,14 @@ class GpuSplatRasterizer {
     /**
      * Upload and process one chunk of gaussians.
      *
+     * Forces a queue submit at the end of the chunk's dispatches. The
+     * project + rasterize computes share a single persistent uniform
+     * buffer per Compute instance in PlayCanvas; without submitting
+     * between chunks the next chunk's `setParameter` would overwrite the
+     * uniform buffer in place, causing every queued dispatch on the same
+     * Compute to read the LAST chunk's values (truncating earlier chunks
+     * to the final chunk's `chunkSize`).
+     *
      * @param slot - Slot index.
      * @param chunkData - Float32Array containing `chunkSize × inputStride` floats.
      * @param chunkSize - Number of gaussians in this chunk (≤ chunkCap).
@@ -743,6 +751,12 @@ class GpuSplatRasterizer {
         s.rasterizeCompute.setParameter('chunkSize', chunkSize);
         s.rasterizeCompute.setupDispatch(this.groupSizeTiles, this.groupSizeTiles, 1);
         this.device.computeDispatch([s.rasterizeCompute], 'splat-rasterize-accumulate');
+
+        // @ts-ignore - submit() is not in the public Compute API but is the
+        // documented way (see playcanvas/build/.../webgpu-graphics-device.js)
+        // to flush queued commands so this chunk's uniforms are captured
+        // before the next chunk overwrites them.
+        this.device.submit?.();
     }
 
     /**
