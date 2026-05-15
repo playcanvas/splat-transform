@@ -3,9 +3,13 @@ import { Vec3 } from 'playcanvas';
 /**
  * Parameters describing a pinhole camera for headless splat rendering.
  *
- * Convention: right-handed, camera-space +X right, +Y down, +Z into the
- * scene (positive depth in front of the camera). This matches the standard
- * 3DGS / computer-vision convention and keeps the Jacobian math sign-clean.
+ * Convention: PlayCanvas right-handed, Y-up world. Camera-space axes are
+ * `right` (image x increases), `down` (image y increases), `forward`
+ * (positive depth in front of the camera). The basis is built from a
+ * `target - eye` direction plus a world-up vector and assumes the camera
+ * looks roughly opposite the world up's perpendicular plane in a
+ * PlayCanvas-style scene (so e.g. camera at +Z looking at the origin
+ * places world `+X` on the right of the image).
  */
 type RenderCamera = {
     /** Camera position in world space. */
@@ -62,7 +66,12 @@ const buildCameraBasis = (camera: RenderCamera): CameraBasis => {
         throw new Error('Camera target equals camera position');
     }
 
-    // right = forward × up_world (image x increases to the right)
+    // right = forward × up_world (image x increases to the right).
+    // For a PlayCanvas-style camera at +Z looking toward the origin (forward
+    // pointing in world -Z), this yields right = world +X, so world +X
+    // appears on the right side of the image. The opposite ordering would
+    // be correct for a CV-style camera looking down +Z; we choose this one
+    // because the renderer always consumes PlayCanvas-identity-space data.
     let right = cross(forward, camera.up);
     if (right.x === 0 && right.y === 0 && right.z === 0) {
         throw new Error('Camera up vector is parallel to view direction');

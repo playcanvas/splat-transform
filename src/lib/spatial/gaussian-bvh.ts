@@ -241,8 +241,10 @@ class GaussianBVH {
      * plane. An AABB is rejected only when it lies fully on the negative
      * side of some plane.
      *
-     * Resizes / appends into `result` from `offset`. Returns the total match
-     * count even if `result` is too small.
+     * Writes matching indices into `result` starting at `offset`, stopping
+     * if the buffer fills up. The total match count is still returned even
+     * when the buffer is too small, so the caller can grow and retry.
+     * Mirrors the `queryOverlappingRawInto` contract.
      *
      * @param planes - 24 floats (6 planes × 4 floats: nx, ny, nz, d).
      * @param result - Output buffer of Gaussian indices.

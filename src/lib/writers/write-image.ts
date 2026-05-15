@@ -9,6 +9,10 @@ import { type RenderCamera } from '../render/camera';
 import type { DeviceCreator } from '../types';
 import { logger, Transform, WebPCodec } from '../utils';
 
+// Cache the WebP codec across invocations; `WebPCodec.create()` instantiates
+// the WASM module which is expensive to repeat. Same pattern as write-sog.ts.
+let webPCodec: WebPCodec | undefined;
+
 /**
  * Options for writing a rendered splat image.
  */
@@ -114,8 +118,10 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     const rgba = await renderSplats(device, pcDataTable, camera, background);
 
     const encodingGroup = logger.group('Encoding');
-    const codec = await WebPCodec.create();
-    const webp = codec.encodeLosslessRGBA(rgba, width, height);
+    if (!webPCodec) {
+        webPCodec = await WebPCodec.create();
+    }
+    const webp = webPCodec.encodeLosslessRGBA(rgba, width, height);
     encodingGroup.end();
 
     await writeFile(fs, filename, webp);

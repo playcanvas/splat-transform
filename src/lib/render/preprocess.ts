@@ -70,10 +70,68 @@ const sortCandidatesByDepth = (
 };
 
 /**
+ * Cached typed-array references for the columns that `packChunkInput`
+ * reads. Built once per render in the orchestrator and reused across
+ * every group/chunk to avoid `getColumnByName` lookups and the SH-rest
+ * array allocation on the hot path.
+ */
+type SplatColumnRefs = {
+    x: Float32Array;
+    y: Float32Array;
+    z: Float32Array;
+    rotW: Float32Array;
+    rotX: Float32Array;
+    rotY: Float32Array;
+    rotZ: Float32Array;
+    scaleX: Float32Array;
+    scaleY: Float32Array;
+    scaleZ: Float32Array;
+    opacity: Float32Array;
+    fdcR: Float32Array;
+    fdcG: Float32Array;
+    fdcB: Float32Array;
+    /** Channel-major SH coefficients: indices `[0..N-1]` red, then green, then blue. Empty when `numSHBands === 0`. */
+    shRest: Float32Array[];
+};
+
+/**
+ * Resolve the typed-array references for every column `packChunkInput`
+ * touches. Call once per render; reuse the result across all chunks.
+ *
+ * @param dataTable - Source splat data.
+ * @param numSHBands - Scene's SH band count (0–3).
+ * @returns Cached column references.
+ */
+const getSplatColumnRefs = (dataTable: DataTable, numSHBands: number): SplatColumnRefs => {
+    const coeffsPerChannel = numSHCoeffsPerChannel(numSHBands);
+    const shRest: Float32Array[] = new Array(coeffsPerChannel * 3);
+    for (let i = 0; i < coeffsPerChannel * 3; i++) {
+        shRest[i] = dataTable.getColumnByName(`f_rest_${i}`)!.data as Float32Array;
+    }
+    return {
+        x: dataTable.getColumnByName('x')!.data as Float32Array,
+        y: dataTable.getColumnByName('y')!.data as Float32Array,
+        z: dataTable.getColumnByName('z')!.data as Float32Array,
+        rotW: dataTable.getColumnByName('rot_0')!.data as Float32Array,
+        rotX: dataTable.getColumnByName('rot_1')!.data as Float32Array,
+        rotY: dataTable.getColumnByName('rot_2')!.data as Float32Array,
+        rotZ: dataTable.getColumnByName('rot_3')!.data as Float32Array,
+        scaleX: dataTable.getColumnByName('scale_0')!.data as Float32Array,
+        scaleY: dataTable.getColumnByName('scale_1')!.data as Float32Array,
+        scaleZ: dataTable.getColumnByName('scale_2')!.data as Float32Array,
+        opacity: dataTable.getColumnByName('opacity')!.data as Float32Array,
+        fdcR: dataTable.getColumnByName('f_dc_0')!.data as Float32Array,
+        fdcG: dataTable.getColumnByName('f_dc_1')!.data as Float32Array,
+        fdcB: dataTable.getColumnByName('f_dc_2')!.data as Float32Array,
+        shRest
+    };
+};
+
+/**
  * Pack a chunk's raw splat fields into a flat Float32Array suitable for
  * upload to the GPU project shader. The layout matches `splatInputStride`.
  *
- * @param dataTable - Source splat data.
+ * @param cols - Pre-resolved column references (build once via `getSplatColumnRefs`).
  * @param chunkIndices - Indices into dataTable for this chunk's splats.
  * @param chunkStart - Offset into `chunkIndices` where the chunk begins.
  * @param chunkSize - Number of splats in this chunk.
@@ -81,7 +139,7 @@ const sortCandidatesByDepth = (
  * @param out - Output buffer, length ≥ `chunkSize · stride`.
  */
 const packChunkInput = (
-    dataTable: DataTable,
+    cols: SplatColumnRefs,
     chunkIndices: Uint32Array,
     chunkStart: number,
     chunkSize: number,
@@ -89,27 +147,12 @@ const packChunkInput = (
     out: Float32Array
 ): void => {
     const stride = splatInputStride(numSHBands);
-    const coeffsPerChannel = numSHCoeffsPerChannel(numSHBands);
-
-    const x = dataTable.getColumnByName('x')!.data;
-    const y = dataTable.getColumnByName('y')!.data;
-    const z = dataTable.getColumnByName('z')!.data;
-    const rotW = dataTable.getColumnByName('rot_0')!.data;
-    const rotX = dataTable.getColumnByName('rot_1')!.data;
-    const rotY = dataTable.getColumnByName('rot_2')!.data;
-    const rotZ = dataTable.getColumnByName('rot_3')!.data;
-    const scaleX = dataTable.getColumnByName('scale_0')!.data;
-    const scaleY = dataTable.getColumnByName('scale_1')!.data;
-    const scaleZ = dataTable.getColumnByName('scale_2')!.data;
-    const opacity = dataTable.getColumnByName('opacity')!.data;
-    const fdcR = dataTable.getColumnByName('f_dc_0')!.data;
-    const fdcG = dataTable.getColumnByName('f_dc_1')!.data;
-    const fdcB = dataTable.getColumnByName('f_dc_2')!.data;
-
-    const shRest: Float32Array[] = [];
-    for (let i = 0; i < coeffsPerChannel * 3; i++) {
-        shRest.push(dataTable.getColumnByName(`f_rest_${i}`)!.data as Float32Array);
-    }
+    const numShFloats = numSHCoeffsPerChannel(numSHBands) * 3;
+    const {
+        x, y, z, rotW, rotX, rotY, rotZ,
+        scaleX, scaleY, scaleZ, opacity,
+        fdcR, fdcG, fdcB, shRest
+    } = cols;
 
     for (let i = 0; i < chunkSize; i++) {
         const s = chunkIndices[chunkStart + i];
@@ -129,7 +172,7 @@ const packChunkInput = (
         out[base + 12] = fdcG[s];
         out[base + 13] = fdcB[s];
         // SH coefficients in channel-major order: f_rest_0..coeffsPerChannel-1 = red, etc.
-        for (let k = 0; k < coeffsPerChannel * 3; k++) {
+        for (let k = 0; k < numShFloats; k++) {
             out[base + 14 + k] = shRest[k][s];
         }
     }
@@ -150,6 +193,8 @@ export {
     splatInputStride,
     numSHCoeffsPerChannel,
     sortCandidatesByDepth,
+    getSplatColumnRefs,
     packChunkInput,
-    sceneSHBands
+    sceneSHBands,
+    type SplatColumnRefs
 };

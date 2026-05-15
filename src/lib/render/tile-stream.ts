@@ -3,6 +3,7 @@ import { GraphicsDevice } from 'playcanvas';
 import { computeGroupFrustumPlanes, queryBvhFrustum } from './bvh-query';
 import { type RenderCamera, buildCameraBasis } from './camera';
 import {
+    getSplatColumnRefs,
     packChunkInput,
     sceneSHBands,
     sortCandidatesByDepth,
@@ -104,11 +105,17 @@ const renderTileStream = async (
     const numSHBands = sceneSHBands(dataTable);
     const inputStride = splatInputStride(numSHBands);
 
+    // Cap the per-slot chunk/buffer sizes by the actual scene size and
+    // group count. Avoids allocating ~50 MB of per-slot GPU buffers for
+    // tiny scenes or single-group renders.
+    const effectiveChunkCap = Math.max(1, Math.min(CHUNK_CAP, dataTable.numRows));
+    const effectiveNumSlots = Math.max(1, Math.min(NUM_SLOTS, numGroups));
+
     const rasterizer = new GpuSplatRasterizer(device, {
         numSHBands,
         groupSizeTiles: GROUP_TILES,
-        chunkCap: CHUNK_CAP,
-        numSlots: NUM_SLOTS,
+        chunkCap: effectiveChunkCap,
+        numSlots: effectiveNumSlots,
         imageWidth: width,
         imageHeight: height,
         near: camera.near,
@@ -132,12 +139,15 @@ const renderTileStream = async (
         bgA: background.a
     });
 
+    // ---- Cached column references (built once, reused across all chunks) ----
+    const cols = getSplatColumnRefs(dataTable, numSHBands);
+
     // ---- Per-slot CPU scratch ----
     const slotState: SlotState[] = [];
-    for (let s = 0; s < NUM_SLOTS; s++) {
+    for (let s = 0; s < effectiveNumSlots; s++) {
         slotState.push({
-            chunkInput: new Float32Array(CHUNK_CAP * inputStride),
-            candidates: new Uint32Array(64 * 1024),
+            chunkInput: new Float32Array(effectiveChunkCap * inputStride),
+            candidates: new Uint32Array(Math.min(64 * 1024, dataTable.numRows)),
             pendingReadback: null,
             pendingGroupX: 0,
             pendingGroupY: 0,
@@ -188,10 +198,10 @@ const renderTileStream = async (
             // Depth-sort always — chunks must be processed front-to-back.
             sortCandidatesByDepth(dataTable, slot.candidates, candidateCount, basis);
 
-            for (let chunkStart = 0; chunkStart < candidateCount; chunkStart += CHUNK_CAP) {
-                const chunkSize = Math.min(CHUNK_CAP, candidateCount - chunkStart);
+            for (let chunkStart = 0; chunkStart < candidateCount; chunkStart += effectiveChunkCap) {
+                const chunkSize = Math.min(effectiveChunkCap, candidateCount - chunkStart);
                 packChunkInput(
-                    dataTable, slot.candidates,
+                    cols, slot.candidates,
                     chunkStart, chunkSize,
                     numSHBands, slot.chunkInput
                 );
@@ -212,7 +222,7 @@ const renderTileStream = async (
     let completed = 0;
     for (let gy = 0; gy < numGroupsY; gy++) {
         for (let gx = 0; gx < numGroupsX; gx++) {
-            const slotIdx = groupIdx % NUM_SLOTS;
+            const slotIdx = groupIdx % effectiveNumSlots;
             const slot = slotState[slotIdx];
 
             // Drain this slot's previous readback before reusing it.

@@ -596,6 +596,9 @@ class GpuSplatRasterizer {
         this.slots = [];
         for (let s = 0; s < this.numSlots; s++) {
             const inputBuffer = new StorageBuffer(device, inputBytes, BUFFERUSAGE_COPY_DST);
+            // projBuffer is GPU-only: project writes it and rasterize reads it.
+            // No CPU upload (no COPY_DST) and no readback (no COPY_SRC) are needed,
+            // so the usage flags are 0.
             const projBuffer = new StorageBuffer(device, projBytes, 0);
             const runningStateBuffer = new StorageBuffer(device, stateBytes, BUFFERUSAGE_COPY_DST);
             const outputBuffer = new StorageBuffer(device, outputBytes, BUFFERUSAGE_COPY_SRC);
@@ -736,11 +739,15 @@ class GpuSplatRasterizer {
         s.rasterizeCompute.setupDispatch(this.groupSizeTiles, this.groupSizeTiles, 1);
         this.device.computeDispatch([s.rasterizeCompute], 'splat-rasterize-accumulate');
 
-        // @ts-ignore - submit() is not in the public Compute API but is the
-        // documented way (see playcanvas/build/.../webgpu-graphics-device.js)
-        // to flush queued commands so this chunk's uniforms are captured
-        // before the next chunk overwrites them.
-        this.device.submit?.();
+        // Required: submit between chunks so each dispatch's persistent
+        // uniform buffer captures its own `chunkSize`. Without this, all
+        // dispatches read the last chunk's value (see method JSDoc).
+        // @ts-ignore - submit() is exposed by WebgpuGraphicsDevice but not on the public GraphicsDevice type.
+        const submit = (this.device as { submit?: () => void }).submit;
+        if (!submit) {
+            throw new Error('GpuSplatRasterizer requires a GraphicsDevice with a submit() method (WebGPU backend).');
+        }
+        submit.call(this.device);
     }
 
     /**
