@@ -406,6 +406,11 @@ const parseArguments = async () => {
         if (parts.length !== 4) {
             throw new Error(`Invalid background: ${v.background}. Expected r,g,b or r,g,b,a.`);
         }
+        for (let i = 0; i < 4; i++) {
+            if (parts[i] < 0 || parts[i] > 1) {
+                throw new Error(`Invalid background channel ${i}: ${parts[i]}. Each channel must be in [0, 1].`);
+            }
+        }
         renderBackground = { r: parts[0], g: parts[1], b: parts[2], a: parts[3] };
     }
 

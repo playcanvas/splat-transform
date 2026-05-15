@@ -30,42 +30,73 @@ const splatInputStride = (numSHBands: number): number => {
 };
 
 /**
+ * Reusable scratch arrays for `sortCandidatesByDepth`. One instance is
+ * created per render in the orchestrator and reused across every group's
+ * sort to avoid allocating multi-MB typed arrays + a boxed-number
+ * `Array` on every call. Buffers grow on demand and never shrink.
+ */
+class SortScratch {
+    depth: Float32Array;
+    order: number[];
+    tmp: Uint32Array;
+
+    constructor() {
+        this.depth = new Float32Array(0);
+        this.order = [];
+        this.tmp = new Uint32Array(0);
+    }
+
+    ensure(count: number): void {
+        if (count > this.depth.length) {
+            this.depth = new Float32Array(count);
+            this.tmp = new Uint32Array(count);
+        }
+        if (count > this.order.length) {
+            this.order.length = count;
+        }
+    }
+}
+
+/**
  * Sort `candidateIndices[0..count)` by camera-space depth ascending
  * (front-to-back) so chunked dispatches process splats in correct blend
  * order. Mutates `candidateIndices` in place.
  *
  * Depth is `forward · (pos − eye)` — no projection needed.
  *
- * @param dataTable - Splat data in PlayCanvas-identity space.
+ * @param cols - Pre-resolved column references (only `x`, `y`, `z` are read).
  * @param candidateIndices - Indices into dataTable rows (mutated).
  * @param count - Number of valid entries.
  * @param camera - Camera basis (only forward + eye used).
+ * @param scratch - Reusable scratch arrays, grown on demand.
  */
 const sortCandidatesByDepth = (
-    dataTable: DataTable,
+    cols: SplatColumnRefs,
     candidateIndices: Uint32Array,
     count: number,
-    camera: CameraBasis
+    camera: CameraBasis,
+    scratch: SortScratch
 ): void => {
     if (count < 2) return;
-    const x = dataTable.getColumnByName('x')!.data;
-    const y = dataTable.getColumnByName('y')!.data;
-    const z = dataTable.getColumnByName('z')!.data;
+    scratch.ensure(count);
+    const { x, y, z } = cols;
+    const { depth, order, tmp } = scratch;
     const fx = camera.forward.x, fy = camera.forward.y, fz = camera.forward.z;
     const ex = camera.eye.x, ey = camera.eye.y, ez = camera.eye.z;
 
-    const depth = new Float32Array(count);
     for (let i = 0; i < count; i++) {
         const s = candidateIndices[i];
         depth[i] = fx * (x[s] - ex) + fy * (y[s] - ey) + fz * (z[s] - ez);
     }
 
-    const orderArr = new Array(count);
-    for (let i = 0; i < count; i++) orderArr[i] = i;
-    orderArr.sort((a, b) => depth[a] - depth[b]);
+    for (let i = 0; i < count; i++) order[i] = i;
+    // `order` may be longer than `count` (kept high-water-mark). Only sort
+    // the active prefix; `Array.prototype.sort` accepts no length arg, so
+    // splice down. Splice-to-shrink is O(n) but cheap vs the sort itself.
+    if (order.length !== count) order.length = count;
+    order.sort((a, b) => depth[a] - depth[b]);
 
-    const tmp = new Uint32Array(count);
-    for (let i = 0; i < count; i++) tmp[i] = candidateIndices[orderArr[i]];
+    for (let i = 0; i < count; i++) tmp[i] = candidateIndices[order[i]];
     candidateIndices.set(tmp.subarray(0, count));
 };
 
@@ -193,6 +224,7 @@ export {
     splatInputStride,
     numSHCoeffsPerChannel,
     sortCandidatesByDepth,
+    SortScratch,
     getSplatColumnRefs,
     packChunkInput,
     sceneSHBands,

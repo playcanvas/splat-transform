@@ -3,6 +3,7 @@ import { GraphicsDevice } from 'playcanvas';
 import { computeGroupFrustumPlanes, queryBvhFrustum } from './bvh-query';
 import { type RenderCamera, buildCameraBasis } from './camera';
 import {
+    SortScratch,
     getSplatColumnRefs,
     packChunkInput,
     sceneSHBands,
@@ -76,7 +77,12 @@ const renderTileStream = async (
     const extentsResult = computeGaussianExtents(dataTable);
     const bvh = new GaussianBVH(dataTable, extentsResult.extents);
 
-    // Far plane: distance from eye to the most distant scene corner.
+    // Far plane: largest camera-space depth of any scene-AABB corner.
+    // The far-plane test is `forward · (p − eye) ≤ far` (a camera-space-z
+    // bound), so we measure `far` along the same axis — using Euclidean
+    // distance would systematically overestimate `far` and loosen frustum
+    // culling. `near * 100` is a floor so the BVH doesn't get a degenerate
+    // frustum on scenes where every corner sits behind the camera.
     const sb = extentsResult.sceneBounds;
     const corners = [
         sb.min.x, sb.min.y, sb.min.z, sb.max.x, sb.min.y, sb.min.z,
@@ -89,7 +95,7 @@ const renderTileStream = async (
         const dx = corners[k] - basis.eye.x;
         const dy = corners[k + 1] - basis.eye.y;
         const dz = corners[k + 2] - basis.eye.z;
-        const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        const d = basis.forward.x * dx + basis.forward.y * dy + basis.forward.z * dz;
         if (d > far) far = d;
     }
     bvhGroup.end();
@@ -141,6 +147,9 @@ const renderTileStream = async (
 
     // ---- Cached column references (built once, reused across all chunks) ----
     const cols = getSplatColumnRefs(dataTable, numSHBands);
+    // Shared sort scratch — groups process serially so one set of buffers
+    // covers every sortCandidatesByDepth call, with no per-call allocation.
+    const sortScratch = new SortScratch();
 
     // ---- Per-slot CPU scratch ----
     const slotState: SlotState[] = [];
@@ -196,7 +205,7 @@ const renderTileStream = async (
 
         if (candidateCount > 0) {
             // Depth-sort always — chunks must be processed front-to-back.
-            sortCandidatesByDepth(dataTable, slot.candidates, candidateCount, basis);
+            sortCandidatesByDepth(cols, slot.candidates, candidateCount, basis, sortScratch);
 
             for (let chunkStart = 0; chunkStart < candidateCount; chunkStart += effectiveChunkCap) {
                 const chunkSize = Math.min(effectiveChunkCap, candidateCount - chunkStart);
