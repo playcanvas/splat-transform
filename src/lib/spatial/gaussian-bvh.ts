@@ -235,6 +235,110 @@ class GaussianBVH {
     }
 
     /**
+     * Query all Gaussian indices whose AABBs intersect a view frustum
+     * defined by 6 planes. Each plane is `(nx, ny, nz, d)` and points into
+     * the frustum: a point is inside the frustum iff `n · p >= d` for every
+     * plane. An AABB is rejected only when it lies fully on the negative
+     * side of some plane.
+     *
+     * Resizes / appends into `result` from `offset`. Returns the total match
+     * count even if `result` is too small.
+     *
+     * @param planes - 24 floats (6 planes × 4 floats: nx, ny, nz, d).
+     * @param result - Output buffer of Gaussian indices.
+     * @param offset - Starting element offset in `result`.
+     * @returns Number of matching Gaussian indices.
+     */
+    queryFrustumRawInto(
+        planes: Float32Array,
+        result: Uint32Array,
+        offset: number
+    ): number {
+        return this.queryFrustumNode(this.root, planes, result, offset, 0);
+    }
+
+    /**
+     * Recursive frustum-plane query helper.
+     *
+     * @param node - Current BVH node.
+     * @param planes - 24 floats (6 planes × 4 floats).
+     * @param result - Buffer to append matching indices into.
+     * @param offset - Starting element offset in `result`.
+     * @param count - Number of matches already written for this query.
+     * @returns Updated match count.
+     */
+    private queryFrustumNode(
+        node: GaussianBVHNode,
+        planes: Float32Array,
+        result: Uint32Array,
+        offset: number,
+        count: number
+    ): number {
+        const b = node.bounds;
+        // Test node AABB against each frustum plane: reject only if the
+        // "positive vertex" (the AABB corner most aligned with the plane
+        // normal) lies on the negative side. If so the whole AABB is out.
+        for (let p = 0; p < 6; p++) {
+            const i = p * 4;
+            const nx = planes[i];
+            const ny = planes[i + 1];
+            const nz = planes[i + 2];
+            const d = planes[i + 3];
+            const px = nx >= 0 ? b.maxX : b.minX;
+            const py = ny >= 0 ? b.maxY : b.minY;
+            const pz = nz >= 0 ? b.maxZ : b.minZ;
+            if (nx * px + ny * py + nz * pz < d) {
+                return count;
+            }
+        }
+
+        if (node.indices) {
+            const { x, y, z, extentX, extentY, extentZ } = this;
+            for (let i = 0; i < node.indices.length; i++) {
+                const idx = node.indices[i];
+                const gMinX = x[idx] - extentX[idx];
+                const gMinY = y[idx] - extentY[idx];
+                const gMinZ = z[idx] - extentZ[idx];
+                const gMaxX = x[idx] + extentX[idx];
+                const gMaxY = y[idx] + extentY[idx];
+                const gMaxZ = z[idx] + extentZ[idx];
+
+                let outside = false;
+                for (let p = 0; p < 6; p++) {
+                    const ii = p * 4;
+                    const nx = planes[ii];
+                    const ny = planes[ii + 1];
+                    const nz = planes[ii + 2];
+                    const d = planes[ii + 3];
+                    const px = nx >= 0 ? gMaxX : gMinX;
+                    const py = ny >= 0 ? gMaxY : gMinY;
+                    const pz = nz >= 0 ? gMaxZ : gMinZ;
+                    if (nx * px + ny * py + nz * pz < d) {
+                        outside = true;
+                        break;
+                    }
+                }
+                if (!outside) {
+                    const writeIdx = offset + count;
+                    if (writeIdx < result.length) {
+                        result[writeIdx] = idx;
+                    }
+                    count++;
+                }
+            }
+            return count;
+        }
+
+        if (node.left) {
+            count = this.queryFrustumNode(node.left, planes, result, offset, count);
+        }
+        if (node.right) {
+            count = this.queryFrustumNode(node.right, planes, result, offset, count);
+        }
+        return count;
+    }
+
+    /**
      * Query overlapping Gaussian indices directly into a caller-provided buffer.
      *
      * Returns the total number of matches even if the target buffer is too

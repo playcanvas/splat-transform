@@ -51,8 +51,8 @@ export { writeSog, writeSpz, writePly, writeCompressedPly, writeCsv, writeHtml, 
 export type { WriteImageOptions, WriteVoxelOptions, VoxelMetadata } from './writers';
 
 // Renderer (for advanced use)
-export { renderSplats, buildCameraBasis, preprocess } from './render';
-export type { RenderCamera, CameraBasis, PreprocessResult } from './render';
+export { renderSplats, buildCameraBasis } from './render';
+export type { RenderCamera, CameraBasis } from './render';
 
 // Voxel
 export { carve, fillExterior, fillFloor, filterCluster, filterFloaters, findClusterVoxelFlood, voxelizeToBuffer } from './voxel';

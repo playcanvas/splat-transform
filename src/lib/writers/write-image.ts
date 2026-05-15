@@ -104,7 +104,10 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     // The renderer's camera, defaults and convention all live in PlayCanvas
     // default space. Convert the DataTable from its source-space (e.g.
     // Transform.PLY) to identity so positions, rotations and SH bands align.
-    const pcDataTable = convertToSpace(dataTable, Transform.IDENTITY);
+    // `inPlace=true` is safe: the CLI builds a fresh combined DataTable per
+    // write and library callers passing data into a writer accept that the
+    // writer may consume the table.
+    const pcDataTable = convertToSpace(dataTable, Transform.IDENTITY, true);
 
     logger.info(`${width}x${height} fov ${fov}° splats ${pcDataTable.numRows}`);
 
