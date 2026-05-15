@@ -37,7 +37,7 @@ type WriteImageOptions = {
     /** Output image height in pixels. Default: 720. */
     height?: number;
 
-    /** Near clip distance in world units. Splats closer than this are culled. Default: 0.01. */
+    /** Near clip distance in world units. Splats with camera-space depth <= near are culled. Default: 0.2 (matches the reference 3DGS rasterizer). */
     near?: number;
 
     /** RGBA background, each channel in [0, 1]. Default: (0, 0, 0, 1). */
@@ -75,7 +75,7 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         fov = 60,
         width = 1280,
         height = 720,
-        near = 0.01,
+        near = 0.2,
         background = { r: 0, g: 0, b: 0, a: 1 },
         createDevice
     } = options;

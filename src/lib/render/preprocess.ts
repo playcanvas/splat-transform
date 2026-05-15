@@ -109,6 +109,14 @@ const preprocess = (
     const tilesY = Math.ceil(height / TILE_SIZE);
     const numTiles = tilesX * tilesY;
 
+    // Reference 3DGS clamps the splat's normalized camera-space position to
+    // 1.3× the frustum extent before forming the EWA Jacobian. Without it,
+    // splats off-screen or close to the camera get a Jacobian with extreme
+    // ∂x/∂z terms (focal · x / z²) that produce non-physical elongated 2D
+    // ellipses streaking across the image.
+    const limX = 1.3 * ((width * 0.5) / focalX);
+    const limY = 1.3 * ((height * 0.5) / focalY);
+
     const splatCenter = new Float32Array(numSplats * 2);
     const splatCovInv = new Float32Array(numSplats * 3);
     const splatColor = new Float32Array(numSplats * 3);
@@ -204,11 +212,19 @@ const preprocess = (
         const c12 = t10 * v20 + t11 * v21 + t12 * v22;
         const c22 = t20 * v20 + t21 * v21 + t22 * v22;
 
-        // 2D covariance via Jacobian J = [[fx/z, 0, -fx*x/z^2], [0, fy/z, -fy*y/z^2]]
+        // 2D covariance via Jacobian J = [[fx/z, 0, -fx*x/z^2], [0, fy/z, -fy*y/z^2]].
+        // Clamp the normalized camera-space (x/z, y/z) to ±1.3·tan(fov/2) so
+        // splats off-screen or close to the camera get a bounded Jacobian.
+        // Screen projection above used unclamped (cx, cy); only the EWA
+        // covariance projection uses the clamped values.
+        const txtz = Math.min(limX, Math.max(-limX, cx * invZ));
+        const tytz = Math.min(limY, Math.max(-limY, cy * invZ));
+        const jcx = txtz * cz;
+        const jcy = tytz * cz;
         const jx0 = focalX * invZ;
-        const jx2 = -focalX * cx * invZ * invZ;
+        const jx2 = -focalX * jcx * invZ * invZ;
         const jy1 = focalY * invZ;
-        const jy2 = -focalY * cy * invZ * invZ;
+        const jy2 = -focalY * jcy * invZ * invZ;
 
         // Σ_2d = J * Σ_cam * J^T (entries before low-pass).
         // Row 0 of J times Σ_cam:

@@ -713,15 +713,6 @@ LOD OUTPUT (lod-meta.json)
     -C, --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
     -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
 
-IMAGE OUTPUT (.webp) — lossless WebP rendered via GPU rasterizer
-        --camera           <x,y,z>          Camera position in world space. Default: 2,1,-2
-        --look-at          <x,y,z>          Camera target point. Default: 0,0,0
-        --up               <x,y,z>          World up vector. Default: 0,1,0
-        --fov              <degrees>        Vertical field of view in degrees. Default: 60
-        --resolution       <WxH>            Output resolution, e.g. 1920x1080. Default: 1280x720
-        --near             <n>              Near clip distance. Default: 0.01
-        --background       <r,g,b[,a]>      Background color in [0,1]. Default: 0,0,0,1
-
 VOXEL OUTPUT (.voxel.json)
         --voxel-params     [size,opacity]   Voxel size and opacity threshold for .voxel.json. Default: 0.05,0.1
         --voxel-external-fill [size]        Fill exterior voxels via boundary flood fill (interior scenes). Default: 1.6
@@ -729,6 +720,15 @@ VOXEL OUTPUT (.voxel.json)
         --voxel-carve [h,r]                 Carve navigable space using capsule flood fill from seed. Default: 1.6,0.2
         --seed-pos         <x,y,z>          Seed position for voxel processing and --filter-cluster. Default: 0,0,0
     -K, --collision-mesh   [smooth|faces]   Generate collision mesh (.collision.glb). Default shape: smooth
+
+IMAGE OUTPUT (.webp) — lossless WebP rendered via GPU rasterizer
+        --camera           <x,y,z>          Camera position in world space. Default: 2,1,-2
+        --look-at          <x,y,z>          Camera target point. Default: 0,0,0
+        --up               <x,y,z>          World up vector. Default: 0,1,0
+        --fov              <degrees>        Vertical field of view in degrees. Default: 60
+        --resolution       <WxH>            Output resolution, e.g. 1920x1080. Default: 1280x720
+        --near             <n>              Near clip distance. Default: 0.2 (matches reference 3DGS)
+        --background       <r,g,b[,a]>      Background color in [0,1]. Default: 0,0,0,1
 
 EXAMPLES
     # Convert formats
