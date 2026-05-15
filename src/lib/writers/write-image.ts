@@ -109,7 +109,7 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     // writer may consume the table.
     const pcDataTable = convertToSpace(dataTable, Transform.IDENTITY, true);
 
-    logger.info(`${width}x${height} fov ${fov}° splats ${pcDataTable.numRows}`);
+    logger.info(`${width}x${height} fov ${fov}°`);
 
     const rgba = await renderSplats(device, pcDataTable, camera, background);
 

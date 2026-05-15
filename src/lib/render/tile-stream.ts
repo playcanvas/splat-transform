@@ -209,8 +209,9 @@ const renderTileStream = async (
         slot.pendingGroupTilesY = groupTilesYVal;
     };
 
-    const renderPhase = logger.group(`Tiles (${numGroups} groups)`);
+    const rasterBar = logger.bar('rasterizing', numGroups);
     let groupIdx = 0;
+    let completed = 0;
     for (let gy = 0; gy < numGroupsY; gy++) {
         for (let gx = 0; gx < numGroupsX; gx++) {
             const slotIdx = groupIdx % NUM_SLOTS;
@@ -221,6 +222,7 @@ const renderTileStream = async (
                 const bytes = await slot.pendingReadback;
                 blitSlot(bytes, slot.pendingGroupX, slot.pendingGroupY, slot.pendingGroupTilesX, slot.pendingGroupTilesY);
                 slot.pendingReadback = null;
+                rasterBar.update(++completed);
             }
 
             processGroup(slotIdx, gx, gy);
@@ -233,9 +235,10 @@ const renderTileStream = async (
             const bytes = await slot.pendingReadback;
             blitSlot(bytes, slot.pendingGroupX, slot.pendingGroupY, slot.pendingGroupTilesX, slot.pendingGroupTilesY);
             slot.pendingReadback = null;
+            rasterBar.update(++completed);
         }
     }
-    renderPhase.end();
+    rasterBar.end();
 
     rasterizer.destroy();
 
