@@ -12,7 +12,7 @@
 SplatTransform is an open source library and CLI tool for converting and editing Gaussian splats. It can:
 
 📥 Read PLY, Compressed PLY, SOG, SPZ, SPLAT, KSPLAT and LCC formats  
-📤 Write PLY, Compressed PLY, SOG, SPZ, GLB, CSV, HTML Viewer, LOD and Voxel formats  
+📤 Write PLY, Compressed PLY, SOG, SPZ, GLB, CSV, HTML Viewer, LOD, Voxel and WebP image formats  
 📊 Generate statistical summaries for data analysis  
 🔗 Merge multiple splats  
 🔄 Apply transformations to input splats  
@@ -67,6 +67,7 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 | `.html` | ❌ | ✅ | HTML viewer app (single-page or unbundled) based on SOG |
 | `.voxel.json` | ❌ | ✅ | Sparse voxel octree for collision detection |
 | `lod-meta.json` | ❌ | ✅ | Multi-level-of-detail SOG bundle (accompanied by per-LOD `.sog` chunks) |
+| `.webp` | ❌ | ✅ | Lossless WebP image rendered from a camera view via GPU rasterizer |
 | `null` | ❌ | ✅ | Discard output (useful with `--summary` for analysis-only runs) |
 
 ## Actions
@@ -193,6 +194,20 @@ Apply when writing `.voxel.json` (sparse voxel octree for collision detection). 
     --seed-pos         <x,y,z>          Seed position for voxel fill/carve and --filter-cluster.
                                           Default: 0,0,0
 -K, --collision-mesh   [smooth|faces]   Generate collision mesh (.collision.glb). Default: smooth
+```
+
+## Image Output Options
+
+Apply when writing `.webp` (lossless WebP rendered via GPU rasterizer).
+
+```none
+    --camera           <x,y,z>          Camera position in world space. Default: 2,1,-2
+    --look-at          <x,y,z>          Camera target point. Default: 0,0,0
+    --up               <x,y,z>          World up vector. Default: 0,1,0
+    --fov              <degrees>        Vertical field of view in degrees. Default: 60
+    --resolution       <WxH>            Output resolution, e.g. 1920x1080. Default: 1280x720
+    --near             <n>              Near clip distance. Default: 0.2 (matches reference 3DGS)
+    --background       <r,g,b[,a]>      Background color in [0,1]. Default: 0,0,0,1
 ```
 
 ## Examples
@@ -358,6 +373,23 @@ splat-transform --seed-pos 1,0,0 --voxel-carve 2.0,0.3 input.ply output.voxel.js
 splat-transform -K faces input.ply output.voxel.json
 ```
 
+### Image Rendering
+
+Render a splat scene to a lossless WebP image from a given camera view. Rendering runs on the GPU.
+
+```bash
+# Default 1280x720 render
+splat-transform input.ply view.webp
+
+# Custom camera and resolution
+splat-transform input.ply view.webp \
+    --camera 2,1,-2 --look-at 0,0,0 \
+    --fov 50 --resolution 1920x1080
+
+# Transparent background
+splat-transform input.ply view.webp --background 0,0,0,0
+```
+
 ### Device Selection for SOG Compression
 
 When compressing to SOG format, you can control which device (GPU or CPU) performs the compression:
@@ -428,6 +460,8 @@ import {
 | `sortMortonOrder` | Sort indices by Morton code for spatial locality |
 | `sortByVisibility` | Sort indices by visibility score for filtering |
 | `writeVoxel` | Write sparse voxel octree files |
+| `writeImage` | Render a camera view to a lossless WebP image (requires GPU) |
+| `renderSplats` | Lower-level renderer returning the raw RGBA byte buffer |
 
 ### File System Abstractions
 
