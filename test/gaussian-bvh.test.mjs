@@ -223,6 +223,89 @@ describe('GaussianBVH', function () {
         });
     });
 
+    describe('queryFrustumRawInto', function () {
+        // Build a "box-frustum" via 6 axis-aligned half-spaces. For the
+        // axis-aligned case the frustum-plane test should agree with the
+        // AABB-overlap test on `queryOverlappingRaw`. The 6 planes are
+        // stored as (nx, ny, nz, d) tuples with `n · p ≥ d` on the inside:
+        //   +X (x ≥ minX), -X (x ≤ maxX), +Y, -Y, +Z, -Z.
+        const boxPlanes = (minX, minY, minZ, maxX, maxY, maxZ) => new Float32Array([
+            1, 0, 0, minX,
+            -1, 0, 0, -maxX,
+            0, 1, 0, minY,
+            0, -1, 0, -maxY,
+            0, 0, 1, minZ,
+            0, 0, -1, -maxZ
+        ]);
+
+        it('should include AABBs that intersect the frustum', function () {
+            const dataTable = createTestData([
+                [0, 0, 0],
+                [5, 0, 0],
+                [10, 0, 0]
+            ]);
+            const { extents } = computeGaussianExtents(dataTable);
+            const bvh = new GaussianBVH(dataTable, extents);
+
+            const result = new Uint32Array(16);
+            const count = bvh.queryFrustumRawInto(boxPlanes(-1, -1, -1, 5, 1, 1), result, 0);
+
+            assert.strictEqual(count, 2);
+            assert.deepStrictEqual([...result.slice(0, 2)].sort((a, b) => a - b), [0, 1]);
+        });
+
+        it('should reject AABBs that lie fully outside a plane', function () {
+            const dataTable = createTestData([
+                [0, 0, 0],
+                [5, 0, 0],
+                [10, 0, 0]
+            ]);
+            const { extents } = computeGaussianExtents(dataTable);
+            const bvh = new GaussianBVH(dataTable, extents);
+
+            // Frustum well past all Gaussians along +X.
+            const result = new Uint32Array(16);
+            const count = bvh.queryFrustumRawInto(boxPlanes(100, -1, -1, 110, 1, 1), result, 0);
+
+            assert.strictEqual(count, 0);
+        });
+
+        it('should write into the buffer at the given offset', function () {
+            const dataTable = createTestData([
+                [0, 0, 0],
+                [5, 0, 0],
+                [10, 0, 0]
+            ]);
+            const { extents } = computeGaussianExtents(dataTable);
+            const bvh = new GaussianBVH(dataTable, extents);
+            const result = new Uint32Array([99, 99, 99, 99]);
+
+            const count = bvh.queryFrustumRawInto(boxPlanes(-1, -1, -1, 5, 1, 1), result, 1);
+
+            assert.strictEqual(count, 2);
+            assert.strictEqual(result[0], 99);
+            assert.deepStrictEqual([...result.slice(1, 3)].sort((a, b) => a - b), [0, 1]);
+            assert.strictEqual(result[3], 99);
+        });
+
+        it('should return the total count when the buffer is too small', function () {
+            const dataTable = createTestData([
+                [0, 0, 0],
+                [5, 0, 0],
+                [10, 0, 0]
+            ]);
+            const { extents } = computeGaussianExtents(dataTable);
+            const bvh = new GaussianBVH(dataTable, extents);
+            const result = new Uint32Array([99, 99]);
+
+            const count = bvh.queryFrustumRawInto(boxPlanes(-2, -2, -2, 12, 2, 2), result, 1);
+
+            assert.strictEqual(count, 3);
+            assert.strictEqual(result[0], 99);
+            assert.ok([0, 1, 2].includes(result[1]));
+        });
+    });
+
     describe('BVH efficiency', function () {
         it('should efficiently query large datasets', function () {
             // Create a grid of Gaussians
