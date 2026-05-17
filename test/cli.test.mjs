@@ -10,9 +10,11 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = dirname(__dirname);
+const cliArgsEnvName = 'SPLAT_TRANSFORM_CLI_TEST_ARGS';
 
 const cliBootstrap = `
-process.argv = ['node', 'src/cli/index.ts', ...process.argv.slice(1)];
+const cliArgs = JSON.parse(process.env.${cliArgsEnvName});
+process.argv = ['node', 'src/cli/index.ts', ...cliArgs];
 const { main } = await import('./src/cli/index.ts');
 await main();
 `;
@@ -20,17 +22,17 @@ await main();
 const runCli = (args) => {
     return new Promise((resolve, reject) => {
         const child = spawn(process.execPath, [
+            '--input-type=module',
             '--import',
             'tsx',
             '-e',
-            cliBootstrap,
-            '--',
-            ...args
+            cliBootstrap
         ], {
             cwd: rootDir,
             env: {
                 ...process.env,
-                NO_COLOR: '1'
+                NO_COLOR: '1',
+                [cliArgsEnvName]: JSON.stringify(args)
             },
             stdio: ['ignore', 'pipe', 'pipe']
         });
