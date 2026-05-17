@@ -30,29 +30,37 @@ const splatInputStride = (numSHBands: number): number => {
 };
 
 /**
- * Reusable scratch arrays for `sortCandidatesByDepth`. One instance is
+ * Reusable scratch buffers for `sortCandidatesByDepth`. One instance is
  * created per render in the orchestrator and reused across every group's
- * sort to avoid allocating multi-MB typed arrays + a boxed-number
- * `Array` on every call. Buffers grow on demand and never shrink.
+ * sort to avoid allocating multi-MB typed arrays on every call. All
+ * buffers grow on demand and never shrink.
  */
 class SortScratch {
+    /** Float32 depths derived from candidate positions; aliased over `keys`. */
     depth: Float32Array;
-    order: number[];
-    tmp: Uint32Array;
+    /** Sortable u32 reinterpretation of `depth`. Same backing buffer. */
+    keys: Uint32Array;
+    /** Ping-pong buffer for radix sort (keys / indices). */
+    keysAlt: Uint32Array;
+    indicesAlt: Uint32Array;
+    /** Per-byte histogram, reused across passes. */
+    counts: Uint32Array;
 
     constructor() {
         this.depth = new Float32Array(0);
-        this.order = [];
-        this.tmp = new Uint32Array(0);
+        this.keys = new Uint32Array(this.depth.buffer);
+        this.keysAlt = new Uint32Array(0);
+        this.indicesAlt = new Uint32Array(0);
+        this.counts = new Uint32Array(256);
     }
 
     ensure(count: number): void {
         if (count > this.depth.length) {
-            this.depth = new Float32Array(count);
-            this.tmp = new Uint32Array(count);
-        }
-        if (count > this.order.length) {
-            this.order.length = count;
+            const buf = new ArrayBuffer(count * 4);
+            this.depth = new Float32Array(buf);
+            this.keys = new Uint32Array(buf);
+            this.keysAlt = new Uint32Array(count);
+            this.indicesAlt = new Uint32Array(count);
         }
     }
 }
@@ -64,11 +72,18 @@ class SortScratch {
  *
  * Depth is `forward · (pos − eye)` — no projection needed.
  *
+ * Uses a 4-pass LSD radix sort on the bit-pattern of the depth as a
+ * sortable u32. For mixed-sign IEEE 754 floats this requires flipping
+ * either the sign bit (positive) or every bit (negative); the result is
+ * monotonic in float order, so a radix sort on the u32 reinterprets
+ * cleanly. At ~250K candidates per group this is ~20× faster than a JS
+ * comparator sort.
+ *
  * @param cols - Pre-resolved column references (only `x`, `y`, `z` are read).
  * @param candidateIndices - Indices into dataTable rows (mutated).
  * @param count - Number of valid entries.
  * @param camera - Camera basis (only forward + eye used).
- * @param scratch - Reusable scratch arrays, grown on demand.
+ * @param scratch - Reusable scratch buffers, grown on demand.
  */
 const sortCandidatesByDepth = (
     cols: SplatColumnRefs,
@@ -80,24 +95,59 @@ const sortCandidatesByDepth = (
     if (count < 2) return;
     scratch.ensure(count);
     const { x, y, z } = cols;
-    const { depth, order, tmp } = scratch;
+    const { depth, keys, keysAlt, indicesAlt, counts } = scratch;
     const fx = camera.forward.x, fy = camera.forward.y, fz = camera.forward.z;
     const ex = camera.eye.x, ey = camera.eye.y, ez = camera.eye.z;
 
+    // 1. Compute float32 depths.
     for (let i = 0; i < count; i++) {
         const s = candidateIndices[i];
         depth[i] = fx * (x[s] - ex) + fy * (y[s] - ey) + fz * (z[s] - ez);
     }
 
-    for (let i = 0; i < count; i++) order[i] = i;
-    // `order` may be longer than `count` (kept high-water-mark). Only sort
-    // the active prefix; `Array.prototype.sort` accepts no length arg, so
-    // splice down. Splice-to-shrink is O(n) but cheap vs the sort itself.
-    if (order.length !== count) order.length = count;
-    order.sort((a, b) => depth[a] - depth[b]);
+    // 2. Convert each float32 to a sortable u32 in place. `keys` aliases
+    //    `depth`'s buffer so the conversion is a single read+write per element.
+    //    - Positive floats: XOR with 0x80000000 to flip the sign bit (so
+    //      ordering matches u32 ordering).
+    //    - Negative floats: bitwise NOT (so larger-magnitude negatives sort
+    //      lower than smaller-magnitude negatives, and all negatives sort
+    //      below positives).
+    for (let i = 0; i < count; i++) {
+        const k = keys[i];
+        keys[i] = (k & 0x80000000) !== 0 ? (~k >>> 0) : ((k ^ 0x80000000) >>> 0);
+    }
 
-    for (let i = 0; i < count; i++) tmp[i] = candidateIndices[order[i]];
-    candidateIndices.set(tmp.subarray(0, count));
+    // 3. LSD radix sort, 4 passes × 8 bits. Ping-pong between
+    //    (keys, candidateIndices) → (keysAlt, indicesAlt) → … . An even
+    //    number of passes leaves the sorted result back in the originals.
+    let kIn = keys, iIn = candidateIndices;
+    let kOut = keysAlt, iOut = indicesAlt;
+
+    for (let shift = 0; shift < 32; shift += 8) {
+        counts.fill(0);
+        for (let i = 0; i < count; i++) {
+            counts[(kIn[i] >>> shift) & 0xff]++;
+        }
+        // Prefix sum → starting offsets per bucket.
+        let sum = 0;
+        for (let b = 0; b < 256; b++) {
+            const c = counts[b];
+            counts[b] = sum;
+            sum += c;
+        }
+        // Scatter.
+        for (let i = 0; i < count; i++) {
+            const b = (kIn[i] >>> shift) & 0xff;
+            const pos = counts[b]++;
+            kOut[pos] = kIn[i];
+            iOut[pos] = iIn[i];
+        }
+        // Swap.
+        const tk = kIn; kIn = kOut; kOut = tk;
+        const ti = iIn; iIn = iOut; iOut = ti;
+    }
+
+    // After 4 passes (even), the sorted output is back in candidateIndices.
 };
 
 /**
