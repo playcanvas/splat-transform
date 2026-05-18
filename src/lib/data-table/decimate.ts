@@ -433,7 +433,6 @@ const computeEdgeCost = (
 
 // Knud Thomsen p=1.6075 approximation for ellipsoid surface area.
 // Used as the per-splat screen-projection weight in the pairwise merge.
-// Matches sparkjsdev/spark `ellipsoid_area`.
 const ELLIPSOID_P = 1.6075;
 const ellipsoidArea = (sx: number, sy: number, sz: number): number => {
     const a = Math.pow(sx * sy, ELLIPSOID_P);
@@ -496,10 +495,10 @@ const momentMatch = (
     const Rj = new Float64Array(9);
 
     let qwi = cr0[i] as number, qxi = cr1[i] as number, qyi = cr2[i] as number, qzi = cr3[i] as number;
-    let ni = 1 / Math.max(Math.hypot(qwi, qxi, qyi, qzi), 1e-12);
+    const ni = 1 / Math.max(Math.hypot(qwi, qxi, qyi, qzi), 1e-12);
     qwi *= ni; qxi *= ni; qyi *= ni; qzi *= ni;
     let qwj = cr0[j] as number, qxj = cr1[j] as number, qyj = cr2[j] as number, qzj = cr3[j] as number;
-    let nj = 1 / Math.max(Math.hypot(qwj, qxj, qyj, qzj), 1e-12);
+    const nj = 1 / Math.max(Math.hypot(qwj, qxj, qyj, qzj), 1e-12);
     qwj *= nj; qxj *= nj; qyj *= nj; qzj *= nj;
 
     quatToRotmat(qwi, qxi, qyi, qzi, Ri, 0);
