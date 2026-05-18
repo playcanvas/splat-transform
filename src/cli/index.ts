@@ -538,7 +538,7 @@ const parseArguments = async () => {
                     if (parts.length !== 4) {
                         throw new Error(`Invalid filter-sphere value: ${t.value}`);
                     }
-                    const values = parts.map(parseNumber);
+                    const values = parts.map((p: string) => parseNumber(p));
                     current.processActions.push({
                         kind: 'filterSphere',
                         center: new Vec3(values[0], values[1], values[2]),
