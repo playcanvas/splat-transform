@@ -429,8 +429,31 @@ const computeEdgeCost = (
     return geo + cSh;
 };
 
-// ====================== MERGE (MPMM) ======================
+// ====================== ELLIPSOID AREA ======================
 
+// Knud Thomsen p=1.6075 approximation for ellipsoid surface area.
+// Used as the per-splat screen-projection weight in the pairwise merge.
+const ELLIPSOID_P = 1.6075;
+const ellipsoidArea = (sx: number, sy: number, sz: number): number => {
+    const a = Math.pow(sx * sy, ELLIPSOID_P);
+    const b = Math.pow(sx * sz, ELLIPSOID_P);
+    const c = Math.pow(sy * sz, ELLIPSOID_P);
+    return 4 * Math.PI * Math.pow((a + b + c) / 3, 1 / ELLIPSOID_P);
+};
+
+// ====================== MERGE ======================
+
+// Pairwise merge derived from sparkjsdev/spark's `gsplat.rs::new_merged`:
+//   - weights are α · ellipsoid-area (the screen-projected "ink" currency),
+//     which preserves color contribution from thin/anisotropic splats that
+//     volume-weighted NanoGS would otherwise drown out
+//   - merged covariance is the area·α-weighted sum of (δδᵀ + Σ_k), giving
+//     the right merged shape via the law of total variance
+//   - merged opacity is mass-conserving: α_m = (Σ α_k · area_k) / area_merged,
+//     clamped at 1 (the `spark-no-inflate` variant — no scale inflation and
+//     no out-of-range α, so the output PLY/SOG stays standard logit-encoded)
+//   - no Spark filter floor: we're pair-wise merging, not building an LOD
+//     grid, so the inter-mean filter regularization adds blur for no benefit
 const momentMatch = (
     i: number, j: number,
     cx: any, cy: any, cz: any,
@@ -449,29 +472,33 @@ const momentMatch = (
     const alphaI = sigmoid(cop[i] as number);
     const alphaJ = sigmoid(cop[j] as number);
 
-    const wi = TWO_PI_POW_1_5 * alphaI * sxi * syi * szi + 1e-12;
-    const wj = TWO_PI_POW_1_5 * alphaJ * sxj * syj * szj + 1e-12;
-    const W = Math.max(wi + wj, 1e-12);
+    // Area·α weighting (NanoGS used (2π)^1.5·sx·sy·sz·α; we use ellipsoid area).
+    const Ai = ellipsoidArea(sxi, syi, szi);
+    const Aj = ellipsoidArea(sxj, syj, szj);
+    const wi = alphaI * Ai + 1e-30;
+    const wj = alphaJ * Aj + 1e-30;
+    const W = wi + wj;
+    const pi = wi / W;
+    const pj = wj / W;
 
-    // Merged mean
-    const mux = (wi * (cx[i] as number) + wj * (cx[j] as number)) / W;
-    const muy = (wi * (cy[i] as number) + wj * (cy[j] as number)) / W;
-    const muz = (wi * (cz[i] as number) + wj * (cz[j] as number)) / W;
+    // Merged mean (weighted)
+    const mxi = cx[i] as number, myi = cy[i] as number, mzi = cz[i] as number;
+    const mxj = cx[j] as number, myj = cy[j] as number, mzj = cz[j] as number;
+    const mux = pi * mxi + pj * mxj;
+    const muy = pi * myi + pj * myj;
+    const muz = pi * mzi + pj * mzj;
 
-    // Build per-splat covariance matrices
+    // Per-input covariance matrices
     const SigI = new Float64Array(9);
     const SigJ = new Float64Array(9);
     const Ri = new Float64Array(9);
     const Rj = new Float64Array(9);
 
     let qwi = cr0[i] as number, qxi = cr1[i] as number, qyi = cr2[i] as number, qzi = cr3[i] as number;
-    let ni = Math.hypot(qwi, qxi, qyi, qzi);
-    ni = 1 / Math.max(ni, 1e-12);
+    const ni = 1 / Math.max(Math.hypot(qwi, qxi, qyi, qzi), 1e-12);
     qwi *= ni; qxi *= ni; qyi *= ni; qzi *= ni;
-
     let qwj = cr0[j] as number, qxj = cr1[j] as number, qyj = cr2[j] as number, qzj = cr3[j] as number;
-    let nj = Math.hypot(qwj, qxj, qyj, qzj);
-    nj = 1 / Math.max(nj, 1e-12);
+    const nj = 1 / Math.max(Math.hypot(qwj, qxj, qyj, qzj), 1e-12);
     qwj *= nj; qxj *= nj; qyj *= nj; qzj *= nj;
 
     quatToRotmat(qwi, qxi, qyi, qzi, Ri, 0);
@@ -479,42 +506,39 @@ const momentMatch = (
     sigmaFromRotVar(Ri, 0, sxi * sxi, syi * syi, szi * szi, SigI, 0);
     sigmaFromRotVar(Rj, 0, sxj * sxj, syj * syj, szj * szj, SigJ, 0);
 
-    const dix = (cx[i] as number) - mux, diy = (cy[i] as number) - muy, diz = (cz[i] as number) - muz;
-    const djx = (cx[j] as number) - mux, djy = (cy[j] as number) - muy, djz = (cz[j] as number) - muz;
+    const dix = mxi - mux, diy = myi - muy, diz = mzi - muz;
+    const djx = mxj - mux, djy = myj - muy, djz = mzj - muz;
 
-    // Merged covariance
+    // Merged covariance (weighted sum of δδᵀ + Σ_k)
     const Sig = new Float64Array(9);
-    for (let a = 0; a < 9; a++) {
-        Sig[a] = (wi * SigI[a] + wj * SigJ[a]) / W;
-    }
-    Sig[0] += (wi * dix * dix + wj * djx * djx) / W;
-    Sig[1] += (wi * dix * diy + wj * djx * djy) / W;
-    Sig[2] += (wi * dix * diz + wj * djx * djz) / W;
-    Sig[3] += (wi * diy * dix + wj * djy * djx) / W;
-    Sig[4] += (wi * diy * diy + wj * djy * djy) / W;
-    Sig[5] += (wi * diy * diz + wj * djy * djz) / W;
-    Sig[6] += (wi * diz * dix + wj * djz * djx) / W;
-    Sig[7] += (wi * diz * diy + wj * djz * djy) / W;
-    Sig[8] += (wi * diz * diz + wj * djz * djz) / W;
-
-    // Force symmetry + regularize
-    Sig[1] = Sig[3] = 0.5 * (Sig[1] + Sig[3]);
-    Sig[2] = Sig[6] = 0.5 * (Sig[2] + Sig[6]);
-    Sig[5] = Sig[7] = 0.5 * (Sig[5] + Sig[7]);
+    Sig[0] = pi * (dix * dix + SigI[0]) + pj * (djx * djx + SigJ[0]);
+    Sig[1] = pi * (dix * diy + SigI[1]) + pj * (djx * djy + SigJ[1]);
+    Sig[2] = pi * (dix * diz + SigI[2]) + pj * (djx * djz + SigJ[2]);
+    Sig[3] = Sig[1];
+    Sig[4] = pi * (diy * diy + SigI[4]) + pj * (djy * djy + SigJ[4]);
+    Sig[5] = pi * (diy * diz + SigI[5]) + pj * (djy * djz + SigJ[5]);
+    Sig[6] = Sig[2];
+    Sig[7] = Sig[5];
+    Sig[8] = pi * (diz * diz + SigI[8]) + pj * (djz * djz + SigJ[8]);
     Sig[0] += EPS_COV;
     Sig[4] += EPS_COV;
     Sig[8] += EPS_COV;
 
-    // Eigendecomposition
+    // Eigendecompose → scales (= √λ) and rotation
     const ev = eigenSymmetric3x3(Sig);
     let vals = ev.values;
     const vecs = ev.vectors;
-
-    // Sort eigenvalues descending
     const order = [0, 1, 2].sort((a, b) => vals[b] - vals[a]);
     vals = order.map(k => Math.max(vals[k], 1e-18));
 
-    // Build rotation matrix with sorted eigenvectors as columns
+    const s0 = Math.sqrt(vals[0]);
+    const s1 = Math.sqrt(vals[1]);
+    const s2 = Math.sqrt(vals[2]);
+
+    // Mass-conserving opacity, clamped at 1 (no scale inflation).
+    const alphaM = Math.min(1, Math.max(1e-6, W / Math.max(ellipsoidArea(s0, s1, s2), 1e-30)));
+
+    // Build rotation matrix from sorted eigenvectors (right-handed)
     const Rm = new Float64Array(9);
     for (let c = 0; c < 3; c++) {
         const src = order[c];
@@ -522,25 +546,21 @@ const momentMatch = (
         Rm[3 + c] = vecs[3 + src];
         Rm[6 + c] = vecs[6 + src];
     }
-
     if (det3(Rm, 0) < 0) {
         Rm[2] *= -1; Rm[5] *= -1; Rm[8] *= -1;
     }
-
     const q = rotmatToQuat(Rm, 0);
 
     out.mu[0] = mux; out.mu[1] = muy; out.mu[2] = muz;
-    out.sc[0] = Math.log(Math.sqrt(vals[0]));
-    out.sc[1] = Math.log(Math.sqrt(vals[1]));
-    out.sc[2] = Math.log(Math.sqrt(vals[2]));
+    out.sc[0] = Math.log(s0);
+    out.sc[1] = Math.log(s1);
+    out.sc[2] = Math.log(s2);
     out.q[0] = q[0]; out.q[1] = q[1]; out.q[2] = q[2]; out.q[3] = q[3];
+    out.op = alphaM;
 
-    // Porter-Duff over opacity
-    out.op = alphaI + alphaJ - alphaI * alphaJ;
-
-    // Mass-weighted appearance
+    // Color: weight-normalized (area·α weighted) average
     for (let k = 0; k < appColCount; k++) {
-        out.sh[k] = (wi * (appData[k][i] as number) + wj * (appData[k][j] as number)) / W;
+        out.sh[k] = pi * (appData[k][i] as number) + pj * (appData[k][j] as number);
     }
 };
 
@@ -580,10 +600,15 @@ const sortByVisibility = (dataTable: DataTable, indices: Uint32Array): void => {
 // ====================== MAIN: simplifyGaussians ======================
 
 /**
- * Simplifies a Gaussian splat DataTable to a target number of splats using the
- * NanoGS progressive pairwise merging algorithm.
+ * Simplifies a Gaussian splat DataTable to a target number of splats by
+ * progressive pair-wise merging of nearest-neighbor gaussians.
  *
- * Reference: "NanoGS: Training-Free Gaussian Splat Simplification" (Xiong et al.)
+ * The merge math is derived from sparkjsdev/spark `gsplat.rs::new_merged`
+ * (area·α weighted, mass-conserving opacity, no filter floor, opacity
+ * clamped at 1). It preserves color fidelity through multiple iterations
+ * far better than the NanoGS Porter-Duff opacity + volume-weighted formula
+ * does — color drift / over-saturation is essentially gone even at
+ * aggressive reductions.
  *
  * @param dataTable - The input splat DataTable.
  * @param targetCount - The desired number of output splats.
