@@ -214,6 +214,55 @@ describe('simplifyGaussians', () => {
         }
     });
 
+    it('should mass-conserve opacity and area-weight color when merging two equal overlapping splats', async () => {
+        // Two unit-sphere splats co-located at the origin, both with logit
+        // opacity 0 (sigmoid → 0.5), identity rotation, and opposite DC
+        // colors. With equal ellipsoid areas Ai=Aj and equal αi=αj=0.5, the
+        // merged covariance equals each input's (no δ-spread term), so the
+        // merged ellipsoid area equals each input's. Mass-conservation gives
+        // α_m = (Σ αₖ·areaₖ) / area_merged = (0.5+0.5)·A / A = 1.0 (capped
+        // at 1). Color is the area·α-weighted average → (0.5, 0.5, 0).
+        //
+        // This locks in the post-NanoGS behavior: a merge of two visible
+        // overlapping splats should fully saturate opacity (not Porter-Duff's
+        // 0.75) and produce an unbiased color blend.
+        const testData = new DataTable([
+            new Column('x', new Float32Array([0, 0])),
+            new Column('y', new Float32Array([0, 0])),
+            new Column('z', new Float32Array([0, 0])),
+            new Column('opacity', new Float32Array([0, 0])),    // logit(0.5)
+            new Column('scale_0', new Float32Array([0, 0])),    // exp(0) = 1
+            new Column('scale_1', new Float32Array([0, 0])),
+            new Column('scale_2', new Float32Array([0, 0])),
+            new Column('rot_0', new Float32Array([1, 1])),
+            new Column('rot_1', new Float32Array([0, 0])),
+            new Column('rot_2', new Float32Array([0, 0])),
+            new Column('rot_3', new Float32Array([0, 0])),
+            new Column('f_dc_0', new Float32Array([1, 0])),
+            new Column('f_dc_1', new Float32Array([0, 1])),
+            new Column('f_dc_2', new Float32Array([0, 0]))
+        ]);
+
+        const result = simplifyGaussians(testData, 1);
+        assert.strictEqual(result.numRows, 1, 'Should merge to a single splat');
+
+        // Position: centroid of two co-located origins → origin.
+        assertClose(result.getColumnByName('x').data[0], 0, 1e-5, 'merged x');
+        assertClose(result.getColumnByName('y').data[0], 0, 1e-5, 'merged y');
+        assertClose(result.getColumnByName('z').data[0], 0, 1e-5, 'merged z');
+
+        // Opacity: stored as logit; sigmoid back to linear should be ≈ 1.
+        // The logit helper clamps p to 1 - 1e-7, so we expect ≥ 0.99.
+        const linearOp = 1 / (1 + Math.exp(-result.getColumnByName('opacity').data[0]));
+        assert(linearOp >= 0.99,
+            `merged opacity sigmoid=${linearOp} should be ≈ 1 (mass-conserving), not Porter-Duff's 0.75`);
+
+        // Color: equal area·α weights → simple average.
+        assertClose(result.getColumnByName('f_dc_0').data[0], 0.5, 1e-5, 'merged f_dc_0 (red avg)');
+        assertClose(result.getColumnByName('f_dc_1').data[0], 0.5, 1e-5, 'merged f_dc_1 (green avg)');
+        assertClose(result.getColumnByName('f_dc_2').data[0], 0,   1e-5, 'merged f_dc_2');
+    });
+
     it('should fall back to visibility pruning when rotation columns are missing', async () => {
         const testData = new DataTable([
             new Column('x', new Float32Array([0, 1, 2, 3])),
