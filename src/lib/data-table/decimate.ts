@@ -2,7 +2,6 @@ import { Column, DataTable } from './data-table';
 import { KdTree } from '../spatial/kd-tree';
 import { logger } from '../utils';
 
-const TWO_PI_POW_1_5 = Math.pow(2 * Math.PI, 1.5);
 const LOG2PI = Math.log(2 * Math.PI);
 const OPACITY_PRUNE_THRESHOLD = 0.1;
 const KNN_K = 16;
@@ -252,6 +251,18 @@ const rotmatToQuat = (R: Float64Array, o: number): Float64Array => {
     return new Float64Array([qw * inv, qx * inv, qy * inv, qz * inv]);
 };
 
+// ====================== ELLIPSOID AREA ======================
+
+// Knud Thomsen p=1.6075 approximation for ellipsoid surface area.
+// Used as the per-splat screen-projection weight in the pairwise merge.
+const ELLIPSOID_P = 1.6075;
+const ellipsoidArea = (sx: number, sy: number, sz: number): number => {
+    const a = Math.pow(sx * sy, ELLIPSOID_P);
+    const b = Math.pow(sx * sz, ELLIPSOID_P);
+    const c = Math.pow(sy * sz, ELLIPSOID_P);
+    return 4 * Math.PI * Math.pow((a + b + c) / 3, 1 / ELLIPSOID_P);
+};
+
 // ====================== PER-SPLAT CACHE ======================
 
 interface SplatCache {
@@ -306,7 +317,12 @@ const buildPerSplatCache = (
         transpose3(R, i9, Rt, i9);
         sigmaFromRotVar(R, i9, vx, vy, vz, sigma, i9);
 
-        mass[i] = TWO_PI_POW_1_5 * linAlpha * sx * sy * sz + 1e-12;
+        // Area·α weighting — matches the merge formula in `momentMatch`, so
+        // the KL cost in `computeEdgeCost` (which uses `cache.mass` to derive
+        // its pi/pj mixture weights) optimises the same merge model that's
+        // actually applied. Volume·α here would mis-score pairs whose
+        // volume/area ratio differs strongly between members.
+        mass[i] = linAlpha * ellipsoidArea(sx, sy, sz) + 1e-12;
     }
 
     return { R, Rt, v, invdiag, logdet, sigma, mass };
@@ -427,18 +443,6 @@ const computeEdgeCost = (
     }
 
     return geo + cSh;
-};
-
-// ====================== ELLIPSOID AREA ======================
-
-// Knud Thomsen p=1.6075 approximation for ellipsoid surface area.
-// Used as the per-splat screen-projection weight in the pairwise merge.
-const ELLIPSOID_P = 1.6075;
-const ellipsoidArea = (sx: number, sy: number, sz: number): number => {
-    const a = Math.pow(sx * sy, ELLIPSOID_P);
-    const b = Math.pow(sx * sz, ELLIPSOID_P);
-    const c = Math.pow(sy * sz, ELLIPSOID_P);
-    return 4 * Math.PI * Math.pow((a + b + c) / 3, 1 / ELLIPSOID_P);
 };
 
 // ====================== MERGE ======================
