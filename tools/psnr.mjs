@@ -1,11 +1,15 @@
 #!/usr/bin/env node
-// PSNR / SSIM comparison for two WebP images (must be same dimensions).
+// PSNR comparison for two or more WebP images (must be same dimensions).
+//
+// Prerequisite: `npm run build` (this script imports `WebPCodec` from
+// `../dist/index.mjs`, which doesn't exist until the package is built).
 //
 // Usage:
 //   node tools/psnr.mjs <reference.webp> <candidate.webp> [candidate2.webp ...]
 //
-// Reports PSNR (RGB) and a simple SSIM (luma-only, 8×8 window) for each
-// candidate against the reference. Higher is better for both.
+// For each candidate, reports PSNR (RGB), mean-luma delta vs reference,
+// mean-saturation delta vs reference, and per-channel mean absolute
+// difference. Higher PSNR / smaller MAD = closer to the reference.
 
 import { readFile } from 'node:fs/promises';
 import { WebPCodec } from '../dist/index.mjs';

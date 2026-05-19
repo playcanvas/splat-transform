@@ -535,8 +535,9 @@ const momentMatch = (
     const s1 = Math.sqrt(vals[1]);
     const s2 = Math.sqrt(vals[2]);
 
-    // Mass-conserving opacity, clamped at 1 (no scale inflation).
-    const alphaM = Math.min(1, Math.max(1e-6, W / Math.max(ellipsoidArea(s0, s1, s2), 1e-30)));
+    // Mass-conserving opacity, capped at 1 (no scale inflation). No lower
+    // clamp here — `logit()` at the storage step already pins p ≥ 1e-7.
+    const alphaM = Math.min(1, W / Math.max(ellipsoidArea(s0, s1, s2), 1e-30));
 
     // Build rotation matrix from sorted eigenvectors (right-handed)
     const Rm = new Float64Array(9);
