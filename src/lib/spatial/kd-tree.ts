@@ -249,7 +249,7 @@ class KdTree {
      * any column set, so callers must ensure these are present and first.
      *
      * @returns Parallel arrays of length N where N = number of points.
-     *   The root is at index 0.
+     * The root is at index 0.
      */
     flattenForGpu(): {
         nodeSplatIdx: Uint32Array;
@@ -259,7 +259,7 @@ class KdTree {
         nodeLeft: Uint32Array;
         nodeRight: Uint32Array;
         rootIdx: number;
-    } {
+        } {
         const n = this.centroids.numRows;
         const nodeSplatIdx = new Uint32Array(n);
         const nodeX = new Float32Array(n);
@@ -272,19 +272,47 @@ class KdTree {
 
         const x = this.colData[0], y = this.colData[1], z = this.colData[2];
 
+        // Iterative pre-order DFS: assign tree indices, then patch the parent's
+        // left/right slot when each child is visited. JS recursion blows the
+        // stack on heavily unbalanced trees, so we maintain the work stack
+        // ourselves. Encoded entries: nodeRef + (parentTreeIdx, side) where
+        // side ∈ {0 = left of parent, 1 = right of parent, 2 = root}.
+        const stackNode: KdTreeNode[] = [this.root];
+        const stackParent = new Int32Array(n + 1);
+        const stackSide = new Uint8Array(n + 1);
+        stackParent[0] = -1;
+        stackSide[0] = 2;
+        let sp = 1;
+
         let cursor = 0;
-        const visit = (node: KdTreeNode): number => {
+        const rootIdx = cursor;
+        while (sp > 0) {
+            sp--;
+            const node = stackNode[sp];
+            const parent = stackParent[sp];
+            const side = stackSide[sp];
             const treeIdx = cursor++;
             const splat = node.index;
             nodeSplatIdx[treeIdx] = splat;
             nodeX[treeIdx] = x[splat];
             nodeY[treeIdx] = y[splat];
             nodeZ[treeIdx] = z[splat];
-            if (node.left) nodeLeft[treeIdx] = visit(node.left);
-            if (node.right) nodeRight[treeIdx] = visit(node.right);
-            return treeIdx;
-        };
-        const rootIdx = visit(this.root);
+            if (side === 0) nodeLeft[parent] = treeIdx;
+            else if (side === 1) nodeRight[parent] = treeIdx;
+            // Push right then left so left is popped first (pre-order).
+            if (node.right) {
+                stackNode[sp] = node.right;
+                stackParent[sp] = treeIdx;
+                stackSide[sp] = 1;
+                sp++;
+            }
+            if (node.left) {
+                stackNode[sp] = node.left;
+                stackParent[sp] = treeIdx;
+                stackSide[sp] = 0;
+                sp++;
+            }
+        }
 
         return { nodeSplatIdx, nodeX, nodeY, nodeZ, nodeLeft, nodeRight, rootIdx };
     }

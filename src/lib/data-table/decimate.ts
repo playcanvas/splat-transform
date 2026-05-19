@@ -1,5 +1,3 @@
-import { GraphicsDevice } from 'playcanvas';
-
 import { Column, DataTable } from './data-table';
 import { type EdgeCostCache, GpuEdgeCost } from '../gpu/gpu-edge-cost';
 import { GpuKnn } from '../gpu/gpu-knn';
@@ -9,6 +7,7 @@ import {
     RadixSortScratch,
     radixSortIndicesByFloat
 } from '../spatial/radix-sort';
+import { type DeviceCreator } from '../types';
 import { logger } from '../utils';
 
 const LOG2PI = Math.log(2 * Math.PI);
@@ -572,17 +571,23 @@ const sortByVisibility = (dataTable: DataTable, indices: Uint32Array): void => {
  *
  * @param dataTable - The input splat DataTable.
  * @param targetCount - The desired number of output splats.
+ * @param createDevice - Optional factory yielding a `GraphicsDevice`. When supplied, KNN and edge-cost run on the GPU; otherwise the CPU KD-tree path is used.
  * @returns A new DataTable with approximately `targetCount` splats.
  */
 const simplifyGaussians = async (
     dataTable: DataTable,
     targetCount: number,
-    device?: GraphicsDevice
+    createDevice?: DeviceCreator
 ): Promise<DataTable> => {
     const N = dataTable.numRows;
     if (N <= targetCount || targetCount <= 0) {
         return targetCount <= 0 ? dataTable.clone({ rows: [] }) : dataTable;
     }
+
+    // Mirrors the factory contract used by `filterFloaters` — caller hands us
+    // a `DeviceCreator`, we own creation here so multiple decimate actions
+    // don't each leak a device.
+    const device = createDevice ? await createDevice() : undefined;
 
     const requiredCols = ['x', 'y', 'z', 'opacity', 'scale_0', 'scale_1', 'scale_2',
         'rot_0', 'rot_1', 'rot_2', 'rot_3'];
@@ -634,6 +639,26 @@ const simplifyGaussians = async (
     // Reusable scratch buffers for the per-iteration edge-cost sort.
     const sortScratch = new RadixSortScratch();
 
+    // Hoist GPU resources above the merging loop so the storage buffers and
+    // compiled shaders are reused across iterations. Sizing is the initial
+    // post-prune row count + the worst-case edge count (every neighbour an
+    // edge before i<j dedup); iterations only shrink from there.
+    const initialN = current.numRows;
+    const kEffMax = Math.min(Math.max(1, KNN_K), Math.max(1, initialN - 1));
+    const initialMaxE = initialN * kEffMax;
+    const numAppColsMax = allAppearanceCols.length;
+    const gpuKnn = device ? new GpuKnn(device, initialN, kEffMax) : undefined;
+    const gpuCost = device ? new GpuEdgeCost(device, initialN, initialMaxE, numAppColsMax) : undefined;
+    // Float32 scratch the GPU edge-cost path packs into each iteration.
+    const positionsPackedScratch = device ? new Float32Array(initialN * 3) : undefined;
+    const splatScalarsScratch = device ? new Float32Array(initialN * 5) : undefined;
+    const rotRFScratch = device ? new Float32Array(initialN * 9) : undefined;
+    const appearanceScratch = device ? new Float32Array(initialN * numAppColsMax) : undefined;
+    const zScratch = device ? new Float32Array(3) : undefined;
+    if (zScratch) {
+        zScratch[0] = Z[0][0]; zScratch[1] = Z[0][1]; zScratch[2] = Z[0][2];
+    }
+
     // Step 2: Iterative merging.
     // Each iteration roughly halves the row count (greedy disjoint pair
     // selection picks up to n/2 merges), so log2(n / target) is a good
@@ -641,338 +666,334 @@ const simplifyGaussians = async (
     // estimate render unnumbered, which is fine.
     const estIterations = Math.max(1, Math.ceil(Math.log2(current.numRows / targetCount)));
     let iterationIndex = 0;
+    try {
 
-    while (current.numRows > targetCount) {
-        const n = current.numRows;
-        const kEff = Math.min(Math.max(1, KNN_K), Math.max(1, n - 1));
+        while (current.numRows > targetCount) {
+            const n = current.numRows;
+            // kEff is fixed to `kEffMax` so the hoisted GPU resources (which bake
+            // k into the shader) work across every iteration. When `n - 1 <
+            // kEffMax`, both KNN paths fill the surplus slots with 0xFFFFFFFF and
+            // the edge-extraction loop ignores them.
+            const kEff = kEffMax;
 
-        iterationIndex++;
-        const g = iterationIndex <= estIterations ?
-            logger.group('Decimate iteration', {
-                index: iterationIndex,
-                total: estIterations
-            }) :
-            logger.group('Decimate iteration');
+            iterationIndex++;
+            const g = iterationIndex <= estIterations ?
+                logger.group('Decimate iteration', {
+                    index: iterationIndex,
+                    total: estIterations
+                }) :
+                logger.group('Decimate iteration');
 
-        const cx = current.getColumnByName('x')!.data;
-        const cy = current.getColumnByName('y')!.data;
-        const cz = current.getColumnByName('z')!.data;
-        const cop = current.getColumnByName('opacity')!.data;
-        const cs0 = current.getColumnByName('scale_0')!.data;
-        const cs1 = current.getColumnByName('scale_1')!.data;
-        const cs2 = current.getColumnByName('scale_2')!.data;
-        const cr0 = current.getColumnByName('rot_0')!.data;
-        const cr1 = current.getColumnByName('rot_1')!.data;
-        const cr2 = current.getColumnByName('rot_2')!.data;
-        const cr3 = current.getColumnByName('rot_3')!.data;
+            const cx = current.getColumnByName('x')!.data;
+            const cy = current.getColumnByName('y')!.data;
+            const cz = current.getColumnByName('z')!.data;
+            const cop = current.getColumnByName('opacity')!.data;
+            const cs0 = current.getColumnByName('scale_0')!.data;
+            const cs1 = current.getColumnByName('scale_1')!.data;
+            const cs2 = current.getColumnByName('scale_2')!.data;
+            const cr0 = current.getColumnByName('rot_0')!.data;
+            const cr1 = current.getColumnByName('rot_1')!.data;
+            const cr2 = current.getColumnByName('rot_2')!.data;
+            const cr3 = current.getColumnByName('rot_3')!.data;
 
-        const cacheSub = logger.group('Building per-splat cache');
-        const cache = buildPerSplatCache(n, cop, cs0, cs1, cs2, cr0, cr1, cr2, cr3);
-        cacheSub.end();
+            const cacheSub = logger.group('Building per-splat cache');
+            const cache = buildPerSplatCache(n, cop, cs0, cs1, cs2, cr0, cr1, cr2, cr3);
+            cacheSub.end();
 
-        // Flat per-query KNN output. allKnn[i*kEff + j] = j-th nearest of i
-        // (sorted ascending by distance, self excluded). Same shape for both
-        // CPU and GPU paths so the edge-extraction loop below is uniform.
-        // Sentinel 0xFFFFFFFF for unfilled slots (when fewer than kEff
-        // non-self neighbours exist).
-        const allKnn = new Uint32Array(n * kEff);
+            // Flat per-query KNN output. allKnn[i*kEff + j] is one of the kEff
+            // nearest neighbours of i, excluding i itself. CPU path emits sorted
+            // ascending by distance; GPU path emits an unsorted top-K. Neither
+            // ordering matters downstream — the edge-extraction loop only filters
+            // j > i. Sentinel 0xFFFFFFFF marks unfilled slots when fewer than kEff
+            // non-self neighbours exist.
+            const allKnn = new Uint32Array(n * kEff);
 
-        const pxArr = cx instanceof Float32Array ? cx : new Float32Array(cx as any);
-        const pyArr = cy instanceof Float32Array ? cy : new Float32Array(cy as any);
-        const pzArr = cz instanceof Float32Array ? cz : new Float32Array(cz as any);
+            const pxArr = cx instanceof Float32Array ? cx : new Float32Array(cx as any);
+            const pyArr = cy instanceof Float32Array ? cy : new Float32Array(cy as any);
+            const pzArr = cz instanceof Float32Array ? cz : new Float32Array(cz as any);
 
-        if (device) {
-            const knnSub = logger.group('Finding nearest neighbors (GPU)');
-            const gpuKnn = new GpuKnn(device, n, kEff);
-            try {
-                await gpuKnn.execute(pxArr, pyArr, pzArr, allKnn);
-            } finally {
-                gpuKnn.destroy();
+            if (device) {
+                const knnSub = logger.group('Finding nearest neighbors (GPU)');
+                await gpuKnn!.execute(pxArr, pyArr, pzArr, allKnn);
+                knnSub.end();
+            } else {
+                const kdSub = logger.group('Building KD-tree');
+                const posTable = new DataTable([
+                    new Column('x', pxArr),
+                    new Column('y', pyArr),
+                    new Column('z', pzArr)
+                ]);
+                const kdTree = new KdTree(posTable);
+                kdSub.end();
+
+                const queryPoint = new Float32Array(3);
+                const knnInterval = Math.max(1, Math.ceil(n / PROGRESS_TICKS));
+                const knnTicks = Math.ceil(n / knnInterval);
+                const knnBar = logger.bar('Finding nearest neighbors', knnTicks);
+                for (let i = 0; i < n; i++) {
+                    queryPoint[0] = cx[i] as number;
+                    queryPoint[1] = cy[i] as number;
+                    queryPoint[2] = cz[i] as number;
+                    // Request kEff+1 because the KD-tree returns the query itself
+                    // (distance 0) as the first match.
+                    const knn = kdTree.findKNearest(queryPoint, kEff + 1);
+                    let outPos = 0;
+                    for (let ki = 0; ki < knn.indices.length && outPos < kEff; ki++) {
+                        const j = knn.indices[ki];
+                        if (j === i) continue;
+                        allKnn[i * kEff + outPos] = j;
+                        outPos++;
+                    }
+                    while (outPos < kEff) {
+                        allKnn[i * kEff + outPos] = 0xFFFFFFFF;
+                        outPos++;
+                    }
+                    if ((i + 1) % knnInterval === 0) knnBar.tick();
+                }
+                if (n % knnInterval !== 0) knnBar.tick();
+                knnBar.end();
             }
-            knnSub.end();
-        } else {
-            const kdSub = logger.group('Building KD-tree');
-            const posTable = new DataTable([
-                new Column('x', pxArr),
-                new Column('y', pyArr),
-                new Column('z', pzArr)
-            ]);
-            const kdTree = new KdTree(posTable);
-            kdSub.end();
 
-            const queryPoint = new Float32Array(3);
-            const knnInterval = Math.max(1, Math.ceil(n / PROGRESS_TICKS));
-            const knnTicks = Math.ceil(n / knnInterval);
-            const knnBar = logger.bar('Finding nearest neighbors', knnTicks);
+            // Extract directed edges (i < j) from the K-NN graph.
+            let edgeCapacity = Math.ceil(n * kEff / 2);
+            let edgeU = new Uint32Array(edgeCapacity);
+            let edgeV = new Uint32Array(edgeCapacity);
+            let edgeCount = 0;
             for (let i = 0; i < n; i++) {
-                queryPoint[0] = cx[i] as number;
-                queryPoint[1] = cy[i] as number;
-                queryPoint[2] = cz[i] as number;
-                // Request kEff+1 because the KD-tree returns the query itself
-                // (distance 0) as the first match.
-                const knn = kdTree.findKNearest(queryPoint, kEff + 1);
-                let outPos = 0;
-                for (let ki = 0; ki < knn.indices.length && outPos < kEff; ki++) {
-                    const j = knn.indices[ki];
-                    if (j === i) continue;
-                    allKnn[i * kEff + outPos] = j;
-                    outPos++;
-                }
-                while (outPos < kEff) {
-                    allKnn[i * kEff + outPos] = 0xFFFFFFFF;
-                    outPos++;
-                }
-                if ((i + 1) % knnInterval === 0) knnBar.tick();
-            }
-            if (n % knnInterval !== 0) knnBar.tick();
-            knnBar.end();
-        }
-
-        // Extract directed edges (i < j) from the K-NN graph.
-        let edgeCapacity = Math.ceil(n * kEff / 2);
-        let edgeU = new Uint32Array(edgeCapacity);
-        let edgeV = new Uint32Array(edgeCapacity);
-        let edgeCount = 0;
-        for (let i = 0; i < n; i++) {
-            const base = i * kEff;
-            for (let ki = 0; ki < kEff; ki++) {
-                const j = allKnn[base + ki];
-                if (j === 0xFFFFFFFF || j <= i) continue;
-                if (edgeCount === edgeCapacity) {
-                    edgeCapacity *= 2;
-                    const newU = new Uint32Array(edgeCapacity);
-                    const newV = new Uint32Array(edgeCapacity);
-                    newU.set(edgeU);
-                    newV.set(edgeV);
-                    edgeU = newU;
-                    edgeV = newV;
-                }
-                edgeU[edgeCount] = i;
-                edgeV[edgeCount] = j;
-                edgeCount++;
-            }
-        }
-
-        if (edgeCount === 0) {
-            g.end();
-            break;
-        }
-
-        const appData: any[] = [];
-        for (let ai = 0; ai < allAppearanceCols.length; ai++) {
-            const col = current.getColumnByName(allAppearanceCols[ai]);
-            if (col) appData.push(col.data);
-        }
-
-        const mergesNeeded = n - targetCount;
-        const costs = new Float32Array(edgeCount);
-
-        if (device) {
-            // GPU path: pack per-splat cache into the layout the kernel
-            // expects (interleaved positions, interleaved scalars). The
-            // Float64Array members of `cache` are downcast to Float32 on copy.
-            const costSub = logger.group('Computing edge costs (GPU)');
-
-            const C = appData.length;
-            const positionsPacked = new Float32Array(n * 3);
-            const splatScalars = new Float32Array(n * 5);
-            const rotRF = new Float32Array(n * 9);
-            const appearance = new Float32Array(n * C);
-
-            for (let s = 0; s < n; s++) {
-                positionsPacked[s * 3 + 0] = cx[s] as number;
-                positionsPacked[s * 3 + 1] = cy[s] as number;
-                positionsPacked[s * 3 + 2] = cz[s] as number;
-
-                splatScalars[s * 5 + 0] = cache.mass[s];
-                splatScalars[s * 5 + 1] = cache.logdet[s];
-                splatScalars[s * 5 + 2] = cache.v[s * 3 + 0];
-                splatScalars[s * 5 + 3] = cache.v[s * 3 + 1];
-                splatScalars[s * 5 + 4] = cache.v[s * 3 + 2];
-            }
-            // Copy rotation matrices (Float64 → Float32).
-            for (let k = 0; k < n * 9; k++) rotRF[k] = cache.R[k];
-            // Pack appearance row-major.
-            for (let s = 0; s < n; s++) {
-                const base = s * C;
-                for (let k = 0; k < C; k++) {
-                    appearance[base + k] = appData[k][s] as number;
+                const base = i * kEff;
+                for (let ki = 0; ki < kEff; ki++) {
+                    const j = allKnn[base + ki];
+                    if (j === 0xFFFFFFFF || j <= i) continue;
+                    if (edgeCount === edgeCapacity) {
+                        edgeCapacity *= 2;
+                        const newU = new Uint32Array(edgeCapacity);
+                        const newV = new Uint32Array(edgeCapacity);
+                        newU.set(edgeU);
+                        newV.set(edgeV);
+                        edgeU = newU;
+                        edgeV = newV;
+                    }
+                    edgeU[edgeCount] = i;
+                    edgeV[edgeCount] = j;
+                    edgeCount++;
                 }
             }
-            const cacheGpu: EdgeCostCache = {
-                positions: positionsPacked,
-                rotR: rotRF,
-                splatScalars,
-                appearance,
-                numAppCols: C,
-                numSplats: n
+
+            if (edgeCount === 0) {
+                g.end();
+                break;
+            }
+
+            const appData: any[] = [];
+            for (let ai = 0; ai < allAppearanceCols.length; ai++) {
+                const col = current.getColumnByName(allAppearanceCols[ai]);
+                if (col) appData.push(col.data);
+            }
+
+            const mergesNeeded = n - targetCount;
+            const costs = new Float32Array(edgeCount);
+
+            if (device) {
+            // GPU path: pack per-splat cache into the hoisted Float32 scratch
+            // buffers in the layout the kernel expects (interleaved positions,
+            // interleaved scalars). The Float64 cache is downcast to Float32.
+                const costSub = logger.group('Computing edge costs (GPU)');
+
+                const C = appData.length;
+                const positionsPacked = positionsPackedScratch!;
+                const splatScalars = splatScalarsScratch!;
+                const rotRF = rotRFScratch!;
+                const appearance = appearanceScratch!;
+
+                for (let s = 0; s < n; s++) {
+                    positionsPacked[s * 3 + 0] = cx[s] as number;
+                    positionsPacked[s * 3 + 1] = cy[s] as number;
+                    positionsPacked[s * 3 + 2] = cz[s] as number;
+
+                    splatScalars[s * 5 + 0] = cache.mass[s];
+                    splatScalars[s * 5 + 1] = cache.logdet[s];
+                    splatScalars[s * 5 + 2] = cache.v[s * 3 + 0];
+                    splatScalars[s * 5 + 3] = cache.v[s * 3 + 1];
+                    splatScalars[s * 5 + 4] = cache.v[s * 3 + 2];
+                }
+                // Copy rotation matrices (Float64 → Float32).
+                for (let k = 0; k < n * 9; k++) rotRF[k] = cache.R[k];
+                // Pack appearance row-major.
+                for (let s = 0; s < n; s++) {
+                    const base = s * C;
+                    for (let k = 0; k < C; k++) {
+                        appearance[base + k] = appData[k][s] as number;
+                    }
+                }
+                const cacheGpu: EdgeCostCache = {
+                    positions: positionsPacked,
+                    rotR: rotRF,
+                    splatScalars,
+                    appearance,
+                    numAppCols: C,
+                    numSplats: n
+                };
+
+                // Trim edge buffers to the valid prefix (edgeU/edgeV were grown).
+                const edgeITrim = edgeU.subarray(0, edgeCount);
+                const edgeJTrim = edgeV.subarray(0, edgeCount);
+
+                await gpuCost!.execute(cacheGpu, edgeITrim, edgeJTrim, zScratch!, costs);
+                costSub.end();
+            } else {
+                const costInterval = Math.max(1, Math.ceil(edgeCount / PROGRESS_TICKS));
+                const costTicks = Math.ceil(edgeCount / costInterval);
+                const costBar = logger.bar('Computing edge costs', costTicks);
+                for (let e = 0; e < edgeCount; e++) {
+                    costs[e] = computeEdgeCost(edgeU[e], edgeV[e], cx, cy, cz,
+                        cache, Z, appData, appData.length);
+                    if ((e + 1) % costInterval === 0) costBar.tick();
+                }
+                if (edgeCount % costInterval !== 0) costBar.tick();
+                costBar.end();
+            }
+
+            // Sort and greedy disjoint pair selection
+            const pairSelectSub = logger.group('Selecting pairs');
+            const sorted = new Uint32Array(edgeCount);
+            const sortedKeys = new Float32Array(edgeCount);
+            const costBits = new Uint32Array(costs.buffer, costs.byteOffset, costs.length);
+            let validCount = 0;
+            for (let i = 0; i < edgeCount; i++) {
+                if (isFloatBitsNonFinite(costBits[i])) continue;
+                sorted[validCount] = i;
+                sortedKeys[validCount] = costs[i];
+                validCount++;
+            }
+            radixSortIndicesByFloat(sorted, sortedKeys, validCount, sortScratch);
+
+            const used = new Uint8Array(n);
+            const pairs: [number, number][] = [];
+
+            for (let t = 0; t < validCount; t++) {
+                const e = sorted[t];
+                const u = edgeU[e], v = edgeV[e];
+                if (used[u] || used[v]) continue;
+                used[u] = 1; used[v] = 1;
+                pairs.push([u, v]);
+                if (pairs.length >= mergesNeeded) break;
+            }
+            pairSelectSub.end();
+
+            if (pairs.length === 0) {
+                g.end();
+                break;
+            }
+
+            // Allocate output table
+            const allocSub = logger.group('Allocating output table');
+            const usedSet = new Uint8Array(n);
+            for (let p = 0; p < pairs.length; p++) {
+                usedSet[pairs[p][0]] = 1;
+                usedSet[pairs[p][1]] = 1;
+            }
+
+            const keepIndices: number[] = [];
+            for (let i = 0; i < n; i++) {
+                if (!usedSet[i]) keepIndices.push(i);
+            }
+
+            const outCount = keepIndices.length + pairs.length;
+            const cols = current.columns;
+            const newColumns: Column[] = [];
+            for (let ci = 0; ci < cols.length; ci++) {
+                const c = cols[ci];
+                newColumns.push(new Column(c.name, new (c.data.constructor as any)(outCount)));
+            }
+            const newTable = new DataTable(newColumns, dataTable.transform);
+            allocSub.end();
+
+            // Copy unmerged splats
+            const copySub = logger.group('Copying kept splats');
+            let dst = 0;
+            for (let t = 0; t < keepIndices.length; t++, dst++) {
+                const src = keepIndices[t];
+                for (let c = 0; c < cols.length; c++) {
+                    newTable.columns[c].data[dst] = cols[c].data[src] as number;
+                }
+            }
+            copySub.end();
+
+            // Merge pairs
+            const mergeOut = {
+                mu: new Float64Array(3),
+                sc: new Float64Array(3),
+                q: new Float64Array(4),
+                op: 0,
+                sh: new Float64Array(allAppearanceCols.length)
             };
 
-            // Trim edge buffers to the valid prefix (edgeU/edgeV were grown).
-            const edgeITrim = edgeU.subarray(0, edgeCount);
-            const edgeJTrim = edgeV.subarray(0, edgeCount);
+            const dstXCol = newTable.getColumnByName('x')!;
+            const dstYCol = newTable.getColumnByName('y')!;
+            const dstZCol = newTable.getColumnByName('z')!;
+            const dstS0Col = newTable.getColumnByName('scale_0')!;
+            const dstS1Col = newTable.getColumnByName('scale_1')!;
+            const dstS2Col = newTable.getColumnByName('scale_2')!;
+            const dstR0Col = newTable.getColumnByName('rot_0')!;
+            const dstR1Col = newTable.getColumnByName('rot_1')!;
+            const dstR2Col = newTable.getColumnByName('rot_2')!;
+            const dstR3Col = newTable.getColumnByName('rot_3')!;
+            const dstOpCol = newTable.getColumnByName('opacity')!;
+            const dstAppCols = allAppearanceCols.map(name => newTable.getColumnByName(name));
 
-            // Single MC sample (matches MC_SAMPLES=1 on CPU).
-            const z = new Float32Array(3);
-            z[0] = Z[0][0]; z[1] = Z[0][1]; z[2] = Z[0][2];
+            const handledCols = new Set([
+                'x', 'y', 'z', 'opacity', 'scale_0', 'scale_1', 'scale_2',
+                'rot_0', 'rot_1', 'rot_2', 'rot_3', ...allAppearanceCols
+            ]);
+            const unhandledColPairs = cols
+            .filter(col => !handledCols.has(col.name))
+            .map(col => ({ src: col, dst: newTable.getColumnByName(col.name)! }))
+            .filter(pair => pair.dst);
 
-            const gpuCost = new GpuEdgeCost(device, n, edgeCount, C);
-            try {
-                await gpuCost.execute(cacheGpu, edgeITrim, edgeJTrim, z, costs);
-            } finally {
-                gpuCost.destroy();
+            const mergeInterval = Math.max(1, Math.ceil(pairs.length / PROGRESS_TICKS));
+            const mergeTicks = Math.ceil(pairs.length / mergeInterval);
+            const mergeBar = logger.bar('Merging splats', mergeTicks);
+            for (let p = 0; p < pairs.length; p++, dst++) {
+                const pi = pairs[p][0], pj = pairs[p][1];
+
+                momentMatch(pi, pj, cx, cy, cz, cop, cs0, cs1, cs2, cr0, cr1, cr2, cr3,
+                    mergeOut, appData, appData.length);
+
+                dstXCol.data[dst] = mergeOut.mu[0];
+                dstYCol.data[dst] = mergeOut.mu[1];
+                dstZCol.data[dst] = mergeOut.mu[2];
+                dstS0Col.data[dst] = mergeOut.sc[0];
+                dstS1Col.data[dst] = mergeOut.sc[1];
+                dstS2Col.data[dst] = mergeOut.sc[2];
+                dstR0Col.data[dst] = mergeOut.q[0];
+                dstR1Col.data[dst] = mergeOut.q[1];
+                dstR2Col.data[dst] = mergeOut.q[2];
+                dstR3Col.data[dst] = mergeOut.q[3];
+                dstOpCol.data[dst] = logit(Math.max(0, Math.min(1, mergeOut.op)));
+
+                for (let k = 0; k < dstAppCols.length; k++) {
+                    if (dstAppCols[k]) dstAppCols[k]!.data[dst] = mergeOut.sh[k];
+                }
+
+                const dominant = cache.mass[pi] >= cache.mass[pj] ? pi : pj;
+                for (let u = 0; u < unhandledColPairs.length; u++) {
+                    unhandledColPairs[u].dst.data[dst] = unhandledColPairs[u].src.data[dominant] as number;
+                }
+
+                if ((p + 1) % mergeInterval === 0) mergeBar.tick();
             }
-            costSub.end();
-        } else {
-            const costInterval = Math.max(1, Math.ceil(edgeCount / PROGRESS_TICKS));
-            const costTicks = Math.ceil(edgeCount / costInterval);
-            const costBar = logger.bar('Computing edge costs', costTicks);
-            for (let e = 0; e < edgeCount; e++) {
-                costs[e] = computeEdgeCost(edgeU[e], edgeV[e], cx, cy, cz,
-                    cache, Z, appData, appData.length);
-                if ((e + 1) % costInterval === 0) costBar.tick();
-            }
-            if (edgeCount % costInterval !== 0) costBar.tick();
-            costBar.end();
-        }
+            if (pairs.length % mergeInterval !== 0) mergeBar.tick();
+            mergeBar.end();
 
-        // Sort and greedy disjoint pair selection
-        const pairSelectSub = logger.group('Selecting pairs');
-        const sorted = new Uint32Array(edgeCount);
-        const sortedKeys = new Float32Array(edgeCount);
-        const costBits = new Uint32Array(costs.buffer, costs.byteOffset, costs.length);
-        let validCount = 0;
-        for (let i = 0; i < edgeCount; i++) {
-            if (isFloatBitsNonFinite(costBits[i])) continue;
-            sorted[validCount] = i;
-            sortedKeys[validCount] = costs[i];
-            validCount++;
-        }
-        radixSortIndicesByFloat(sorted, sortedKeys, validCount, sortScratch);
-
-        const used = new Uint8Array(n);
-        const pairs: [number, number][] = [];
-
-        for (let t = 0; t < validCount; t++) {
-            const e = sorted[t];
-            const u = edgeU[e], v = edgeV[e];
-            if (used[u] || used[v]) continue;
-            used[u] = 1; used[v] = 1;
-            pairs.push([u, v]);
-            if (pairs.length >= mergesNeeded) break;
-        }
-        pairSelectSub.end();
-
-        if (pairs.length === 0) {
+            current = newTable;
             g.end();
-            break;
         }
 
-        // Allocate output table
-        const allocSub = logger.group('Allocating output table');
-        const usedSet = new Uint8Array(n);
-        for (let p = 0; p < pairs.length; p++) {
-            usedSet[pairs[p][0]] = 1;
-            usedSet[pairs[p][1]] = 1;
-        }
-
-        const keepIndices: number[] = [];
-        for (let i = 0; i < n; i++) {
-            if (!usedSet[i]) keepIndices.push(i);
-        }
-
-        const outCount = keepIndices.length + pairs.length;
-        const cols = current.columns;
-        const newColumns: Column[] = [];
-        for (let ci = 0; ci < cols.length; ci++) {
-            const c = cols[ci];
-            newColumns.push(new Column(c.name, new (c.data.constructor as any)(outCount)));
-        }
-        const newTable = new DataTable(newColumns, dataTable.transform);
-        allocSub.end();
-
-        // Copy unmerged splats
-        const copySub = logger.group('Copying kept splats');
-        let dst = 0;
-        for (let t = 0; t < keepIndices.length; t++, dst++) {
-            const src = keepIndices[t];
-            for (let c = 0; c < cols.length; c++) {
-                newTable.columns[c].data[dst] = cols[c].data[src] as number;
-            }
-        }
-        copySub.end();
-
-        // Merge pairs
-        const mergeOut = {
-            mu: new Float64Array(3),
-            sc: new Float64Array(3),
-            q: new Float64Array(4),
-            op: 0,
-            sh: new Float64Array(allAppearanceCols.length)
-        };
-
-        const dstXCol = newTable.getColumnByName('x')!;
-        const dstYCol = newTable.getColumnByName('y')!;
-        const dstZCol = newTable.getColumnByName('z')!;
-        const dstS0Col = newTable.getColumnByName('scale_0')!;
-        const dstS1Col = newTable.getColumnByName('scale_1')!;
-        const dstS2Col = newTable.getColumnByName('scale_2')!;
-        const dstR0Col = newTable.getColumnByName('rot_0')!;
-        const dstR1Col = newTable.getColumnByName('rot_1')!;
-        const dstR2Col = newTable.getColumnByName('rot_2')!;
-        const dstR3Col = newTable.getColumnByName('rot_3')!;
-        const dstOpCol = newTable.getColumnByName('opacity')!;
-        const dstAppCols = allAppearanceCols.map(name => newTable.getColumnByName(name));
-
-        const handledCols = new Set([
-            'x', 'y', 'z', 'opacity', 'scale_0', 'scale_1', 'scale_2',
-            'rot_0', 'rot_1', 'rot_2', 'rot_3', ...allAppearanceCols
-        ]);
-        const unhandledColPairs = cols
-        .filter(col => !handledCols.has(col.name))
-        .map(col => ({ src: col, dst: newTable.getColumnByName(col.name)! }))
-        .filter(pair => pair.dst);
-
-        const mergeInterval = Math.max(1, Math.ceil(pairs.length / PROGRESS_TICKS));
-        const mergeTicks = Math.ceil(pairs.length / mergeInterval);
-        const mergeBar = logger.bar('Merging splats', mergeTicks);
-        for (let p = 0; p < pairs.length; p++, dst++) {
-            const pi = pairs[p][0], pj = pairs[p][1];
-
-            momentMatch(pi, pj, cx, cy, cz, cop, cs0, cs1, cs2, cr0, cr1, cr2, cr3,
-                mergeOut, appData, appData.length);
-
-            dstXCol.data[dst] = mergeOut.mu[0];
-            dstYCol.data[dst] = mergeOut.mu[1];
-            dstZCol.data[dst] = mergeOut.mu[2];
-            dstS0Col.data[dst] = mergeOut.sc[0];
-            dstS1Col.data[dst] = mergeOut.sc[1];
-            dstS2Col.data[dst] = mergeOut.sc[2];
-            dstR0Col.data[dst] = mergeOut.q[0];
-            dstR1Col.data[dst] = mergeOut.q[1];
-            dstR2Col.data[dst] = mergeOut.q[2];
-            dstR3Col.data[dst] = mergeOut.q[3];
-            dstOpCol.data[dst] = logit(Math.max(0, Math.min(1, mergeOut.op)));
-
-            for (let k = 0; k < dstAppCols.length; k++) {
-                if (dstAppCols[k]) dstAppCols[k]!.data[dst] = mergeOut.sh[k];
-            }
-
-            const dominant = cache.mass[pi] >= cache.mass[pj] ? pi : pj;
-            for (let u = 0; u < unhandledColPairs.length; u++) {
-                unhandledColPairs[u].dst.data[dst] = unhandledColPairs[u].src.data[dominant] as number;
-            }
-
-            if ((p + 1) % mergeInterval === 0) mergeBar.tick();
-        }
-        if (pairs.length % mergeInterval !== 0) mergeBar.tick();
-        mergeBar.end();
-
-        current = newTable;
-        g.end();
+        return current;
+    } finally {
+        gpuKnn?.destroy();
+        gpuCost?.destroy();
     }
-
-    return current;
 };
 
 export { sortByVisibility, simplifyGaussians };

@@ -30,9 +30,10 @@ import { KdTree } from '../spatial/kd-tree';
  * compare-and-branch (no dynamic-indexed shift).
  *
  * @param k - Compile-time K, the number of nearest neighbours per query.
+ * @param stackSize - Compile-time per-thread DFS stack depth.
  * @returns WGSL source.
  */
-const knnWgsl = (k: number) => /* wgsl */`
+const knnWgsl = (k: number, stackSize: number) => /* wgsl */`
 struct Uniforms {
     queryOffset: u32,
     queryCount: u32,
@@ -59,7 +60,7 @@ const K: u32 = ${k}u;
 const NULL_NODE: u32 = 0xFFFFFFFFu;
 const F32_MAX: f32 = 3.4028234663852886e+38;
 // log2(N) + slack — safe to ~2^40 nodes which is way past our limits.
-const STACK_SIZE: u32 = 48u;
+const STACK_SIZE: u32 = ${stackSize}u;
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
@@ -84,7 +85,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
     // Stack: (nodeIdx, axis) packed as u32. axis ∈ {0,1,2} in top 2 bits,
     // nodeIdx in low 30 — supports up to ~1B nodes.
-    var stack: array<u32, 48>;
+    var stack: array<u32, ${stackSize}>;
     var sp: u32 = 0u;
     stack[0] = uniforms.rootIdx;   // axis=0 → no axis bits set
     sp = 1u;
@@ -153,9 +154,16 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     }
 
     // Emit unsorted top-K (the decimator does not require sorted neighbours).
+    // Slots that never received a real candidate (n-1 < K) keep F32_MAX in
+    // topDist; emit the sentinel 0xFFFFFFFF for those so downstream
+    // edge-extraction can skip them, matching the CPU path.
     let outBase = bid * K;
     for (var i: u32 = 0u; i < K; i++) {
-        outIndices[outBase + i] = topIdx[i];
+        if (topDist[i] == F32_MAX) {
+            outIndices[outBase + i] = 0xFFFFFFFFu;
+        } else {
+            outIndices[outBase + i] = topIdx[i];
+        }
     }
 }
 `;
@@ -181,8 +189,8 @@ class GpuKnn {
      * @param py - y coordinates.
      * @param pz - z coordinates.
      * @param outNeighbours - destination for per-query K neighbour indices,
-     *   length `N * k`. `outNeighbours[i * k + j]` is one of the k nearest
-     *   neighbours of point i (UNSORTED). Excludes i itself.
+     * length `N * k`. `outNeighbours[i * k + j]` is one of the k nearest
+     * neighbours of point i (UNSORTED). Excludes i itself.
      */
     execute: (
         px: Float32Array,
@@ -200,6 +208,11 @@ class GpuKnn {
     constructor(device: GraphicsDevice, maxN: number, k: number) {
         const workgroupSize = 64;
         const queriesPerBatch = 1024 * workgroupSize;  // 65,536
+        // log2(maxN) + slack; safe to ~2^40 nodes via the 30-bit nodeIdx packing.
+        const stackSize = 48;
+        if (maxN > 0x3FFFFFFF) {
+            throw new Error(`GpuKnn: maxN=${maxN} exceeds 30-bit nodeIdx packing limit (~1B nodes)`);
+        }
 
         const bindGroupFormat = new BindGroupFormat(device, [
             new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
@@ -218,7 +231,7 @@ class GpuKnn {
         const shader = new Shader(device, {
             name: 'compute-knn-kdtree',
             shaderLanguage: SHADERLANGUAGE_WGSL,
-            cshader: knnWgsl(k),
+            cshader: knnWgsl(k, stackSize),
             // @ts-ignore
             computeUniformBufferFormats: {
                 uniforms: new UniformBufferFormat(device, [

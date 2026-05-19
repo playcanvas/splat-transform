@@ -304,12 +304,25 @@ class GpuEdgeCost {
             computeBindGroupFormat: bindGroupFormat
         });
 
+        // Pre-flight the appearance buffer against the device's storage limit
+        // so we fail with a clear message instead of a driver-side error.
+        const appBytes = maxN * maxAppCols * 4;
+        const maxStorage = (device as any).limits?.maxStorageBufferBindingSize;
+        if (typeof maxStorage === 'number' && appBytes > maxStorage) {
+            throw new Error(
+                `GpuEdgeCost: appearance buffer (${appBytes} bytes for ${maxN} splats × ${maxAppCols} cols) ` +
+                `exceeds device maxStorageBufferBindingSize (${maxStorage})`
+            );
+        }
+
         const positionsBuf = new StorageBuffer(device, maxN * 3 * 4, BUFFERUSAGE_COPY_DST);
         const rotRBuf = new StorageBuffer(device, maxN * 9 * 4, BUFFERUSAGE_COPY_DST);
         const splatScalarsBuf = new StorageBuffer(device, maxN * 5 * 4, BUFFERUSAGE_COPY_DST);
-        const appearanceBuf = new StorageBuffer(device, maxN * maxAppCols * 4, BUFFERUSAGE_COPY_DST);
+        const appearanceBuf = new StorageBuffer(device, appBytes, BUFFERUSAGE_COPY_DST);
 
         const edgesBuf = new StorageBuffer(device, maxE * 2 * 4, BUFFERUSAGE_COPY_DST);
+        // Reused across execute() calls — interleaving each call would alloc maxE*8 bytes.
+        const edgePackedScratch = new Uint32Array(maxE * 2);
 
         const outBuf = new StorageBuffer(
             device,
@@ -354,13 +367,12 @@ class GpuEdgeCost {
             splatScalarsBuf.write(0, cache.splatScalars, 0, n * 5);
             appearanceBuf.write(0, cache.appearance, 0, n * cache.numAppCols);
 
-            // Upload edges interleaved (i, j).
-            const edgePacked = new Uint32Array(e * 2);
+            // Upload edges interleaved (i, j) into the shared scratch.
             for (let k = 0; k < e; k++) {
-                edgePacked[k * 2] = edgeI[k];
-                edgePacked[k * 2 + 1] = edgeJ[k];
+                edgePackedScratch[k * 2] = edgeI[k];
+                edgePackedScratch[k * 2 + 1] = edgeJ[k];
             }
-            edgesBuf.write(0, edgePacked, 0, e * 2);
+            edgesBuf.write(0, edgePackedScratch, 0, e * 2);
 
             compute.setParameter('numAppCols', cache.numAppCols);
             compute.setParameter('z0', z[0]);

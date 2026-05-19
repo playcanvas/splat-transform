@@ -36,7 +36,7 @@ class RadixSortScratch {
  *
  * @param bits - Float32 bit pattern.
  * @returns A u32 such that radix-sorting these values yields the same order
- *   as comparator-sorting the original Float32s ascending.
+ * as comparator-sorting the original Float32s ascending.
  */
 const encodeFloatKey = (bits: number): number => {
     return (bits & 0x80000000) !== 0 ? (~bits >>> 0) : ((bits ^ 0x80000000) >>> 0);
