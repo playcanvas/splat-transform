@@ -589,7 +589,13 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 }
                 keepCount = Math.max(0, keepCount);
 
-                result = simplifyGaussians(result, keepCount);
+                // Use GPU KNN when a device is available; falls back to
+                // CPU KD-tree otherwise. Async because the GPU dispatch
+                // returns a promise (CPU path resolves synchronously).
+                result = await simplifyGaussians(
+                    result, keepCount,
+                    options?.createDevice ? await options.createDevice() : undefined
+                );
                 break;
             }
             case 'filterFloaters': {

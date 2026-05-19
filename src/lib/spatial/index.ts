@@ -6,3 +6,4 @@ export { kmeans } from './k-means';
 export { KdTree } from './kd-tree';
 export type { KdTreeNode } from './kd-tree';
 export { quantize1d } from './quantize-1d';
+export { RadixSortScratch, radixSortIndicesByFloat, isFloatBitsNonFinite } from './radix-sort';

@@ -231,6 +231,63 @@ class KdTree {
 
         return { indices: resultIndices, distances: resultDist };
     }
+
+    /**
+     * Flatten the tree into GPU-friendly typed arrays. Each tree node is
+     * assigned a tree-index in pre-order DFS. The arrays are parallel:
+     * for tree-index `t`, the node holds splat `nodeSplatIdx[t]` whose
+     * position is `(nodeX[t], nodeY[t], nodeZ[t])`. Children live at
+     * `nodeLeft[t]` and `nodeRight[t]` (tree indices), with the sentinel
+     * `0xFFFFFFFF` for missing children.
+     *
+     * Positions are denormalised at each tree node (rather than indirected
+     * through `nodeSplatIdx` + the source position arrays) so a tree-walk
+     * does one read per visit instead of two. Costs 12 bytes/node extra.
+     *
+     * Layout assumes the underlying `centroids` DataTable has columns
+     * `x`, `y`, `z` (the first three columns). The constructor accepts
+     * any column set, so callers must ensure these are present and first.
+     *
+     * @returns Parallel arrays of length N where N = number of points.
+     *   The root is at index 0.
+     */
+    flattenForGpu(): {
+        nodeSplatIdx: Uint32Array;
+        nodeX: Float32Array;
+        nodeY: Float32Array;
+        nodeZ: Float32Array;
+        nodeLeft: Uint32Array;
+        nodeRight: Uint32Array;
+        rootIdx: number;
+    } {
+        const n = this.centroids.numRows;
+        const nodeSplatIdx = new Uint32Array(n);
+        const nodeX = new Float32Array(n);
+        const nodeY = new Float32Array(n);
+        const nodeZ = new Float32Array(n);
+        const nodeLeft = new Uint32Array(n);
+        const nodeRight = new Uint32Array(n);
+        nodeLeft.fill(0xFFFFFFFF);
+        nodeRight.fill(0xFFFFFFFF);
+
+        const x = this.colData[0], y = this.colData[1], z = this.colData[2];
+
+        let cursor = 0;
+        const visit = (node: KdTreeNode): number => {
+            const treeIdx = cursor++;
+            const splat = node.index;
+            nodeSplatIdx[treeIdx] = splat;
+            nodeX[treeIdx] = x[splat];
+            nodeY[treeIdx] = y[splat];
+            nodeZ[treeIdx] = z[splat];
+            if (node.left) nodeLeft[treeIdx] = visit(node.left);
+            if (node.right) nodeRight[treeIdx] = visit(node.right);
+            return treeIdx;
+        };
+        const rootIdx = visit(this.root);
+
+        return { nodeSplatIdx, nodeX, nodeY, nodeZ, nodeLeft, nodeRight, rootIdx };
+    }
 }
 
 export { KdTreeNode, KdTree };
