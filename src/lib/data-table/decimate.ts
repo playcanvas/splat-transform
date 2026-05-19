@@ -63,7 +63,7 @@ const makeGaussianSamples = (n: number, seed: number): Float64Array[] => {
 
 // ---------- 3x3 matrix helpers (row-major, 9 floats) ----------
 
-const quatToRotmat = (qw: number, qx: number, qy: number, qz: number, out: Float64Array, o: number) => {
+const quatToRotmat = (qw: number, qx: number, qy: number, qz: number, out: Float32Array | Float64Array, o: number) => {
     const xx = qx * qx, yy = qy * qy, zz = qz * qz;
     const wx = qw * qx, wy = qw * qy, wz = qw * qz;
     const xy = qx * qy, xz = qx * qz, yz = qy * qz;
@@ -78,13 +78,7 @@ const quatToRotmat = (qw: number, qx: number, qy: number, qz: number, out: Float
     out[o + 8] = 1 - 2 * (xx + yy);
 };
 
-const transpose3 = (src: Float64Array, so: number, dst: Float64Array, doff: number) => {
-    dst[doff] = src[so]; dst[doff + 1] = src[so + 3]; dst[doff + 2] = src[so + 6];
-    dst[doff + 3] = src[so + 1]; dst[doff + 4] = src[so + 4]; dst[doff + 5] = src[so + 7];
-    dst[doff + 6] = src[so + 2]; dst[doff + 7] = src[so + 5]; dst[doff + 8] = src[so + 8];
-};
-
-const sigmaFromRotVar = (R: Float64Array, r: number, vx: number, vy: number, vz: number, out: Float64Array, o: number) => {
+const sigmaFromRotVar = (R: Float32Array | Float64Array, r: number, vx: number, vy: number, vz: number, out: Float32Array | Float64Array, o: number) => {
     const r00 = R[r], r01 = R[r + 1], r02 = R[r + 2];
     const r10 = R[r + 3], r11 = R[r + 4], r12 = R[r + 5];
     const r20 = R[r + 6], r21 = R[r + 7], r22 = R[r + 8];
@@ -110,7 +104,7 @@ const det3 = (A: Float64Array, o: number) => {
 const gaussLogpdfDiagrot = (
     x: number, y: number, z: number,
     mx: number, my: number, mz: number,
-    R: Float64Array, ro: number,
+    R: Float32Array | Float64Array, ro: number,
     invx: number, invy: number, invz: number, logdet: number
 ) => {
     const dx = x - mx, dy = y - my, dz = z - mz;
@@ -121,10 +115,17 @@ const gaussLogpdfDiagrot = (
     return -0.5 * (3 * LOG2PI + logdet + quad);
 };
 
-// Jacobi eigendecomposition for 3x3 symmetric matrix (full 9-element row-major)
-const eigenSymmetric3x3 = (Ain: Float64Array) => {
-    const A = new Float64Array(Ain);
-    const V = new Float64Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
+// Jacobi eigendecomposition for 3x3 symmetric matrix (full 9-element row-major).
+// `A` and `V` are caller-provided 9-element scratch buffers; `Ain` is copied
+// into `A` on entry, and on return `A`'s diagonal holds the eigenvalues and
+// `V` holds the eigenvectors as columns. Returns nothing — caller reads from
+// the buffers it passed in. This shape exists to avoid the per-call
+// allocations the merge loop would otherwise burn at ~Nlog2(N) rate.
+const eigenSymmetric3x3 = (Ain: Float64Array, A: Float64Array, V: Float64Array) => {
+    A.set(Ain);
+    V[0] = 1; V[1] = 0; V[2] = 0;
+    V[3] = 0; V[4] = 1; V[5] = 0;
+    V[6] = 0; V[7] = 0; V[8] = 1;
 
     for (let iter = 0; iter < 24; iter++) {
         let p = 0, q = 1;
@@ -165,11 +166,12 @@ const eigenSymmetric3x3 = (Ain: Float64Array) => {
             V[kq] = s * vkp + c * vkq;
         }
     }
-
-    return { values: [A[0], A[4], A[8]], vectors: V };
 };
 
-const rotmatToQuat = (R: Float64Array, o: number): Float64Array => {
+// Writes the unit quaternion (w, x, y, z) to `out[oo..oo+3]`. The previous
+// version returned a fresh Float64Array per call — at ~9M merge calls that's
+// 280 MB of throwaway garbage per decimate.
+const rotmatToQuat = (R: Float64Array, o: number, out: Float64Array, oo: number) => {
     const m00 = R[o], m11 = R[o + 4], m22 = R[o + 8];
     const tr = m00 + m11 + m22;
     let qw: number, qx: number, qy: number, qz: number;
@@ -202,7 +204,10 @@ const rotmatToQuat = (R: Float64Array, o: number): Float64Array => {
 
     const n = Math.hypot(qw, qx, qy, qz);
     const inv = 1 / Math.max(n, 1e-12);
-    return new Float64Array([qw * inv, qx * inv, qy * inv, qz * inv]);
+    out[oo] = qw * inv;
+    out[oo + 1] = qx * inv;
+    out[oo + 2] = qy * inv;
+    out[oo + 3] = qz * inv;
 };
 
 // ====================== ELLIPSOID AREA ======================
@@ -219,28 +224,36 @@ const ellipsoidArea = (sx: number, sy: number, sz: number): number => {
 
 // ====================== PER-SPLAT CACHE ======================
 
+// Float32 throughout — at 17.9M splats the cache hits ~2.5GB at Float64 and the
+// downstream cost is a noisy single-MC-sample heuristic anyway, so f32
+// precision is fine. `Rt` is dropped (derivable from `R` via index swap at
+// call sites); `invdiag` is kept since it amortises ~6 divisions per edge
+// across ~k edges per splat.
 interface SplatCache {
-    R: Float64Array;
-    Rt: Float64Array;
-    v: Float64Array;       // variances (scale^2 + eps) per axis
-    invdiag: Float64Array;
-    logdet: Float64Array;
-    sigma: Float64Array;   // full 9-element covariance
-    mass: Float64Array;
+    R: Float32Array;       // row-major 3×3 rotation per splat
+    v: Float32Array;       // variances (scale^2 + eps) per axis
+    invdiag: Float32Array; // 1 / v per axis, precomputed
+    logdet: Float32Array;
+    sigma: Float32Array;   // full 9-element covariance per splat
+    mass: Float32Array;
 }
 
+// `forGpu` skips the cache fields the GPU kernel recomputes on the fly —
+// `invdiag` (1/v, computed in the kernel) and `sigma` (= R·diag(v)·Rᵀ, also
+// computed in the kernel). On a 17.9M-splat run that's ~860 MB less held for
+// the entire decimate.
 const buildPerSplatCache = (
     n: number,
     cop: any, cs0: any, cs1: any, cs2: any,
-    cr0: any, cr1: any, cr2: any, cr3: any
+    cr0: any, cr1: any, cr2: any, cr3: any,
+    forGpu: boolean
 ): SplatCache => {
-    const R = new Float64Array(n * 9);
-    const Rt = new Float64Array(n * 9);
-    const v = new Float64Array(n * 3);
-    const invdiag = new Float64Array(n * 3);
-    const logdet = new Float64Array(n);
-    const sigma = new Float64Array(n * 9);
-    const mass = new Float64Array(n);
+    const R = new Float32Array(n * 9);
+    const v = new Float32Array(n * 3);
+    const invdiag = forGpu ? new Float32Array(0) : new Float32Array(n * 3);
+    const logdet = new Float32Array(n);
+    const sigma = forGpu ? new Float32Array(0) : new Float32Array(n * 9);
+    const mass = new Float32Array(n);
 
     for (let i = 0; i < n; i++) {
         const i3 = 3 * i;
@@ -256,9 +269,11 @@ const buildPerSplatCache = (
         const vz = sz * sz + EPS_COV;
 
         v[i3] = vx; v[i3 + 1] = vy; v[i3 + 2] = vz;
-        invdiag[i3] = 1 / Math.max(vx, 1e-30);
-        invdiag[i3 + 1] = 1 / Math.max(vy, 1e-30);
-        invdiag[i3 + 2] = 1 / Math.max(vz, 1e-30);
+        if (!forGpu) {
+            invdiag[i3] = 1 / Math.max(vx, 1e-30);
+            invdiag[i3 + 1] = 1 / Math.max(vy, 1e-30);
+            invdiag[i3 + 2] = 1 / Math.max(vz, 1e-30);
+        }
         logdet[i] = Math.log(Math.max(vx, 1e-30)) + Math.log(Math.max(vy, 1e-30)) + Math.log(Math.max(vz, 1e-30));
 
         // Normalize quaternion before building rotation
@@ -268,8 +283,9 @@ const buildPerSplatCache = (
         qw *= invq; qx *= invq; qy *= invq; qz *= invq;
 
         quatToRotmat(qw, qx, qy, qz, R, i9);
-        transpose3(R, i9, Rt, i9);
-        sigmaFromRotVar(R, i9, vx, vy, vz, sigma, i9);
+        if (!forGpu) {
+            sigmaFromRotVar(R, i9, vx, vy, vz, sigma, i9);
+        }
 
         // Area·α weighting — matches the merge formula in `momentMatch`, so
         // the KL cost in `computeEdgeCost` (which uses `cache.mass` to derive
@@ -279,7 +295,7 @@ const buildPerSplatCache = (
         mass[i] = linAlpha * ellipsoidArea(sx, sy, sz) + 1e-12;
     }
 
-    return { R, Rt, v, invdiag, logdet, sigma, mass };
+    return { R, v, invdiag, logdet, sigma, mass };
 };
 
 // ====================== COST FUNCTION ======================
@@ -359,15 +375,15 @@ const computeEdgeCost = (
     for (let s = 0; s < Z.length; s++) {
         const z0 = Z[s][0], z1 = Z[s][1], z2 = Z[s][2];
 
-        // x_i = mu_i + R_i^T * diag(std_i) * z
-        const xix = mux + z0 * stdix * cache.Rt[i9] + z1 * stdiy * cache.Rt[i9 + 3] + z2 * stdiz * cache.Rt[i9 + 6];
-        const xiy = muy + z0 * stdix * cache.Rt[i9 + 1] + z1 * stdiy * cache.Rt[i9 + 4] + z2 * stdiz * cache.Rt[i9 + 7];
-        const xiz = muz + z0 * stdix * cache.Rt[i9 + 2] + z1 * stdiy * cache.Rt[i9 + 5] + z2 * stdiz * cache.Rt[i9 + 8];
+        // Sample x = mu + R · diag(std) · z (same form as the GPU kernel).
+        // Each row a of R sits at R[i9 + 3a .. i9 + 3a + 2].
+        const xix = mux + z0 * stdix * cache.R[i9 + 0] + z1 * stdiy * cache.R[i9 + 1] + z2 * stdiz * cache.R[i9 + 2];
+        const xiy = muy + z0 * stdix * cache.R[i9 + 3] + z1 * stdiy * cache.R[i9 + 4] + z2 * stdiz * cache.R[i9 + 5];
+        const xiz = muz + z0 * stdix * cache.R[i9 + 6] + z1 * stdiy * cache.R[i9 + 7] + z2 * stdiz * cache.R[i9 + 8];
 
-        // x_j = mu_j + R_j^T * diag(std_j) * z
-        const xjx = mvx + z0 * stdjx * cache.Rt[j9] + z1 * stdjy * cache.Rt[j9 + 3] + z2 * stdjz * cache.Rt[j9 + 6];
-        const xjy = mvy + z0 * stdjx * cache.Rt[j9 + 1] + z1 * stdjy * cache.Rt[j9 + 4] + z2 * stdjz * cache.Rt[j9 + 7];
-        const xjz = mvz + z0 * stdjx * cache.Rt[j9 + 2] + z1 * stdjy * cache.Rt[j9 + 5] + z2 * stdjz * cache.Rt[j9 + 8];
+        const xjx = mvx + z0 * stdjx * cache.R[j9 + 0] + z1 * stdjy * cache.R[j9 + 1] + z2 * stdjz * cache.R[j9 + 2];
+        const xjy = mvy + z0 * stdjx * cache.R[j9 + 3] + z1 * stdjy * cache.R[j9 + 4] + z2 * stdjz * cache.R[j9 + 5];
+        const xjz = mvz + z0 * stdjx * cache.R[j9 + 6] + z1 * stdjy * cache.R[j9 + 7] + z2 * stdjz * cache.R[j9 + 8];
 
         // Evaluate log p_ij at samples from component i
         const logNiOnI = gaussLogpdfDiagrot(xix, xiy, xiz, mux, muy, muz,
@@ -412,6 +428,21 @@ const computeEdgeCost = (
 //     no out-of-range α, so the output PLY/SOG stays standard logit-encoded)
 //   - no Spark filter floor: we're pair-wise merging, not building an LOD
 //     grid, so the inter-mean filter regularization adds blur for no benefit
+// Module-level scratch for `momentMatch`. The per-call alternative — 6×
+// Float64Array(9) inside `momentMatch`, plus 2× inside `eigenSymmetric3x3` —
+// produced ~600 bytes of throwaway garbage per call. At ~9M pairs per
+// decimate that's ~5 GB of transient allocation, which bumped peak RSS by
+// 3-4 GB before V8 caught up with GC. Reusing these is safe because
+// `momentMatch` is called serially from the merge loop.
+const _mmSigI = new Float64Array(9);
+const _mmSigJ = new Float64Array(9);
+const _mmRi = new Float64Array(9);
+const _mmRj = new Float64Array(9);
+const _mmSig = new Float64Array(9);
+const _mmRm = new Float64Array(9);
+const _mmEigA = new Float64Array(9);
+const _mmEigV = new Float64Array(9);
+
 const momentMatch = (
     i: number, j: number,
     cx: any, cy: any, cz: any,
@@ -446,11 +477,11 @@ const momentMatch = (
     const muy = pi * myi + pj * myj;
     const muz = pi * mzi + pj * mzj;
 
-    // Per-input covariance matrices
-    const SigI = new Float64Array(9);
-    const SigJ = new Float64Array(9);
-    const Ri = new Float64Array(9);
-    const Rj = new Float64Array(9);
+    // Per-input covariance matrices — module-scoped scratch (see top of file).
+    const SigI = _mmSigI;
+    const SigJ = _mmSigJ;
+    const Ri = _mmRi;
+    const Rj = _mmRj;
 
     let qwi = cr0[i] as number, qxi = cr1[i] as number, qyi = cr2[i] as number, qzi = cr3[i] as number;
     const ni = 1 / Math.max(Math.hypot(qwi, qxi, qyi, qzi), 1e-12);
@@ -467,8 +498,8 @@ const momentMatch = (
     const dix = mxi - mux, diy = myi - muy, diz = mzi - muz;
     const djx = mxj - mux, djy = myj - muy, djz = mzj - muz;
 
-    // Merged covariance (weighted sum of δδᵀ + Σ_k)
-    const Sig = new Float64Array(9);
+    // Merged covariance (weighted sum of δδᵀ + Σ_k) — scratch.
+    const Sig = _mmSig;
     Sig[0] = pi * (dix * dix + SigI[0]) + pj * (djx * djx + SigJ[0]);
     Sig[1] = pi * (dix * diy + SigI[1]) + pj * (djx * djy + SigJ[1]);
     Sig[2] = pi * (dix * diz + SigI[2]) + pj * (djx * djz + SigJ[2]);
@@ -482,39 +513,59 @@ const momentMatch = (
     Sig[4] += EPS_COV;
     Sig[8] += EPS_COV;
 
-    // Eigendecompose → scales (= √λ) and rotation
-    const ev = eigenSymmetric3x3(Sig);
-    let vals = ev.values;
-    const vecs = ev.vectors;
-    const order = [0, 1, 2].sort((a, b) => vals[b] - vals[a]);
-    vals = order.map(k => Math.max(vals[k], 1e-18));
+    // Eigendecompose → scales (= √λ) and rotation. `_mmEigA` ends with the
+    // eigenvalues on its diagonal (positions 0/4/8); `_mmEigV` holds the
+    // eigenvectors as columns.
+    eigenSymmetric3x3(Sig, _mmEigA, _mmEigV);
+    const vecs = _mmEigV;
 
-    const s0 = Math.sqrt(vals[0]);
-    const s1 = Math.sqrt(vals[1]);
-    const s2 = Math.sqrt(vals[2]);
+    // Sort eigenvalue indices descending. Hand-unrolled to avoid the
+    // `[0,1,2].sort(...)` + `.map(...)` allocations.
+    const v0 = _mmEigA[0], v1 = _mmEigA[4], v2 = _mmEigA[8];
+    let o0: number, o1: number, o2: number;
+    if (v0 >= v1) {
+        if (v1 >= v2)      {
+            o0 = 0; o1 = 1; o2 = 2;
+        } else if (v0 >= v2) {
+            o0 = 0; o1 = 2; o2 = 1;
+        } else               {
+            o0 = 2; o1 = 0; o2 = 1;
+        }
+    } else {
+        if (v0 >= v2)      {
+            o0 = 1; o1 = 0; o2 = 2;
+        } else if (v1 >= v2) {
+            o0 = 1; o1 = 2; o2 = 0;
+        } else               {
+            o0 = 2; o1 = 1; o2 = 0;
+        }
+    }
+    const ev0 = Math.max(_mmEigA[3 * o0 + o0], 1e-18);
+    const ev1 = Math.max(_mmEigA[3 * o1 + o1], 1e-18);
+    const ev2 = Math.max(_mmEigA[3 * o2 + o2], 1e-18);
+
+    const s0 = Math.sqrt(ev0);
+    const s1 = Math.sqrt(ev1);
+    const s2 = Math.sqrt(ev2);
 
     // Mass-conserving opacity, capped at 1 (no scale inflation). No lower
     // clamp here — `logit()` at the storage step already pins p ≥ 1e-7.
     const alphaM = Math.min(1, W / Math.max(ellipsoidArea(s0, s1, s2), 1e-30));
 
-    // Build rotation matrix from sorted eigenvectors (right-handed)
-    const Rm = new Float64Array(9);
-    for (let c = 0; c < 3; c++) {
-        const src = order[c];
-        Rm[0 + c] = vecs[0 + src];
-        Rm[3 + c] = vecs[3 + src];
-        Rm[6 + c] = vecs[6 + src];
-    }
+    // Build rotation matrix from sorted eigenvectors (right-handed) — scratch.
+    const Rm = _mmRm;
+    Rm[0] = vecs[o0]; Rm[1] = vecs[o1]; Rm[2] = vecs[o2];
+    Rm[3] = vecs[3 + o0]; Rm[4] = vecs[3 + o1]; Rm[5] = vecs[3 + o2];
+    Rm[6] = vecs[6 + o0]; Rm[7] = vecs[6 + o1]; Rm[8] = vecs[6 + o2];
     if (det3(Rm, 0) < 0) {
         Rm[2] *= -1; Rm[5] *= -1; Rm[8] *= -1;
     }
-    const q = rotmatToQuat(Rm, 0);
+    rotmatToQuat(Rm, 0, out.q, 0);
 
     out.mu[0] = mux; out.mu[1] = muy; out.mu[2] = muz;
     out.sc[0] = Math.log(s0);
     out.sc[1] = Math.log(s1);
     out.sc[2] = Math.log(s2);
-    out.q[0] = q[0]; out.q[1] = q[1]; out.q[2] = q[2]; out.q[3] = q[3];
     out.op = alphaM;
 
     // Color: weight-normalized (area·α weighted) average
@@ -639,25 +690,21 @@ const simplifyGaussians = async (
     // Reusable scratch buffers for the per-iteration edge-cost sort.
     const sortScratch = new RadixSortScratch();
 
-    // Hoist GPU resources above the merging loop so the storage buffers and
-    // compiled shaders are reused across iterations. Sizing is the initial
-    // post-prune row count + the worst-case edge count (every neighbour an
-    // edge before i<j dedup); iterations only shrink from there.
+    // Hoist GPU resources above the merging loop. Empirically this lowers peak
+    // RSS by ~1.4 GB on a 17.9M-splat run vs. per-iteration construction —
+    // the per-iteration version has a transient destroy/create overlap where
+    // GpuKnn buffers haven't been reclaimed by the WebGPU backend before
+    // GpuEdgeCost allocates fresh ones. Hoisting reuses the same backing
+    // storage across iterations. Edge buffer is sized to the post-i<j-dedup
+    // bound (n·k/2).
     const initialN = current.numRows;
     const kEffMax = Math.min(Math.max(1, KNN_K), Math.max(1, initialN - 1));
-    const initialMaxE = initialN * kEffMax;
+    const initialMaxE = Math.ceil(initialN * kEffMax / 2);
     const numAppColsMax = allAppearanceCols.length;
     const gpuKnn = device ? new GpuKnn(device, initialN, kEffMax) : undefined;
     const gpuCost = device ? new GpuEdgeCost(device, initialN, initialMaxE, numAppColsMax) : undefined;
-    // Float32 scratch the GPU edge-cost path packs into each iteration.
-    const positionsPackedScratch = device ? new Float32Array(initialN * 3) : undefined;
-    const splatScalarsScratch = device ? new Float32Array(initialN * 5) : undefined;
-    const rotRFScratch = device ? new Float32Array(initialN * 9) : undefined;
-    const appearanceScratch = device ? new Float32Array(initialN * numAppColsMax) : undefined;
-    const zScratch = device ? new Float32Array(3) : undefined;
-    if (zScratch) {
-        zScratch[0] = Z[0][0]; zScratch[1] = Z[0][1]; zScratch[2] = Z[0][2];
-    }
+    const z = new Float32Array(3);
+    z[0] = Z[0][0]; z[1] = Z[0][1]; z[2] = Z[0][2];
 
     // Step 2: Iterative merging.
     // Each iteration roughly halves the row count (greedy disjoint pair
@@ -666,14 +713,14 @@ const simplifyGaussians = async (
     // estimate render unnumbered, which is fine.
     const estIterations = Math.max(1, Math.ceil(Math.log2(current.numRows / targetCount)));
     let iterationIndex = 0;
-    try {
 
+    try {
         while (current.numRows > targetCount) {
             const n = current.numRows;
-            // kEff is fixed to `kEffMax` so the hoisted GPU resources (which bake
-            // k into the shader) work across every iteration. When `n - 1 <
-            // kEffMax`, both KNN paths fill the surplus slots with 0xFFFFFFFF and
-            // the edge-extraction loop ignores them.
+            // kEff fixed at kEffMax so the hoisted GPU resources (which bake k
+            // into the shader and into buffer sizing) work across every iteration.
+            // When n - 1 < kEffMax, both KNN paths fill the surplus slots with the
+            // sentinel 0xFFFFFFFF and the edge-extraction loop ignores them.
             const kEff = kEffMax;
 
             iterationIndex++;
@@ -697,7 +744,7 @@ const simplifyGaussians = async (
             const cr3 = current.getColumnByName('rot_3')!.data;
 
             const cacheSub = logger.group('Building per-splat cache');
-            const cache = buildPerSplatCache(n, cop, cs0, cs1, cs2, cr0, cr1, cr2, cr3);
+            const cache = buildPerSplatCache(n, cop, cs0, cs1, cs2, cr0, cr1, cr2, cr3, !!device);
             cacheSub.end();
 
             // Flat per-query KNN output. allKnn[i*kEff + j] is one of the kEff
@@ -705,8 +752,10 @@ const simplifyGaussians = async (
             // ascending by distance; GPU path emits an unsorted top-K. Neither
             // ordering matters downstream — the edge-extraction loop only filters
             // j > i. Sentinel 0xFFFFFFFF marks unfilled slots when fewer than kEff
-            // non-self neighbours exist.
-            const allKnn = new Uint32Array(n * kEff);
+            // non-self neighbours exist. `let` so we can drop the reference after
+            // edge extraction — letting it go out of scope at end of iteration
+            // doesn't help because V8 grows the heap before collecting.
+            let allKnn = new Uint32Array(n * kEff);
 
             const pxArr = cx instanceof Float32Array ? cx : new Float32Array(cx as any);
             const pyArr = cy instanceof Float32Array ? cy : new Float32Array(cy as any);
@@ -779,6 +828,11 @@ const simplifyGaussians = async (
                 }
             }
 
+            // allKnn was only read by the edge-extraction loop above. Drop the
+            // reference so V8 can reclaim the 1.14 GB (at N=17.9M, k=16) — see
+            // the comment at the declaration.
+            allKnn = new Uint32Array(0);
+
             if (edgeCount === 0) {
                 g.end();
                 break;
@@ -791,19 +845,18 @@ const simplifyGaussians = async (
             }
 
             const mergesNeeded = n - targetCount;
-            const costs = new Float32Array(edgeCount);
+            let costs = new Float32Array(edgeCount);
 
             if (device) {
-            // GPU path: pack per-splat cache into the hoisted Float32 scratch
-            // buffers in the layout the kernel expects (interleaved positions,
-            // interleaved scalars). The Float64 cache is downcast to Float32.
+            // GPU path: pack per-splat cache into the layout the kernel
+            // expects (interleaved positions, interleaved scalars). The
+            // cache is already Float32, so `R` passes through directly.
                 const costSub = logger.group('Computing edge costs (GPU)');
 
                 const C = appData.length;
-                const positionsPacked = positionsPackedScratch!;
-                const splatScalars = splatScalarsScratch!;
-                const rotRF = rotRFScratch!;
-                const appearance = appearanceScratch!;
+                const positionsPacked = new Float32Array(n * 3);
+                const splatScalars = new Float32Array(n * 5);
+                const appearance = new Float32Array(n * C);
 
                 for (let s = 0; s < n; s++) {
                     positionsPacked[s * 3 + 0] = cx[s] as number;
@@ -816,8 +869,6 @@ const simplifyGaussians = async (
                     splatScalars[s * 5 + 3] = cache.v[s * 3 + 1];
                     splatScalars[s * 5 + 4] = cache.v[s * 3 + 2];
                 }
-                // Copy rotation matrices (Float64 → Float32).
-                for (let k = 0; k < n * 9; k++) rotRF[k] = cache.R[k];
                 // Pack appearance row-major.
                 for (let s = 0; s < n; s++) {
                     const base = s * C;
@@ -827,7 +878,7 @@ const simplifyGaussians = async (
                 }
                 const cacheGpu: EdgeCostCache = {
                     positions: positionsPacked,
-                    rotR: rotRF,
+                    rotR: cache.R,
                     splatScalars,
                     appearance,
                     numAppCols: C,
@@ -838,7 +889,7 @@ const simplifyGaussians = async (
                 const edgeITrim = edgeU.subarray(0, edgeCount);
                 const edgeJTrim = edgeV.subarray(0, edgeCount);
 
-                await gpuCost!.execute(cacheGpu, edgeITrim, edgeJTrim, zScratch!, costs);
+                await gpuCost!.execute(cacheGpu, edgeITrim, edgeJTrim, z, costs);
                 costSub.end();
             } else {
                 const costInterval = Math.max(1, Math.ceil(edgeCount / PROGRESS_TICKS));
@@ -853,19 +904,34 @@ const simplifyGaussians = async (
                 costBar.end();
             }
 
-            // Sort and greedy disjoint pair selection
+            // Release the per-splat cache fields that are no longer needed —
+            // the merge loop only reads `cache.mass` for dominant-side
+            // selection. At N=17.9M that's ~1.7 GB of buffers (R, v, invdiag,
+            // logdet, sigma) we can drop before the sort phase pushes peak.
+            cache.R = new Float32Array(0);
+            cache.v = new Float32Array(0);
+            cache.invdiag = new Float32Array(0);
+            cache.logdet = new Float32Array(0);
+            cache.sigma = new Float32Array(0);
+
+            // Sort and greedy disjoint pair selection. We pass `costs` directly as
+            // the parallel-key buffer (an edgeCount-sized Float32 scratch would
+            // otherwise add ~580 MB to peak at 17.9M splats). Non-finite costs are
+            // replaced by +Inf in place so they sort to the end; the greedy loop
+            // caps at `validCount` to ignore them. `costs` is iteration-local and
+            // not read again after this point, so mutating it is safe.
             const pairSelectSub = logger.group('Selecting pairs');
-            const sorted = new Uint32Array(edgeCount);
-            const sortedKeys = new Float32Array(edgeCount);
+            let sorted = new Uint32Array(edgeCount);
             const costBits = new Uint32Array(costs.buffer, costs.byteOffset, costs.length);
-            let validCount = 0;
+            let validCount = edgeCount;
             for (let i = 0; i < edgeCount; i++) {
-                if (isFloatBitsNonFinite(costBits[i])) continue;
-                sorted[validCount] = i;
-                sortedKeys[validCount] = costs[i];
-                validCount++;
+                sorted[i] = i;
+                if (isFloatBitsNonFinite(costBits[i])) {
+                    costs[i] = Infinity;
+                    validCount--;
+                }
             }
-            radixSortIndicesByFloat(sorted, sortedKeys, validCount, sortScratch);
+            radixSortIndicesByFloat(sorted, costs, edgeCount, sortScratch);
 
             const used = new Uint8Array(n);
             const pairs: [number, number][] = [];
@@ -879,6 +945,15 @@ const simplifyGaussians = async (
                 if (pairs.length >= mergesNeeded) break;
             }
             pairSelectSub.end();
+
+            // Release the sort/edge scratch — none of it is read during the
+            // merge below. At N=17.9M this is ~2.85 GB (edgeU/V 1.14 GB,
+            // sorted 0.57 GB, costs 0.57 GB) that V8 would otherwise keep
+            // pinned through the merge.
+            edgeU = new Uint32Array(0);
+            edgeV = new Uint32Array(0);
+            costs = new Float32Array(0);
+            sorted = new Uint32Array(0);
 
             if (pairs.length === 0) {
                 g.end();

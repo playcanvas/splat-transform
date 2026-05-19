@@ -39,20 +39,22 @@ struct Uniforms {
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
-// Edge list, interleaved: edges[2e] = i, edges[2e+1] = j.
-@group(0) @binding(1) var<storage, read> edges: array<u32>;
+// Edge list split into two parallel arrays — avoids the host having to
+// allocate an edgeCount*2 Uint32 scratch to interleave (i, j) on every call.
+@group(0) @binding(1) var<storage, read> edgesI: array<u32>;
+@group(0) @binding(2) var<storage, read> edgesJ: array<u32>;
 // Positions, interleaved xyz: positions[3s + 0/1/2].
-@group(0) @binding(2) var<storage, read> positions: array<f32>;
+@group(0) @binding(3) var<storage, read> positions: array<f32>;
 // Row-major 3x3 rotation matrix per splat (9 floats per splat).
-@group(0) @binding(3) var<storage, read> rotR: array<f32>;
+@group(0) @binding(4) var<storage, read> rotR: array<f32>;
 // Per-splat scalars packed: splatScalars[5s + 0] = mass,
 //                          splatScalars[5s + 1] = logdet,
 //                          splatScalars[5s + 2..4] = variances (vx, vy, vz).
-@group(0) @binding(4) var<storage, read> splatScalars: array<f32>;
+@group(0) @binding(5) var<storage, read> splatScalars: array<f32>;
 // Appearance: row-major, app[s * C + k] = ch k of splat s.
-@group(0) @binding(5) var<storage, read> appearance: array<f32>;
+@group(0) @binding(6) var<storage, read> appearance: array<f32>;
 // Output: cost per edge.
-@group(0) @binding(6) var<storage, read_write> costs: array<f32>;
+@group(0) @binding(7) var<storage, read_write> costs: array<f32>;
 
 const EPS_COV: f32 = 1e-8;
 const LOG2PI: f32 = 1.8378770664093453;
@@ -108,8 +110,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     if (bid >= uniforms.edgeCount) { return; }
     let eIdx = bid + uniforms.edgeOffset;
 
-    let i = edges[eIdx * 2u + 0u];
-    let j = edges[eIdx * 2u + 1u];
+    let i = edgesI[eIdx];
+    let j = edgesJ[eIdx];
 
     let i3 = i * 3u;
     let j3 = j * 3u;
@@ -277,7 +279,8 @@ class GpuEdgeCost {
 
         const bindGroupFormat = new BindGroupFormat(device, [
             new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
-            new BindStorageBufferFormat('edges', SHADERSTAGE_COMPUTE, true),
+            new BindStorageBufferFormat('edgesI', SHADERSTAGE_COMPUTE, true),
+            new BindStorageBufferFormat('edgesJ', SHADERSTAGE_COMPUTE, true),
             new BindStorageBufferFormat('positions', SHADERSTAGE_COMPUTE, true),
             new BindStorageBufferFormat('rotR', SHADERSTAGE_COMPUTE, true),
             new BindStorageBufferFormat('splatScalars', SHADERSTAGE_COMPUTE, true),
@@ -320,9 +323,11 @@ class GpuEdgeCost {
         const splatScalarsBuf = new StorageBuffer(device, maxN * 5 * 4, BUFFERUSAGE_COPY_DST);
         const appearanceBuf = new StorageBuffer(device, appBytes, BUFFERUSAGE_COPY_DST);
 
-        const edgesBuf = new StorageBuffer(device, maxE * 2 * 4, BUFFERUSAGE_COPY_DST);
-        // Reused across execute() calls — interleaving each call would alloc maxE*8 bytes.
-        const edgePackedScratch = new Uint32Array(maxE * 2);
+        // Two parallel u32 buffers — uploading `edgeI` / `edgeJ` directly is
+        // ~1 GB cheaper than packing into a single interleaved scratch on a
+        // 17.9M-splat run, since the host never has to materialise the pack.
+        const edgesIBuf = new StorageBuffer(device, maxE * 4, BUFFERUSAGE_COPY_DST);
+        const edgesJBuf = new StorageBuffer(device, maxE * 4, BUFFERUSAGE_COPY_DST);
 
         const outBuf = new StorageBuffer(
             device,
@@ -332,7 +337,8 @@ class GpuEdgeCost {
         const outScratch = new Float32Array(edgesPerBatch);
 
         const compute = new Compute(device, shader, 'compute-edge-cost');
-        compute.setParameter('edges', edgesBuf);
+        compute.setParameter('edgesI', edgesIBuf);
+        compute.setParameter('edgesJ', edgesJBuf);
         compute.setParameter('positions', positionsBuf);
         compute.setParameter('rotR', rotRBuf);
         compute.setParameter('splatScalars', splatScalarsBuf);
@@ -367,12 +373,9 @@ class GpuEdgeCost {
             splatScalarsBuf.write(0, cache.splatScalars, 0, n * 5);
             appearanceBuf.write(0, cache.appearance, 0, n * cache.numAppCols);
 
-            // Upload edges interleaved (i, j) into the shared scratch.
-            for (let k = 0; k < e; k++) {
-                edgePackedScratch[k * 2] = edgeI[k];
-                edgePackedScratch[k * 2 + 1] = edgeJ[k];
-            }
-            edgesBuf.write(0, edgePackedScratch, 0, e * 2);
+            // Upload edges as two parallel u32 buffers — no host-side pack.
+            edgesIBuf.write(0, edgeI, 0, e);
+            edgesJBuf.write(0, edgeJ, 0, e);
 
             compute.setParameter('numAppCols', cache.numAppCols);
             compute.setParameter('z0', z[0]);
@@ -402,7 +405,8 @@ class GpuEdgeCost {
             rotRBuf.destroy();
             splatScalarsBuf.destroy();
             appearanceBuf.destroy();
-            edgesBuf.destroy();
+            edgesIBuf.destroy();
+            edgesJBuf.destroy();
             outBuf.destroy();
             shader.destroy();
             bindGroupFormat.destroy();
