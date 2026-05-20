@@ -112,6 +112,7 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var<storage, read> splats: array<f32>;
 @group(0) @binding(2) var<storage, read_write> projected: array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read_write> coverage: array<u32>;
 
 const SH_C0: f32 = 0.28209479177387814;
 const SH_C1: f32 = 0.4886025119029199;
@@ -134,6 +135,7 @@ fn writeInvalid(idx: u32) {
     projected[idx * 3u + 0u] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     projected[idx * 3u + 1u] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     projected[idx * 3u + 2u] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    coverage[idx] = 0u;
 }
 
 @compute @workgroup_size(64)
@@ -367,6 +369,21 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     projected[i * 3u + 0u] = vec4<f32>(screenX, screenY, radius, 0.0);
     projected[i * 3u + 1u] = vec4<f32>(covInvA, covInvB, covInvC, alpha);
     projected[i * 3u + 2u] = vec4<f32>(colR, colG, colB, 0.0);
+
+    // Per-splat tile-coverage count. Used by the GPU tile-bin pipeline to
+    // scan into emit offsets before the radix sort. The tile range here is
+    // identical to what the binner will compute, so the count and the
+    // emit-pairs scatter never disagree.
+    let tsz: f32 = ${wgslF32(TILE_SIZE)};
+    let minTX = max(0, i32(floor((screenX - radius) / tsz)));
+    let maxTX = min(i32(uniforms.groupTilesX) - 1, i32(floor((screenX + radius) / tsz)));
+    let minTY = max(0, i32(floor((screenY - radius) / tsz)));
+    let maxTY = min(i32(uniforms.groupTilesY) - 1, i32(floor((screenY + radius) / tsz)));
+    if (maxTX < minTX || maxTY < minTY) {
+        coverage[i] = 0u;
+    } else {
+        coverage[i] = u32(maxTX - minTX + 1) * u32(maxTY - minTY + 1);
+    }
 }
 `;
 
@@ -556,6 +573,12 @@ interface Slot {
     tileOffsetsBuffer: StorageBuffer;
     /** Tile-binned splat indices, sized for `chunkCap × MAX_COVERAGE`. */
     tileDataBuffer: StorageBuffer;
+    /**
+     * Per-splat tile-coverage count, written by the project shader.
+     * CPU reads this back and prefix-sums it into emit offsets for the
+     * GPU tile-binning emit pass.
+     */
+    coverageBuffer: StorageBuffer;
     projectCompute: Compute;
     rasterizeBinnedCompute: Compute;
     finalizeCompute: Compute;
@@ -622,7 +645,8 @@ class GpuSplatRasterizer {
         this.projectBgFormat = new BindGroupFormat(device, [
             new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
             new BindStorageBufferFormat('splats', SHADERSTAGE_COMPUTE, true),
-            new BindStorageBufferFormat('projected', SHADERSTAGE_COMPUTE)
+            new BindStorageBufferFormat('projected', SHADERSTAGE_COMPUTE),
+            new BindStorageBufferFormat('coverage', SHADERSTAGE_COMPUTE)
         ]);
         this.rasterizeBinnedBgFormat = new BindGroupFormat(device, [
             new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
@@ -668,6 +692,8 @@ class GpuSplatRasterizer {
         const tileOffsetsBytes = (numTiles + 1) * 4;
         const tileDataBytes = options.chunkCap * MAX_COVERAGE_PER_SPLAT * 4;
 
+        const coverageBytes = options.chunkCap * 4;
+
         this.slots = [];
         for (let s = 0; s < this.numSlots; s++) {
             const inputBuffer = new StorageBuffer(device, inputBytes, BUFFERUSAGE_COPY_DST);
@@ -678,10 +704,15 @@ class GpuSplatRasterizer {
             const outputBuffer = new StorageBuffer(device, outputBytes, BUFFERUSAGE_COPY_SRC);
             const tileOffsetsBuffer = new StorageBuffer(device, tileOffsetsBytes, BUFFERUSAGE_COPY_DST);
             const tileDataBuffer = new StorageBuffer(device, tileDataBytes, BUFFERUSAGE_COPY_DST);
+            // coverageBuffer is written by the project shader and read back
+            // to the CPU (or scanned on GPU) to build emit offsets for the
+            // tile-bin pipeline.
+            const coverageBuffer = new StorageBuffer(device, coverageBytes, BUFFERUSAGE_COPY_SRC);
 
             const projectCompute = new Compute(device, this.projectShader, `splat-project-slot-${s}`);
             projectCompute.setParameter('splats', inputBuffer);
             projectCompute.setParameter('projected', projBuffer);
+            projectCompute.setParameter('coverage', coverageBuffer);
 
             const rasterizeBinnedCompute = new Compute(device, this.rasterizeBinnedShader, `splat-rasterize-binned-slot-${s}`);
             rasterizeBinnedCompute.setParameter('projected', projBuffer);
@@ -700,6 +731,7 @@ class GpuSplatRasterizer {
                 outputBuffer,
                 tileOffsetsBuffer,
                 tileDataBuffer,
+                coverageBuffer,
                 projectCompute,
                 rasterizeBinnedCompute,
                 finalizeCompute
@@ -909,6 +941,7 @@ class GpuSplatRasterizer {
             s.outputBuffer.destroy();
             s.tileOffsetsBuffer.destroy();
             s.tileDataBuffer.destroy();
+            s.coverageBuffer.destroy();
         }
         this.projectShader.destroy();
         this.rasterizeBinnedShader.destroy();
