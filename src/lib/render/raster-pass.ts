@@ -72,25 +72,23 @@ const renderRasterPass = async (
     const basis = buildCameraBasis(camera);
 
     // ---- Frustum cull ----
-    // Linear, centre-only near-plane test in camera space. Each splat is
-    // kept iff its centre is in front of the near plane:
-    //   - transform position to camera space, take cz = forward · (p - eye)
-    //   - cull if cz <= near
+    // Linear, centre-only near-plane test in camera space. For each splat:
+    //   - cz = forward · (p - eye)
+    //   - cull if cz <= near (matches the GPU project shader's near-plane
+    //     test exactly)
     //
-    // This matches the GPU project shader's near-plane test exactly, so
-    // a splat that the CPU passes through is one that the GPU might
-    // actually rasterize. Splats whose centres are outside the side
-    // cones (|cx| > limX·cz or |cy| > limY·cz) but whose 3σ tails
-    // project into the image are kept here and culled later by the
-    // project shader's 2D image-rect test — a tighter, post-projection
-    // test that uses the actual screen-space radius.
+    // We deliberately don't test the side cones on the CPU. A proper
+    // AABB-vs-cone test needs `exp(max(s))` per splat — on an 18 M scene
+    // that's ~275 ms of extra CPU work, and at typical reference-render
+    // FOVs (60–90°) the cone contains nearly every front-of-camera splat
+    // anyway (measured 95.8 % retention on windmill at 90°). The splats
+    // that the cone test *would* drop are caught by the GPU project
+    // shader's 2D image-rect test, which uses the actual screen-space
+    // radius — strictly tighter than the L∞-bound CPU test.
     //
-    // Replaces the old `computeGaussianExtents + GaussianBVH +
-    // queryBvhFrustum` stage (~6 s for 18 M splats). For one whole-image
-    // query the BVH's tree-walk savings don't recoup its build cost;
-    // this linear scan delivers a superset of the visible-set at a
-    // fraction of the time (~100 ms for 18 M splats). The slight
-    // over-inclusion is absorbed by the project shader.
+    // If a future use case renders at narrow FOV (≤ 30°) where cone-
+    // outside splats dominate, switching to an AABB-vs-cone test here
+    // could pay for itself.
     const cullGroup = logger.group('Cull');
     const xCol = dataTable.getColumnByName('x')!.data as Float32Array;
     const yCol = dataTable.getColumnByName('y')!.data as Float32Array;
@@ -109,10 +107,7 @@ const renderRasterPass = async (
         if (cz > near) candidates[candidateCount++] = i;
     }
     cullGroup.end();
-    // Suppress unused import warning for FAR_PLANE_NEAR_FACTOR — kept in
-    // config for future use (e.g. logging or a sanity bound on chunk
-    // depth ranges) but not needed by the current cull pass.
-    void FAR_PLANE_NEAR_FACTOR;
+    void FAR_PLANE_NEAR_FACTOR;  // kept in config for future use
 
     // ---- Image tile grid ----
     const imageTilesX = Math.ceil(width / TILE_SIZE);
