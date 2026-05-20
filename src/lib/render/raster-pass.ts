@@ -1,0 +1,201 @@
+import { GraphicsDevice } from 'playcanvas';
+
+import { computeGroupFrustumPlanes, queryBvhFrustum } from './bvh-query';
+import { type RenderCamera, buildCameraBasis } from './camera';
+import {
+    SortScratch,
+    getSplatColumnRefs,
+    packChunkInput,
+    sceneSHBands,
+    sortCandidatesByDepth,
+    splatInputStride
+} from './preprocess';
+import { DataTable, computeGaussianExtents } from '../data-table';
+import { GpuSplatRasterizer, TILE_SIZE } from '../gpu';
+import { GaussianBVH } from '../spatial';
+import { logger } from '../utils';
+
+/**
+ * Max gaussians per GPU dispatch. Bounds per-render input/projection
+ * buffer sizes and the granularity of the depth-ordered chunked path.
+ *
+ * Each chunk dispatches its own project + rasterize-accumulate.
+ * Running state persists across chunks; saturated pixels (T < 1e-4)
+ * short-circuit on subsequent chunks via the rasterize shader's T
+ * early-out.
+ */
+const CHUNK_CAP = 200_000;
+
+interface BackgroundRGBA {
+    r: number;
+    g: number;
+    b: number;
+    a: number;
+}
+
+/**
+ * Render a splat scene to an RGBA byte buffer.
+ *
+ * Replaces the per-tile-group orchestration of `tile-stream.ts` with a
+ * single whole-image pipeline:
+ *
+ *   1. Build the BVH from the scene's 3-σ extents.
+ *   2. Frustum-cull once against the whole image's view frustum.
+ *   3. Sort visible splats globally by camera-space z (front-to-back).
+ *   4. Drive the rasterizer with one tile group covering the entire
+ *      image, chunking the depth-sorted splat list into `CHUNK_CAP`-
+ *      sized batches. The rasterizer's running-state buffer accumulates
+ *      across chunks; `T < 1e-4` short-circuits saturated pixels.
+ *
+ * This eliminates the per-group BVH cull that produced visible seams at
+ * 128 px tile-group boundaries — there are no groups any more, so
+ * nothing can be culled inconsistently between neighbouring regions.
+ *
+ * @param device - PlayCanvas WebGPU graphics device.
+ * @param dataTable - Gaussian splat data in PlayCanvas-identity space.
+ * @param camera - Camera parameters.
+ * @param background - RGBA background composited under residual transmittance.
+ * @returns RGBA byte array of length `camera.width × camera.height × 4`.
+ */
+const renderRasterPass = async (
+    device: GraphicsDevice,
+    dataTable: DataTable,
+    camera: RenderCamera,
+    background: BackgroundRGBA
+): Promise<Uint8Array> => {
+    if (!Number.isInteger(camera.width) || !Number.isInteger(camera.height) ||
+        camera.width <= 0 || camera.height <= 0) {
+        throw new Error(`Invalid resolution: ${camera.width}x${camera.height}`);
+    }
+
+    const width = camera.width;
+    const height = camera.height;
+    const basis = buildCameraBasis(camera);
+
+    // ---- Build BVH ----
+    const bvhGroup = logger.group('BVH');
+    const extentsResult = computeGaussianExtents(dataTable);
+    const bvh = new GaussianBVH(dataTable, extentsResult.extents);
+
+    // Far plane: largest camera-space depth of any scene-AABB corner.
+    // The far-plane test is `forward · (p − eye) ≤ far` (a camera-space-z
+    // bound), so we measure `far` along the same axis. `near * 100` is a
+    // floor so the BVH doesn't get a degenerate frustum on scenes where
+    // every corner sits behind the camera.
+    const sb = extentsResult.sceneBounds;
+    const corners = [
+        sb.min.x, sb.min.y, sb.min.z, sb.max.x, sb.min.y, sb.min.z,
+        sb.min.x, sb.max.y, sb.min.z, sb.max.x, sb.max.y, sb.min.z,
+        sb.min.x, sb.min.y, sb.max.z, sb.max.x, sb.min.y, sb.max.z,
+        sb.min.x, sb.max.y, sb.max.z, sb.max.x, sb.max.y, sb.max.z
+    ];
+    let far = camera.near * 100;
+    for (let k = 0; k < 24; k += 3) {
+        const dx = corners[k] - basis.eye.x;
+        const dy = corners[k + 1] - basis.eye.y;
+        const dz = corners[k + 2] - basis.eye.z;
+        const d = basis.forward.x * dx + basis.forward.y * dy + basis.forward.z * dz;
+        if (d > far) far = d;
+    }
+    bvhGroup.end();
+
+    // ---- Whole-image frustum cull ----
+    // One BVH query against the camera frustum for the entire image —
+    // not subdivided by tile group. Per-tile coverage is decided downstream
+    // by the project shader's 2D image-AABB cull, so a splat whose centre
+    // lies just outside one tile but whose tail crosses into the next is
+    // still considered (and its tail still rasterises) as it would have
+    // been if the cull had been done per-tile.
+    const planes = new Float32Array(24);
+    computeGroupFrustumPlanes(basis, 0, 0, width, height, width, height, camera.near, far, planes);
+
+    const initialCandidates: Uint32Array = new Uint32Array(Math.min(64 * 1024, dataTable.numRows));
+    const qr = queryBvhFrustum(bvh, planes, initialCandidates);
+    const candidates: Uint32Array = qr.buffer;
+    const candidateCount = qr.count;
+
+    // ---- Image tile grid ----
+    const imageTilesX = Math.ceil(width / TILE_SIZE);
+    const imageTilesY = Math.ceil(height / TILE_SIZE);
+
+    // ---- Global depth sort ----
+    const numSHBands = sceneSHBands(dataTable);
+    const inputStride = splatInputStride(numSHBands);
+    const cols = getSplatColumnRefs(dataTable, numSHBands);
+    const sortScratch = new SortScratch();
+    sortCandidatesByDepth(cols, candidates, candidateCount, basis, sortScratch);
+
+    // ---- Rasterizer (single group covering whole image) ----
+    // The existing rasterizer accumulates depth-sorted splats into a
+    // persistent running-state buffer across chunks within a group.
+    // We use ONE group covering the whole image, so the running state
+    // is the full output image and there are no inter-group seams.
+    //
+    // The rasterizer dispatches a square `groupSizeTiles × groupSizeTiles`
+    // grid of workgroups; tiles outside the actual image's tile grid
+    // early-out via `wgId.x >= groupTilesX || wgId.y >= groupTilesY`. We
+    // size the square to the larger image axis.
+    const groupSizeTiles = Math.max(imageTilesX, imageTilesY);
+    const effectiveChunkCap = Math.max(1, Math.min(CHUNK_CAP, candidateCount));
+
+    const rasterizer = new GpuSplatRasterizer(device, {
+        numSHBands,
+        groupSizeTiles,
+        chunkCap: effectiveChunkCap,
+        numSlots: 1,
+        imageWidth: width,
+        imageHeight: height,
+        near: camera.near,
+        rightX: basis.right.x, rightY: basis.right.y, rightZ: basis.right.z,
+        downX: basis.down.x, downY: basis.down.y, downZ: basis.down.z,
+        forwardX: basis.forward.x, forwardY: basis.forward.y, forwardZ: basis.forward.z,
+        eyeX: basis.eye.x, eyeY: basis.eye.y, eyeZ: basis.eye.z,
+        focalX: basis.focalX, focalY: basis.focalY,
+        bgR: background.r, bgG: background.g, bgB: background.b, bgA: background.a
+    });
+
+    // Per-chunk CPU scratch.
+    const chunkInput = new Float32Array(effectiveChunkCap * inputStride);
+
+    // Single group at origin (0, 0), spanning the whole image tile grid.
+    rasterizer.beginGroup(0, 0, 0, imageTilesX, imageTilesY);
+
+    const rasterBar = logger.bar('rasterizing', Math.max(1, Math.ceil(candidateCount / effectiveChunkCap)));
+    let completed = 0;
+    for (let chunkStart = 0; chunkStart < candidateCount; chunkStart += effectiveChunkCap) {
+        const chunkSize = Math.min(effectiveChunkCap, candidateCount - chunkStart);
+        packChunkInput(cols, candidates, chunkStart, chunkSize, numSHBands, chunkInput);
+        rasterizer.dispatchChunk(0, chunkInput, chunkSize);
+        rasterBar.update(++completed);
+    }
+    rasterBar.end();
+
+    const rawBytes = await rasterizer.finishGroup(0, imageTilesX, imageTilesY);
+
+    rasterizer.destroy();
+
+    // The rasterizer writes its group output at a stride of
+    // `groupTilesX × TILE_SIZE` (= image width here, since we span the
+    // image in tile units). The buffer's row stride matches the image's,
+    // so we can return it directly when it's exactly image-sized. If the
+    // image width isn't a multiple of TILE_SIZE the buffer rows are wider
+    // than the image rows, and we need to repack.
+    const groupPixelW = imageTilesX * TILE_SIZE;
+    if (groupPixelW === width) {
+        // Common case for image dimensions that are multiples of TILE_SIZE.
+        const out = rawBytes.subarray(0, width * height * 4);
+        // Make a copy so the returned buffer's lifetime is independent
+        // of the GPU readback's typed array.
+        return new Uint8Array(out);
+    }
+
+    const finalImage = new Uint8Array(width * height * 4);
+    for (let row = 0; row < height; row++) {
+        const srcOffset = row * groupPixelW * 4;
+        const dstOffset = row * width * 4;
+        finalImage.set(rawBytes.subarray(srcOffset, srcOffset + width * 4), dstOffset);
+    }
+    return finalImage;
+};
+
+export { renderRasterPass, CHUNK_CAP };
