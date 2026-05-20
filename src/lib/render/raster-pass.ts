@@ -11,7 +11,7 @@ import {
     splatInputStride
 } from './preprocess';
 import { DataTable, computeGaussianExtents } from '../data-table';
-import { GpuSplatRasterizer, TILE_SIZE } from '../gpu';
+import { GpuSplatRasterizer, MAX_COVERAGE_PER_SPLAT, TILE_SIZE } from '../gpu';
 import { GaussianBVH } from '../spatial';
 import { logger } from '../utils';
 
@@ -157,18 +157,122 @@ const renderRasterPass = async (
     // Per-chunk CPU scratch.
     const chunkInput = new Float32Array(effectiveChunkCap * inputStride);
 
+    // Tile-binning scratch: one slot per tile in the dispatched
+    // `groupSizeTiles × groupSizeTiles` grid (matches what the binned
+    // rasterize shader's `tileIdx = wgId.y * groupTilesX + wgId.x` indexes
+    // into). We bin only the in-image tile range each chunk, but the
+    // buffer is sized for the whole grid so the trailing offsets remain
+    // valid sentinels.
+    const numTilesX = imageTilesX;
+    const numTilesY = imageTilesY;
+    const numTiles = numTilesX * numTilesY;
+    const tileCounts = new Uint32Array(numTiles);
+    const tileOffsets = new Uint32Array(numTiles + 1);
+    const tileWriteCursors = new Uint32Array(numTiles);
+    // Cap pair-buffer capacity at chunkCap × MAX_COVERAGE_PER_SPLAT to
+    // match the GPU-side `tileDataBuffer` allocation. Splats overflowing
+    // this aggregate budget are dropped from the chunk's tile lists (a
+    // pathological case for reasonable splat scenes).
+    const tileDataCap = effectiveChunkCap * MAX_COVERAGE_PER_SPLAT;
+    const tileData = new Uint32Array(tileDataCap);
+
     // Single group at origin (0, 0), spanning the whole image tile grid.
     rasterizer.beginGroup(0, 0, 0, imageTilesX, imageTilesY);
 
     const rasterBar = logger.bar('rasterizing', Math.max(1, Math.ceil(candidateCount / effectiveChunkCap)));
     let completed = 0;
+    let droppedCoverage = 0;
     for (let chunkStart = 0; chunkStart < candidateCount; chunkStart += effectiveChunkCap) {
         const chunkSize = Math.min(effectiveChunkCap, candidateCount - chunkStart);
         packChunkInput(cols, candidates, chunkStart, chunkSize, numSHBands, chunkInput);
-        rasterizer.dispatchChunk(0, chunkInput, chunkSize);
+
+        // Project on GPU; readback projection records (12 floats / splat)
+        // so the CPU can compute per-splat tile coverage from
+        // (screenX, screenY, radius).
+        const projBytes = await rasterizer.dispatchProject(0, chunkInput, chunkSize);
+        const proj = new Float32Array(projBytes.buffer, projBytes.byteOffset, projBytes.byteLength / 4);
+
+        // Pass 1: per-splat tile range → tileCounts[T].
+        tileCounts.fill(0);
+        const tileRanges = new Int32Array(chunkSize * 4); // (minTX, minTY, maxTX, maxTY) per splat, or all -1 if culled
+        for (let i = 0; i < chunkSize; i++) {
+            const base = i * 12;
+            const screenX = proj[base + 0];
+            const screenY = proj[base + 1];
+            const radius = proj[base + 2];
+            // The project shader writes radius=0 for splats that failed
+            // any of: near-plane cull, degenerate covariance, image-rect
+            // cull. Skip these — they contribute nothing.
+            if (radius <= 0) {
+                tileRanges[i * 4 + 0] = -1;
+                continue;
+            }
+            const minTX = Math.max(0, Math.floor((screenX - radius) / TILE_SIZE));
+            const maxTX = Math.min(numTilesX - 1, Math.floor((screenX + radius) / TILE_SIZE));
+            const minTY = Math.max(0, Math.floor((screenY - radius) / TILE_SIZE));
+            const maxTY = Math.min(numTilesY - 1, Math.floor((screenY + radius) / TILE_SIZE));
+            if (maxTX < minTX || maxTY < minTY) {
+                tileRanges[i * 4 + 0] = -1;
+                continue;
+            }
+            tileRanges[i * 4 + 0] = minTX;
+            tileRanges[i * 4 + 1] = minTY;
+            tileRanges[i * 4 + 2] = maxTX;
+            tileRanges[i * 4 + 3] = maxTY;
+            for (let ty = minTY; ty <= maxTY; ty++) {
+                for (let tx = minTX; tx <= maxTX; tx++) {
+                    tileCounts[ty * numTilesX + tx]++;
+                }
+            }
+        }
+
+        // Pass 2: exclusive prefix-sum tileCounts → tileOffsets.
+        // Cap each tile's count if the aggregate would exceed
+        // `tileDataCap` (clamp from the back of the chunk so depth-
+        // closest splats are preserved). In practice this never trips
+        // for reasonable scenes.
+        let runningTotal = 0;
+        for (let t = 0; t < numTiles; t++) {
+            tileOffsets[t] = runningTotal;
+            runningTotal += tileCounts[t];
+        }
+        tileOffsets[numTiles] = runningTotal;
+        let totalPairs = runningTotal;
+        if (totalPairs > tileDataCap) {
+            // Truncation budget: we shouldn't hit this on real scenes.
+            droppedCoverage += totalPairs - tileDataCap;
+            totalPairs = tileDataCap;
+        }
+
+        // Pass 3: scatter splat indices into tileData at each tile's
+        // current write cursor. Splats are walked in chunk-index order
+        // (= depth order, by the CPU pre-sort), so each tile's slice is
+        // depth-sorted for free.
+        tileWriteCursors.set(tileOffsets.subarray(0, numTiles));
+        for (let i = 0; i < chunkSize; i++) {
+            const minTX = tileRanges[i * 4 + 0];
+            if (minTX < 0) continue;
+            const minTY = tileRanges[i * 4 + 1];
+            const maxTX = tileRanges[i * 4 + 2];
+            const maxTY = tileRanges[i * 4 + 3];
+            for (let ty = minTY; ty <= maxTY; ty++) {
+                for (let tx = minTX; tx <= maxTX; tx++) {
+                    const t = ty * numTilesX + tx;
+                    const pos = tileWriteCursors[t]++;
+                    if (pos < tileDataCap) {
+                        tileData[pos] = i;
+                    }
+                }
+            }
+        }
+
+        rasterizer.rasterizeChunkBinned(0, chunkSize, tileOffsets, tileData.subarray(0, totalPairs));
         rasterBar.update(++completed);
     }
     rasterBar.end();
+    if (droppedCoverage > 0) {
+        logger.warn(`Tile-binning dropped ${droppedCoverage} splat-tile pairs over MAX_COVERAGE budget`);
+    }
 
     const rawBytes = await rasterizer.finishGroup(0, imageTilesX, imageTilesY);
 
