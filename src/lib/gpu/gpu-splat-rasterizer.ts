@@ -24,6 +24,8 @@ import {
     MIN_ALPHA,
     MIN_TRANSMITTANCE,
     OPACITY_CAP,
+    RADIUS_FADE_END_PX,
+    RADIUS_FADE_START_PX,
     SIGMA_CUTOFF,
     TILE_SIZE
 } from '../render/config';
@@ -265,7 +267,21 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let mid = 0.5 * (cov00 + cov11);
     let disc = sqrt(max(${wgslF32(DISCRIMINANT_FLOOR)}, mid * mid - det));
     let lambdaMax = mid + disc;
-    let radius = ceil(${wgslF32(SIGMA_CUTOFF)} * sqrt(lambdaMax));
+    let radiusRaw = ${wgslF32(SIGMA_CUTOFF)} * sqrt(lambdaMax);
+
+    // Outlier-splat fade: huge splats (close-by mega-splats or pathological
+    // training output) would otherwise project to a screen-spanning footprint
+    // and tint the whole frame. Linearly fade alpha from 1 to 0 as the
+    // un-clamped radius grows from RADIUS_FADE_START_PX to RADIUS_FADE_END_PX,
+    // and discard beyond. The bbox we hand to the rasterizer is clamped at
+    // RADIUS_FADE_END_PX so the binner doesn't reserve tile coverage for a
+    // splat that contributes zero anyway. Softer than a hard clamp: prevents
+    // the visible pop as the camera approaches a clipped splat.
+    let fadeStart = ${wgslF32(RADIUS_FADE_START_PX)};
+    let fadeEnd = ${wgslF32(RADIUS_FADE_END_PX)};
+    let radiusFade = clamp((fadeEnd - radiusRaw) / (fadeEnd - fadeStart), 0.0, 1.0);
+    if (radiusFade <= 0.0) { writeInvalid(i); return; }
+    let radius = ceil(min(radiusRaw, fadeEnd));
 
     // Group AABB cull. The BVH frustum query may include splats whose
     // 3D AABB grazes the frustum but whose 2D footprint misses the group.
@@ -346,7 +362,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let colG = max(0.0, cG + 0.5);
     let colB = max(0.0, cB + 0.5);
 
-    let alpha = 1.0 / (1.0 + exp(-opacity));
+    let alpha = (1.0 / (1.0 + exp(-opacity))) * radiusFade;
 
     projected[i * 3u + 0u] = vec4<f32>(screenX, screenY, radius, 0.0);
     projected[i * 3u + 1u] = vec4<f32>(covInvA, covInvB, covInvC, alpha);

@@ -97,3 +97,24 @@ export const TILE_SIZE = 16;
  * radius, well above the typical 3σ projection of a real splat).
  */
 export const MAX_COVERAGE_PER_SPLAT = 64;
+
+/**
+ * Screen-radius fade thresholds, in pixels. Defends against outlier
+ * splats with large world-space scale or near-camera placement that
+ * would otherwise project to a screen-spanning footprint.
+ *
+ * A hard clamp produces a visible "pop" as the camera approaches a
+ * splat that grows past the cap (the splat suddenly stops getting any
+ * bigger). Instead we *linearly fade out* the splat's alpha between
+ * `RADIUS_FADE_START_PX` (alpha × 1) and `RADIUS_FADE_END_PX` (alpha
+ * × 0). Beyond `RADIUS_FADE_END_PX` the splat is discarded entirely.
+ *
+ * The bounding bbox is clamped at `RADIUS_FADE_END_PX` so the binner
+ * doesn't allocate tile coverage for splats with effectively zero
+ * contribution.
+ *
+ * Inspired by PlayCanvas engine's `min(1024.0, viewport)` axis cap
+ * (see `gsplatCorner.js`), but with the cap softened into a fade.
+ */
+export const RADIUS_FADE_START_PX = 1024;
+export const RADIUS_FADE_END_PX = 2048;
