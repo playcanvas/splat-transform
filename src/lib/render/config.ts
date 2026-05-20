@@ -118,3 +118,21 @@ export const MAX_COVERAGE_PER_SPLAT = 64;
  */
 export const RADIUS_FADE_START_PX = 1024;
 export const RADIUS_FADE_END_PX = 2048;
+
+/**
+ * Bit allocation for the packed `(tileIdx, splatIdx)` key used by the GPU
+ * pair-sort tile binner. `splatIdx` occupies the low `SPLAT_IDX_BITS`,
+ * `tileIdx` the upper bits.
+ *
+ * Constraints:
+ *   - `splatIdx < chunkCap` → need ceil(log2(chunkCap)) bits. At
+ *     `chunkCap = 200_000` that's 18; we use 19 with one spare.
+ *   - `tileIdx < numTilesX × numTilesY`. At 1920×1080 / TILE_SIZE that's
+ *     8160 < 8192 = 2^13. 19 + 13 = 32 fits a u32 key exactly.
+ *
+ * If `chunkCap > 524288` or tile count > 8192 we would need a 64-bit
+ * key (or larger SPLAT_IDX_BITS with a wider tile budget). The CPU
+ * binner has no such limit, so deferring 64-bit keys until needed.
+ */
+export const SPLAT_IDX_BITS = 19;
+export const SPLAT_IDX_MASK = (1 << SPLAT_IDX_BITS) - 1;

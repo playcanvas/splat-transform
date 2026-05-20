@@ -9,6 +9,7 @@ import {
     BindStorageBufferFormat,
     BindUniformBufferFormat,
     Compute,
+    ComputeRadixSort,
     GraphicsDevice,
     Shader,
     StorageBuffer,
@@ -27,6 +28,8 @@ import {
     RADIUS_FADE_END_PX,
     RADIUS_FADE_START_PX,
     SIGMA_CUTOFF,
+    SPLAT_IDX_BITS,
+    SPLAT_IDX_MASK,
     TILE_SIZE
 } from '../render/config';
 
@@ -388,6 +391,67 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 `;
 
 /**
+ * Tile-bin emit-pairs shader. For each projected splat, emits one packed
+ * u32 key per covered tile into the global `pairs` buffer, at positions
+ * starting at `emitOffset[splatIdx]`. Key layout:
+ *
+ *   key = (tileIdx << SPLAT_IDX_BITS) | splatIdx
+ *
+ * The emit offsets are produced on the CPU by exclusive prefix-sum of the
+ * project shader's per-splat `coverage[]` output. A subsequent radix sort
+ * over these keys groups pairs by tile, and within each tile the secondary
+ * sort by splatIdx preserves the chunk's depth order (since splatIdx is
+ * monotonic in depth from the CPU pre-sort).
+ *
+ * The tile-range computation here must match the project shader's
+ * coverage computation exactly, or the emit will write past the budgeted
+ * slot.
+ */
+const tileBinEmitPairsWgsl = () => /* wgsl */`
+struct Uniforms {
+    rightX: f32, rightY: f32, rightZ: f32, _p0: f32,
+    downX: f32, downY: f32, downZ: f32, _p1: f32,
+    forwardX: f32, forwardY: f32, forwardZ: f32, _p2: f32,
+    eyeX: f32, eyeY: f32, eyeZ: f32, _p3: f32,
+    focalX: f32, focalY: f32, near: f32, _p4: f32,
+    imageWidth: u32, imageHeight: u32, splatStride: u32, chunkSize: u32,
+    groupPixelMinX: u32, groupPixelMinY: u32, groupPixelMaxX: u32, groupPixelMaxY: u32,
+    groupTilesX: u32, groupTilesY: u32, groupPixelOriginX: u32, groupPixelOriginY: u32,
+    bgR: f32, bgG: f32, bgB: f32, bgA: f32,
+}
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(0) @binding(1) var<storage, read> projected: array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read> emitOffset: array<u32>;
+@group(0) @binding(3) var<storage, read_write> pairs: array<u32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= uniforms.chunkSize) { return; }
+    let v0 = projected[i * 3u + 0u];
+    let radius = v0.z;
+    if (radius <= 0.0) { return; }
+    let sX = v0.x;
+    let sY = v0.y;
+    let tsz: f32 = ${wgslF32(TILE_SIZE)};
+    let minTX = max(0, i32(floor((sX - radius) / tsz)));
+    let maxTX = min(i32(uniforms.groupTilesX) - 1, i32(floor((sX + radius) / tsz)));
+    let minTY = max(0, i32(floor((sY - radius) / tsz)));
+    let maxTY = min(i32(uniforms.groupTilesY) - 1, i32(floor((sY + radius) / tsz)));
+    if (maxTX < minTX || maxTY < minTY) { return; }
+    var slot = emitOffset[i];
+    for (var ty = minTY; ty <= maxTY; ty = ty + 1) {
+        for (var tx = minTX; tx <= maxTX; tx = tx + 1) {
+            let t = u32(ty) * uniforms.groupTilesX + u32(tx);
+            pairs[slot] = (t << ${SPLAT_IDX_BITS}u) | i;
+            slot = slot + 1u;
+        }
+    }
+}
+`;
+
+/**
  * Binned rasterize shader. Each workgroup handles one tile and only walks
  * the splats that have been pre-binned into it (tile-bin pre-pass on CPU
  * or GPU). Replaces the "walk all splats per pixel" loop in
@@ -421,7 +485,7 @@ struct Uniforms {
 @group(0) @binding(1) var<storage, read> projected: array<vec4<f32>>;
 @group(0) @binding(2) var<storage, read_write> runningState: array<vec4<f32>>;
 @group(0) @binding(3) var<storage, read> tileOffsets: array<u32>;
-@group(0) @binding(4) var<storage, read> tileData: array<u32>;
+@group(0) @binding(4) var<storage, read> sortedKeys: array<u32>;
 
 @compute @workgroup_size(${TILE_SIZE}, ${TILE_SIZE}, 1)
 fn main(
@@ -454,7 +518,7 @@ fn main(
 
     for (var i: u32 = sliceStart; i < sliceEnd; i = i + 1u) {
         if (T < ${wgslF32(MIN_TRANSMITTANCE)}) { break; }
-        let splatIdx = tileData[i];
+        let splatIdx = sortedKeys[i] & ${SPLAT_IDX_MASK}u;
         let v0 = projected[splatIdx * 3u + 0u];
         let dx = px - v0.x;
         let dy = py - v0.y;
@@ -571,15 +635,26 @@ interface Slot {
     outputBuffer: StorageBuffer;
     /** Per-tile offset table for binned rasterize: `(numTiles + 1) × u32`. */
     tileOffsetsBuffer: StorageBuffer;
-    /** Tile-binned splat indices, sized for `chunkCap × MAX_COVERAGE`. */
-    tileDataBuffer: StorageBuffer;
     /**
      * Per-splat tile-coverage count, written by the project shader.
      * CPU reads this back and prefix-sums it into emit offsets for the
      * GPU tile-binning emit pass.
      */
     coverageBuffer: StorageBuffer;
+    /**
+     * Exclusive prefix-sum of `coverageBuffer`, uploaded by the CPU.
+     * `emitOffset[i]` is the first slot in `pairsBuffer` that splat i
+     * writes to in the emit-pairs pass.
+     */
+    emitOffsetBuffer: StorageBuffer;
+    /**
+     * Packed `(tileIdx, splatIdx)` u32 keys written by the emit-pairs
+     * pass; consumed (and overwritten in-place) by `ComputeRadixSort`.
+     * Sized for the worst-case `chunkCap × MAX_COVERAGE_PER_SPLAT` keys.
+     */
+    pairsBuffer: StorageBuffer;
     projectCompute: Compute;
+    emitPairsCompute: Compute;
     rasterizeBinnedCompute: Compute;
     finalizeCompute: Compute;
 }
@@ -588,22 +663,29 @@ interface Slot {
 /**
  * GPU-accelerated splat rasterizer.
  *
- * Owns three compute shaders (project, rasterize-binned, finalize-pack) and
- * per-slot GPU buffers. Designed to be driven by an external orchestrator
- * (`raster-pass.ts`) that handles BVH queries, depth sort, and tile-binning.
+ * Owns four compute shaders (project, tile-bin-emit-pairs, rasterize-binned,
+ * finalize-pack), a shared `ComputeRadixSort`, and per-slot GPU buffers.
+ * Designed to be driven by an external orchestrator (`raster-pass.ts`)
+ * that handles depth sort and the per-chunk CPU prefix-sum and boundary
+ * scan steps in the GPU tile-bin pipeline.
  *
  * Per-render flow:
  *   1. `beginGroup(slot, ...)` — clears the slot's running state and sets
  *      uniforms for this render.
  *   2. For each chunk of depth-sorted splats:
- *      a. `dispatchProject(slot, chunkData, chunkSize)` — uploads the
- *         chunk, dispatches the project pass, and readbacks the projection
- *         records so the CPU binner can compute per-tile splat lists.
- *      b. `rasterizeChunkBinned(slot, chunkSize, tileOffsets, tileData)` —
- *         uploads the pre-built per-tile splat lists and dispatches the
- *         binned rasterize pass. Running state persists across chunks;
- *         saturated pixels short-circuit via the T < MIN_TRANSMITTANCE
- *         early-out.
+ *      a. `dispatchProjectAndCoverage` — uploads the chunk, runs the
+ *         project pass which writes both projection records and per-splat
+ *         tile-coverage counts.
+ *      b. `readCoverage` → CPU exclusive prefix-sum → `uploadEmitOffsets`.
+ *      c. `dispatchEmitPairs` — writes packed `(tileIdx, splatIdx)` keys
+ *         to `pairsBuffer`, one per covered tile per splat.
+ *      d. `runRadixSort` — 32-bit GPU radix sort over the keys; the high
+ *         bits group by tile, the low `SPLAT_IDX_BITS` preserve the
+ *         caller's chunk-internal depth order as a secondary sort.
+ *      e. `readSortedKeys` → CPU boundary scan → `uploadTileOffsets`.
+ *      f. `dispatchRasterizeBinned` — walks each tile's slice in depth
+ *         order, compositing into the persistent running-state buffer.
+ *         Saturated pixels short-circuit via `T < MIN_TRANSMITTANCE`.
  *   3. `finishGroup(slot)` — dispatches finalize-pack and starts an async
  *      readback. Returns a `Promise<Uint8Array>` resolved when the GPU has
  *      finished writing this group's RGBA bytes.
@@ -612,12 +694,20 @@ class GpuSplatRasterizer {
     private device: GraphicsDevice;
     private options: SplatRasterizerOptions;
     private projectShader: Shader;
+    private emitPairsShader: Shader;
     private rasterizeBinnedShader: Shader;
     private finalizeShader: Shader;
     private projectBgFormat: BindGroupFormat;
+    private emitPairsBgFormat: BindGroupFormat;
     private rasterizeBinnedBgFormat: BindGroupFormat;
     private finalizeBgFormat: BindGroupFormat;
     private slots: Slot[];
+    /**
+     * Single shared `ComputeRadixSort` for the GPU tile-bin pipeline. The
+     * sorter is stateful (internal ping-pong buffers) but reusable across
+     * calls; one instance is reused across slots and chunks.
+     */
+    private radixSort: ComputeRadixSort;
     private clearStatePattern: Float32Array;
 
     /** Floats per gaussian in the input buffer (depends on SH band count). */
@@ -648,12 +738,18 @@ class GpuSplatRasterizer {
             new BindStorageBufferFormat('projected', SHADERSTAGE_COMPUTE),
             new BindStorageBufferFormat('coverage', SHADERSTAGE_COMPUTE)
         ]);
+        this.emitPairsBgFormat = new BindGroupFormat(device, [
+            new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
+            new BindStorageBufferFormat('projected', SHADERSTAGE_COMPUTE, true),
+            new BindStorageBufferFormat('emitOffset', SHADERSTAGE_COMPUTE, true),
+            new BindStorageBufferFormat('pairs', SHADERSTAGE_COMPUTE)
+        ]);
         this.rasterizeBinnedBgFormat = new BindGroupFormat(device, [
             new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
             new BindStorageBufferFormat('projected', SHADERSTAGE_COMPUTE, true),
             new BindStorageBufferFormat('runningState', SHADERSTAGE_COMPUTE),
             new BindStorageBufferFormat('tileOffsets', SHADERSTAGE_COMPUTE, true),
-            new BindStorageBufferFormat('tileData', SHADERSTAGE_COMPUTE, true)
+            new BindStorageBufferFormat('sortedKeys', SHADERSTAGE_COMPUTE, true)
         ]);
         this.finalizeBgFormat = new BindGroupFormat(device, [
             new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
@@ -674,6 +770,7 @@ class GpuSplatRasterizer {
         });
 
         this.projectShader = mkShader('splat-project', projectWgsl(coeffs), this.projectBgFormat);
+        this.emitPairsShader = mkShader('splat-tilebin-emit-pairs', tileBinEmitPairsWgsl(), this.emitPairsBgFormat);
         this.rasterizeBinnedShader = mkShader('splat-rasterize-binned', rasterizeBinnedWgsl(), this.rasterizeBinnedBgFormat);
         this.finalizeShader = mkShader('splat-finalize-pack', finalizeWgsl(), this.finalizeBgFormat);
 
@@ -690,9 +787,12 @@ class GpuSplatRasterizer {
         // bounded without per-chunk reallocation.
         const numTiles = options.groupSizeTiles * options.groupSizeTiles;
         const tileOffsetsBytes = (numTiles + 1) * 4;
-        const tileDataBytes = options.chunkCap * MAX_COVERAGE_PER_SPLAT * 4;
 
         const coverageBytes = options.chunkCap * 4;
+        const emitOffsetBytes = options.chunkCap * 4;
+        // pairsBuffer worst-case = chunkCap × MAX_COVERAGE_PER_SPLAT packed
+        // u32 keys, matching the budget the CPU binner uses for tileData.
+        const pairsBytes = options.chunkCap * MAX_COVERAGE_PER_SPLAT * 4;
 
         this.slots = [];
         for (let s = 0; s < this.numSlots; s++) {
@@ -703,22 +803,35 @@ class GpuSplatRasterizer {
             const runningStateBuffer = new StorageBuffer(device, stateBytes, BUFFERUSAGE_COPY_DST);
             const outputBuffer = new StorageBuffer(device, outputBytes, BUFFERUSAGE_COPY_SRC);
             const tileOffsetsBuffer = new StorageBuffer(device, tileOffsetsBytes, BUFFERUSAGE_COPY_DST);
-            const tileDataBuffer = new StorageBuffer(device, tileDataBytes, BUFFERUSAGE_COPY_DST);
             // coverageBuffer is written by the project shader and read back
             // to the CPU (or scanned on GPU) to build emit offsets for the
             // tile-bin pipeline.
             const coverageBuffer = new StorageBuffer(device, coverageBytes, BUFFERUSAGE_COPY_SRC);
+            // emitOffsetBuffer is uploaded each chunk from the CPU after
+            // prefix-summing coverageBuffer.
+            const emitOffsetBuffer = new StorageBuffer(device, emitOffsetBytes, BUFFERUSAGE_COPY_DST);
+            // pairsBuffer is consumed and overwritten in-place by
+            // ComputeRadixSort. COPY_SRC lets us optionally read it back
+            // (for debugging / validation).
+            const pairsBuffer = new StorageBuffer(device, pairsBytes, BUFFERUSAGE_COPY_SRC);
 
             const projectCompute = new Compute(device, this.projectShader, `splat-project-slot-${s}`);
             projectCompute.setParameter('splats', inputBuffer);
             projectCompute.setParameter('projected', projBuffer);
             projectCompute.setParameter('coverage', coverageBuffer);
 
+            const emitPairsCompute = new Compute(device, this.emitPairsShader, `splat-tilebin-emit-pairs-slot-${s}`);
+            emitPairsCompute.setParameter('projected', projBuffer);
+            emitPairsCompute.setParameter('emitOffset', emitOffsetBuffer);
+            emitPairsCompute.setParameter('pairs', pairsBuffer);
+
             const rasterizeBinnedCompute = new Compute(device, this.rasterizeBinnedShader, `splat-rasterize-binned-slot-${s}`);
             rasterizeBinnedCompute.setParameter('projected', projBuffer);
             rasterizeBinnedCompute.setParameter('runningState', runningStateBuffer);
             rasterizeBinnedCompute.setParameter('tileOffsets', tileOffsetsBuffer);
-            rasterizeBinnedCompute.setParameter('tileData', tileDataBuffer);
+            // `sortedKeys` is bound per-chunk inside `dispatchRasterizeBinned`,
+            // pointing at whichever radix-sort ping-pong buffer holds the
+            // current chunk's sorted output.
 
             const finalizeCompute = new Compute(device, this.finalizeShader, `splat-finalize-slot-${s}`);
             finalizeCompute.setParameter('runningState', runningStateBuffer);
@@ -730,9 +843,11 @@ class GpuSplatRasterizer {
                 runningStateBuffer,
                 outputBuffer,
                 tileOffsetsBuffer,
-                tileDataBuffer,
                 coverageBuffer,
+                emitOffsetBuffer,
+                pairsBuffer,
                 projectCompute,
+                emitPairsCompute,
                 rasterizeBinnedCompute,
                 finalizeCompute
             });
@@ -744,6 +859,8 @@ class GpuSplatRasterizer {
         for (let i = 0; i < groupPixels; i++) {
             this.clearStatePattern[i * 4 + 3] = 1; // T = 1
         }
+
+        this.radixSort = new ComputeRadixSort(device);
     }
 
     /**
@@ -772,6 +889,7 @@ class GpuSplatRasterizer {
         const slotObj = this.slots[slot];
         for (const c of [
             slotObj.projectCompute,
+            slotObj.emitPairsCompute,
             slotObj.rasterizeBinnedCompute,
             slotObj.finalizeCompute
         ]) {
@@ -825,25 +943,32 @@ class GpuSplatRasterizer {
     }
 
     /**
-     * Upload a chunk and run only the project pass. Returns a Promise that
-     * resolves to the chunk's projection records (`chunkSize × 3` vec4s).
-     * Used by the tile-binned path: CPU reads back screen bounds, builds
-     * per-tile lists, then calls `rasterizeChunkBinned`.
-     *
-     * The returned Uint8Array is the raw bytes of the projection buffer's
-     * first `chunkSize × PROJECTION_STRIDE_F32 × 4` bytes. View it as
-     * Float32Array to read fields:
-     *   - `f32[i * 12 + 0..2]` — screenX, screenY, radius (vec4 0)
-     *   - `f32[i * 12 + 4..7]` — covInv, alpha (vec4 1)
-     *   - `f32[i * 12 + 8..10]` — RGB (vec4 2)
+     * Commit pending GPU work. Required between dispatches that share a
+     * `Compute` instance's persistent uniform buffer (each chunk's uniform
+     * values must be captured before the next chunk overwrites them) and
+     * before any readback can complete.
+     */
+    private submit(): void {
+        // @ts-ignore - submit() is exposed by WebgpuGraphicsDevice but not on the public GraphicsDevice type.
+        const submit = (this.device as { submit?: () => void }).submit;
+        if (!submit) {
+            throw new Error('GpuSplatRasterizer requires a GraphicsDevice with a submit() method (WebGPU backend).');
+        }
+        submit.call(this.device);
+    }
+
+    /**
+     * Upload a chunk and run the project pass. Writes both the projection
+     * records (`projBuffer`) and the per-splat tile-coverage count
+     * (`coverageBuffer`). No readback; the caller follows with
+     * `readCoverage` to start the GPU tile-bin pipeline.
      *
      * @param slot - Slot index.
      * @param chunkData - Float32Array containing `chunkSize × inputStride` floats.
      * @param chunkSize - Number of gaussians in this chunk (≤ chunkCap).
-     * @returns Promise resolving to the readback bytes (length `chunkSize × 48`).
      */
-    dispatchProject(slot: number, chunkData: Float32Array, chunkSize: number): Promise<Uint8Array> {
-        if (chunkSize === 0) return Promise.resolve(new Uint8Array(0));
+    dispatchProjectAndCoverage(slot: number, chunkData: Float32Array, chunkSize: number): void {
+        if (chunkSize === 0) return;
         if (chunkSize > this.chunkCap) {
             throw new Error(`chunkSize ${chunkSize} exceeds chunkCap ${this.chunkCap}`);
         }
@@ -853,62 +978,66 @@ class GpuSplatRasterizer {
         s.projectCompute.setParameter('chunkSize', chunkSize);
         s.projectCompute.setupDispatch(Math.ceil(chunkSize / 64), 1, 1);
         this.device.computeDispatch([s.projectCompute], 'splat-project');
-
-        // Submit so the per-Compute uniform buffer captures this chunk's
-        // `chunkSize` before the next dispatchProject overwrites it.
-        // @ts-ignore - submit() is exposed by WebgpuGraphicsDevice but not on the public GraphicsDevice type.
-        const submit = (this.device as { submit?: () => void }).submit;
-        if (!submit) {
-            throw new Error('GpuSplatRasterizer requires a GraphicsDevice with a submit() method (WebGPU backend).');
-        }
-        submit.call(this.device);
-
-        const projBytes = chunkSize * PROJECTION_STRIDE_F32 * 4;
-        return s.projBuffer.read(0, projBytes, null, true) as Promise<Uint8Array>;
+        this.submit();
     }
 
     /**
-     * Upload pre-computed tile lists and run the binned rasterize pass on
-     * the projection produced by the most recent `dispatchProject` call
-     * for this slot.
-     *
-     * Caller responsibilities:
-     *   - `tileOffsets` has length `numTiles + 1` (where `numTiles =
-     *     groupSizeTiles²`); `tileOffsets[T]` is the start of tile T's
-     *     slice in `tileData`, and `tileOffsets[numTiles]` is the total
-     *     pair count.
-     *   - `tileData` is a flat array of `splatIdx` values, grouped by
-     *     tile, depth-sorted within each tile.
-     *
-     * @param slot - Slot index.
-     * @param chunkSize - The chunkSize last used with `dispatchProject` (sets the uniform).
-     * @param tileOffsets - `(numTiles + 1) × u32`.
-     * @param tileData - Variable-length `u32` array of splat indices.
+     * Read back the per-splat tile-coverage counts written by the most
+     * recent `dispatchProjectAndCoverage` call. The CPU prefix-sums this
+     * into the emit-offset table used by the emit-pairs dispatch.
      */
-    rasterizeChunkBinned(
-        slot: number,
-        chunkSize: number,
-        tileOffsets: Uint32Array,
-        tileData: Uint32Array
-    ): void {
+    async readCoverage(slot: number, chunkSize: number): Promise<Uint32Array> {
+        if (chunkSize === 0) return new Uint32Array(0);
+        const bytes = (await this.slots[slot].coverageBuffer.read(
+            0, chunkSize * 4, null, true
+        )) as Uint8Array;
+        return new Uint32Array(bytes.buffer, bytes.byteOffset, chunkSize);
+    }
+
+    /**
+     * Upload the CPU-computed emit-offset table for a chunk. Length is
+     * `chunkSize`; entry `i` is the start position in `pairsBuffer` for
+     * splat `i`'s emitted tile pairs.
+     */
+    uploadEmitOffsets(slot: number, emitOffsets: Uint32Array, chunkSize: number): void {
+        if (chunkSize === 0) return;
+        this.slots[slot].emitOffsetBuffer.write(0, emitOffsets, 0, chunkSize);
+    }
+
+    /**
+     * Dispatch the emit-pairs compute. Reads `projected` + `emitOffset`,
+     * writes packed `(tileIdx, splatIdx)` u32 keys into `pairsBuffer`.
+     * Must be called after `uploadEmitOffsets` for this chunk.
+     */
+    dispatchEmitPairs(slot: number, chunkSize: number): void {
+        if (chunkSize === 0) return;
         const s = this.slots[slot];
+        s.emitPairsCompute.setParameter('chunkSize', chunkSize);
+        s.emitPairsCompute.setupDispatch(Math.ceil(chunkSize / 64), 1, 1);
+        this.device.computeDispatch([s.emitPairsCompute], 'splat-tilebin-emit-pairs');
+        this.submit();
+    }
 
-        s.tileOffsetsBuffer.write(0, tileOffsets, 0, tileOffsets.length);
-        if (tileData.length > 0) {
-            s.tileDataBuffer.write(0, tileData, 0, tileData.length);
-        }
+    /**
+     * Upload a chunk's tile-offset table (length `numTiles + 1`) into
+     * `tileOffsetsBuffer`, ready for the rasterize-binned dispatch.
+     */
+    uploadTileOffsets(slot: number, tileOffsets: Uint32Array): void {
+        this.slots[slot].tileOffsetsBuffer.write(0, tileOffsets, 0, tileOffsets.length);
+    }
 
+    /**
+     * Dispatch the rasterize-binned pass. Caller passes the sorted-keys
+     * buffer (returned by `runRadixSort`) so the parameter binds to the
+     * radix sort's current ping-pong buffer for this chunk.
+     */
+    dispatchRasterizeBinned(slot: number, chunkSize: number, sortedKeysBuf: StorageBuffer): void {
+        const s = this.slots[slot];
+        s.rasterizeBinnedCompute.setParameter('sortedKeys', sortedKeysBuf);
         s.rasterizeBinnedCompute.setParameter('chunkSize', chunkSize);
         s.rasterizeBinnedCompute.setupDispatch(this.groupSizeTiles, this.groupSizeTiles, 1);
         this.device.computeDispatch([s.rasterizeBinnedCompute], 'splat-rasterize-binned');
-
-        // Submit so the uniform buffer captures this chunk's chunkSize.
-        // @ts-ignore - submit() is exposed by WebgpuGraphicsDevice but not on the public GraphicsDevice type.
-        const submit = (this.device as { submit?: () => void }).submit;
-        if (!submit) {
-            throw new Error('GpuSplatRasterizer requires a GraphicsDevice with a submit() method (WebGPU backend).');
-        }
-        submit.call(this.device);
+        this.submit();
     }
 
     /**
@@ -933,20 +1062,64 @@ class GpuSplatRasterizer {
     /**
      * Release all GPU resources.
      */
+    /**
+     * Read back the contents of the radix sort's sortedKeys buffer.
+     * `sortedKeys` is the StorageBuffer previously returned by
+     * `runRadixSort`. Used by the CPU boundary-scan pass that builds
+     * `tileOffsets` for the rasterize-binned dispatch.
+     */
+    async readSortedKeys(sortedKeys: StorageBuffer, totalPairs: number): Promise<Uint32Array> {
+        if (totalPairs === 0) return new Uint32Array(0);
+        const bytes = (await sortedKeys.read(0, totalPairs * 4, null, true)) as Uint8Array;
+        return new Uint32Array(bytes.buffer, bytes.byteOffset, totalPairs);
+    }
+
+    /**
+     * Run the GPU radix sort over a slot's emit-pairs output.
+     *
+     * Sorts `totalPairs` u32 keys in `slot.pairsBuffer` over all 32 bits.
+     * The sorter's internal ping-pong buffers hold the result; the
+     * returned `StorageBuffer` is owned by the `ComputeRadixSort` instance
+     * (do not destroy it). Caller binds it to the rasterize-binned
+     * `Compute` via `setParameter('sortedKeys', returned)`.
+     *
+     * The returned buffer reference may change across calls if the sort
+     * resizes its internal allocation, so rebind every chunk.
+     */
+    runRadixSort(slot: number, totalPairs: number): StorageBuffer {
+        if (totalPairs === 0) {
+            // Nothing to sort. Caller should skip the rasterize dispatch
+            // for this chunk; we still return a non-null buffer so the
+            // bind layout stays satisfied if it isn't skipped.
+            this.radixSort.sort(this.slots[slot].pairsBuffer, 1, 32);
+        } else {
+            this.radixSort.sort(this.slots[slot].pairsBuffer, totalPairs, 32);
+        }
+        const sortedKeys = this.radixSort.sortedKeys;
+        if (!sortedKeys) {
+            throw new Error('ComputeRadixSort.sortedKeys returned null after sort()');
+        }
+        return sortedKeys;
+    }
+
     destroy(): void {
+        this.radixSort.destroy();
         for (const s of this.slots) {
             s.inputBuffer.destroy();
             s.projBuffer.destroy();
             s.runningStateBuffer.destroy();
             s.outputBuffer.destroy();
             s.tileOffsetsBuffer.destroy();
-            s.tileDataBuffer.destroy();
             s.coverageBuffer.destroy();
+            s.emitOffsetBuffer.destroy();
+            s.pairsBuffer.destroy();
         }
         this.projectShader.destroy();
+        this.emitPairsShader.destroy();
         this.rasterizeBinnedShader.destroy();
         this.finalizeShader.destroy();
         this.projectBgFormat.destroy();
+        this.emitPairsBgFormat.destroy();
         this.rasterizeBinnedBgFormat.destroy();
         this.finalizeBgFormat.destroy();
     }
