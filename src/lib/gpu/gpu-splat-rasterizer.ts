@@ -16,11 +16,27 @@ import {
     UniformFormat
 } from 'playcanvas';
 
+import {
+    AA_DILATION_COV,
+    DISCRIMINANT_FLOOR,
+    JACOBIAN_LIMIT_FACTOR,
+    MAX_COVERAGE_PER_SPLAT,
+    MIN_ALPHA,
+    MIN_TRANSMITTANCE,
+    OPACITY_CAP,
+    SIGMA_CUTOFF,
+    TILE_SIZE
+} from '../render/config';
+
 /**
- * Tile size in pixels (workgroup size for rasterize/finalize compute).
- * Must match the value baked into the WGSL shader sources.
+ * Format a JS number as a WGSL `f32` literal. Adds an explicit `.0` so
+ * integer-valued constants like `3` aren't parsed as `AbstractInt` —
+ * keeps shaders readable when the constant flips to a fractional value.
  */
-const TILE_SIZE = 16;
+const wgslF32 = (n: number): string => {
+    const s = n.toString();
+    return s.includes('.') || s.includes('e') || s.includes('E') ? s : `${s}.0`;
+};
 
 /** 12 floats per projected splat: vec4 × 3. */
 const PROJECTION_STRIDE_F32 = 12;
@@ -214,8 +230,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let c22 = t20 * v20 + t21 * v21 + t22 * v22;
 
     // Jacobian with x/z, y/z clamp.
-    let limX = 1.3 * (f32(uniforms.imageWidth) * 0.5) / uniforms.focalX;
-    let limY = 1.3 * (f32(uniforms.imageHeight) * 0.5) / uniforms.focalY;
+    let limX = ${wgslF32(JACOBIAN_LIMIT_FACTOR)} * (f32(uniforms.imageWidth) * 0.5) / uniforms.focalX;
+    let limY = ${wgslF32(JACOBIAN_LIMIT_FACTOR)} * (f32(uniforms.imageHeight) * 0.5) / uniforms.focalY;
     let txtz = clamp(cx * invZ, -limX, limX);
     let tytz = clamp(cy * invZ, -limY, limY);
     let jcx = txtz * cz;
@@ -235,8 +251,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let cov01 = u01 * jy1 + u02 * jy2;
     var cov11 = u11 * jy1 + u12 * jy2;
 
-    cov00 = cov00 + 0.3;
-    cov11 = cov11 + 0.3;
+    cov00 = cov00 + ${wgslF32(AA_DILATION_COV)};
+    cov11 = cov11 + ${wgslF32(AA_DILATION_COV)};
 
     let det = cov00 * cov11 - cov01 * cov01;
     if (det <= 0.0) { writeInvalid(i); return; }
@@ -247,9 +263,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let covInvC = cov00 * invDet;
 
     let mid = 0.5 * (cov00 + cov11);
-    let disc = sqrt(max(0.1, mid * mid - det));
+    let disc = sqrt(max(${wgslF32(DISCRIMINANT_FLOOR)}, mid * mid - det));
     let lambdaMax = mid + disc;
-    let radius = ceil(3.0 * sqrt(lambdaMax));
+    let radius = ceil(${wgslF32(SIGMA_CUTOFF)} * sqrt(lambdaMax));
 
     // Group AABB cull. The BVH frustum query may include splats whose
     // 3D AABB grazes the frustum but whose 2D footprint misses the group.
@@ -338,71 +354,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 `;
 
-const rasterizeWgsl = () => /* wgsl */`
-struct Uniforms {
-    rightX: f32, rightY: f32, rightZ: f32, _p0: f32,
-    downX: f32, downY: f32, downZ: f32, _p1: f32,
-    forwardX: f32, forwardY: f32, forwardZ: f32, _p2: f32,
-    eyeX: f32, eyeY: f32, eyeZ: f32, _p3: f32,
-    focalX: f32, focalY: f32, near: f32, _p4: f32,
-    imageWidth: u32, imageHeight: u32, splatStride: u32, chunkSize: u32,
-    groupPixelMinX: u32, groupPixelMinY: u32, groupPixelMaxX: u32, groupPixelMaxY: u32,
-    groupTilesX: u32, groupTilesY: u32, groupPixelOriginX: u32, groupPixelOriginY: u32,
-    bgR: f32, bgG: f32, bgB: f32, bgA: f32,
-}
-
-@group(0) @binding(0) var<uniform> uniforms: Uniforms;
-@group(0) @binding(1) var<storage, read> projected: array<vec4<f32>>;
-@group(0) @binding(2) var<storage, read_write> runningState: array<vec4<f32>>;
-
-@compute @workgroup_size(${TILE_SIZE}, ${TILE_SIZE}, 1)
-fn main(
-    @builtin(workgroup_id) wgId: vec3<u32>,
-    @builtin(local_invocation_id) lid: vec3<u32>
-) {
-    if (wgId.x >= uniforms.groupTilesX || wgId.y >= uniforms.groupTilesY) { return; }
-
-    let localPixelX = wgId.x * ${TILE_SIZE}u + lid.x;
-    let localPixelY = wgId.y * ${TILE_SIZE}u + lid.y;
-    let groupPixelW = uniforms.groupTilesX * ${TILE_SIZE}u;
-
-    let imagePixelX = uniforms.groupPixelOriginX + localPixelX;
-    let imagePixelY = uniforms.groupPixelOriginY + localPixelY;
-    if (imagePixelX >= uniforms.imageWidth || imagePixelY >= uniforms.imageHeight) { return; }
-
-    let pixelIdx = localPixelY * groupPixelW + localPixelX;
-    var state = runningState[pixelIdx];
-    var color = state.rgb;
-    var T = state.a;
-
-    if (T < 1e-4) { return; }
-
-    let px = f32(imagePixelX) + 0.5;
-    let py = f32(imagePixelY) + 0.5;
-    let n = uniforms.chunkSize;
-
-    for (var i: u32 = 0u; i < n; i = i + 1u) {
-        if (T < 1e-4) { break; }
-        let v0 = projected[i * 3u + 0u];
-        let dx = px - v0.x;
-        let dy = py - v0.y;
-        let r = v0.z;
-        if (r <= 0.0 || abs(dx) > r || abs(dy) > r) { continue; }
-        let v1 = projected[i * 3u + 1u];
-        let power = -0.5 * (v1.x * dx * dx + 2.0 * v1.y * dx * dy + v1.z * dy * dy);
-        if (power > 0.0) { continue; }
-        let alpha = min(0.99, v1.w * exp(power));
-        if (alpha < (1.0 / 255.0)) { continue; }
-        let weight = T * alpha;
-        let v2 = projected[i * 3u + 2u];
-        color = color + weight * v2.rgb;
-        T = T * (1.0 - alpha);
-    }
-
-    runningState[pixelIdx] = vec4<f32>(color, T);
-}
-`;
-
 /**
  * Binned rasterize shader. Each workgroup handles one tile and only walks
  * the splats that have been pre-binned into it (tile-bin pre-pass on CPU
@@ -463,13 +414,13 @@ fn main(
     var color = state.rgb;
     var T = state.a;
 
-    if (T < 1e-4) { return; }
+    if (T < ${wgslF32(MIN_TRANSMITTANCE)}) { return; }
 
     let px = f32(imagePixelX) + 0.5;
     let py = f32(imagePixelY) + 0.5;
 
     for (var i: u32 = sliceStart; i < sliceEnd; i = i + 1u) {
-        if (T < 1e-4) { break; }
+        if (T < ${wgslF32(MIN_TRANSMITTANCE)}) { break; }
         let splatIdx = tileData[i];
         let v0 = projected[splatIdx * 3u + 0u];
         let dx = px - v0.x;
@@ -479,8 +430,8 @@ fn main(
         let v1 = projected[splatIdx * 3u + 1u];
         let power = -0.5 * (v1.x * dx * dx + 2.0 * v1.y * dx * dy + v1.z * dy * dy);
         if (power > 0.0) { continue; }
-        let alpha = min(0.99, v1.w * exp(power));
-        if (alpha < (1.0 / 255.0)) { continue; }
+        let alpha = min(${wgslF32(OPACITY_CAP)}, v1.w * exp(power));
+        if (alpha < ${wgslF32(MIN_ALPHA)}) { continue; }
         let weight = T * alpha;
         let v2 = projected[splatIdx * 3u + 2u];
         color = color + weight * v2.rgb;
@@ -590,34 +541,30 @@ interface Slot {
     /** Tile-binned splat indices, sized for `chunkCap × MAX_COVERAGE`. */
     tileDataBuffer: StorageBuffer;
     projectCompute: Compute;
-    rasterizeCompute: Compute;
     rasterizeBinnedCompute: Compute;
     finalizeCompute: Compute;
 }
 
-/**
- * Worst-case tile coverage per splat. Bounds `tileDataBuffer` size at
- * construction. Splats with screen radius such that their 2D AABB covers
- * more tiles than this get silently truncated by the CPU binner (the
- * truncation count is reported via the orchestrator's diagnostics so
- * pathological splats are visible).
- */
-const MAX_COVERAGE_PER_SPLAT = 256;
 
 /**
- * GPU-accelerated splat rasterizer mirroring `GpuVoxelization`'s shape.
+ * GPU-accelerated splat rasterizer.
  *
- * Owns three compute shaders (project, rasterize-accumulate, finalize-pack)
- * and per-slot GPU buffers. Designed to be driven by an external
- * orchestrator (`raster-pass.ts`) that handles BVH queries, sorting and
- * tile-binning.
+ * Owns three compute shaders (project, rasterize-binned, finalize-pack) and
+ * per-slot GPU buffers. Designed to be driven by an external orchestrator
+ * (`raster-pass.ts`) that handles BVH queries, depth sort, and tile-binning.
  *
- * The caller's per-group flow is:
+ * Per-render flow:
  *   1. `beginGroup(slot, ...)` — clears the slot's running state and sets
- *      uniforms for this group.
- *   2. `dispatchChunk(slot, chunkData, chunkSize)` once per chunk —
- *      uploads the chunk's raw splat fields, dispatches project, then
- *      rasterize-accumulate.
+ *      uniforms for this render.
+ *   2. For each chunk of depth-sorted splats:
+ *      a. `dispatchProject(slot, chunkData, chunkSize)` — uploads the
+ *         chunk, dispatches the project pass, and readbacks the projection
+ *         records so the CPU binner can compute per-tile splat lists.
+ *      b. `rasterizeChunkBinned(slot, chunkSize, tileOffsets, tileData)` —
+ *         uploads the pre-built per-tile splat lists and dispatches the
+ *         binned rasterize pass. Running state persists across chunks;
+ *         saturated pixels short-circuit via the T < MIN_TRANSMITTANCE
+ *         early-out.
  *   3. `finishGroup(slot)` — dispatches finalize-pack and starts an async
  *      readback. Returns a `Promise<Uint8Array>` resolved when the GPU has
  *      finished writing this group's RGBA bytes.
@@ -626,11 +573,9 @@ class GpuSplatRasterizer {
     private device: GraphicsDevice;
     private options: SplatRasterizerOptions;
     private projectShader: Shader;
-    private rasterizeShader: Shader;
     private rasterizeBinnedShader: Shader;
     private finalizeShader: Shader;
     private projectBgFormat: BindGroupFormat;
-    private rasterizeBgFormat: BindGroupFormat;
     private rasterizeBinnedBgFormat: BindGroupFormat;
     private finalizeBgFormat: BindGroupFormat;
     private slots: Slot[];
@@ -663,11 +608,6 @@ class GpuSplatRasterizer {
             new BindStorageBufferFormat('splats', SHADERSTAGE_COMPUTE, true),
             new BindStorageBufferFormat('projected', SHADERSTAGE_COMPUTE)
         ]);
-        this.rasterizeBgFormat = new BindGroupFormat(device, [
-            new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
-            new BindStorageBufferFormat('projected', SHADERSTAGE_COMPUTE, true),
-            new BindStorageBufferFormat('runningState', SHADERSTAGE_COMPUTE)
-        ]);
         this.rasterizeBinnedBgFormat = new BindGroupFormat(device, [
             new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
             new BindStorageBufferFormat('projected', SHADERSTAGE_COMPUTE, true),
@@ -694,7 +634,6 @@ class GpuSplatRasterizer {
         });
 
         this.projectShader = mkShader('splat-project', projectWgsl(coeffs), this.projectBgFormat);
-        this.rasterizeShader = mkShader('splat-rasterize-accumulate', rasterizeWgsl(), this.rasterizeBgFormat);
         this.rasterizeBinnedShader = mkShader('splat-rasterize-binned', rasterizeBinnedWgsl(), this.rasterizeBinnedBgFormat);
         this.finalizeShader = mkShader('splat-finalize-pack', finalizeWgsl(), this.finalizeBgFormat);
 
@@ -728,10 +667,6 @@ class GpuSplatRasterizer {
             projectCompute.setParameter('splats', inputBuffer);
             projectCompute.setParameter('projected', projBuffer);
 
-            const rasterizeCompute = new Compute(device, this.rasterizeShader, `splat-rasterize-slot-${s}`);
-            rasterizeCompute.setParameter('projected', projBuffer);
-            rasterizeCompute.setParameter('runningState', runningStateBuffer);
-
             const rasterizeBinnedCompute = new Compute(device, this.rasterizeBinnedShader, `splat-rasterize-binned-slot-${s}`);
             rasterizeBinnedCompute.setParameter('projected', projBuffer);
             rasterizeBinnedCompute.setParameter('runningState', runningStateBuffer);
@@ -750,7 +685,6 @@ class GpuSplatRasterizer {
                 tileOffsetsBuffer,
                 tileDataBuffer,
                 projectCompute,
-                rasterizeCompute,
                 rasterizeBinnedCompute,
                 finalizeCompute
             });
@@ -790,7 +724,6 @@ class GpuSplatRasterizer {
         const slotObj = this.slots[slot];
         for (const c of [
             slotObj.projectCompute,
-            slotObj.rasterizeCompute,
             slotObj.rasterizeBinnedCompute,
             slotObj.finalizeCompute
         ]) {
@@ -841,48 +774,6 @@ class GpuSplatRasterizer {
         this.slots[slot].runningStateBuffer.write(
             0, this.clearStatePattern, 0, groupPixels * RUNNING_STATE_STRIDE_F32
         );
-    }
-
-    /**
-     * Upload and process one chunk of gaussians.
-     *
-     * Forces a queue submit at the end of the chunk's dispatches. The
-     * project + rasterize computes share a single persistent uniform
-     * buffer per Compute instance in PlayCanvas; without submitting
-     * between chunks the next chunk's `setParameter` would overwrite the
-     * uniform buffer in place, causing every queued dispatch on the same
-     * Compute to read the LAST chunk's values (truncating earlier chunks
-     * to the final chunk's `chunkSize`).
-     *
-     * @param slot - Slot index.
-     * @param chunkData - Float32Array containing `chunkSize × inputStride` floats.
-     * @param chunkSize - Number of gaussians in this chunk (≤ chunkCap).
-     */
-    dispatchChunk(slot: number, chunkData: Float32Array, chunkSize: number): void {
-        if (chunkSize === 0) return;
-        if (chunkSize > this.chunkCap) {
-            throw new Error(`chunkSize ${chunkSize} exceeds chunkCap ${this.chunkCap}`);
-        }
-        const s = this.slots[slot];
-        s.inputBuffer.write(0, chunkData, 0, chunkSize * this.inputStride);
-
-        s.projectCompute.setParameter('chunkSize', chunkSize);
-        s.projectCompute.setupDispatch(Math.ceil(chunkSize / 64), 1, 1);
-        this.device.computeDispatch([s.projectCompute], 'splat-project');
-
-        s.rasterizeCompute.setParameter('chunkSize', chunkSize);
-        s.rasterizeCompute.setupDispatch(this.groupSizeTiles, this.groupSizeTiles, 1);
-        this.device.computeDispatch([s.rasterizeCompute], 'splat-rasterize-accumulate');
-
-        // Required: submit between chunks so each dispatch's persistent
-        // uniform buffer captures its own `chunkSize`. Without this, all
-        // dispatches read the last chunk's value (see method JSDoc).
-        // @ts-ignore - submit() is exposed by WebgpuGraphicsDevice but not on the public GraphicsDevice type.
-        const submit = (this.device as { submit?: () => void }).submit;
-        if (!submit) {
-            throw new Error('GpuSplatRasterizer requires a GraphicsDevice with a submit() method (WebGPU backend).');
-        }
-        submit.call(this.device);
     }
 
     /**
@@ -1004,14 +895,12 @@ class GpuSplatRasterizer {
             s.tileDataBuffer.destroy();
         }
         this.projectShader.destroy();
-        this.rasterizeShader.destroy();
         this.rasterizeBinnedShader.destroy();
         this.finalizeShader.destroy();
         this.projectBgFormat.destroy();
-        this.rasterizeBgFormat.destroy();
         this.rasterizeBinnedBgFormat.destroy();
         this.finalizeBgFormat.destroy();
     }
 }
 
-export { GpuSplatRasterizer, type SplatRasterizerOptions, TILE_SIZE, MAX_COVERAGE_PER_SPLAT };
+export { GpuSplatRasterizer, type SplatRasterizerOptions };

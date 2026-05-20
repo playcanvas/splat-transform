@@ -2,6 +2,7 @@ import { GraphicsDevice } from 'playcanvas';
 
 import { computeGroupFrustumPlanes, queryBvhFrustum } from './bvh-query';
 import { type RenderCamera, buildCameraBasis } from './camera';
+import { FAR_PLANE_NEAR_FACTOR, MAX_COVERAGE_PER_SPLAT, TILE_SIZE } from './config';
 import {
     SortScratch,
     getSplatColumnRefs,
@@ -11,7 +12,7 @@ import {
     splatInputStride
 } from './preprocess';
 import { DataTable, computeGaussianExtents } from '../data-table';
-import { GpuSplatRasterizer, MAX_COVERAGE_PER_SPLAT, TILE_SIZE } from '../gpu';
+import { GpuSplatRasterizer } from '../gpu';
 import { GaussianBVH } from '../spatial';
 import { logger } from '../utils';
 
@@ -89,7 +90,7 @@ const renderRasterPass = async (
         sb.min.x, sb.min.y, sb.max.z, sb.max.x, sb.min.y, sb.max.z,
         sb.min.x, sb.max.y, sb.max.z, sb.max.x, sb.max.y, sb.max.z
     ];
-    let far = camera.near * 100;
+    let far = camera.near * FAR_PLANE_NEAR_FACTOR;
     for (let k = 0; k < 24; k += 3) {
         const dx = corners[k] - basis.eye.x;
         const dy = corners[k + 1] - basis.eye.y;
