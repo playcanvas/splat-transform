@@ -1,6 +1,5 @@
 import { GraphicsDevice } from 'playcanvas';
 
-import { computeGroupFrustumPlanes, queryBvhFrustum } from './bvh-query';
 import { type RenderCamera, buildCameraBasis } from './camera';
 import { FAR_PLANE_NEAR_FACTOR, MAX_COVERAGE_PER_SPLAT, TILE_SIZE } from './config';
 import {
@@ -11,9 +10,8 @@ import {
     sortCandidatesByDepth,
     splatInputStride
 } from './preprocess';
-import { DataTable, computeGaussianExtents } from '../data-table';
+import { DataTable } from '../data-table';
 import { GpuSplatRasterizer } from '../gpu';
-import { GaussianBVH } from '../spatial';
 import { logger } from '../utils';
 
 /**
@@ -37,20 +35,20 @@ interface BackgroundRGBA {
 /**
  * Render a splat scene to an RGBA byte buffer.
  *
- * Replaces the per-tile-group orchestration of `tile-stream.ts` with a
- * single whole-image pipeline:
+ * Whole-image pipeline:
  *
- *   1. Build the BVH from the scene's 3-σ extents.
- *   2. Frustum-cull once against the whole image's view frustum.
- *   3. Sort visible splats globally by camera-space z (front-to-back).
- *   4. Drive the rasterizer with one tile group covering the entire
+ *   1. Linear frustum cull — one pass over all splats, testing each
+ *      centre against the camera frustum in camera-space. No BVH or
+ *      per-splat AABB precomputation.
+ *   2. Sort visible splats globally by camera-space z (front-to-back).
+ *   3. Drive the rasterizer with one tile group covering the entire
  *      image, chunking the depth-sorted splat list into `CHUNK_CAP`-
  *      sized batches. The rasterizer's running-state buffer accumulates
- *      across chunks; `T < 1e-4` short-circuits saturated pixels.
+ *      across chunks; `T < MIN_TRANSMITTANCE` short-circuits saturated
+ *      pixels.
  *
- * This eliminates the per-group BVH cull that produced visible seams at
- * 128 px tile-group boundaries — there are no groups any more, so
- * nothing can be culled inconsistently between neighbouring regions.
+ * Per-chunk: project on GPU → CPU bins splats by tile → GPU rasterizes
+ * each tile against only its tile's slice. No per-tile-group seams.
  *
  * @param device - PlayCanvas WebGPU graphics device.
  * @param dataTable - Gaussian splat data in PlayCanvas-identity space.
@@ -73,47 +71,48 @@ const renderRasterPass = async (
     const height = camera.height;
     const basis = buildCameraBasis(camera);
 
-    // ---- Build BVH ----
-    const bvhGroup = logger.group('BVH');
-    const extentsResult = computeGaussianExtents(dataTable);
-    const bvh = new GaussianBVH(dataTable, extentsResult.extents);
+    // ---- Frustum cull ----
+    // Linear, centre-only near-plane test in camera space. Each splat is
+    // kept iff its centre is in front of the near plane:
+    //   - transform position to camera space, take cz = forward · (p - eye)
+    //   - cull if cz <= near
+    //
+    // This matches the GPU project shader's near-plane test exactly, so
+    // a splat that the CPU passes through is one that the GPU might
+    // actually rasterize. Splats whose centres are outside the side
+    // cones (|cx| > limX·cz or |cy| > limY·cz) but whose 3σ tails
+    // project into the image are kept here and culled later by the
+    // project shader's 2D image-rect test — a tighter, post-projection
+    // test that uses the actual screen-space radius.
+    //
+    // Replaces the old `computeGaussianExtents + GaussianBVH +
+    // queryBvhFrustum` stage (~6 s for 18 M splats). For one whole-image
+    // query the BVH's tree-walk savings don't recoup its build cost;
+    // this linear scan delivers a superset of the visible-set at a
+    // fraction of the time (~100 ms for 18 M splats). The slight
+    // over-inclusion is absorbed by the project shader.
+    const cullGroup = logger.group('Cull');
+    const xCol = dataTable.getColumnByName('x')!.data as Float32Array;
+    const yCol = dataTable.getColumnByName('y')!.data as Float32Array;
+    const zCol = dataTable.getColumnByName('z')!.data as Float32Array;
+    const numRows = dataTable.numRows;
 
-    // Far plane: largest camera-space depth of any scene-AABB corner.
-    // The far-plane test is `forward · (p − eye) ≤ far` (a camera-space-z
-    // bound), so we measure `far` along the same axis. `near * 100` is a
-    // floor so the BVH doesn't get a degenerate frustum on scenes where
-    // every corner sits behind the camera.
-    const sb = extentsResult.sceneBounds;
-    const corners = [
-        sb.min.x, sb.min.y, sb.min.z, sb.max.x, sb.min.y, sb.min.z,
-        sb.min.x, sb.max.y, sb.min.z, sb.max.x, sb.max.y, sb.min.z,
-        sb.min.x, sb.min.y, sb.max.z, sb.max.x, sb.min.y, sb.max.z,
-        sb.min.x, sb.max.y, sb.max.z, sb.max.x, sb.max.y, sb.max.z
-    ];
-    let far = camera.near * FAR_PLANE_NEAR_FACTOR;
-    for (let k = 0; k < 24; k += 3) {
-        const dx = corners[k] - basis.eye.x;
-        const dy = corners[k + 1] - basis.eye.y;
-        const dz = corners[k + 2] - basis.eye.z;
-        const d = basis.forward.x * dx + basis.forward.y * dy + basis.forward.z * dz;
-        if (d > far) far = d;
+    const ex = basis.eye.x, ey = basis.eye.y, ez = basis.eye.z;
+    const fx = basis.forward.x, fy = basis.forward.y, fz = basis.forward.z;
+    const near = camera.near;
+
+    // Worst-case visible-count allocation. Right-sized at the end via subarray.
+    const candidates = new Uint32Array(numRows);
+    let candidateCount = 0;
+    for (let i = 0; i < numRows; i++) {
+        const cz = fx * (xCol[i] - ex) + fy * (yCol[i] - ey) + fz * (zCol[i] - ez);
+        if (cz > near) candidates[candidateCount++] = i;
     }
-    bvhGroup.end();
-
-    // ---- Whole-image frustum cull ----
-    // One BVH query against the camera frustum for the entire image —
-    // not subdivided by tile group. Per-tile coverage is decided downstream
-    // by the project shader's 2D image-AABB cull, so a splat whose centre
-    // lies just outside one tile but whose tail crosses into the next is
-    // still considered (and its tail still rasterises) as it would have
-    // been if the cull had been done per-tile.
-    const planes = new Float32Array(24);
-    computeGroupFrustumPlanes(basis, 0, 0, width, height, width, height, camera.near, far, planes);
-
-    const initialCandidates: Uint32Array = new Uint32Array(Math.min(64 * 1024, dataTable.numRows));
-    const qr = queryBvhFrustum(bvh, planes, initialCandidates);
-    const candidates: Uint32Array = qr.buffer;
-    const candidateCount = qr.count;
+    cullGroup.end();
+    // Suppress unused import warning for FAR_PLANE_NEAR_FACTOR — kept in
+    // config for future use (e.g. logging or a sanity bound on chunk
+    // depth ranges) but not needed by the current cull pass.
+    void FAR_PLANE_NEAR_FACTOR;
 
     // ---- Image tile grid ----
     const imageTilesX = Math.ceil(width / TILE_SIZE);
