@@ -231,6 +231,98 @@ class KdTree {
 
         return { indices: resultIndices, distances: resultDist };
     }
+
+    /**
+     * Flatten the tree into GPU-friendly typed arrays. Each tree node is
+     * assigned a tree-index in pre-order DFS. The arrays are parallel:
+     * for tree-index `t`, the node holds splat `nodeSplatIdx[t]` whose
+     * position is `(nodeX[t], nodeY[t], nodeZ[t])`. Children live at
+     * `nodeLeft[t]` and `nodeRight[t]` (tree indices), with the sentinel
+     * `0xFFFFFFFF` for missing children.
+     *
+     * Positions are denormalised at each tree node (rather than indirected
+     * through `nodeSplatIdx` + the source position arrays) so a tree-walk
+     * does one read per visit instead of two. Costs 12 bytes/node extra.
+     *
+     * Layout assumes the underlying `centroids` DataTable has columns
+     * `x`, `y`, `z` (the first three columns). The constructor accepts
+     * any column set, so callers must ensure these are present and first.
+     *
+     * @returns Parallel arrays of length N where N = number of points.
+     * The root is at index 0.
+     */
+    flattenForGpu(): {
+        nodeSplatIdx: Uint32Array;
+        nodeX: Float32Array;
+        nodeY: Float32Array;
+        nodeZ: Float32Array;
+        nodeLeft: Uint32Array;
+        nodeRight: Uint32Array;
+        rootIdx: number;
+        } {
+        const n = this.centroids.numRows;
+        const nodeSplatIdx = new Uint32Array(n);
+        const nodeX = new Float32Array(n);
+        const nodeY = new Float32Array(n);
+        const nodeZ = new Float32Array(n);
+        const nodeLeft = new Uint32Array(n);
+        const nodeRight = new Uint32Array(n);
+        nodeLeft.fill(0xFFFFFFFF);
+        nodeRight.fill(0xFFFFFFFF);
+
+        const x = this.colData[0], y = this.colData[1], z = this.colData[2];
+
+        // Iterative pre-order DFS: assign tree indices, then patch the parent's
+        // left/right slot when each child is visited. JS recursion blows the
+        // stack on heavily unbalanced trees, so we maintain the work stack
+        // ourselves. Encoded entries: nodeRef + (parentTreeIdx, side) where
+        // side ∈ {0 = left of parent, 1 = right of parent, 2 = root}.
+        //
+        // Max DFS depth is the tree's height. `KdTree.build` is recursive and
+        // splits at the nthElement median, so the tree is near-balanced and
+        // its height is bounded by JS's recursion limit (~10K). A fixed 64
+        // entries is enough for any tree this codebase can actually build
+        // (2^64 ≫ 10K) and avoids an `n+1`-sized scratch (~85 MB at N=17.9M).
+        const stackCap = 64;
+        const stackNode: KdTreeNode[] = [this.root];
+        const stackParent = new Int32Array(stackCap);
+        const stackSide = new Uint8Array(stackCap);
+        stackParent[0] = -1;
+        stackSide[0] = 2;
+        let sp = 1;
+
+        let cursor = 0;
+        const rootIdx = cursor;
+        while (sp > 0) {
+            sp--;
+            const node = stackNode[sp];
+            const parent = stackParent[sp];
+            const side = stackSide[sp];
+            const treeIdx = cursor++;
+            const splat = node.index;
+            nodeSplatIdx[treeIdx] = splat;
+            nodeX[treeIdx] = x[splat];
+            nodeY[treeIdx] = y[splat];
+            nodeZ[treeIdx] = z[splat];
+            if (side === 0) nodeLeft[parent] = treeIdx;
+            else if (side === 1) nodeRight[parent] = treeIdx;
+            // Push right then left so left is popped first (pre-order).
+            if (node.right) {
+                stackNode[sp] = node.right;
+                stackParent[sp] = treeIdx;
+                stackSide[sp] = 1;
+                sp++;
+            }
+            if (node.left) {
+                stackNode[sp] = node.left;
+                stackParent[sp] = treeIdx;
+                stackSide[sp] = 0;
+                sp++;
+            }
+        }
+
+        return { nodeSplatIdx, nodeX, nodeY, nodeZ, nodeLeft, nodeRight, rootIdx };
+    }
 }
 
 export { KdTreeNode, KdTree };

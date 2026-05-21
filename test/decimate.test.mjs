@@ -129,26 +129,41 @@ describe('sortByVisibility', () => {
 describe('simplifyGaussians', () => {
     it('should return all splats when targetCount >= numRows', async () => {
         const testData = createMinimalTestData();
-        const result = simplifyGaussians(testData, 1000);
+        const result = await simplifyGaussians(testData, 1000);
         assert.strictEqual(result.numRows, testData.numRows, 'Should keep all rows');
     });
 
     it('should return empty DataTable when targetCount is 0', async () => {
         const testData = createMinimalTestData();
-        const result = simplifyGaussians(testData, 0);
+        const result = await simplifyGaussians(testData, 0);
         assert.strictEqual(result.numRows, 0, 'Should have 0 rows');
+    });
+
+    it('should not invoke createDevice on the early-return path', async () => {
+        const testData = createMinimalTestData();
+        let invoked = false;
+        const createDevice = async () => {
+            invoked = true;
+            throw new Error('should not be called');
+        };
+        // No work needed (target >= numRows): factory must not be touched.
+        await simplifyGaussians(testData, 1000, createDevice);
+        assert.strictEqual(invoked, false, 'createDevice should be lazy');
+        // Same for the empty-output early return.
+        await simplifyGaussians(testData, 0, createDevice);
+        assert.strictEqual(invoked, false, 'createDevice should be lazy on empty target too');
     });
 
     it('should reduce to target count', async () => {
         const testData = createMinimalTestData();
-        const result = simplifyGaussians(testData, 8);
+        const result = await simplifyGaussians(testData, 8);
         assert.strictEqual(result.numRows, 8, 'Should have exactly 8 rows');
     });
 
     it('should preserve all columns', async () => {
         const testData = createMinimalTestData();
         const originalCols = testData.columnNames.sort();
-        const result = simplifyGaussians(testData, 8);
+        const result = await simplifyGaussians(testData, 8);
         const resultCols = result.columnNames.sort();
         assert.deepStrictEqual(resultCols, originalCols, 'Should have same columns');
     });
@@ -163,7 +178,7 @@ describe('simplifyGaussians', () => {
         const minZ = Math.min(...origZ);
         const maxZ = Math.max(...origZ);
 
-        const result = simplifyGaussians(testData, 4);
+        const result = await simplifyGaussians(testData, 4);
 
         const resX = result.getColumnByName('x').data;
         const resZ = result.getColumnByName('z').data;
@@ -177,7 +192,7 @@ describe('simplifyGaussians', () => {
 
     it('should produce valid opacity values', async () => {
         const testData = createMinimalTestData();
-        const result = simplifyGaussians(testData, 8);
+        const result = await simplifyGaussians(testData, 8);
 
         const opacityData = result.getColumnByName('opacity').data;
         for (let i = 0; i < result.numRows; i++) {
@@ -189,7 +204,7 @@ describe('simplifyGaussians', () => {
 
     it('should produce finite scale values', async () => {
         const testData = createMinimalTestData();
-        const result = simplifyGaussians(testData, 8);
+        const result = await simplifyGaussians(testData, 8);
 
         for (const col of ['scale_0', 'scale_1', 'scale_2']) {
             const data = result.getColumnByName(col).data;
@@ -201,7 +216,7 @@ describe('simplifyGaussians', () => {
 
     it('should produce normalized quaternion rotations', async () => {
         const testData = createMinimalTestData();
-        const result = simplifyGaussians(testData, 8);
+        const result = await simplifyGaussians(testData, 8);
 
         const r0 = result.getColumnByName('rot_0').data;
         const r1 = result.getColumnByName('rot_1').data;
@@ -243,7 +258,7 @@ describe('simplifyGaussians', () => {
             new Column('f_dc_2', new Float32Array([0, 0]))
         ]);
 
-        const result = simplifyGaussians(testData, 1);
+        const result = await simplifyGaussians(testData, 1);
         assert.strictEqual(result.numRows, 1, 'Should merge to a single splat');
 
         // Position: centroid of two co-located origins → origin.
@@ -274,7 +289,7 @@ describe('simplifyGaussians', () => {
             new Column('scale_2', new Float32Array([0, 0, 0, Math.log(2)]))
         ]);
 
-        const result = simplifyGaussians(testData, 2);
+        const result = await simplifyGaussians(testData, 2);
         assert.strictEqual(result.numRows, 2, 'Should produce 2 rows via fallback');
     });
 });
