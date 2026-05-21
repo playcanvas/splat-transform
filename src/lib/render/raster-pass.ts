@@ -2,8 +2,12 @@ import { GraphicsDevice } from 'playcanvas';
 
 import { type RenderCamera, buildCameraBasis } from './camera';
 import {
+    AA_DILATION_COV,
+    DISCRIMINANT_FLOOR,
+    JACOBIAN_LIMIT_FACTOR,
     PAIR_BUFFER_BUDGET_BYTES,
     PAIR_BUFFER_TOTAL_BYTES_PER_ELEMENT,
+    SIGMA_CUTOFF,
     TILE_SIZE
 } from './config';
 import {
@@ -149,6 +153,141 @@ const renderRasterPass = async (
     const sortScratch = new SortScratch();
     sortCandidatesByDepth(cols, candidates, candidateCount, basis, sortScratch);
 
+    // ---- Per-sub-frame CPU cull ----
+    // For multi-sub-frame renders, partition the depth-sorted candidate
+    // list into per-sub-frame sub-lists so each sub-frame only packs/
+    // uploads/projects the splats whose conservative screen bbox
+    // overlaps it. Without this, every sub-frame pays the full upload
+    // + project cost for every candidate (the GPU AABB cull only
+    // discards them at the end of projection) — at 8K that's 16×
+    // duplicate work.
+    //
+    // Bound is constructed to be ≥ the GPU project shader's computed
+    // radius, so the cull is byte-exact: every splat the GPU would
+    // include sits inside its bound bbox, and a "definitely outside"
+    // verdict means the GPU AABB cull would also drop it.
+    //
+    // Derivation. The GPU computes radius = SIGMA_CUTOFF · sqrt(lambdaMax)
+    // where lambdaMax is the larger eigenvalue of the projected 2D
+    // covariance (C2D = J·C3D·Jᵀ + AA_DILATION_COV·I, with the
+    // DISCRIMINANT_FLOOR safety also bumping it). Matrix theory:
+    //   maxEig(J·C3D·Jᵀ) ≤ maxEig(J·Jᵀ) · maxEig(C3D)
+    // and for our perspective Jacobian J = focal/cz · [[1, 0, -tx],
+    // [0, 1, -ty]]:
+    //   maxEig(J·Jᵀ) = (focal/cz)² · (1 + tx² + ty²)
+    // with tx, ty clamped per JACOBIAN_LIMIT_FACTOR (same as the GPU
+    // project shader's clamp). maxEig(C3D) = max-axis-scale² for an
+    // anisotropic Gaussian. Adding AA_DILATION_COV and the
+    // DISCRIMINANT_FLOOR safety bump:
+    //   lambdaMax ≤ (focal/cz)² · (1+tx²+ty²) · maxScale²
+    //              + AA_DILATION_COV + sqrt(DISCRIMINANT_FLOOR)
+    // Per-splat order is preserved → per-sub-frame lists stay
+    // depth-sorted.
+    let subFrameLists: Uint32Array[];
+    if (numSubFrames === 1) {
+        subFrameLists = [candidates.subarray(0, candidateCount)];
+    } else {
+        const subFramePixelsX = subFrameTilesX * TILE_SIZE;
+        const subFramePixelsY = subFrameTilesY * TILE_SIZE;
+        const rx2 = basis.right.x, ry2 = basis.right.y, rz2 = basis.right.z;
+        const dx2 = basis.down.x, dy2 = basis.down.y, dz2 = basis.down.z;
+        const focalX = basis.focalX, focalY = basis.focalY;
+        const halfW = width * 0.5, halfH = height * 0.5;
+        const sxColRef = cols.scaleX, syColRef = cols.scaleY, szColRef = cols.scaleZ;
+        // Tan-of-half-FOV cap; matches the project shader's Jacobian clamp.
+        const limX = JACOBIAN_LIMIT_FACTOR * halfW / focalX;
+        const limY = JACOBIAN_LIMIT_FACTOR * halfH / focalY;
+        const limX2 = limX * limX;
+        const limY2 = limY * limY;
+        // Additive squared-radius safety: AA dilation + disc-floor bump.
+        const lambdaSafety = AA_DILATION_COV + Math.sqrt(DISCRIMINANT_FLOOR);
+        // Per-buffer base focal scale (max of focals so the bound is
+        // valid against either axis).
+        const focalMax = Math.max(focalX, focalY);
+
+        // Packed Uint8 buffer of (sx0, sx1, sy0, sy1) per candidate.
+        // sx0 = 255 sentinel marks "off-screen, skip in pass 2".
+        const SF_OFFSCREEN = 255;
+        const ranges = new Uint8Array(candidateCount * 4);
+        const subFrameCounts = new Uint32Array(numSubFrames);
+
+        // Pass 1: compute ranges, count per sub-frame.
+        for (let i = 0; i < candidateCount; i++) {
+            const idx = candidates[i];
+            const wx = xCol[idx] - ex;
+            const wy = yCol[idx] - ey;
+            const wz = zCol[idx] - ez;
+            const cz = fx * wx + fy * wy + fz * wz;
+            // Candidate has already passed the near-plane CPU cull; cz > near
+            // is therefore an invariant here, no need to retest.
+            const cx = rx2 * wx + ry2 * wy + rz2 * wz;
+            const cy = dx2 * wx + dy2 * wy + dz2 * wz;
+            const invZ = 1.0 / cz;
+            const screenX = focalX * cx * invZ + halfW;
+            const screenY = focalY * cy * invZ + halfH;
+            const maxScale = Math.max(
+                Math.exp(sxColRef[idx]),
+                Math.exp(syColRef[idx]),
+                Math.exp(szColRef[idx])
+            );
+            // Jacobian factor: (focal/cz)² · (1 + tx² + ty²) with
+            // tx = cx/cz, ty = cy/cz both clamped to ±lim. Matches the
+            // project shader's clamp so the bound is tight.
+            const tx = cx * invZ;
+            const ty = cy * invZ;
+            const txClamped = tx > limX ? limX : (tx < -limX ? -limX : tx);
+            const tyClamped = ty > limY ? limY : (ty < -limY ? -limY : ty);
+            const tx2 = Math.min(txClamped * txClamped, limX2);
+            const ty2 = Math.min(tyClamped * tyClamped, limY2);
+            const jFactorSq = 1 + tx2 + ty2;
+            const lambdaMaxBound = (focalMax * invZ) * (focalMax * invZ) * jFactorSq * maxScale * maxScale + lambdaSafety;
+            // +1 px ceil safety to match the GPU's `ceil(radius)`.
+            const screenR = Math.ceil(SIGMA_CUTOFF * Math.sqrt(lambdaMaxBound)) + 1;
+            const minX = screenX - screenR;
+            const maxX = screenX + screenR;
+            const minY = screenY - screenR;
+            const maxY = screenY + screenR;
+            if (maxX < 0 || minX >= width || maxY < 0 || minY >= height) {
+                ranges[i * 4] = SF_OFFSCREEN;
+                continue;
+            }
+            const sx0 = Math.max(0, Math.floor(minX / subFramePixelsX));
+            const sx1 = Math.min(numSubFramesX - 1, Math.floor(maxX / subFramePixelsX));
+            const sy0 = Math.max(0, Math.floor(minY / subFramePixelsY));
+            const sy1 = Math.min(numSubFramesY - 1, Math.floor(maxY / subFramePixelsY));
+            ranges[i * 4 + 0] = sx0;
+            ranges[i * 4 + 1] = sx1;
+            ranges[i * 4 + 2] = sy0;
+            ranges[i * 4 + 3] = sy1;
+            for (let sy = sy0; sy <= sy1; sy++) {
+                for (let sx = sx0; sx <= sx1; sx++) {
+                    subFrameCounts[sy * numSubFramesX + sx]++;
+                }
+            }
+        }
+
+        // Allocate exact-size lists and fill (pass 2).
+        subFrameLists = new Array(numSubFrames);
+        const insertIdx = new Uint32Array(numSubFrames);
+        for (let s = 0; s < numSubFrames; s++) {
+            subFrameLists[s] = new Uint32Array(subFrameCounts[s]);
+        }
+        for (let i = 0; i < candidateCount; i++) {
+            const sx0 = ranges[i * 4 + 0];
+            if (sx0 === SF_OFFSCREEN) continue;
+            const sx1 = ranges[i * 4 + 1];
+            const sy0 = ranges[i * 4 + 2];
+            const sy1 = ranges[i * 4 + 3];
+            const idx = candidates[i];
+            for (let sy = sy0; sy <= sy1; sy++) {
+                for (let sx = sx0; sx <= sx1; sx++) {
+                    const s = sy * numSubFramesX + sx;
+                    subFrameLists[s][insertIdx[s]++] = idx;
+                }
+            }
+        }
+    }
+
     // ---- Rasterizer (one instance, reused across sub-frames) ----
     // The rasterizer's buffers are sized to the MAX sub-frame
     // dimensions, not the full image. Each sub-frame calls beginGroup
@@ -219,8 +358,13 @@ const renderRasterPass = async (
     // copied into.
     const finalImage = new Uint8Array(width * height * 4);
 
-    const numChunks = Math.max(1, Math.ceil(candidateCount / effectiveChunkCap));
-    const rasterBar = logger.bar('rasterizing', numSubFrames * numChunks);
+    // Total chunks across all sub-frames (each sub-frame's list is its
+    // own filtered count). Used only for progress reporting.
+    let totalChunks = 0;
+    for (let s = 0; s < numSubFrames; s++) {
+        totalChunks += Math.max(1, Math.ceil(subFrameLists[s].length / effectiveChunkCap));
+    }
+    const rasterBar = logger.bar('rasterizing', Math.max(1, totalChunks));
     let completed = 0;
 
     for (let sy = 0; sy < numSubFramesY; sy++) {
@@ -230,9 +374,11 @@ const renderRasterPass = async (
 
             rasterizer.beginGroup(sx, sy, tilesX, tilesY);
 
-            for (let chunkStart = 0; chunkStart < candidateCount; chunkStart += effectiveChunkCap) {
-                const chunkSize = Math.min(effectiveChunkCap, candidateCount - chunkStart);
-                packChunkInput(cols, candidates, chunkStart, chunkSize, numSHBands, chunkInput);
+            const sfCandidates = subFrameLists[sy * numSubFramesX + sx];
+            const sfCount = sfCandidates.length;
+            for (let chunkStart = 0; chunkStart < sfCount; chunkStart += effectiveChunkCap) {
+                const chunkSize = Math.min(effectiveChunkCap, sfCount - chunkStart);
+                packChunkInput(cols, sfCandidates, chunkStart, chunkSize, numSHBands, chunkInput);
                 rasterizer.dispatchChunk(chunkInput, chunkSize);
                 rasterBar.update(++completed);
             }
