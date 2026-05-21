@@ -590,8 +590,11 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 keepCount = Math.max(0, keepCount);
 
                 // Pass the factory (not an eagerly-created device) so
-                // `simplifyGaussians` owns the device lifecycle for this run
-                // — matches the pattern used by `filterFloaters` below.
+                // `simplifyGaussians` can create the device lazily — and skip
+                // creation entirely when the input is already at or below the
+                // target count. The caller of `processDataTable` is
+                // responsible for caching the device if it should be reused
+                // across actions (see `DeviceCreator` contract in types.ts).
                 result = await simplifyGaussians(result, keepCount, options?.createDevice);
                 break;
             }

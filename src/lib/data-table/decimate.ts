@@ -299,14 +299,41 @@ const buildPerSplatCache = (
 
 // ====================== COST FUNCTION ======================
 
-const _Sigm = new Float64Array(9);
+// Reusable scratch shared by `computeEdgeCost` and `momentMatch`. Allocated
+// once per `simplifyGaussians` invocation (not per call) so concurrent
+// invocations don't share state. Per-call allocation at ~9M merges/iter
+// would burn ~5 GB of throwaway garbage; per-decimate allocation is ~600 B.
+interface MergeScratch {
+    sigm: Float64Array;  // computeEdgeCost: merged covariance
+    sigI: Float64Array;  // momentMatch: input i covariance
+    sigJ: Float64Array;  // momentMatch: input j covariance
+    rI: Float64Array;    // momentMatch: input i rotation
+    rJ: Float64Array;    // momentMatch: input j rotation
+    sig: Float64Array;   // momentMatch: merged covariance
+    rM: Float64Array;    // momentMatch: merged rotation
+    eigA: Float64Array;  // eigenSymmetric3x3: working matrix
+    eigV: Float64Array;  // eigenSymmetric3x3: eigenvectors
+}
+
+const createMergeScratch = (): MergeScratch => ({
+    sigm: new Float64Array(9),
+    sigI: new Float64Array(9),
+    sigJ: new Float64Array(9),
+    rI: new Float64Array(9),
+    rJ: new Float64Array(9),
+    sig: new Float64Array(9),
+    rM: new Float64Array(9),
+    eigA: new Float64Array(9),
+    eigV: new Float64Array(9),
+});
 
 const computeEdgeCost = (
     i: number, j: number,
     cx: any, cy: any, cz: any,
     cache: SplatCache,
     Z: Float64Array[],
-    appData: any[], appColCount: number
+    appData: any[], appColCount: number,
+    scratch: MergeScratch
 ): number => {
     const i3 = 3 * i, j3 = 3 * j;
     const i9 = 9 * i, j9 = 9 * j;
@@ -333,28 +360,29 @@ const computeEdgeCost = (
     const djx = mvx - mmx, djy = mvy - mmy, djz = mvz - mmz;
 
     // Merged covariance (full 9-element, reuse preallocated buffer)
+    const sigm = scratch.sigm;
     for (let a = 0; a < 9; a++) {
-        _Sigm[a] = pi * cache.sigma[i9 + a] + pj * cache.sigma[j9 + a];
+        sigm[a] = pi * cache.sigma[i9 + a] + pj * cache.sigma[j9 + a];
     }
-    _Sigm[0] += pi * dix * dix + pj * djx * djx;
-    _Sigm[1] += pi * dix * diy + pj * djx * djy;
-    _Sigm[2] += pi * dix * diz + pj * djx * djz;
-    _Sigm[3] += pi * diy * dix + pj * djy * djx;
-    _Sigm[4] += pi * diy * diy + pj * djy * djy;
-    _Sigm[5] += pi * diy * diz + pj * djy * djz;
-    _Sigm[6] += pi * diz * dix + pj * djz * djx;
-    _Sigm[7] += pi * diz * diy + pj * djz * djy;
-    _Sigm[8] += pi * diz * diz + pj * djz * djz;
+    sigm[0] += pi * dix * dix + pj * djx * djx;
+    sigm[1] += pi * dix * diy + pj * djx * djy;
+    sigm[2] += pi * dix * diz + pj * djx * djz;
+    sigm[3] += pi * diy * dix + pj * djy * djx;
+    sigm[4] += pi * diy * diy + pj * djy * djy;
+    sigm[5] += pi * diy * diz + pj * djy * djz;
+    sigm[6] += pi * diz * dix + pj * djz * djx;
+    sigm[7] += pi * diz * diy + pj * djz * djy;
+    sigm[8] += pi * diz * diz + pj * djz * djz;
 
     // Force symmetry + regularize
-    _Sigm[1] = _Sigm[3] = 0.5 * (_Sigm[1] + _Sigm[3]);
-    _Sigm[2] = _Sigm[6] = 0.5 * (_Sigm[2] + _Sigm[6]);
-    _Sigm[5] = _Sigm[7] = 0.5 * (_Sigm[5] + _Sigm[7]);
-    _Sigm[0] += EPS_COV;
-    _Sigm[4] += EPS_COV;
-    _Sigm[8] += EPS_COV;
+    sigm[1] = sigm[3] = 0.5 * (sigm[1] + sigm[3]);
+    sigm[2] = sigm[6] = 0.5 * (sigm[2] + sigm[6]);
+    sigm[5] = sigm[7] = 0.5 * (sigm[5] + sigm[7]);
+    sigm[0] += EPS_COV;
+    sigm[4] += EPS_COV;
+    sigm[8] += EPS_COV;
 
-    const detm = Math.max(det3(_Sigm, 0), 1e-30);
+    const detm = Math.max(det3(sigm, 0), 1e-30);
     const logdetm = Math.log(detm);
 
     // E_p[-log q_m] computed analytically as entropy of merged Gaussian
@@ -427,28 +455,14 @@ const computeEdgeCost = (
 //     no out-of-range α, so the output PLY/SOG stays standard logit-encoded)
 //   - no Spark filter floor: we're pair-wise merging, not building an LOD
 //     grid, so the inter-mean filter regularization adds blur for no benefit
-// Module-level scratch for `momentMatch`. The per-call alternative — 6×
-// Float64Array(9) inside `momentMatch`, plus 2× inside `eigenSymmetric3x3` —
-// produced ~600 bytes of throwaway garbage per call. At ~9M pairs per
-// decimate that's ~5 GB of transient allocation, which bumped peak RSS by
-// 3-4 GB before V8 caught up with GC. Reusing these is safe because
-// `momentMatch` is called serially from the merge loop.
-const _mmSigI = new Float64Array(9);
-const _mmSigJ = new Float64Array(9);
-const _mmRi = new Float64Array(9);
-const _mmRj = new Float64Array(9);
-const _mmSig = new Float64Array(9);
-const _mmRm = new Float64Array(9);
-const _mmEigA = new Float64Array(9);
-const _mmEigV = new Float64Array(9);
-
 const momentMatch = (
     i: number, j: number,
     cx: any, cy: any, cz: any,
     cop: any, cs0: any, cs1: any, cs2: any,
     cr0: any, cr1: any, cr2: any, cr3: any,
     out: { mu: Float64Array; sc: Float64Array; q: Float64Array; op: number; sh: Float64Array },
-    appData: any[], appColCount: number
+    appData: any[], appColCount: number,
+    scratch: MergeScratch
 ) => {
     const sxi = Math.max(Math.exp(cs0[i] as number), 1e-12);
     const syi = Math.max(Math.exp(cs1[i] as number), 1e-12);
@@ -476,11 +490,11 @@ const momentMatch = (
     const muy = pi * myi + pj * myj;
     const muz = pi * mzi + pj * mzj;
 
-    // Per-input covariance matrices — module-scoped scratch (see top of file).
-    const SigI = _mmSigI;
-    const SigJ = _mmSigJ;
-    const Ri = _mmRi;
-    const Rj = _mmRj;
+    // Per-call scratch buffers — owned by `simplifyGaussians` and passed in.
+    const SigI = scratch.sigI;
+    const SigJ = scratch.sigJ;
+    const Ri = scratch.rI;
+    const Rj = scratch.rJ;
 
     let qwi = cr0[i] as number, qxi = cr1[i] as number, qyi = cr2[i] as number, qzi = cr3[i] as number;
     const ni = 1 / Math.max(Math.hypot(qwi, qxi, qyi, qzi), 1e-12);
@@ -498,7 +512,7 @@ const momentMatch = (
     const djx = mxj - mux, djy = myj - muy, djz = mzj - muz;
 
     // Merged covariance (weighted sum of δδᵀ + Σ_k) — scratch.
-    const Sig = _mmSig;
+    const Sig = scratch.sig;
     Sig[0] = pi * (dix * dix + SigI[0]) + pj * (djx * djx + SigJ[0]);
     Sig[1] = pi * (dix * diy + SigI[1]) + pj * (djx * djy + SigJ[1]);
     Sig[2] = pi * (dix * diz + SigI[2]) + pj * (djx * djz + SigJ[2]);
@@ -512,15 +526,17 @@ const momentMatch = (
     Sig[4] += EPS_COV;
     Sig[8] += EPS_COV;
 
-    // Eigendecompose → scales (= √λ) and rotation. `_mmEigA` ends with the
-    // eigenvalues on its diagonal (positions 0/4/8); `_mmEigV` holds the
+    // Eigendecompose → scales (= √λ) and rotation. `eigA` ends with the
+    // eigenvalues on its diagonal (positions 0/4/8); `eigV` holds the
     // eigenvectors as columns.
-    eigenSymmetric3x3(Sig, _mmEigA, _mmEigV);
-    const vecs = _mmEigV;
+    const eigA = scratch.eigA;
+    const eigV = scratch.eigV;
+    eigenSymmetric3x3(Sig, eigA, eigV);
+    const vecs = eigV;
 
     // Sort eigenvalue indices descending. Hand-unrolled to avoid the
     // `[0,1,2].sort(...)` + `.map(...)` allocations.
-    const v0 = _mmEigA[0], v1 = _mmEigA[4], v2 = _mmEigA[8];
+    const v0 = eigA[0], v1 = eigA[4], v2 = eigA[8];
     let o0: number, o1: number, o2: number;
     if (v0 >= v1) {
         if (v1 >= v2)      {
@@ -539,9 +555,9 @@ const momentMatch = (
             o0 = 2; o1 = 1; o2 = 0;
         }
     }
-    const ev0 = Math.max(_mmEigA[3 * o0 + o0], 1e-18);
-    const ev1 = Math.max(_mmEigA[3 * o1 + o1], 1e-18);
-    const ev2 = Math.max(_mmEigA[3 * o2 + o2], 1e-18);
+    const ev0 = Math.max(eigA[3 * o0 + o0], 1e-18);
+    const ev1 = Math.max(eigA[3 * o1 + o1], 1e-18);
+    const ev2 = Math.max(eigA[3 * o2 + o2], 1e-18);
 
     const s0 = Math.sqrt(ev0);
     const s1 = Math.sqrt(ev1);
@@ -552,7 +568,7 @@ const momentMatch = (
     const alphaM = Math.min(1, W / Math.max(ellipsoidArea(s0, s1, s2), 1e-30));
 
     // Build rotation matrix from sorted eigenvectors (right-handed) — scratch.
-    const Rm = _mmRm;
+    const Rm = scratch.rM;
     Rm[0] = vecs[o0]; Rm[1] = vecs[o1]; Rm[2] = vecs[o2];
     Rm[3] = vecs[3 + o0]; Rm[4] = vecs[3 + o1]; Rm[5] = vecs[3 + o2];
     Rm[6] = vecs[6 + o0]; Rm[7] = vecs[6 + o1]; Rm[8] = vecs[6 + o2];
@@ -668,6 +684,10 @@ const simplifyGaussians = async (
 
     // Reusable scratch buffers for the per-iteration edge-cost sort.
     const sortScratch = new RadixSortScratch();
+
+    // Per-call merge scratch — see `MergeScratch` above. Lives until the end
+    // of this `simplifyGaussians` invocation; not shared with concurrent calls.
+    const mergeScratch = createMergeScratch();
 
     // Hoist GPU resources above the merging loop. Empirically this lowers peak
     // RSS by ~1.4 GB on a 17.9M-splat run vs. per-iteration construction —
@@ -888,7 +908,7 @@ const simplifyGaussians = async (
                 const costBar = logger.bar('Computing edge costs', costTicks);
                 for (let e = 0; e < edgeCount; e++) {
                     costs[e] = computeEdgeCost(edgeU[e], edgeV[e], cx, cy, cz,
-                        cache, Z, appData, appData.length);
+                        cache, Z, appData, appData.length, mergeScratch);
                     if ((e + 1) % costInterval === 0) costBar.tick();
                 }
                 if (edgeCount % costInterval !== 0) costBar.tick();
@@ -1023,7 +1043,7 @@ const simplifyGaussians = async (
                 const pi = pairs[p][0], pj = pairs[p][1];
 
                 momentMatch(pi, pj, cx, cy, cz, cop, cs0, cs1, cs2, cr0, cr1, cr2, cr3,
-                    mergeOut, appData, appData.length);
+                    mergeOut, appData, appData.length, mergeScratch);
 
                 dstXCol.data[dst] = mergeOut.mu[0];
                 dstYCol.data[dst] = mergeOut.mu[1];
