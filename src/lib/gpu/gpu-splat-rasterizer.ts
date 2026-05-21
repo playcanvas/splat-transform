@@ -121,10 +121,11 @@ const numSHCoeffsPerChannel = (bands: number): number => {
  * rasterizer can early-out on the first vec4 load.
  *
  * @param coeffsPerChannel - Per-channel SH coefficient count (0/3/8/15).
- * @param maxCoveragePerSplat - Hard upper bound on per-splat tile count;
- * splats whose raw bbox exceeds this are dropped entirely (rather than
- * truncated) to avoid hard tile-boundary edges at the cap. Chosen
- * per-render from image dimensions.
+ * @param maxCoveragePerSplat - Hard upper bound on per-splat tile count.
+ * Embedded into the shader's `coverage[i] = min(raw, cap)` clamp. The
+ * orchestrator sets this to the group's full tile area so the clamp is
+ * geometrically unreachable in practice; emit-pairs walks the bbox
+ * row-major and truncates at the bottom-right if the cap is ever hit.
  * @returns WGSL source for the project compute shader.
  */
 const projectWgsl = (coeffsPerChannel: number, maxCoveragePerSplat: number) => /* wgsl */`
