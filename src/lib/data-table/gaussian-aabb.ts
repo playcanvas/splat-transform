@@ -1,6 +1,7 @@
 import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { Column, DataTable } from './data-table';
+import { SIGMA_CUTOFF } from '../render/config';
 import { fmtCount, logger } from '../utils';
 
 /**
@@ -87,8 +88,10 @@ const computeGaussianExtents = (dataTable: DataTable): GaussianExtentsResult => 
         rotation.set(rx[i], ry[i], rz[i], rw[i]).normalize();
         scale.set(Math.exp(sx[i]), Math.exp(sy[i]), Math.exp(sz[i]));
 
-        // Set local box half-extents to 3-sigma (Gaussians render out to 3-sigma)
-        localBox.halfExtents.set(scale.x * 3, scale.y * 3, scale.z * 3);
+        // Set local box half-extents to N-sigma (Gaussians render out to N-sigma).
+        // Matches the rasterizer's projected radius (`SIGMA_CUTOFF · sqrt(λmax)`),
+        // so any splat included by the BVH cull is actually rasterized.
+        localBox.halfExtents.set(scale.x * SIGMA_CUTOFF, scale.y * SIGMA_CUTOFF, scale.z * SIGMA_CUTOFF);
 
         // Create rotation matrix (translation is included to position the AABB correctly)
         mat4.setTRS(position, rotation, Vec3.ONE);

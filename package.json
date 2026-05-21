@@ -1,6 +1,6 @@
 {
   "name": "@playcanvas/splat-transform",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "author": "PlayCanvas<support@playcanvas.com>",
   "homepage": "https://playcanvas.com",
   "description": "Library and CLI tool for 3D Gaussian splat format conversion and transformation",
@@ -80,6 +80,7 @@
     "lint:fix": "eslint src --fix",
     "publint": "publint",
     "watch": "rollup -c -w",
+    "pretest": "npm run build",
     "test": "node --import tsx --test test/*.test.mjs",
     "test:fixtures": "node --import tsx test/fixtures/create-fixtures.mjs"
   },
