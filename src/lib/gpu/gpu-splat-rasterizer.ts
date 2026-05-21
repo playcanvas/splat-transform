@@ -1,6 +1,7 @@
 import {
     BUFFERUSAGE_COPY_DST,
     BUFFERUSAGE_COPY_SRC,
+    BUFFERUSAGE_INDIRECT,
     SHADERLANGUAGE_WGSL,
     SHADERSTAGE_COMPUTE,
     UNIFORMTYPE_FLOAT,
@@ -452,6 +453,231 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 `;
 
 /**
+ * Single-workgroup exclusive prefix-sum of the project shader's
+ * per-splat `coverage[]` into `emitOffset[]`. Also writes the total
+ * pair count into `totalPairs[0]` so downstream kernels and the radix
+ * sort can size their dispatches without a CPU round trip.
+ *
+ * Layout: 256 threads, each processes `${SCAN_PER_THREAD}` elements
+ * serially (chosen so that 256 × SCAN_PER_THREAD ≥ chunkCap). Phase 1
+ * computes a per-thread partial sum; phase 2 has thread 0 scan the 256
+ * partials in shared memory (negligible vs the 800-element block work);
+ * phase 3 each thread re-walks its block writing the exclusive prefix.
+ *
+ * @param scanPerThread - Per-thread element budget; must satisfy
+ *   `256 * scanPerThread >= chunkCap`.
+ */
+const prefixSumWgsl = (scanPerThread: number) => /* wgsl */`
+struct Uniforms {
+    rightX: f32, rightY: f32, rightZ: f32, _p0: f32,
+    downX: f32, downY: f32, downZ: f32, _p1: f32,
+    forwardX: f32, forwardY: f32, forwardZ: f32, _p2: f32,
+    eyeX: f32, eyeY: f32, eyeZ: f32, _p3: f32,
+    focalX: f32, focalY: f32, near: f32, _p4: f32,
+    imageWidth: u32, imageHeight: u32, splatStride: u32, chunkSize: u32,
+    groupPixelMinX: u32, groupPixelMinY: u32, groupPixelMaxX: u32, groupPixelMaxY: u32,
+    groupTilesX: u32, groupTilesY: u32, groupPixelOriginX: u32, groupPixelOriginY: u32,
+    bgR: f32, bgG: f32, bgB: f32, bgA: f32,
+}
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(0) @binding(1) var<storage, read> coverage: array<u32>;
+@group(0) @binding(2) var<storage, read_write> emitOffset: array<u32>;
+@group(0) @binding(3) var<storage, read_write> totalPairs: array<u32>;
+
+const SCAN_THREADS: u32 = 256u;
+const SCAN_PER_THREAD: u32 = ${scanPerThread}u;
+
+var<workgroup> scratch: array<u32, SCAN_THREADS>;
+
+@compute @workgroup_size(SCAN_THREADS)
+fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
+    let tid = lid.x;
+    let n = uniforms.chunkSize;
+    let base = tid * SCAN_PER_THREAD;
+
+    var partial: u32 = 0u;
+    for (var i: u32 = 0u; i < SCAN_PER_THREAD; i = i + 1u) {
+        let idx = base + i;
+        if (idx < n) {
+            partial = partial + coverage[idx];
+        }
+    }
+    scratch[tid] = partial;
+    workgroupBarrier();
+
+    if (tid == 0u) {
+        var acc: u32 = 0u;
+        for (var i: u32 = 0u; i < SCAN_THREADS; i = i + 1u) {
+            let v = scratch[i];
+            scratch[i] = acc;
+            acc = acc + v;
+        }
+        totalPairs[0] = acc;
+    }
+    workgroupBarrier();
+
+    var prefix: u32 = scratch[tid];
+    for (var i: u32 = 0u; i < SCAN_PER_THREAD; i = i + 1u) {
+        let idx = base + i;
+        if (idx < n) {
+            emitOffset[idx] = prefix;
+            prefix = prefix + coverage[idx];
+        }
+    }
+}
+`;
+
+/**
+ * Prepares indirect-dispatch arguments by reading `totalPairs[0]` and
+ * writing workgroup counts into two slots of the device's
+ * `indirectDispatchBuffer` (each slot is 3 × u32 = `(x, y, z)`):
+ *
+ *   - `sortSlot`: workgroup count for `ComputeRadixSort.sortIndirect`,
+ *     computed as `ceil(totalPairs / 2048)` (matches the radix sort's
+ *     16×16 thread × 8 elements / thread = 2048 elements/workgroup).
+ *   - `boundariesSlot`: workgroup count for `findBoundaries`, computed
+ *     as `ceil(totalPairs / 64)`.
+ *
+ * Slot byte offsets are passed in via two u32 uniforms in a small ad-hoc
+ * uniform block (NOT the shared `Uniforms` struct, because the slot
+ * indices vary per chunk while the shared uniforms are set per group).
+ */
+const prepareIndirectWgsl = () => /* wgsl */`
+struct PrepareUniforms {
+    sortSlotBase: u32,
+    boundariesSlotBase: u32,
+}
+
+@group(0) @binding(0) var<uniform> uniforms: PrepareUniforms;
+@group(0) @binding(1) var<storage, read> totalPairs: array<u32>;
+@group(0) @binding(2) var<storage, read_write> indirectBuffer: array<u32>;
+
+const SORT_ELEMENTS_PER_WG: u32 = 2048u;
+const BOUNDARIES_THREADS_PER_WG: u32 = 64u;
+// WebGPU spec minimum for maxComputeWorkgroupsPerDimension. Any larger
+// 1-D dispatch must be tiled into 2-D so both axes stay <= this bound.
+// The consumer shaders linearise via WORKGROUP_ID = w_id.x + w_id.y * w_dim.x.
+const MAX_DIM: u32 = 65535u;
+
+fn splitWg(count: u32) -> vec2<u32> {
+    if (count <= MAX_DIM) {
+        return vec2<u32>(count, 1u);
+    }
+    let y = (count + MAX_DIM - 1u) / MAX_DIM;
+    let x = (count + y - 1u) / y;
+    return vec2<u32>(x, y);
+}
+
+@compute @workgroup_size(1)
+fn main() {
+    let n = totalPairs[0];
+    let sortWg = (n + SORT_ELEMENTS_PER_WG - 1u) / SORT_ELEMENTS_PER_WG;
+    let bndWg = (n + BOUNDARIES_THREADS_PER_WG - 1u) / BOUNDARIES_THREADS_PER_WG;
+    let sortDim = splitWg(sortWg);
+    let bndDim = splitWg(bndWg);
+    let s = uniforms.sortSlotBase;
+    let b = uniforms.boundariesSlotBase;
+    indirectBuffer[s + 0u] = sortDim.x;
+    indirectBuffer[s + 1u] = sortDim.y;
+    indirectBuffer[s + 2u] = 1u;
+    indirectBuffer[b + 0u] = bndDim.x;
+    indirectBuffer[b + 1u] = bndDim.y;
+    indirectBuffer[b + 2u] = 1u;
+}
+`;
+
+/**
+ * Initialises `tileOffsets[0 .. numTiles]` to the sentinel value
+ * `totalPairs[0]` (= past-the-end). `findBoundaries` then atomicMin's
+ * the actual first-pair-index for every non-empty tile; tiles with no
+ * pairs keep the sentinel, which collapses to a zero-length slice when
+ * the rasterize-binned shader reads `tileOffsets[T] .. tileOffsets[T+1]`.
+ */
+const initTileOffsetsWgsl = () => /* wgsl */`
+struct Uniforms {
+    rightX: f32, rightY: f32, rightZ: f32, _p0: f32,
+    downX: f32, downY: f32, downZ: f32, _p1: f32,
+    forwardX: f32, forwardY: f32, forwardZ: f32, _p2: f32,
+    eyeX: f32, eyeY: f32, eyeZ: f32, _p3: f32,
+    focalX: f32, focalY: f32, near: f32, _p4: f32,
+    imageWidth: u32, imageHeight: u32, splatStride: u32, chunkSize: u32,
+    groupPixelMinX: u32, groupPixelMinY: u32, groupPixelMaxX: u32, groupPixelMaxY: u32,
+    groupTilesX: u32, groupTilesY: u32, groupPixelOriginX: u32, groupPixelOriginY: u32,
+    bgR: f32, bgG: f32, bgB: f32, bgA: f32,
+}
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(0) @binding(1) var<storage, read> totalPairs: array<u32>;
+@group(0) @binding(2) var<storage, read_write> tileOffsets: array<u32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    let numTiles = uniforms.groupTilesX * uniforms.groupTilesY;
+    if (i > numTiles) { return; }
+    tileOffsets[i] = totalPairs[0];
+}
+`;
+
+/**
+ * For every adjacent pair of sorted keys where the high-bit tile index
+ * differs, atomicMin's the current position into `tileOffsets[t]` for
+ * every tile `t` in `(prevTile, curTile]`. Combined with the sentinel
+ * init this gives `tileOffsets[T]` = first index in `sortedKeys` whose
+ * tile bits equal T (or the sentinel if T is empty).
+ *
+ * Dispatched indirectly with workgroup count `ceil(totalPairs / 64)` so
+ * that we don't waste invocations on the unused tail of the pairs
+ * buffer.
+ */
+const findBoundariesWgsl = () => /* wgsl */`
+struct Uniforms {
+    rightX: f32, rightY: f32, rightZ: f32, _p0: f32,
+    downX: f32, downY: f32, downZ: f32, _p1: f32,
+    forwardX: f32, forwardY: f32, forwardZ: f32, _p2: f32,
+    eyeX: f32, eyeY: f32, eyeZ: f32, _p3: f32,
+    focalX: f32, focalY: f32, near: f32, _p4: f32,
+    imageWidth: u32, imageHeight: u32, splatStride: u32, chunkSize: u32,
+    groupPixelMinX: u32, groupPixelMinY: u32, groupPixelMaxX: u32, groupPixelMaxY: u32,
+    groupTilesX: u32, groupTilesY: u32, groupPixelOriginX: u32, groupPixelOriginY: u32,
+    bgR: f32, bgG: f32, bgB: f32, bgA: f32,
+}
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(0) @binding(1) var<storage, read> totalPairs: array<u32>;
+@group(0) @binding(2) var<storage, read> sortedKeys: array<u32>;
+@group(0) @binding(3) var<storage, read_write> tileOffsets: array<atomic<u32>>;
+
+@compute @workgroup_size(64)
+fn main(
+    @builtin(workgroup_id) wgId: vec3<u32>,
+    @builtin(num_workgroups) numWg: vec3<u32>,
+    @builtin(local_invocation_id) lid: vec3<u32>
+) {
+    // 2-D dispatch (prepare-indirect splits to stay under the 65535
+    // per-axis workgroup-count limit); linearise here.
+    let linearWg = wgId.x + wgId.y * numWg.x;
+    let i = linearWg * 64u + lid.x;
+    let n = totalPairs[0];
+    if (i >= n) { return; }
+
+    // Reference uniforms once so the binding isn't dead-code-stripped
+    // (keeps the BG format in sync with the shader expectations).
+    let _u = uniforms.groupTilesX;
+
+    let curTile = sortedKeys[i] >> ${SPLAT_IDX_BITS}u;
+    // Sentinel for "no previous tile" — overflow makes prevTile+1 = 0u
+    // so the for loop below cleanly handles the i = 0 case.
+    let prevTileBits = select(0xFFFFFFFFu, sortedKeys[i - 1u] >> ${SPLAT_IDX_BITS}u, i > 0u);
+    if (curTile == prevTileBits) { return; }
+    for (var t: u32 = prevTileBits + 1u; t <= curTile; t = t + 1u) {
+        atomicMin(&tileOffsets[t], i);
+    }
+}
+`;
+
+/**
  * Binned rasterize shader. Each workgroup handles one tile and only walks
  * the splats that have been pre-binned into it (tile-bin pre-pass on CPU
  * or GPU). Replaces the "walk all splats per pixel" loop in
@@ -637,16 +863,21 @@ interface Slot {
     tileOffsetsBuffer: StorageBuffer;
     /**
      * Per-splat tile-coverage count, written by the project shader.
-     * CPU reads this back and prefix-sums it into emit offsets for the
-     * GPU tile-binning emit pass.
+     * Consumed by the GPU prefix-sum kernel; never read by the CPU.
      */
     coverageBuffer: StorageBuffer;
     /**
-     * Exclusive prefix-sum of `coverageBuffer`, uploaded by the CPU.
+     * GPU-computed exclusive prefix-sum of `coverageBuffer`.
      * `emitOffset[i]` is the first slot in `pairsBuffer` that splat i
      * writes to in the emit-pairs pass.
      */
     emitOffsetBuffer: StorageBuffer;
+    /**
+     * Single u32 holding the total pair count produced by the prefix-sum.
+     * Read by `prepareIndirect`, `initTileOffsets`, `findBoundaries`,
+     * and the radix sort's indirect dispatch. Never touched by the CPU.
+     */
+    totalPairsBuffer: StorageBuffer;
     /**
      * Packed `(tileIdx, splatIdx)` u32 keys written by the emit-pairs
      * pass; consumed (and overwritten in-place) by `ComputeRadixSort`.
@@ -654,7 +885,11 @@ interface Slot {
      */
     pairsBuffer: StorageBuffer;
     projectCompute: Compute;
+    prefixSumCompute: Compute;
     emitPairsCompute: Compute;
+    prepareIndirectCompute: Compute;
+    initTileOffsetsCompute: Compute;
+    findBoundariesCompute: Compute;
     rasterizeBinnedCompute: Compute;
     finalizeCompute: Compute;
 }
@@ -663,29 +898,22 @@ interface Slot {
 /**
  * GPU-accelerated splat rasterizer.
  *
- * Owns four compute shaders (project, tile-bin-emit-pairs, rasterize-binned,
- * finalize-pack), a shared `ComputeRadixSort`, and per-slot GPU buffers.
- * Designed to be driven by an external orchestrator (`raster-pass.ts`)
- * that handles depth sort and the per-chunk CPU prefix-sum and boundary
- * scan steps in the GPU tile-bin pipeline.
+ * Owns eight compute shaders — project, prefix-sum, emit-pairs,
+ * prepare-indirect, init-tile-offsets, find-boundaries, rasterize-binned,
+ * finalize-pack — a shared `ComputeRadixSort` (used in indirect mode),
+ * and per-slot GPU buffers. The per-chunk pipeline is fully GPU-resident:
+ * the caller never reads back coverage, sorted keys, or tile offsets.
  *
  * Per-render flow:
  *   1. `beginGroup(slot, ...)` — clears the slot's running state and sets
  *      uniforms for this render.
- *   2. For each chunk of depth-sorted splats:
- *      a. `dispatchProjectAndCoverage` — uploads the chunk, runs the
- *         project pass which writes both projection records and per-splat
- *         tile-coverage counts.
- *      b. `readCoverage` → CPU exclusive prefix-sum → `uploadEmitOffsets`.
- *      c. `dispatchEmitPairs` — writes packed `(tileIdx, splatIdx)` keys
- *         to `pairsBuffer`, one per covered tile per splat.
- *      d. `runRadixSort` — 32-bit GPU radix sort over the keys; the high
- *         bits group by tile, the low `SPLAT_IDX_BITS` preserve the
- *         caller's chunk-internal depth order as a secondary sort.
- *      e. `readSortedKeys` → CPU boundary scan → `uploadTileOffsets`.
- *      f. `dispatchRasterizeBinned` — walks each tile's slice in depth
- *         order, compositing into the persistent running-state buffer.
- *         Saturated pixels short-circuit via `T < MIN_TRANSMITTANCE`.
+ *   2. For each chunk of depth-sorted splats: `dispatchChunk(slot, data,
+ *      chunkSize)` runs the whole tile-bin + rasterize pipeline in one
+ *      submission — project + coverage → prefix-sum (writes emitOffsets
+ *      + totalPairs) → emit-pairs → prepare-indirect → radix sortIndirect
+ *      → init-tile-offsets → find-boundaries → rasterize-binned. No
+ *      readbacks; one `submit()` per chunk to capture each compute's
+ *      uniform state before the next chunk overwrites it.
  *   3. `finishGroup(slot)` — dispatches finalize-pack and starts an async
  *      readback. Returns a `Promise<Uint8Array>` resolved when the GPU has
  *      finished writing this group's RGBA bytes.
@@ -694,11 +922,19 @@ class GpuSplatRasterizer {
     private device: GraphicsDevice;
     private options: SplatRasterizerOptions;
     private projectShader: Shader;
+    private prefixSumShader: Shader;
     private emitPairsShader: Shader;
+    private prepareIndirectShader: Shader;
+    private initTileOffsetsShader: Shader;
+    private findBoundariesShader: Shader;
     private rasterizeBinnedShader: Shader;
     private finalizeShader: Shader;
     private projectBgFormat: BindGroupFormat;
+    private prefixSumBgFormat: BindGroupFormat;
     private emitPairsBgFormat: BindGroupFormat;
+    private prepareIndirectBgFormat: BindGroupFormat;
+    private initTileOffsetsBgFormat: BindGroupFormat;
+    private findBoundariesBgFormat: BindGroupFormat;
     private rasterizeBinnedBgFormat: BindGroupFormat;
     private finalizeBgFormat: BindGroupFormat;
     private slots: Slot[];
@@ -738,11 +974,33 @@ class GpuSplatRasterizer {
             new BindStorageBufferFormat('projected', SHADERSTAGE_COMPUTE),
             new BindStorageBufferFormat('coverage', SHADERSTAGE_COMPUTE)
         ]);
+        this.prefixSumBgFormat = new BindGroupFormat(device, [
+            new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
+            new BindStorageBufferFormat('coverage', SHADERSTAGE_COMPUTE, true),
+            new BindStorageBufferFormat('emitOffset', SHADERSTAGE_COMPUTE),
+            new BindStorageBufferFormat('totalPairs', SHADERSTAGE_COMPUTE)
+        ]);
         this.emitPairsBgFormat = new BindGroupFormat(device, [
             new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
             new BindStorageBufferFormat('projected', SHADERSTAGE_COMPUTE, true),
             new BindStorageBufferFormat('emitOffset', SHADERSTAGE_COMPUTE, true),
             new BindStorageBufferFormat('pairs', SHADERSTAGE_COMPUTE)
+        ]);
+        this.prepareIndirectBgFormat = new BindGroupFormat(device, [
+            new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
+            new BindStorageBufferFormat('totalPairs', SHADERSTAGE_COMPUTE, true),
+            new BindStorageBufferFormat('indirectBuffer', SHADERSTAGE_COMPUTE)
+        ]);
+        this.initTileOffsetsBgFormat = new BindGroupFormat(device, [
+            new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
+            new BindStorageBufferFormat('totalPairs', SHADERSTAGE_COMPUTE, true),
+            new BindStorageBufferFormat('tileOffsets', SHADERSTAGE_COMPUTE)
+        ]);
+        this.findBoundariesBgFormat = new BindGroupFormat(device, [
+            new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
+            new BindStorageBufferFormat('totalPairs', SHADERSTAGE_COMPUTE, true),
+            new BindStorageBufferFormat('sortedKeys', SHADERSTAGE_COMPUTE, true),
+            new BindStorageBufferFormat('tileOffsets', SHADERSTAGE_COMPUTE)
         ]);
         this.rasterizeBinnedBgFormat = new BindGroupFormat(device, [
             new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
@@ -757,20 +1015,43 @@ class GpuSplatRasterizer {
             new BindStorageBufferFormat('output', SHADERSTAGE_COMPUTE)
         ]);
 
-        const mkShader = (name: string, source: string, bgFormat: BindGroupFormat) => new Shader(device, {
+        const mkShader = (
+            name: string,
+            source: string,
+            bgFormat: BindGroupFormat,
+            uniformEntries: UniformFormat[] = uniformFormatEntries()
+        ) => new Shader(device, {
             name,
             shaderLanguage: SHADERLANGUAGE_WGSL,
             cshader: source,
             // @ts-ignore - computeUniformBufferFormats / computeBindGroupFormat are not in public Shader types.
             computeUniformBufferFormats: {
-                uniforms: new UniformBufferFormat(device, uniformFormatEntries())
+                uniforms: new UniformBufferFormat(device, uniformEntries)
             },
             // @ts-ignore
             computeBindGroupFormat: bgFormat
         });
 
+        // The prefix-sum kernel processes the chunk in 256-thread blocks
+        // of `scanPerThread` elements; the constant is compile-time
+        // embedded so this product must cover the largest chunk we ever
+        // dispatch (= chunkCap).
+        const scanPerThread = Math.ceil(options.chunkCap / 256);
+
+        // Uniform format for the small prepareIndirect kernel — just the
+        // two slot-base indices into the device's indirect dispatch
+        // buffer. Different layout from the shared `Uniforms` block.
+        const prepareIndirectUniforms: UniformFormat[] = [
+            new UniformFormat('sortSlotBase', UNIFORMTYPE_UINT),
+            new UniformFormat('boundariesSlotBase', UNIFORMTYPE_UINT)
+        ];
+
         this.projectShader = mkShader('splat-project', projectWgsl(coeffs), this.projectBgFormat);
+        this.prefixSumShader = mkShader('splat-tilebin-prefix-sum', prefixSumWgsl(scanPerThread), this.prefixSumBgFormat);
         this.emitPairsShader = mkShader('splat-tilebin-emit-pairs', tileBinEmitPairsWgsl(), this.emitPairsBgFormat);
+        this.prepareIndirectShader = mkShader('splat-tilebin-prepare-indirect', prepareIndirectWgsl(), this.prepareIndirectBgFormat, prepareIndirectUniforms);
+        this.initTileOffsetsShader = mkShader('splat-tilebin-init-tile-offsets', initTileOffsetsWgsl(), this.initTileOffsetsBgFormat);
+        this.findBoundariesShader = mkShader('splat-tilebin-find-boundaries', findBoundariesWgsl(), this.findBoundariesBgFormat);
         this.rasterizeBinnedShader = mkShader('splat-rasterize-binned', rasterizeBinnedWgsl(), this.rasterizeBinnedBgFormat);
         this.finalizeShader = mkShader('splat-finalize-pack', finalizeWgsl(), this.finalizeBgFormat);
 
@@ -793,37 +1074,48 @@ class GpuSplatRasterizer {
         // pairsBuffer worst-case = chunkCap × MAX_COVERAGE_PER_SPLAT packed
         // u32 keys, matching the budget the CPU binner uses for tileData.
         const pairsBytes = options.chunkCap * MAX_COVERAGE_PER_SPLAT * 4;
+        const totalPairsBytes = 4;
 
         this.slots = [];
         for (let s = 0; s < this.numSlots; s++) {
             const inputBuffer = new StorageBuffer(device, inputBytes, BUFFERUSAGE_COPY_DST);
-            // projBuffer needs COPY_SRC so the CPU binner can read screen
-            // bounds after the project pass.
-            const projBuffer = new StorageBuffer(device, projBytes, BUFFERUSAGE_COPY_SRC);
+            const projBuffer = new StorageBuffer(device, projBytes, 0);
             const runningStateBuffer = new StorageBuffer(device, stateBytes, BUFFERUSAGE_COPY_DST);
             const outputBuffer = new StorageBuffer(device, outputBytes, BUFFERUSAGE_COPY_SRC);
-            const tileOffsetsBuffer = new StorageBuffer(device, tileOffsetsBytes, BUFFERUSAGE_COPY_DST);
-            // coverageBuffer is written by the project shader and read back
-            // to the CPU (or scanned on GPU) to build emit offsets for the
-            // tile-bin pipeline.
-            const coverageBuffer = new StorageBuffer(device, coverageBytes, BUFFERUSAGE_COPY_SRC);
-            // emitOffsetBuffer is uploaded each chunk from the CPU after
-            // prefix-summing coverageBuffer.
-            const emitOffsetBuffer = new StorageBuffer(device, emitOffsetBytes, BUFFERUSAGE_COPY_DST);
-            // pairsBuffer is consumed and overwritten in-place by
-            // ComputeRadixSort. COPY_SRC lets us optionally read it back
-            // (for debugging / validation).
-            const pairsBuffer = new StorageBuffer(device, pairsBytes, BUFFERUSAGE_COPY_SRC);
+            const tileOffsetsBuffer = new StorageBuffer(device, tileOffsetsBytes, 0);
+            const coverageBuffer = new StorageBuffer(device, coverageBytes, 0);
+            const emitOffsetBuffer = new StorageBuffer(device, emitOffsetBytes, 0);
+            const pairsBuffer = new StorageBuffer(device, pairsBytes, 0);
+            const totalPairsBuffer = new StorageBuffer(device, totalPairsBytes, 0);
 
             const projectCompute = new Compute(device, this.projectShader, `splat-project-slot-${s}`);
             projectCompute.setParameter('splats', inputBuffer);
             projectCompute.setParameter('projected', projBuffer);
             projectCompute.setParameter('coverage', coverageBuffer);
 
+            const prefixSumCompute = new Compute(device, this.prefixSumShader, `splat-tilebin-prefix-sum-slot-${s}`);
+            prefixSumCompute.setParameter('coverage', coverageBuffer);
+            prefixSumCompute.setParameter('emitOffset', emitOffsetBuffer);
+            prefixSumCompute.setParameter('totalPairs', totalPairsBuffer);
+
             const emitPairsCompute = new Compute(device, this.emitPairsShader, `splat-tilebin-emit-pairs-slot-${s}`);
             emitPairsCompute.setParameter('projected', projBuffer);
             emitPairsCompute.setParameter('emitOffset', emitOffsetBuffer);
             emitPairsCompute.setParameter('pairs', pairsBuffer);
+
+            const prepareIndirectCompute = new Compute(device, this.prepareIndirectShader, `splat-tilebin-prepare-indirect-slot-${s}`);
+            prepareIndirectCompute.setParameter('totalPairs', totalPairsBuffer);
+            // `indirectBuffer` is bound lazily inside dispatchPrepareIndirect
+            // after the device has allocated its indirect-dispatch buffer.
+
+            const initTileOffsetsCompute = new Compute(device, this.initTileOffsetsShader, `splat-tilebin-init-tile-offsets-slot-${s}`);
+            initTileOffsetsCompute.setParameter('totalPairs', totalPairsBuffer);
+            initTileOffsetsCompute.setParameter('tileOffsets', tileOffsetsBuffer);
+
+            const findBoundariesCompute = new Compute(device, this.findBoundariesShader, `splat-tilebin-find-boundaries-slot-${s}`);
+            findBoundariesCompute.setParameter('totalPairs', totalPairsBuffer);
+            findBoundariesCompute.setParameter('tileOffsets', tileOffsetsBuffer);
+            // `sortedKeys` is bound per-chunk after the radix sort runs.
 
             const rasterizeBinnedCompute = new Compute(device, this.rasterizeBinnedShader, `splat-rasterize-binned-slot-${s}`);
             rasterizeBinnedCompute.setParameter('projected', projBuffer);
@@ -845,9 +1137,14 @@ class GpuSplatRasterizer {
                 tileOffsetsBuffer,
                 coverageBuffer,
                 emitOffsetBuffer,
+                totalPairsBuffer,
                 pairsBuffer,
                 projectCompute,
+                prefixSumCompute,
                 emitPairsCompute,
+                prepareIndirectCompute,
+                initTileOffsetsCompute,
+                findBoundariesCompute,
                 rasterizeBinnedCompute,
                 finalizeCompute
             });
@@ -861,6 +1158,21 @@ class GpuSplatRasterizer {
         }
 
         this.radixSort = new ComputeRadixSort(device);
+
+        // The per-chunk pipeline reserves 2 slots in the device's
+        // indirect-dispatch buffer (one for the radix sort, one for
+        // find-boundaries). The default capacity (256) is enough for
+        // ~128 chunks; bump it so very dense scenes don't overflow.
+        // Setting this BEFORE the first `getIndirectDispatchSlot` call
+        // ensures the buffer is sized correctly on first allocation.
+        const wantedSlots = 8192;
+        // @ts-ignore - maxIndirectDispatchCount is a public property on
+        // the WebGPU device but not in the public GraphicsDevice type.
+        const cur = (device as { maxIndirectDispatchCount?: number }).maxIndirectDispatchCount ?? 0;
+        if (cur < wantedSlots) {
+            // @ts-ignore
+            (device as { maxIndirectDispatchCount: number }).maxIndirectDispatchCount = wantedSlots;
+        }
     }
 
     /**
@@ -889,7 +1201,10 @@ class GpuSplatRasterizer {
         const slotObj = this.slots[slot];
         for (const c of [
             slotObj.projectCompute,
+            slotObj.prefixSumCompute,
             slotObj.emitPairsCompute,
+            slotObj.initTileOffsetsCompute,
+            slotObj.findBoundariesCompute,
             slotObj.rasterizeBinnedCompute,
             slotObj.finalizeCompute
         ]) {
@@ -943,12 +1258,14 @@ class GpuSplatRasterizer {
     }
 
     /**
-     * Commit pending GPU work. Required between dispatches that share a
-     * `Compute` instance's persistent uniform buffer (each chunk's uniform
-     * values must be captured before the next chunk overwrites them) and
-     * before any readback can complete.
+     * Commit pending GPU work. Called at chunk boundaries so each chunk's
+     * uniform-buffer values are captured before the next chunk overwrites
+     * them — a `Compute` instance's persistent uniform buffer is updated
+     * by `setParameter`, and the dispatch only captures the value on
+     * submit. Within a chunk, every dispatch uses a distinct `Compute`
+     * instance, so no internal submits are needed.
      */
-    private submit(): void {
+    submit(): void {
         // @ts-ignore - submit() is exposed by WebgpuGraphicsDevice but not on the public GraphicsDevice type.
         const submit = (this.device as { submit?: () => void }).submit;
         if (!submit) {
@@ -958,85 +1275,106 @@ class GpuSplatRasterizer {
     }
 
     /**
-     * Upload a chunk and run the project pass. Writes both the projection
-     * records (`projBuffer`) and the per-splat tile-coverage count
-     * (`coverageBuffer`). No readback; the caller follows with
-     * `readCoverage` to start the GPU tile-bin pipeline.
+     * Reserve a fresh sort + find-boundaries slot pair in the device's
+     * indirect-dispatch buffer for this chunk. The returned indices are
+     * consumed by `dispatchTileBinChunk` (internally) and exposed for
+     * cross-cutting use (e.g. the radix sort needs the sort slot).
+     */
+    private acquireIndirectSlots(): { sortSlot: number; boundariesSlot: number } {
+        // @ts-ignore - getIndirectDispatchSlot exists on WebgpuGraphicsDevice.
+        const get = (this.device as { getIndirectDispatchSlot?: (count?: number) => number }).getIndirectDispatchSlot;
+        if (!get) {
+            throw new Error('GpuSplatRasterizer requires a GraphicsDevice with getIndirectDispatchSlot() (WebGPU backend).');
+        }
+        const sortSlot = get.call(this.device, 1);
+        const boundariesSlot = get.call(this.device, 1);
+        return { sortSlot, boundariesSlot };
+    }
+
+    /**
+     * Dispatch the entire per-chunk tile-bin + rasterize pipeline on the
+     * GPU with zero CPU readbacks:
+     *
+     *   pack-and-upload → project + coverage → prefix-sum (writes
+     *   emitOffsets + totalPairs) → emit-pairs → prepare-indirect (writes
+     *   workgroup counts into the device's indirect-dispatch buffer for
+     *   the sort and find-boundaries) → radix sortIndirect → init
+     *   tile-offsets to sentinel → find-boundaries (atomicMin) → rasterize.
+     *
+     * All eight dispatches use distinct `Compute` instances, so their
+     * persistent uniform buffers don't alias each other within a chunk;
+     * a single `submit()` after the rasterize captures everything before
+     * the next chunk starts overwriting `setParameter` values.
      *
      * @param slot - Slot index.
      * @param chunkData - Float32Array containing `chunkSize × inputStride` floats.
      * @param chunkSize - Number of gaussians in this chunk (≤ chunkCap).
      */
-    dispatchProjectAndCoverage(slot: number, chunkData: Float32Array, chunkSize: number): void {
+    dispatchChunk(slot: number, chunkData: Float32Array, chunkSize: number): void {
         if (chunkSize === 0) return;
         if (chunkSize > this.chunkCap) {
             throw new Error(`chunkSize ${chunkSize} exceeds chunkCap ${this.chunkCap}`);
         }
         const s = this.slots[slot];
-        s.inputBuffer.write(0, chunkData, 0, chunkSize * this.inputStride);
 
+        // --- 1. Upload chunk + project (writes projected, coverage). ---
+        s.inputBuffer.write(0, chunkData, 0, chunkSize * this.inputStride);
         s.projectCompute.setParameter('chunkSize', chunkSize);
         s.projectCompute.setupDispatch(Math.ceil(chunkSize / 64), 1, 1);
         this.device.computeDispatch([s.projectCompute], 'splat-project');
-        this.submit();
-    }
 
-    /**
-     * Read back the per-splat tile-coverage counts written by the most
-     * recent `dispatchProjectAndCoverage` call. The CPU prefix-sums this
-     * into the emit-offset table used by the emit-pairs dispatch.
-     */
-    async readCoverage(slot: number, chunkSize: number): Promise<Uint32Array> {
-        if (chunkSize === 0) return new Uint32Array(0);
-        const bytes = (await this.slots[slot].coverageBuffer.read(
-            0, chunkSize * 4, null, true
-        )) as Uint8Array;
-        return new Uint32Array(bytes.buffer, bytes.byteOffset, chunkSize);
-    }
+        // --- 2. GPU prefix-sum (coverage → emitOffsets + totalPairs). ---
+        s.prefixSumCompute.setParameter('chunkSize', chunkSize);
+        s.prefixSumCompute.setupDispatch(1, 1, 1);
+        this.device.computeDispatch([s.prefixSumCompute], 'splat-tilebin-prefix-sum');
 
-    /**
-     * Upload the CPU-computed emit-offset table for a chunk. Length is
-     * `chunkSize`; entry `i` is the start position in `pairsBuffer` for
-     * splat `i`'s emitted tile pairs.
-     */
-    uploadEmitOffsets(slot: number, emitOffsets: Uint32Array, chunkSize: number): void {
-        if (chunkSize === 0) return;
-        this.slots[slot].emitOffsetBuffer.write(0, emitOffsets, 0, chunkSize);
-    }
-
-    /**
-     * Dispatch the emit-pairs compute. Reads `projected` + `emitOffset`,
-     * writes packed `(tileIdx, splatIdx)` u32 keys into `pairsBuffer`.
-     * Must be called after `uploadEmitOffsets` for this chunk.
-     */
-    dispatchEmitPairs(slot: number, chunkSize: number): void {
-        if (chunkSize === 0) return;
-        const s = this.slots[slot];
+        // --- 3. Emit (tileIdx << SPLAT_IDX_BITS | splatIdx) pairs. ---
         s.emitPairsCompute.setParameter('chunkSize', chunkSize);
         s.emitPairsCompute.setupDispatch(Math.ceil(chunkSize / 64), 1, 1);
         this.device.computeDispatch([s.emitPairsCompute], 'splat-tilebin-emit-pairs');
-        this.submit();
-    }
 
-    /**
-     * Upload a chunk's tile-offset table (length `numTiles + 1`) into
-     * `tileOffsetsBuffer`, ready for the rasterize-binned dispatch.
-     */
-    uploadTileOffsets(slot: number, tileOffsets: Uint32Array): void {
-        this.slots[slot].tileOffsetsBuffer.write(0, tileOffsets, 0, tileOffsets.length);
-    }
+        // --- 4. Prepare indirect dispatch params for sort + find-boundaries. ---
+        // @ts-ignore - indirectDispatchBuffer getter is WebGPU-only.
+        const indirectBuf = (this.device as { indirectDispatchBuffer?: StorageBuffer | null }).indirectDispatchBuffer;
+        const { sortSlot, boundariesSlot } = this.acquireIndirectSlots();
+        if (!indirectBuf) {
+            throw new Error('Device indirectDispatchBuffer not allocated (WebGPU backend required).');
+        }
+        s.prepareIndirectCompute.setParameter('indirectBuffer', indirectBuf);
+        // Each slot is 3 u32s in the buffer; the shader writes to
+        // indirectBuffer[base + {0,1,2}], so base = slot * 3.
+        s.prepareIndirectCompute.setParameter('sortSlotBase', sortSlot * 3);
+        s.prepareIndirectCompute.setParameter('boundariesSlotBase', boundariesSlot * 3);
+        s.prepareIndirectCompute.setupDispatch(1, 1, 1);
+        this.device.computeDispatch([s.prepareIndirectCompute], 'splat-tilebin-prepare-indirect');
 
-    /**
-     * Dispatch the rasterize-binned pass. Caller passes the sorted-keys
-     * buffer (returned by `runRadixSort`) so the parameter binds to the
-     * radix sort's current ping-pong buffer for this chunk.
-     */
-    dispatchRasterizeBinned(slot: number, chunkSize: number, sortedKeysBuf: StorageBuffer): void {
-        const s = this.slots[slot];
+        // --- 5. Radix sort the pairs (indirect dispatch). ---
+        // maxElementCount = pairsCap so the sort's internal ping-pong
+        // buffers are allocated once and reused; the actual element
+        // count is read from `totalPairsBuffer` at dispatch time.
+        const pairsCap = this.chunkCap * MAX_COVERAGE_PER_SPLAT;
+        this.radixSort.sortIndirect(s.pairsBuffer, pairsCap, 32, sortSlot, s.totalPairsBuffer);
+        const sortedKeysBuf = this.radixSort.sortedKeys;
+        if (!sortedKeysBuf) {
+            throw new Error('ComputeRadixSort.sortedKeys returned null after sortIndirect()');
+        }
+
+        // --- 6. Init tile-offsets to the sentinel (= totalPairs). ---
+        const numTiles = this.groupSizeTiles * this.groupSizeTiles;
+        s.initTileOffsetsCompute.setupDispatch(Math.ceil((numTiles + 1) / 64), 1, 1);
+        this.device.computeDispatch([s.initTileOffsetsCompute], 'splat-tilebin-init-tile-offsets');
+
+        // --- 7. Find tile boundaries via atomicMin. ---
+        s.findBoundariesCompute.setParameter('sortedKeys', sortedKeysBuf);
+        s.findBoundariesCompute.setupIndirectDispatch(boundariesSlot);
+        this.device.computeDispatch([s.findBoundariesCompute], 'splat-tilebin-find-boundaries');
+
+        // --- 8. Rasterize: walk each tile's slice in depth order. ---
         s.rasterizeBinnedCompute.setParameter('sortedKeys', sortedKeysBuf);
         s.rasterizeBinnedCompute.setParameter('chunkSize', chunkSize);
         s.rasterizeBinnedCompute.setupDispatch(this.groupSizeTiles, this.groupSizeTiles, 1);
         this.device.computeDispatch([s.rasterizeBinnedCompute], 'splat-rasterize-binned');
+
         this.submit();
     }
 
@@ -1062,46 +1400,6 @@ class GpuSplatRasterizer {
     /**
      * Release all GPU resources.
      */
-    /**
-     * Read back the contents of the radix sort's sortedKeys buffer.
-     * `sortedKeys` is the StorageBuffer previously returned by
-     * `runRadixSort`. Used by the CPU boundary-scan pass that builds
-     * `tileOffsets` for the rasterize-binned dispatch.
-     */
-    async readSortedKeys(sortedKeys: StorageBuffer, totalPairs: number): Promise<Uint32Array> {
-        if (totalPairs === 0) return new Uint32Array(0);
-        const bytes = (await sortedKeys.read(0, totalPairs * 4, null, true)) as Uint8Array;
-        return new Uint32Array(bytes.buffer, bytes.byteOffset, totalPairs);
-    }
-
-    /**
-     * Run the GPU radix sort over a slot's emit-pairs output.
-     *
-     * Sorts `totalPairs` u32 keys in `slot.pairsBuffer` over all 32 bits.
-     * The sorter's internal ping-pong buffers hold the result; the
-     * returned `StorageBuffer` is owned by the `ComputeRadixSort` instance
-     * (do not destroy it). Caller binds it to the rasterize-binned
-     * `Compute` via `setParameter('sortedKeys', returned)`.
-     *
-     * The returned buffer reference may change across calls if the sort
-     * resizes its internal allocation, so rebind every chunk.
-     */
-    runRadixSort(slot: number, totalPairs: number): StorageBuffer {
-        if (totalPairs === 0) {
-            // Nothing to sort. Caller should skip the rasterize dispatch
-            // for this chunk; we still return a non-null buffer so the
-            // bind layout stays satisfied if it isn't skipped.
-            this.radixSort.sort(this.slots[slot].pairsBuffer, 1, 32);
-        } else {
-            this.radixSort.sort(this.slots[slot].pairsBuffer, totalPairs, 32);
-        }
-        const sortedKeys = this.radixSort.sortedKeys;
-        if (!sortedKeys) {
-            throw new Error('ComputeRadixSort.sortedKeys returned null after sort()');
-        }
-        return sortedKeys;
-    }
-
     destroy(): void {
         this.radixSort.destroy();
         for (const s of this.slots) {
@@ -1112,14 +1410,23 @@ class GpuSplatRasterizer {
             s.tileOffsetsBuffer.destroy();
             s.coverageBuffer.destroy();
             s.emitOffsetBuffer.destroy();
+            s.totalPairsBuffer.destroy();
             s.pairsBuffer.destroy();
         }
         this.projectShader.destroy();
+        this.prefixSumShader.destroy();
         this.emitPairsShader.destroy();
+        this.prepareIndirectShader.destroy();
+        this.initTileOffsetsShader.destroy();
+        this.findBoundariesShader.destroy();
         this.rasterizeBinnedShader.destroy();
         this.finalizeShader.destroy();
         this.projectBgFormat.destroy();
+        this.prefixSumBgFormat.destroy();
         this.emitPairsBgFormat.destroy();
+        this.prepareIndirectBgFormat.destroy();
+        this.initTileOffsetsBgFormat.destroy();
+        this.findBoundariesBgFormat.destroy();
         this.rasterizeBinnedBgFormat.destroy();
         this.finalizeBgFormat.destroy();
     }

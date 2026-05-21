@@ -1,7 +1,7 @@
 import { GraphicsDevice } from 'playcanvas';
 
 import { type RenderCamera, buildCameraBasis } from './camera';
-import { FAR_PLANE_NEAR_FACTOR, MAX_COVERAGE_PER_SPLAT, SPLAT_IDX_BITS, TILE_SIZE } from './config';
+import { FAR_PLANE_NEAR_FACTOR, TILE_SIZE } from './config';
 import {
     SortScratch,
     getSplatColumnRefs,
@@ -47,10 +47,11 @@ interface BackgroundRGBA {
  *      across chunks; `T < MIN_TRANSMITTANCE` short-circuits saturated
  *      pixels.
  *
- * Per-chunk (GPU tile-bin pipeline): project (writes per-splat tile
- * coverage) → CPU prefix-sum → emit-pairs → GPU radix sort → CPU boundary
- * scan → rasterize each tile's slice in depth order. No per-tile-group
- * seams; no per-chunk projection readback.
+ * Per-chunk (GPU tile-bin pipeline, fully GPU-resident): project (writes
+ * per-splat tile coverage) → prefix-sum (writes emitOffsets + totalPairs)
+ * → emit-pairs → prepare-indirect → radix sortIndirect → init-tile-offsets
+ * → find-boundaries (atomicMin) → rasterize each tile's slice in depth
+ * order. No per-chunk CPU readbacks; no per-tile-group seams.
  *
  * @param device - PlayCanvas WebGPU graphics device.
  * @param dataTable - Gaussian splat data in PlayCanvas-identity space.
@@ -154,25 +155,6 @@ const renderRasterPass = async (
     // Per-chunk CPU scratch.
     const chunkInput = new Float32Array(effectiveChunkCap * inputStride);
 
-    // Tile-binning scratch. The dispatched grid is
-    // `groupSizeTiles × groupSizeTiles` (matches the rasterize-binned
-    // shader's `tileIdx = wgId.y * groupTilesX + wgId.x`); we bin only
-    // the in-image tile range each chunk, but the buffer is sized for
-    // the whole grid so the trailing offsets remain valid sentinels.
-    const numTilesX = imageTilesX;
-    const numTilesY = imageTilesY;
-    const numTiles = numTilesX * numTilesY;
-    const tileOffsets = new Uint32Array(numTiles + 1);
-    // CPU prefix-sum of the GPU's per-splat tile-coverage count.
-    // `emitOffsets[i]` is the first slot in `pairsBuffer` that splat
-    // `i`'s emitted (tileIdx, splatIdx) keys start at.
-    const emitOffsets = new Uint32Array(effectiveChunkCap);
-    // Aggregate pair budget for an entire chunk, matching the
-    // rasterizer's `pairsBuffer` allocation. Overflow here is fatal —
-    // unlike the old CPU binner, the emit-pairs shader has no per-splat
-    // truncation path.
-    const pairsCap = effectiveChunkCap * MAX_COVERAGE_PER_SPLAT;
-
     // Single group at origin (0, 0), spanning the whole image tile grid.
     rasterizer.beginGroup(0, 0, 0, imageTilesX, imageTilesY);
 
@@ -181,56 +163,7 @@ const renderRasterPass = async (
     for (let chunkStart = 0; chunkStart < candidateCount; chunkStart += effectiveChunkCap) {
         const chunkSize = Math.min(effectiveChunkCap, candidateCount - chunkStart);
         packChunkInput(cols, candidates, chunkStart, chunkSize, numSHBands, chunkInput);
-
-        // Project: writes both `projected` records and per-splat
-        // `coverage` (tile-count) to GPU buffers. No projection readback.
-        rasterizer.dispatchProjectAndCoverage(0, chunkInput, chunkSize);
-
-        // Readback coverage → CPU prefix-sum to build emit offsets.
-        const coverage = await rasterizer.readCoverage(0, chunkSize);
-        let totalPairs = 0;
-        for (let i = 0; i < chunkSize; i++) {
-            emitOffsets[i] = totalPairs;
-            totalPairs += coverage[i];
-        }
-        if (totalPairs > pairsCap) {
-            throw new Error(
-                `Tile-bin emit overflow: ${totalPairs} pairs exceeds budget ${pairsCap} ` +
-                `(chunkCap ${effectiveChunkCap} × MAX_COVERAGE_PER_SPLAT ${MAX_COVERAGE_PER_SPLAT})`
-            );
-        }
-
-        if (totalPairs === 0) {
-            // No splats cover any tile in this chunk — nothing to rasterize.
-            // Running state stays as-is for subsequent chunks.
-            rasterBar.update(++completed);
-            continue;
-        }
-
-        rasterizer.uploadEmitOffsets(0, emitOffsets, chunkSize);
-        rasterizer.dispatchEmitPairs(0, chunkSize);
-        const sortedKeysBuf = rasterizer.runRadixSort(0, totalPairs);
-        const sortedKeys = await rasterizer.readSortedKeys(sortedKeysBuf, totalPairs);
-
-        // CPU boundary scan: tileOffsets[T] = first index in sortedKeys
-        // whose key's tile bits == T. Empty tiles collapse to a zero-
-        // length slice (`tileOffsets[T] == tileOffsets[T + 1]`).
-        // The sentinel `totalPairs` for trailing empty tiles is set
-        // after the scan.
-        tileOffsets.fill(totalPairs);
-        let prevTile = sortedKeys[0] >>> SPLAT_IDX_BITS;
-        for (let g = 0; g <= prevTile; g++) tileOffsets[g] = 0;
-        for (let i = 1; i < totalPairs; i++) {
-            const t = sortedKeys[i] >>> SPLAT_IDX_BITS;
-            if (t !== prevTile) {
-                for (let g = prevTile + 1; g <= t; g++) tileOffsets[g] = i;
-                prevTile = t;
-            }
-        }
-        tileOffsets[numTiles] = totalPairs;
-
-        rasterizer.uploadTileOffsets(0, tileOffsets);
-        rasterizer.dispatchRasterizeBinned(0, chunkSize, sortedKeysBuf);
+        rasterizer.dispatchChunk(0, chunkInput, chunkSize);
         rasterBar.update(++completed);
     }
     rasterBar.end();
