@@ -205,10 +205,12 @@ const renderRasterPass = async (
         // valid against either axis).
         const focalMax = Math.max(focalX, focalY);
 
-        // Packed Uint8 buffer of (sx0, sx1, sy0, sy1) per candidate.
-        // sx0 = 255 sentinel marks "off-screen, skip in pass 2".
-        const SF_OFFSCREEN = 255;
-        const ranges = new Uint8Array(candidateCount * 4);
+        // Packed Uint16 buffer of (sx0, sx1, sy0, sy1) per candidate.
+        // sx0 = 0xFFFF sentinel marks "off-screen, skip in pass 2".
+        // Uint16 (not Uint8) so sub-frame counts per axis aren't capped
+        // at 254 by the storage width / sentinel collision.
+        const SF_OFFSCREEN = 0xFFFF;
+        const ranges = new Uint16Array(candidateCount * 4);
         const subFrameCounts = new Uint32Array(numSubFrames);
 
         // Pass 1: compute ranges, count per sub-frame.
