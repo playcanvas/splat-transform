@@ -139,6 +139,21 @@ describe('simplifyGaussians', () => {
         assert.strictEqual(result.numRows, 0, 'Should have 0 rows');
     });
 
+    it('should not invoke createDevice on the early-return path', async () => {
+        const testData = createMinimalTestData();
+        let invoked = false;
+        const createDevice = async () => {
+            invoked = true;
+            throw new Error('should not be called');
+        };
+        // No work needed (target >= numRows): factory must not be touched.
+        await simplifyGaussians(testData, 1000, createDevice);
+        assert.strictEqual(invoked, false, 'createDevice should be lazy');
+        // Same for the empty-output early return.
+        await simplifyGaussians(testData, 0, createDevice);
+        assert.strictEqual(invoked, false, 'createDevice should be lazy on empty target too');
+    });
+
     it('should reduce to target count', async () => {
         const testData = createMinimalTestData();
         const result = await simplifyGaussians(testData, 8);
