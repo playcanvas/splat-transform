@@ -11,7 +11,6 @@ import { type DeviceCreator } from '../types';
 import { logger } from '../utils';
 
 const LOG2PI = Math.log(2 * Math.PI);
-const OPACITY_PRUNE_THRESHOLD = 0.1;
 const KNN_K = 16;
 const MC_SAMPLES = 1;
 const EPS_COV = 1e-8;
@@ -662,27 +661,7 @@ const simplifyGaussians = async (
         if (dataTable.hasColumn(name)) allAppearanceCols.push(name);
     }
 
-    // Step 1: Opacity pruning
-    const pruneGroup = logger.group('Pruning low-opacity splats');
-    const opacityData = dataTable.getColumnByName('opacity')!.data;
-    const opsSorted = new Array(N);
-    for (let i = 0; i < N; i++) opsSorted[i] = sigmoid(opacityData[i]);
-    opsSorted.sort((a: number, b: number) => a - b);
-    const median = opsSorted[N >> 1];
-    const pruneThreshold = Math.min(OPACITY_PRUNE_THRESHOLD, median);
-
-    const keptIndices: number[] = [];
-    for (let i = 0; i < N; i++) {
-        if (sigmoid(opacityData[i]) >= pruneThreshold) keptIndices.push(i);
-    }
-
-    let current: DataTable;
-    if (keptIndices.length < N && keptIndices.length > targetCount) {
-        current = dataTable.clone({ rows: keptIndices });
-    } else {
-        current = dataTable;
-    }
-    pruneGroup.end();
+    let current: DataTable = dataTable;
 
     // Pre-generate MC samples
     const Z = makeGaussianSamples(MC_SAMPLES, 0);
@@ -706,7 +685,7 @@ const simplifyGaussians = async (
     const z = new Float32Array(3);
     z[0] = Z[0][0]; z[1] = Z[0][1]; z[2] = Z[0][2];
 
-    // Step 2: Iterative merging.
+    // Iterative merging.
     // Each iteration roughly halves the row count (greedy disjoint pair
     // selection picks up to n/2 merges), so log2(n / target) is a good
     // upper bound for the [N/T] series numbering. Iterations beyond the
