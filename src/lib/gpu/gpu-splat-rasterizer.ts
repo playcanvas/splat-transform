@@ -25,8 +25,8 @@ import {
     MIN_ALPHA,
     MIN_TRANSMITTANCE,
     OPACITY_CAP,
-    RADIUS_FADE_END_PX,
-    RADIUS_FADE_START_PX,
+    RADIUS_FADE_END_FRAC,
+    RADIUS_FADE_START_FRAC,
     SIGMA_CUTOFF,
     TILE_SIZE
 } from '../render/config';
@@ -299,13 +299,18 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Outlier-splat fade: huge splats (close-by mega-splats or pathological
     // training output) would otherwise project to a screen-spanning footprint
     // and tint the whole frame. Linearly fade alpha from 1 to 0 as the
-    // un-clamped radius grows from RADIUS_FADE_START_PX to RADIUS_FADE_END_PX,
-    // and discard beyond. The bbox we hand to the rasterizer is clamped at
-    // RADIUS_FADE_END_PX so the binner doesn't reserve tile coverage for a
-    // splat that contributes zero anyway. Softer than a hard clamp: prevents
-    // the visible pop as the camera approaches a clipped splat.
-    let fadeStart = ${wgslF32(RADIUS_FADE_START_PX)};
-    let fadeEnd = ${wgslF32(RADIUS_FADE_END_PX)};
+    // un-clamped radius grows from fadeStart to fadeEnd, and discard
+    // beyond. The bbox we hand to the rasterizer is clamped at fadeEnd
+    // so the binner doesn't reserve tile coverage for a splat that
+    // contributes zero anyway. Softer than a hard clamp: prevents the
+    // visible pop as the camera approaches a clipped splat.
+    //
+    // Thresholds are fractions of image height so the SAME world-space
+    // splats fade at every render resolution — preserves cross-
+    // resolution consistency (e.g. 8K-downsampled-to-1080p matches
+    // 1080p direct).
+    let fadeStart = ${wgslF32(RADIUS_FADE_START_FRAC)} * f32(uniforms.imageHeight);
+    let fadeEnd = ${wgslF32(RADIUS_FADE_END_FRAC)} * f32(uniforms.imageHeight);
     let radiusFade = clamp((fadeEnd - radiusRaw) / (fadeEnd - fadeStart), 0.0, 1.0);
     if (radiusFade <= 0.0) { writeInvalid(i); return; }
     let radius = ceil(min(radiusRaw, fadeEnd));

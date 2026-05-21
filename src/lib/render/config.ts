@@ -97,22 +97,27 @@ export const TILE_SIZE = 16;
 export const PAIR_BUFFER_BUDGET_BYTES = 256 * 1024 * 1024;
 
 /**
- * Screen-radius fade thresholds, in pixels. Defends against outlier
- * splats with large world-space scale or near-camera placement that
- * would otherwise project to a screen-spanning footprint.
+ * Screen-radius fade thresholds, expressed as fractions of image
+ * height. Defends against outlier splats with large world-space scale
+ * or near-camera placement that would otherwise project to a screen-
+ * spanning footprint.
  *
  * A hard clamp produces a visible "pop" as the camera approaches a
  * splat that grows past the cap (the splat suddenly stops getting any
  * bigger). Instead we *linearly fade out* the splat's alpha between
- * `RADIUS_FADE_START_PX` (alpha × 1) and `RADIUS_FADE_END_PX` (alpha
- * × 0). Beyond `RADIUS_FADE_END_PX` the splat is discarded entirely.
+ * `RADIUS_FADE_START_FRAC × imageHeight` (alpha × 1) and
+ * `RADIUS_FADE_END_FRAC × imageHeight` (alpha × 0). Beyond the END
+ * threshold the splat is discarded entirely.
  *
- * The bounding bbox is clamped at `RADIUS_FADE_END_PX` so the binner
- * doesn't allocate tile coverage for splats with effectively zero
- * contribution.
+ * Image-height-relative so the SAME world-space splats fade at every
+ * render resolution — a splat that doesn't fade at 1080p won't get
+ * dropped at 8K just because its pixel radius is 4× bigger. The values
+ * are calibrated so that the original 1080p thresholds (1024 px /
+ * 2048 px) reproduce, while 8K renders fade only the splats that
+ * would also fade at 1080p.
  *
  * Inspired by PlayCanvas engine's `min(1024.0, viewport)` axis cap
  * (see `gsplatCorner.js`), but with the cap softened into a fade.
  */
-export const RADIUS_FADE_START_PX = 1024;
-export const RADIUS_FADE_END_PX = 2048;
+export const RADIUS_FADE_START_FRAC = 1024 / 1080;
+export const RADIUS_FADE_END_FRAC = 2048 / 1080;
