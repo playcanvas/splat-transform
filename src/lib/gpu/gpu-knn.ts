@@ -208,7 +208,8 @@ class GpuKnn {
     constructor(device: GraphicsDevice, maxN: number, k: number) {
         const workgroupSize = 64;
         const queriesPerBatch = 1024 * workgroupSize;  // 65,536
-        // log2(maxN) + slack; safe to ~2^40 nodes via the 30-bit nodeIdx packing.
+        // Per-thread DFS stack depth: tree depth = log2(maxN) + slack. 48 is
+        // safe for any N within the 30-bit nodeIdx packing limit checked below.
         const stackSize = 48;
         if (maxN > 0x3FFFFFFF) {
             throw new Error(`GpuKnn: maxN=${maxN} exceeds 30-bit nodeIdx packing limit (~1B nodes)`);
