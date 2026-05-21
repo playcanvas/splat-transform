@@ -324,7 +324,7 @@ const createMergeScratch = (): MergeScratch => ({
     sig: new Float64Array(9),
     rM: new Float64Array(9),
     eigA: new Float64Array(9),
-    eigV: new Float64Array(9),
+    eigV: new Float64Array(9)
 });
 
 const computeEdgeCost = (
