@@ -38,23 +38,20 @@ struct Uniforms {
     queryOffset: u32,
     queryCount: u32,
     rootIdx: u32,
-    _pad: u32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
-// Query positions (one per query splat).
-@group(0) @binding(1) var<storage, read> px: array<f32>;
-@group(0) @binding(2) var<storage, read> py: array<f32>;
-@group(0) @binding(3) var<storage, read> pz: array<f32>;
-// Flattened KD-tree.
-@group(0) @binding(4) var<storage, read> nodeSplatIdx: array<u32>;
-@group(0) @binding(5) var<storage, read> nodeX: array<f32>;
-@group(0) @binding(6) var<storage, read> nodeY: array<f32>;
-@group(0) @binding(7) var<storage, read> nodeZ: array<f32>;
-@group(0) @binding(8) var<storage, read> nodeLeft: array<u32>;
-@group(0) @binding(9) var<storage, read> nodeRight: array<u32>;
+// Query positions interleaved xyz: positions[q*3 + 0/1/2].
+@group(0) @binding(1) var<storage, read> positions: array<f32>;
+// Flattened KD-tree. Positions and children are interleaved so the kernel
+// stays comfortably under the WebGPU per-stage storage-buffer minimum (8):
+// nodePositions[t*3 + 0/1/2] for tree node t, nodeChildren[t*2 + 0/1] for
+// (left, right). Kept separate from nodeSplatIdx to avoid mixing f32/u32.
+@group(0) @binding(2) var<storage, read> nodeSplatIdx: array<u32>;
+@group(0) @binding(3) var<storage, read> nodePositions: array<f32>;
+@group(0) @binding(4) var<storage, read> nodeChildren: array<u32>;
 // Output: per query, k neighbour splat indices (unsorted).
-@group(0) @binding(10) var<storage, read_write> outIndices: array<u32>;
+@group(0) @binding(5) var<storage, read_write> outIndices: array<u32>;
 
 const K: u32 = ${k}u;
 const NULL_NODE: u32 = 0xFFFFFFFFu;
@@ -68,9 +65,10 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     if (bid >= uniforms.queryCount) { return; }
     let q = bid + uniforms.queryOffset;
 
-    let qx = px[q];
-    let qy = py[q];
-    let qz = pz[q];
+    let q3 = q * 3u;
+    let qx = positions[q3 + 0u];
+    let qy = positions[q3 + 1u];
+    let qz = positions[q3 + 2u];
 
     // Top-K state, unsorted. worstIdx points to the current K-th worst slot
     // so accepts replace it in O(1) and we recompute worst via a fixed loop.
@@ -97,9 +95,10 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         let axis = packed >> 30u;
 
         // Read the node's position + splat id.
-        let nx = nodeX[nodeIdx];
-        let ny = nodeY[nodeIdx];
-        let nz = nodeZ[nodeIdx];
+        let np = nodeIdx * 3u;
+        let nx = nodePositions[np + 0u];
+        let ny = nodePositions[np + 1u];
+        let nz = nodePositions[np + 2u];
         let splatId = nodeSplatIdx[nodeIdx];
 
         // Update top-K, skipping the query itself.
@@ -136,8 +135,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         let nextAxis = select(axis + 1u, 0u, axis + 1u >= 3u);
         let nextAxisPacked = nextAxis << 30u;
 
-        let leftChild = nodeLeft[nodeIdx];
-        let rightChild = nodeRight[nodeIdx];
+        let nc = nodeIdx * 2u;
+        let leftChild = nodeChildren[nc + 0u];
+        let rightChild = nodeChildren[nc + 1u];
         let near = select(rightChild, leftChild, delta < 0.0);
         let far = select(leftChild, rightChild, delta < 0.0);
 
@@ -215,17 +215,15 @@ class GpuKnn {
             throw new Error(`GpuKnn: maxN=${maxN} exceeds 30-bit nodeIdx packing limit (~1B nodes)`);
         }
 
+        // 5 storage buffers + 1 uniform — comfortably under the WebGPU
+        // per-stage minimum (8 storage buffers). Positions and KD-tree
+        // arrays are interleaved (see WGSL above) to keep the count down.
         const bindGroupFormat = new BindGroupFormat(device, [
             new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
-            new BindStorageBufferFormat('px', SHADERSTAGE_COMPUTE, true),
-            new BindStorageBufferFormat('py', SHADERSTAGE_COMPUTE, true),
-            new BindStorageBufferFormat('pz', SHADERSTAGE_COMPUTE, true),
+            new BindStorageBufferFormat('positions', SHADERSTAGE_COMPUTE, true),
             new BindStorageBufferFormat('nodeSplatIdx', SHADERSTAGE_COMPUTE, true),
-            new BindStorageBufferFormat('nodeX', SHADERSTAGE_COMPUTE, true),
-            new BindStorageBufferFormat('nodeY', SHADERSTAGE_COMPUTE, true),
-            new BindStorageBufferFormat('nodeZ', SHADERSTAGE_COMPUTE, true),
-            new BindStorageBufferFormat('nodeLeft', SHADERSTAGE_COMPUTE, true),
-            new BindStorageBufferFormat('nodeRight', SHADERSTAGE_COMPUTE, true),
+            new BindStorageBufferFormat('nodePositions', SHADERSTAGE_COMPUTE, true),
+            new BindStorageBufferFormat('nodeChildren', SHADERSTAGE_COMPUTE, true),
             new BindStorageBufferFormat('outIndices', SHADERSTAGE_COMPUTE)
         ]);
 
@@ -245,17 +243,10 @@ class GpuKnn {
             computeBindGroupFormat: bindGroupFormat
         });
 
-        const floatBufBytes = maxN * 4;
-        const u32BufBytes = maxN * 4;
-        const pxBuf = new StorageBuffer(device, floatBufBytes, BUFFERUSAGE_COPY_DST);
-        const pyBuf = new StorageBuffer(device, floatBufBytes, BUFFERUSAGE_COPY_DST);
-        const pzBuf = new StorageBuffer(device, floatBufBytes, BUFFERUSAGE_COPY_DST);
-        const nSplatIdxBuf = new StorageBuffer(device, u32BufBytes, BUFFERUSAGE_COPY_DST);
-        const nXBuf = new StorageBuffer(device, floatBufBytes, BUFFERUSAGE_COPY_DST);
-        const nYBuf = new StorageBuffer(device, floatBufBytes, BUFFERUSAGE_COPY_DST);
-        const nZBuf = new StorageBuffer(device, floatBufBytes, BUFFERUSAGE_COPY_DST);
-        const nLeftBuf = new StorageBuffer(device, u32BufBytes, BUFFERUSAGE_COPY_DST);
-        const nRightBuf = new StorageBuffer(device, u32BufBytes, BUFFERUSAGE_COPY_DST);
+        const positionsBuf = new StorageBuffer(device, maxN * 3 * 4, BUFFERUSAGE_COPY_DST);
+        const nSplatIdxBuf = new StorageBuffer(device, maxN * 4, BUFFERUSAGE_COPY_DST);
+        const nPositionsBuf = new StorageBuffer(device, maxN * 3 * 4, BUFFERUSAGE_COPY_DST);
+        const nChildrenBuf = new StorageBuffer(device, maxN * 2 * 4, BUFFERUSAGE_COPY_DST);
 
         const outBatchBytes = queriesPerBatch * k * 4;
         const outBuf = new StorageBuffer(
@@ -266,16 +257,17 @@ class GpuKnn {
         const outScratch = new Uint32Array(queriesPerBatch * k);
 
         const compute = new Compute(device, shader, 'compute-knn-kdtree');
-        compute.setParameter('px', pxBuf);
-        compute.setParameter('py', pyBuf);
-        compute.setParameter('pz', pzBuf);
+        compute.setParameter('positions', positionsBuf);
         compute.setParameter('nodeSplatIdx', nSplatIdxBuf);
-        compute.setParameter('nodeX', nXBuf);
-        compute.setParameter('nodeY', nYBuf);
-        compute.setParameter('nodeZ', nZBuf);
-        compute.setParameter('nodeLeft', nLeftBuf);
-        compute.setParameter('nodeRight', nRightBuf);
+        compute.setParameter('nodePositions', nPositionsBuf);
+        compute.setParameter('nodeChildren', nChildrenBuf);
         compute.setParameter('outIndices', outBuf);
+
+        // Pack scratches reused across execute() calls — avoids allocating
+        // O(N) every call when simplifyGaussians runs the KNN per iteration.
+        let positionsPacked = new Float32Array(0);
+        let nodePosPacked = new Float32Array(0);
+        let nodeChildrenPacked = new Uint32Array(0);
 
         this.execute = async (
             px: Float32Array,
@@ -304,16 +296,34 @@ class GpuKnn {
             const tree = new KdTree(posTable);
             const flat = tree.flattenForGpu();
 
-            // Upload everything in one go.
-            pxBuf.write(0, px, 0, n);
-            pyBuf.write(0, py, 0, n);
-            pzBuf.write(0, pz, 0, n);
+            // Pack query positions xyz-interleaved into a scratch (one buffer
+            // upload instead of three).
+            if (positionsPacked.length < n * 3) positionsPacked = new Float32Array(n * 3);
+            for (let i = 0; i < n; i++) {
+                positionsPacked[i * 3 + 0] = px[i];
+                positionsPacked[i * 3 + 1] = py[i];
+                positionsPacked[i * 3 + 2] = pz[i];
+            }
+            // Pack node positions xyz-interleaved.
+            if (nodePosPacked.length < n * 3) nodePosPacked = new Float32Array(n * 3);
+            const nodeX = flat.nodeX, nodeY = flat.nodeY, nodeZ = flat.nodeZ;
+            for (let i = 0; i < n; i++) {
+                nodePosPacked[i * 3 + 0] = nodeX[i];
+                nodePosPacked[i * 3 + 1] = nodeY[i];
+                nodePosPacked[i * 3 + 2] = nodeZ[i];
+            }
+            // Pack node children (left, right) pairs.
+            if (nodeChildrenPacked.length < n * 2) nodeChildrenPacked = new Uint32Array(n * 2);
+            const nodeLeft = flat.nodeLeft, nodeRight = flat.nodeRight;
+            for (let i = 0; i < n; i++) {
+                nodeChildrenPacked[i * 2 + 0] = nodeLeft[i];
+                nodeChildrenPacked[i * 2 + 1] = nodeRight[i];
+            }
+
+            positionsBuf.write(0, positionsPacked, 0, n * 3);
             nSplatIdxBuf.write(0, flat.nodeSplatIdx, 0, n);
-            nXBuf.write(0, flat.nodeX, 0, n);
-            nYBuf.write(0, flat.nodeY, 0, n);
-            nZBuf.write(0, flat.nodeZ, 0, n);
-            nLeftBuf.write(0, flat.nodeLeft, 0, n);
-            nRightBuf.write(0, flat.nodeRight, 0, n);
+            nPositionsBuf.write(0, nodePosPacked, 0, n * 3);
+            nChildrenBuf.write(0, nodeChildrenPacked, 0, n * 2);
             compute.setParameter('rootIdx', flat.rootIdx);
 
             const numBatches = Math.ceil(n / queriesPerBatch);
@@ -335,15 +345,10 @@ class GpuKnn {
         };
 
         this.destroy = () => {
-            pxBuf.destroy();
-            pyBuf.destroy();
-            pzBuf.destroy();
+            positionsBuf.destroy();
             nSplatIdxBuf.destroy();
-            nXBuf.destroy();
-            nYBuf.destroy();
-            nZBuf.destroy();
-            nLeftBuf.destroy();
-            nRightBuf.destroy();
+            nPositionsBuf.destroy();
+            nChildrenBuf.destroy();
             outBuf.destroy();
             shader.destroy();
             bindGroupFormat.destroy();

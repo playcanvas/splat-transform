@@ -703,8 +703,6 @@ const simplifyGaussians = async (
     const kEffMax = Math.min(Math.max(1, KNN_K), Math.max(1, initialN - 1));
     const initialMaxE = initialN * kEffMax;
     const numAppColsMax = allAppearanceCols.length;
-    const gpuKnn = device ? new GpuKnn(device, initialN, kEffMax) : undefined;
-    const gpuCost = device ? new GpuEdgeCost(device, initialN, initialMaxE, numAppColsMax) : undefined;
     const z = new Float32Array(3);
     z[0] = Z[0][0]; z[1] = Z[0][1]; z[2] = Z[0][2];
 
@@ -716,7 +714,19 @@ const simplifyGaussians = async (
     const estIterations = Math.max(1, Math.ceil(Math.log2(current.numRows / targetCount)));
     let iterationIndex = 0;
 
+    // GPU resources live inside the try block so that if the second
+    // constructor throws (e.g. the appearance-buffer preflight in
+    // GpuEdgeCost), the partially-built first constructor's resources get
+    // cleaned up by the finally.
+    let gpuKnn: GpuKnn | undefined;
+    let gpuCost: GpuEdgeCost | undefined;
+
     try {
+        if (device) {
+            gpuKnn = new GpuKnn(device, initialN, kEffMax);
+            gpuCost = new GpuEdgeCost(device, initialN, initialMaxE, numAppColsMax);
+        }
+
         while (current.numRows > targetCount) {
             const n = current.numRows;
             // kEff fixed at kEffMax so the hoisted GPU resources (which bake k
