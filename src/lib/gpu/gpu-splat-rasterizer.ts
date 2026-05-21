@@ -79,12 +79,15 @@ interface SplatRasterizerOptions {
      * Hard upper bound on per-splat tile coverage. The project shader
      * clamps `coverage[i] = min(rawBboxArea, maxCoveragePerSplat)`, so
      * the pair buffer is bounded by `chunkCap × maxCoveragePerSplat`
-     * regardless of scene/screen size. Splats whose raw bbox exceeds
-     * this get their central tiles via the centre-priority emit walk.
-     * Should be chosen per-render: small (~64) is fine at 1080p where
-     * splats project to a handful of tiles each; bigger images need
-     * larger values (splat pixel radius scales with focal length, so
-     * tile coverage scales with image_height² for a fixed FOV).
+     * regardless of scene/screen size. If the cap ever bites, the
+     * emit-pairs shader walks the bbox row-major and stops once it
+     * has written `coverage[i]` pairs — i.e. it truncates the bbox at
+     * its bottom-right corner.
+     *
+     * The orchestrator sets this to the group's full tile area so the
+     * clamp is geometrically unreachable (any in-group bbox ≤ group
+     * area ≤ cap), making truncation a non-issue in practice. The cap
+     * is retained as a defensive ceiling on the pair buffer.
      */
     maxCoveragePerSplat: number;
     /** Output image width in pixels (constant per render). */
@@ -1008,6 +1011,9 @@ class GpuSplatRasterizer {
     /** sortIndirect numBits, derived from numTiles (multiple of 4). */
     private sortKeyBits: number;
     private clearStatePattern: Float32Array;
+    /** Active group's tile dimensions, set by `beginGroup`. */
+    private activeTilesX: number = 0;
+    private activeTilesY: number = 0;
 
     /** Floats per gaussian in the input buffer (depends on SH band count). */
     readonly inputStride: number;
@@ -1328,6 +1334,8 @@ class GpuSplatRasterizer {
         groupTilesY: number
     ): void {
         this.setUniforms(groupX, groupY, groupTilesX, groupTilesY);
+        this.activeTilesX = groupTilesX;
+        this.activeTilesY = groupTilesY;
         const groupPixels = groupTilesX * groupTilesY * TILE_SIZE * TILE_SIZE;
         this.buffers.runningStateBuffer.write(
             0, this.clearStatePattern, 0, groupPixels * RUNNING_STATE_STRIDE_F32
@@ -1475,15 +1483,22 @@ class GpuSplatRasterizer {
      * Finish processing a group. Dispatches finalize-pack and starts an
      * async readback of the group's RGBA8 pixel bytes.
      *
-     * @returns Promise resolving to the group's RGBA byte buffer
-     * (`groupTilesX·16 × groupTilesY·16 × 4` bytes).
+     * Dispatch + readback are sized to the ACTIVE group dimensions (set
+     * by the most recent `beginGroup`), not the constructor-provided
+     * maximum, so edge sub-frames smaller than the max don't pay for
+     * unused workgroups or readback bytes.
+     *
+     * @returns Promise resolving to the active group's RGBA byte buffer
+     * (`activeTilesX·16 × activeTilesY·16 × 4` bytes).
      */
     finishGroup(): Promise<Uint8Array> {
         const b = this.buffers;
-        b.finalizeCompute.setupDispatch(this.groupTilesX, this.groupTilesY, 1);
+        b.finalizeCompute.setupDispatch(this.activeTilesX, this.activeTilesY, 1);
         this.device.computeDispatch([b.finalizeCompute], 'splat-finalize');
 
-        const groupOutputBytes = this.groupPixelW * this.groupPixelH * 4;
+        const activePixelW = this.activeTilesX * TILE_SIZE;
+        const activePixelH = this.activeTilesY * TILE_SIZE;
+        const groupOutputBytes = activePixelW * activePixelH * 4;
         return b.outputBuffer.read(0, groupOutputBytes, null, true) as Promise<Uint8Array>;
     }
 

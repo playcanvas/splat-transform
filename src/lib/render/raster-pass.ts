@@ -359,10 +359,11 @@ const renderRasterPass = async (
     const finalImage = new Uint8Array(width * height * 4);
 
     // Total chunks across all sub-frames (each sub-frame's list is its
-    // own filtered count). Used only for progress reporting.
+    // own filtered count). Used only for progress reporting; counts
+    // actual dispatched chunks, so empty sub-frames contribute 0.
     let totalChunks = 0;
     for (let s = 0; s < numSubFrames; s++) {
-        totalChunks += Math.max(1, Math.ceil(subFrameLists[s].length / effectiveChunkCap));
+        totalChunks += Math.ceil(subFrameLists[s].length / effectiveChunkCap);
     }
     const rasterBar = logger.bar('rasterizing', Math.max(1, totalChunks));
     let completed = 0;
