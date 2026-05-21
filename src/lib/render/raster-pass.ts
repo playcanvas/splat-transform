@@ -3,6 +3,7 @@ import { GraphicsDevice } from 'playcanvas';
 import { type RenderCamera, buildCameraBasis } from './camera';
 import {
     PAIR_BUFFER_BUDGET_BYTES,
+    PAIR_BUFFER_TOTAL_BYTES_PER_ELEMENT,
     TILE_SIZE
 } from './config';
 import {
@@ -162,17 +163,21 @@ const renderRasterPass = async (
     const subFrameTiles = subFrameTilesX * subFrameTilesY;
     const maxCoveragePerSplat = 1 << Math.ceil(Math.log2(Math.max(1, subFrameTiles)));
 
-    // Pair buffer is two parallel u32 arrays (tileKeys + splatValues).
-    // Each must fit inside a single storage-buffer binding —
-    // `maxStorageBufferBindingSize` is typically 128 MiB on the
-    // baseline adapter, larger on desktop. Both that limit and the
-    // soft `PAIR_BUFFER_BUDGET_BYTES` policy (combined-buffer budget)
-    // bound `chunkCap`.
+    // chunkCap is bounded by two GPU constraints:
+    //  (a) each individual pair buffer (tileKeys, splatValues, and the
+    //      four radix-sort internal ping-pong buffers) must fit inside
+    //      a single storage-buffer binding — capped at
+    //      `maxStorageBufferBindingSize` (typically 128 MiB baseline,
+    //      ~1 GiB on Apple Silicon, larger on desktop discrete GPUs).
+    //  (b) the TOTAL of all six pair-sized buffers combined must stay
+    //      within `PAIR_BUFFER_BUDGET_BYTES` — bounds the rasterizer's
+    //      peak GPU footprint when chunkCap could otherwise saturate
+    //      the binding limit on adapters with very large bindings.
     // @ts-ignore - limits is exposed by WebgpuGraphicsDevice
     const wgpuLimits = (device as { limits?: { maxStorageBufferBindingSize?: number } }).limits;
     const maxBindingBytes = wgpuLimits?.maxStorageBufferBindingSize ?? 128 * 1024 * 1024;
     const bindingChunkCap = Math.floor(maxBindingBytes / (maxCoveragePerSplat * 4));
-    const budgetChunkCap = Math.floor(PAIR_BUFFER_BUDGET_BYTES / (maxCoveragePerSplat * 8));
+    const budgetChunkCap = Math.floor(PAIR_BUFFER_BUDGET_BYTES / (maxCoveragePerSplat * PAIR_BUFFER_TOTAL_BYTES_PER_ELEMENT));
     const effectiveChunkCap = Math.max(
         1,
         Math.min(CHUNK_CAP, budgetChunkCap, bindingChunkCap, candidateCount)

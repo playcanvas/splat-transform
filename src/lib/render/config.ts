@@ -89,12 +89,25 @@ export const TILE_SIZE = 16;
 
 
 /**
- * Memory budget for the per-chunk pair buffers (tileKeys + splatValues
- * combined). Constrains `chunkCap × maxCoveragePerSplat × 8B`. As
- * `maxCoveragePerSplat` grows with resolution, `chunkCap` is reduced
- * to keep the buffer at this budget.
+ * Total GPU memory budget for ALL pair-sized buffers combined: the
+ * tile-key and splat-value buffers the rasterizer owns (2× pairsCap × 4 B)
+ * plus the four internal ping-pong buffers `ComputeRadixSort` allocates
+ * (`_keys0`, `_keys1`, `_values0`, `_values1` — another 4× pairsCap × 4 B).
+ * That's 6 × pairsCap × 4 B = `PAIR_BUFFER_TOTAL_BYTES_PER_ELEMENT × pairsCap`.
+ *
+ * `chunkCap` is sized to keep this total under budget. The radix-sort
+ * scratch is the dominant share; budgeting only the local buffers (as
+ * earlier revisions did) under-counts actual GPU memory by ~3×.
  */
-export const PAIR_BUFFER_BUDGET_BYTES = 256 * 1024 * 1024;
+export const PAIR_BUFFER_BUDGET_BYTES = 768 * 1024 * 1024;
+
+/**
+ * Total bytes per pair *element* across all six pair-sized buffers
+ * (4 B × 6 buffers). Used by the orchestrator's chunkCap calculation
+ * so the math reflects actual GPU memory consumed by the sort
+ * pipeline.
+ */
+export const PAIR_BUFFER_TOTAL_BYTES_PER_ELEMENT = 4 * 6;
 
 /**
  * Screen-radius fade thresholds, expressed as fractions of image

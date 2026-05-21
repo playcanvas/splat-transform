@@ -22,9 +22,10 @@
  */
 
 import { spawn } from 'node:child_process';
-import { readFile, stat } from 'node:fs/promises';
+import { statSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { describe, it, before } from 'node:test';
+import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,6 +35,19 @@ import { CASES } from './render-golden.cases.mjs';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = dirname(__dirname);
 const cliPath = join(rootDir, 'bin/cli.mjs');
+
+// `bin/cli.mjs` imports the bundled `dist/cli.mjs` (gitignored, must be
+// built). `npm run pretest` builds before `npm test`; direct invocation
+// (`node --test test/render-golden.test.mjs`) without a prior build is
+// also valid and the suite skips with a clear message.
+const distExists = (() => {
+    try {
+        statSync(join(rootDir, 'dist/cli.mjs'));
+        return true;
+    } catch {
+        return false;
+    }
+})();
 
 const runCli = (args) => {
     return new Promise((resolve, reject) => {
@@ -54,18 +68,7 @@ const runCli = (args) => {
     });
 };
 
-describe('Render goldens', () => {
-    before(async () => {
-        try {
-            await stat(join(rootDir, 'dist/cli.mjs'));
-        } catch {
-            throw new Error(
-                'dist/cli.mjs missing — run `npm run build` before this test. ' +
-                'The renderer is exercised via the built CLI so the bundled WebP wasm resolves correctly.'
-            );
-        }
-    });
-
+describe('Render goldens', { skip: distExists ? false : 'dist/cli.mjs missing — run `npm run build` first (or `npm test`, which builds via the pretest hook)' }, () => {
     for (const { name, args, goldenPath } of CASES) {
         it(`${name} matches golden`, async () => {
             const outPath = join(tmpdir(), `golden-${name}-${process.pid}.webp`);

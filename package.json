@@ -80,6 +80,7 @@
     "lint:fix": "eslint src --fix",
     "publint": "publint",
     "watch": "rollup -c -w",
+    "pretest": "npm run build",
     "test": "node --import tsx --test test/*.test.mjs",
     "test:fixtures": "node --import tsx test/fixtures/create-fixtures.mjs"
   },
