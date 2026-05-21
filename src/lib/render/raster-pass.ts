@@ -2,7 +2,6 @@ import { GraphicsDevice } from 'playcanvas';
 
 import { type RenderCamera, buildCameraBasis } from './camera';
 import {
-    FAR_PLANE_NEAR_FACTOR,
     PAIR_BUFFER_BUDGET_BYTES,
     TILE_SIZE
 } from './config';
@@ -132,7 +131,6 @@ const renderRasterPass = async (
         if (cz > near) candidates[candidateCount++] = i;
     }
     cullGroup.end();
-    void FAR_PLANE_NEAR_FACTOR;  // kept in config for future use
 
     // ---- Image tile grid + sub-frame partition ----
     const imageTilesX = Math.ceil(width / TILE_SIZE);
@@ -189,12 +187,24 @@ const renderRasterPass = async (
         imageWidth: width,
         imageHeight: height,
         near: camera.near,
-        rightX: basis.right.x, rightY: basis.right.y, rightZ: basis.right.z,
-        downX: basis.down.x, downY: basis.down.y, downZ: basis.down.z,
-        forwardX: basis.forward.x, forwardY: basis.forward.y, forwardZ: basis.forward.z,
-        eyeX: basis.eye.x, eyeY: basis.eye.y, eyeZ: basis.eye.z,
-        focalX: basis.focalX, focalY: basis.focalY,
-        bgR: background.r, bgG: background.g, bgB: background.b, bgA: background.a
+        rightX: basis.right.x,
+        rightY: basis.right.y,
+        rightZ: basis.right.z,
+        downX: basis.down.x,
+        downY: basis.down.y,
+        downZ: basis.down.z,
+        forwardX: basis.forward.x,
+        forwardY: basis.forward.y,
+        forwardZ: basis.forward.z,
+        eyeX: basis.eye.x,
+        eyeY: basis.eye.y,
+        eyeZ: basis.eye.z,
+        focalX: basis.focalX,
+        focalY: basis.focalY,
+        bgR: background.r,
+        bgG: background.g,
+        bgB: background.b,
+        bgA: background.a
     });
 
     // Per-chunk CPU scratch.

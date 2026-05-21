@@ -35,6 +35,9 @@ import {
  * Format a JS number as a WGSL `f32` literal. Adds an explicit `.0` so
  * integer-valued constants like `3` aren't parsed as `AbstractInt` —
  * keeps shaders readable when the constant flips to a fractional value.
+ *
+ * @param n - Numeric value to format.
+ * @returns WGSL literal string with explicit `.0` for integer values.
  */
 const wgslF32 = (n: number): string => {
     const s = n.toString();
@@ -437,6 +440,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
  * groups pairs by tile; within each tile, the splatIdx-as-value sort
  * preserves the chunk's depth order (splatIdx is monotonic in depth
  * from the CPU pre-sort).
+ *
+ * @returns WGSL source for the emit-pairs compute shader.
  */
 const tileBinEmitPairsWgsl = () => /* wgsl */`
 struct Uniforms {
@@ -506,8 +511,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
  * partials in shared memory (negligible vs the 800-element block work);
  * phase 3 each thread re-walks its block writing the exclusive prefix.
  *
- * @param scanPerThread - Per-thread element budget; must satisfy
- *   `256 * scanPerThread >= chunkCap`.
+ * @param scanPerThread - Per-thread element budget; must satisfy `256 * scanPerThread >= chunkCap`.
+ * @returns WGSL source for the prefix-sum compute shader.
  */
 const prefixSumWgsl = (scanPerThread: number) => /* wgsl */`
 struct Uniforms {
@@ -584,6 +589,8 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
  * Slot byte offsets are passed in via two u32 uniforms in a small ad-hoc
  * uniform block (NOT the shared `Uniforms` struct, because the slot
  * indices vary per chunk while the shared uniforms are set per group).
+ *
+ * @returns WGSL source for the prepare-indirect compute shader.
  */
 const prepareIndirectWgsl = () => /* wgsl */`
 struct PrepareUniforms {
@@ -635,6 +642,8 @@ fn main() {
  * the actual first-pair-index for every non-empty tile; tiles with no
  * pairs keep the sentinel, which collapses to a zero-length slice when
  * the rasterize-binned shader reads `tileOffsets[T] .. tileOffsets[T+1]`.
+ *
+ * @returns WGSL source for the init-tile-offsets compute shader.
  */
 const initTileOffsetsWgsl = () => /* wgsl */`
 struct Uniforms {
@@ -672,6 +681,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
  * Dispatched indirectly with workgroup count `ceil(totalPairs / 64)` so
  * that we don't waste invocations on the unused tail of the pairs
  * buffer.
+ *
+ * @returns WGSL source for the find-boundaries compute shader.
  */
 const findBoundariesWgsl = () => /* wgsl */`
 struct Uniforms {
@@ -735,6 +746,8 @@ fn main(
  *
  * The shader's bindings mirror `rasterizeWgsl` and add bindings 3, 4 for
  * the tile lists.
+ *
+ * @returns WGSL source for the binned-rasterize compute shader.
  */
 const rasterizeBinnedWgsl = () => /* wgsl */`
 struct Uniforms {
