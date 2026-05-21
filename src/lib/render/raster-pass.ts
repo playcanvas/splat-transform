@@ -1,7 +1,11 @@
 import { GraphicsDevice } from 'playcanvas';
 
 import { type RenderCamera, buildCameraBasis } from './camera';
-import { FAR_PLANE_NEAR_FACTOR, TILE_SIZE } from './config';
+import {
+    FAR_PLANE_NEAR_FACTOR,
+    PAIR_BUFFER_BUDGET_BYTES,
+    TILE_SIZE
+} from './config';
 import {
     SortScratch,
     getSplatColumnRefs,
@@ -25,6 +29,26 @@ import { logger } from '../utils';
  */
 const CHUNK_CAP = 200_000;
 
+/**
+ * Maximum sub-frame dimensions, in tiles. Renders larger than this get
+ * split into a grid of independent sub-frames stitched together at the
+ * end. At 1080p (120×68 tiles) this is exactly one sub-frame; at 4K it
+ * becomes 2×2; at 8K it becomes 4×4.
+ *
+ * Why split: per-splat tile coverage scales with image_height² (focal
+ * length is proportional to image height for a fixed FOV). At 8K a
+ * splat that projects to ~few tiles at 1080p projects to ~hundreds of
+ * tiles, which would either need a huge pair buffer or produce hard
+ * truncation edges when clamped. Sub-frame rendering keeps each
+ * sub-frame's working set ≤ 1080p-sized, so the per-splat coverage
+ * stays in the same regime as the (well-tested) 1080p path. The
+ * project shader's group-AABB cull skips splats outside the current
+ * sub-frame, and the global CPU depth sort is shared across sub-frames
+ * (no seam artifacts at sub-frame boundaries).
+ */
+const MAX_SUB_FRAME_TILES_X = Math.ceil(1920 / TILE_SIZE);  // 120
+const MAX_SUB_FRAME_TILES_Y = Math.ceil(1080 / TILE_SIZE);  // 68
+
 interface BackgroundRGBA {
     r: number;
     g: number;
@@ -41,17 +65,19 @@ interface BackgroundRGBA {
  *      centre against the camera frustum in camera-space. No BVH or
  *      per-splat AABB precomputation.
  *   2. Sort visible splats globally by camera-space z (front-to-back).
- *   3. Drive the rasterizer with one tile group covering the entire
- *      image, chunking the depth-sorted splat list into `CHUNK_CAP`-
- *      sized batches. The rasterizer's running-state buffer accumulates
- *      across chunks; `T < MIN_TRANSMITTANCE` short-circuits saturated
- *      pixels.
+ *   3. Split image into a grid of sub-frames (each ≤ MAX_SUB_FRAME_TILES
+ *      in either dimension) and render each independently. The rasterizer
+ *      retains its per-sub-frame running state; the project shader's
+ *      group-AABB cull skips splats outside the current sub-frame. The
+ *      CPU depth sort is global, so depth ordering is consistent across
+ *      sub-frames and there are no boundary seams.
  *
  * Per-chunk (GPU tile-bin pipeline, fully GPU-resident): project (writes
  * per-splat tile coverage) → prefix-sum (writes emitOffsets + totalPairs)
- * → emit-pairs → prepare-indirect → radix sortIndirect → init-tile-offsets
- * → find-boundaries (atomicMin) → rasterize each tile's slice in depth
- * order. No per-chunk CPU readbacks; no per-tile-group seams.
+ * → emit-pairs → prepare-indirect → radix sortIndirect (key + value:
+ * tile keys sorted, splat indices reordered) → init-tile-offsets →
+ * find-boundaries (atomicMin) → rasterize each tile's slice in depth
+ * order. No per-chunk CPU readbacks.
  *
  * @param device - PlayCanvas WebGPU graphics device.
  * @param dataTable - Gaussian splat data in PlayCanvas-identity space.
@@ -88,10 +114,6 @@ const renderRasterPass = async (
     // that the cone test *would* drop are caught by the GPU project
     // shader's 2D image-rect test, which uses the actual screen-space
     // radius — strictly tighter than the L∞-bound CPU test.
-    //
-    // If a future use case renders at narrow FOV (≤ 30°) where cone-
-    // outside splats dominate, switching to an AABB-vs-cone test here
-    // could pay for itself.
     const cullGroup = logger.group('Cull');
     const xCol = dataTable.getColumnByName('x')!.data as Float32Array;
     const yCol = dataTable.getColumnByName('y')!.data as Float32Array;
@@ -112,9 +134,14 @@ const renderRasterPass = async (
     cullGroup.end();
     void FAR_PLANE_NEAR_FACTOR;  // kept in config for future use
 
-    // ---- Image tile grid ----
+    // ---- Image tile grid + sub-frame partition ----
     const imageTilesX = Math.ceil(width / TILE_SIZE);
     const imageTilesY = Math.ceil(height / TILE_SIZE);
+    const subFrameTilesX = Math.min(imageTilesX, MAX_SUB_FRAME_TILES_X);
+    const subFrameTilesY = Math.min(imageTilesY, MAX_SUB_FRAME_TILES_Y);
+    const numSubFramesX = Math.ceil(imageTilesX / subFrameTilesX);
+    const numSubFramesY = Math.ceil(imageTilesY / subFrameTilesY);
+    const numSubFrames = numSubFramesX * numSubFramesY;
 
     // ---- Global depth sort ----
     const numSHBands = sceneSHBands(dataTable);
@@ -123,24 +150,42 @@ const renderRasterPass = async (
     const sortScratch = new SortScratch();
     sortCandidatesByDepth(cols, candidates, candidateCount, basis, sortScratch);
 
-    // ---- Rasterizer (single group covering whole image) ----
-    // The existing rasterizer accumulates depth-sorted splats into a
-    // persistent running-state buffer across chunks within a group.
-    // We use ONE group covering the whole image, so the running state
-    // is the full output image and there are no inter-group seams.
+    // ---- Rasterizer (one instance, reused across sub-frames) ----
+    // The rasterizer's buffers are sized to the MAX sub-frame
+    // dimensions, not the full image. Each sub-frame calls beginGroup
+    // with its actual dimensions (≤ max) and gets a clean running state.
     //
-    // The rasterizer dispatches a square `groupSizeTiles × groupSizeTiles`
-    // grid of workgroups; tiles outside the actual image's tile grid
-    // early-out via `wgId.x >= groupTilesX || wgId.y >= groupTilesY`. We
-    // size the square to the larger image axis.
-    const groupSizeTiles = Math.max(imageTilesX, imageTilesY);
-    const effectiveChunkCap = Math.max(1, Math.min(CHUNK_CAP, candidateCount));
+    // maxCoveragePerSplat = sub-frame tile area. Then every splat's
+    // bbox-in-sub-frame ≤ maxCoveragePerSplat (since coverage is
+    // geometrically bounded by the sub-frame's area), so the project
+    // shader's coverage clamp never bites and emit-pairs writes the
+    // entire bbox-in-sub-frame. No truncation → no hard tile edges, no
+    // boundary seams. The cost is pair-buffer memory and chunkCap.
+    const subFrameTiles = subFrameTilesX * subFrameTilesY;
+    const maxCoveragePerSplat = 1 << Math.ceil(Math.log2(Math.max(1, subFrameTiles)));
+
+    // Pair buffer is two parallel u32 arrays (tileKeys + splatValues).
+    // Each must fit inside a single storage-buffer binding —
+    // `maxStorageBufferBindingSize` is typically 128 MiB on the
+    // baseline adapter, larger on desktop. Both that limit and the
+    // soft `PAIR_BUFFER_BUDGET_BYTES` policy (combined-buffer budget)
+    // bound `chunkCap`.
+    // @ts-ignore - limits is exposed by WebgpuGraphicsDevice
+    const wgpuLimits = (device as { limits?: { maxStorageBufferBindingSize?: number } }).limits;
+    const maxBindingBytes = wgpuLimits?.maxStorageBufferBindingSize ?? 128 * 1024 * 1024;
+    const bindingChunkCap = Math.floor(maxBindingBytes / (maxCoveragePerSplat * 4));
+    const budgetChunkCap = Math.floor(PAIR_BUFFER_BUDGET_BYTES / (maxCoveragePerSplat * 8));
+    const effectiveChunkCap = Math.max(
+        1,
+        Math.min(CHUNK_CAP, budgetChunkCap, bindingChunkCap, candidateCount)
+    );
 
     const rasterizer = new GpuSplatRasterizer(device, {
         numSHBands,
-        groupSizeTiles,
+        groupTilesX: subFrameTilesX,
+        groupTilesY: subFrameTilesY,
         chunkCap: effectiveChunkCap,
-        numSlots: 1,
+        maxCoveragePerSplat,
         imageWidth: width,
         imageHeight: height,
         near: camera.near,
@@ -155,44 +200,54 @@ const renderRasterPass = async (
     // Per-chunk CPU scratch.
     const chunkInput = new Float32Array(effectiveChunkCap * inputStride);
 
-    // Single group at origin (0, 0), spanning the whole image tile grid.
-    rasterizer.beginGroup(0, 0, 0, imageTilesX, imageTilesY);
+    // Final image buffer (image-sized) that each sub-frame's output is
+    // copied into.
+    const finalImage = new Uint8Array(width * height * 4);
 
-    const rasterBar = logger.bar('rasterizing', Math.max(1, Math.ceil(candidateCount / effectiveChunkCap)));
+    const numChunks = Math.max(1, Math.ceil(candidateCount / effectiveChunkCap));
+    const rasterBar = logger.bar('rasterizing', numSubFrames * numChunks);
     let completed = 0;
-    for (let chunkStart = 0; chunkStart < candidateCount; chunkStart += effectiveChunkCap) {
-        const chunkSize = Math.min(effectiveChunkCap, candidateCount - chunkStart);
-        packChunkInput(cols, candidates, chunkStart, chunkSize, numSHBands, chunkInput);
-        rasterizer.dispatchChunk(0, chunkInput, chunkSize);
-        rasterBar.update(++completed);
+
+    for (let sy = 0; sy < numSubFramesY; sy++) {
+        for (let sx = 0; sx < numSubFramesX; sx++) {
+            const tilesX = Math.min(subFrameTilesX, imageTilesX - sx * subFrameTilesX);
+            const tilesY = Math.min(subFrameTilesY, imageTilesY - sy * subFrameTilesY);
+
+            rasterizer.beginGroup(sx, sy, tilesX, tilesY);
+
+            for (let chunkStart = 0; chunkStart < candidateCount; chunkStart += effectiveChunkCap) {
+                const chunkSize = Math.min(effectiveChunkCap, candidateCount - chunkStart);
+                packChunkInput(cols, candidates, chunkStart, chunkSize, numSHBands, chunkInput);
+                rasterizer.dispatchChunk(chunkInput, chunkSize);
+                rasterBar.update(++completed);
+            }
+
+            const subFrameBytes = await rasterizer.finishGroup();
+
+            // Copy the sub-frame's pixels into the final image. The
+            // rasterizer's output buffer row stride is the sub-frame's
+            // pixel width (`tilesX × TILE_SIZE`), not the image width;
+            // copy row-by-row into the right offset.
+            const subPixelOriginX = sx * subFrameTilesX * TILE_SIZE;
+            const subPixelOriginY = sy * subFrameTilesY * TILE_SIZE;
+            const subPixelW = tilesX * TILE_SIZE;
+            const subPixelH = tilesY * TILE_SIZE;
+            const copyW = Math.min(subPixelW, width - subPixelOriginX);
+            const copyH = Math.min(subPixelH, height - subPixelOriginY);
+            for (let row = 0; row < copyH; row++) {
+                const srcOffset = row * subPixelW * 4;
+                const dstOffset = ((subPixelOriginY + row) * width + subPixelOriginX) * 4;
+                finalImage.set(
+                    subFrameBytes.subarray(srcOffset, srcOffset + copyW * 4),
+                    dstOffset
+                );
+            }
+        }
     }
     rasterBar.end();
 
-    const rawBytes = await rasterizer.finishGroup(0, imageTilesX, imageTilesY);
-
     rasterizer.destroy();
 
-    // The rasterizer writes its group output at a stride of
-    // `groupTilesX × TILE_SIZE` (= image width here, since we span the
-    // image in tile units). The buffer's row stride matches the image's,
-    // so we can return it directly when it's exactly image-sized. If the
-    // image width isn't a multiple of TILE_SIZE the buffer rows are wider
-    // than the image rows, and we need to repack.
-    const groupPixelW = imageTilesX * TILE_SIZE;
-    if (groupPixelW === width) {
-        // Common case for image dimensions that are multiples of TILE_SIZE.
-        const out = rawBytes.subarray(0, width * height * 4);
-        // Make a copy so the returned buffer's lifetime is independent
-        // of the GPU readback's typed array.
-        return new Uint8Array(out);
-    }
-
-    const finalImage = new Uint8Array(width * height * 4);
-    for (let row = 0; row < height; row++) {
-        const srcOffset = row * groupPixelW * 4;
-        const dstOffset = row * width * 4;
-        finalImage.set(rawBytes.subarray(srcOffset, srcOffset + width * 4), dstOffset);
-    }
     return finalImage;
 };
 
