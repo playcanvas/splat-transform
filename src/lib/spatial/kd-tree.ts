@@ -277,9 +277,16 @@ class KdTree {
         // stack on heavily unbalanced trees, so we maintain the work stack
         // ourselves. Encoded entries: nodeRef + (parentTreeIdx, side) where
         // side ∈ {0 = left of parent, 1 = right of parent, 2 = root}.
+        //
+        // Max DFS depth is the tree's height. `KdTree.build` is recursive and
+        // splits at the nthElement median, so the tree is near-balanced and
+        // its height is bounded by JS's recursion limit (~10K). A fixed 64
+        // entries is enough for any tree this codebase can actually build
+        // (2^64 ≫ 10K) and avoids an `n+1`-sized scratch (~85 MB at N=17.9M).
+        const stackCap = 64;
         const stackNode: KdTreeNode[] = [this.root];
-        const stackParent = new Int32Array(n + 1);
-        const stackSide = new Uint8Array(n + 1);
+        const stackParent = new Int32Array(stackCap);
+        const stackSide = new Uint8Array(stackCap);
         stackParent[0] = -1;
         stackSide[0] = 2;
         let sp = 1;

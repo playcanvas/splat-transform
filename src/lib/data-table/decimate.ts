@@ -650,9 +650,11 @@ const simplifyGaussians = async (
         return targetCount <= 0 ? dataTable.clone({ rows: [] }) : dataTable;
     }
 
-    // Mirrors the factory contract used by `filterFloaters` — caller hands us
-    // a `DeviceCreator`, we own creation here so multiple decimate actions
-    // don't each leak a device.
+    // Mirrors the factory contract used by `filterFloaters` — the caller
+    // hands us a `DeviceCreator` so we can create the device lazily (and
+    // skip creation entirely on the early-return path above). We don't
+    // destroy the device; per the `DeviceCreator` contract in types.ts,
+    // the caller owns its lifecycle and is responsible for caching/reuse.
     const device = createDevice ? await createDevice() : undefined;
 
     const requiredCols = ['x', 'y', 'z', 'opacity', 'scale_0', 'scale_1', 'scale_2',
