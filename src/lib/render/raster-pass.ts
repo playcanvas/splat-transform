@@ -1,6 +1,6 @@
 import { GraphicsDevice } from 'playcanvas';
 
-import { type RenderCamera, buildCameraBasis } from './camera';
+import { type Projection, type RenderCamera, buildCameraBasis } from './camera';
 import {
     AA_DILATION_COV,
     DISCRIMINANT_FLOOR,
@@ -102,7 +102,10 @@ const renderRasterPass = async (
 
     const width = camera.width;
     const height = camera.height;
-    const projection = camera.projection;
+    // Default to pinhole when projection is omitted — matches the
+    // back-compat treatment in buildCameraBasis. All downstream branches
+    // (CPU cull/sort, sub-frame split, GPU rasterizer) read this local.
+    const projection: Projection = camera.projection ?? 'pinhole';
     const basis = buildCameraBasis(camera);
 
     // ---- Frustum cull ----

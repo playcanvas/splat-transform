@@ -42,7 +42,7 @@ type WriteImageOptions = {
     /** World-space up vector. Default: (0, 1, 0). */
     up?: { x: number; y: number; z: number };
 
-    /** Vertical field of view in degrees. Default: 60. Unused for `equirect`. */
+    /** Vertical field of view in degrees. Default: 60 for `pinhole`. Must be omitted for `equirect` (throws if supplied). */
     fov?: number;
 
     /** Output image width in pixels. Default: 1280 (pinhole) or 2048 (equirect). */

@@ -30,8 +30,12 @@ type Projection = 'pinhole' | 'equirect';
  * places world `+X` on the right of the image).
  */
 type RenderCamera = {
-    /** Projection mode. */
-    projection: Projection;
+    /**
+     * Projection mode. Defaults to `'pinhole'` if omitted — back-compatible
+     * with callers (JS, or TS compiled against the pre-equirect type) that
+     * don't know the field exists.
+     */
+    projection?: Projection;
     /** Camera position in world space. */
     position: Vec3;
     /** Point the camera looks at, in world space. */
@@ -108,7 +112,9 @@ const buildCameraBasis = (camera: RenderCamera): CameraBasis => {
     // to provide.
     let focalX = 0;
     let focalY = 0;
-    if (camera.projection === 'pinhole') {
+    // Default to pinhole when projection is omitted — keeps existing JS
+    // callers (no TS type-checking against the new field) working.
+    if ((camera.projection ?? 'pinhole') === 'pinhole') {
         const halfTanY = Math.tan(camera.fovY * 0.5);
         focalY = (camera.height * 0.5) / halfTanY;
         focalX = focalY;
