@@ -50,6 +50,18 @@ type RenderCamera = {
     height: number;
     /** Near clipping distance in world units. For pinhole, splats with `cz <= near` are culled; for equirect, splats with radial `r <= near`. */
     near: number;
+    /**
+     * Camera-space Z of the focus plane in world units. Pinhole only;
+     * ignored for equirect. Optional — only meaningful when
+     * `apertureScale > 0`.
+     */
+    focusDistance?: number;
+    /**
+     * DoF strength as a pixel-space scalar: the CoC radius in pixels
+     * when `|1 − focusDistance/cz| = 1`. Pinhole only; ignored for
+     * equirect. Default `0` disables defocus.
+     */
+    apertureScale?: number;
 };
 
 /**

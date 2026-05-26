@@ -211,6 +211,13 @@ Apply when writing `.webp` (lossless WebP rendered via GPU rasterizer).
     --resolution       <WxH>            Output resolution, e.g. 1920x1080. Default: 1280x720 (pinhole) or 2048x1024 (equirect)
     --near             <n>              Near clip distance. Default: 0.2 (matches reference 3DGS)
     --background       <r,g,b[,a]>      Background color in [0,1]. Default: 0,0,0,1
+    --f-stop           <N>              Aperture as a photographic f-stop (e.g. 2.8, 5.6, 11). Enables defocus blur;
+                                        smaller = more blur. Pinhole only. Default: disabled (no defocus).
+    --focus-distance   <n>              Camera-space Z of the focus plane (world units). Default: distance to --look-at.
+                                        Pinhole only; only meaningful with --f-stop.
+    --sensor-size      <n>              Vertical sensor height in world units. Gives --f-stop a physical meaning.
+                                        Default: 0.024 (35mm full-frame, world units = meters). Scale to your world:
+                                        world unit = decimeter → 0.24, world unit = millimeter → 24.
 ```
 
 ## Examples
@@ -391,6 +398,13 @@ splat-transform input.ply view.webp \
 
 # Transparent background
 splat-transform input.ply view.webp --background 0,0,0,0
+
+# Defocus blur (focus on look-at, f/2.8 aperture)
+splat-transform input.ply view.webp --f-stop 2.8
+
+# Defocus with explicit focus distance and a smaller world scale
+splat-transform input.ply view.webp \
+    --f-stop 2.8 --focus-distance 3 --sensor-size 0.1
 
 # 360° equirectangular panorama from camera position
 splat-transform input.ply pano.webp \

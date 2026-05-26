@@ -111,6 +111,18 @@ interface SplatRasterizerOptions {
     eyeX: number; eyeY: number; eyeZ: number;
     /** Focal lengths in pixel units. */
     focalX: number; focalY: number;
+    /**
+     * Camera-space Z of the focus plane, world units. Pinhole-only;
+     * unused when `projection === 'equirect'`.
+     */
+    focusDistance: number;
+    /**
+     * DoF strength as a pixel-space scalar: the CoC radius in pixels when
+     * `|1 − focusDistance/cz| = 1`. `0` disables defocus. The writer
+     * derives this from `--f-stop` + `--sensor-size` using the thin-lens
+     * CoC formula. Pinhole-only.
+     */
+    apertureScale: number;
     /** RGBA background, each channel in [0, 1]. */
     bgR: number; bgG: number; bgB: number; bgA: number;
 }
@@ -559,6 +571,9 @@ class GpuSplatRasterizer {
             c.setParameter('_p3', 0);
             c.setParameter('focalX', o.focalX); c.setParameter('focalY', o.focalY);
             c.setParameter('near', o.near); c.setParameter('_p4', 0);
+            c.setParameter('focusDistance', o.focusDistance);
+            c.setParameter('apertureScale', o.apertureScale);
+            c.setParameter('_p5', 0); c.setParameter('_p6', 0);
             c.setParameter('imageWidth', o.imageWidth); c.setParameter('imageHeight', o.imageHeight);
             c.setParameter('splatStride', this.inputStride);
             // chunkSize set per-dispatch

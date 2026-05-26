@@ -147,6 +147,9 @@ const cliOptionsConfig = {
     'resolution': { type: 'string' },
     'near': { type: 'string' },
     'background': { type: 'string' },
+    'f-stop': { type: 'string' },
+    'focus-distance': { type: 'string' },
+    'sensor-size': { type: 'string' },
 
     // per-file options
     translate: { type: 'string', short: 't', multiple: true },
@@ -407,6 +410,18 @@ const parseArguments = async () => {
         renderHeight = parseInteger(m[2]);
     }
     const renderNear = v.near !== undefined ? parseNumber(v.near, 0) : undefined;
+    const renderFStop = v['f-stop'] !== undefined ? parseNumber(v['f-stop'], 0) : undefined;
+    if (renderFStop !== undefined && renderFStop <= 0) {
+        throw new Error(`Invalid --f-stop value: ${v['f-stop']}. Must be > 0.`);
+    }
+    const renderFocusDistance = v['focus-distance'] !== undefined ? parseNumber(v['focus-distance'], 0) : undefined;
+    if (renderFocusDistance !== undefined && renderFocusDistance <= 0) {
+        throw new Error(`Invalid --focus-distance value: ${v['focus-distance']}. Must be > 0.`);
+    }
+    const renderSensorSize = v['sensor-size'] !== undefined ? parseNumber(v['sensor-size'], 0) : undefined;
+    if (renderSensorSize !== undefined && renderSensorSize <= 0) {
+        throw new Error(`Invalid --sensor-size value: ${v['sensor-size']}. Must be > 0.`);
+    }
     let renderBackground: { r: number; g: number; b: number; a: number } | undefined;
     if (v.background !== undefined) {
         const parts = v.background.split(',').map((p: string) => parseNumber(p.trim()));
@@ -455,7 +470,10 @@ const parseArguments = async () => {
         renderWidth,
         renderHeight,
         renderNear,
-        renderBackground
+        renderBackground,
+        renderFStop,
+        renderFocusDistance,
+        renderSensorSize
     };
 
     for (const t of tokens) {
@@ -746,6 +764,13 @@ IMAGE OUTPUT (.webp) — lossless WebP rendered via GPU rasterizer
         --resolution       <WxH>            Output resolution, e.g. 1920x1080. Default: 1280x720 (pinhole) or 2048x1024 (equirect)
         --near             <n>              Near clip distance. Default: 0.2 (matches reference 3DGS)
         --background       <r,g,b[,a]>      Background color in [0,1]. Default: 0,0,0,1
+        --f-stop           <N>              Aperture as a photographic f-stop (e.g. 2.8, 5.6, 11). Enables defocus blur;
+                                            smaller = more blur. Pinhole only. Default: disabled (no defocus).
+        --focus-distance   <n>              Camera-space Z of the focus plane (world units). Default: distance to --look-at.
+                                            Pinhole only; only meaningful with --f-stop.
+        --sensor-size      <n>              Vertical sensor height in world units. Gives --f-stop a physical meaning.
+                                            Default: 0.024 (35mm full-frame, world units = meters). Scale to your world:
+                                            world unit = decimeter → 0.24, world unit = millimeter → 24.
 
 EXAMPLES
     # Convert formats
