@@ -18,6 +18,19 @@ import {
 import type { SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
 
 /**
+ * Block-type enum and Fibonacci-hash constant, shared between the
+ * extract and compact shaders. Mirrors the values used by the CPU
+ * `BlockMaskMap.slot` formula so the GPU's hash probe lands in the same
+ * slot.
+ */
+const dilationConstants = /* wgsl */`
+const BLOCK_EMPTY: u32 = 0u;
+const BLOCK_SOLID: u32 = 1u;
+const BLOCK_MIXED: u32 = 2u;
+const FIBONACCI_HASH: u32 = 0x9E3779B9u;
+`;
+
+/**
  * Extract shader — converts a `SparseVoxelGrid` (uploaded as types + open-
  * addressed mask hash) directly into a row-aligned dense bit buffer for one
  * outer chunk. One thread per source block in the chunk's outer block range.
@@ -31,6 +44,8 @@ import type { SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
  * @returns WGSL source for the extract compute shader.
  */
 const extractWgsl = () => /* wgsl */`
+${dilationConstants}
+
 struct ExtractUniforms {
     minBx: i32, minBy: i32, minBz: i32,
 
@@ -72,15 +87,15 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     let typeWord = srcTypes[blockIdx >> 4u];
     let bt = (typeWord >> ((blockIdx & 15u) * 2u)) & 3u;
 
-    if (bt == 0u) { return; }  // BLOCK_EMPTY
+    if (bt == BLOCK_EMPTY) { return; }
 
     var lo: u32; var hi: u32;
-    if (bt == 1u) {  // BLOCK_SOLID
+    if (bt == BLOCK_SOLID) {
         lo = 0xFFFFFFFFu;
         hi = 0xFFFFFFFFu;
     } else {
-        // BLOCK_MIXED → hash lookup. Same Fibonacci constant as CPU.
-        var i = (blockIdx * 0x9E3779B9u) & u.srcCapMinusOne;
+        // BLOCK_MIXED → hash lookup. Same constant as CPU BlockMaskMap.
+        var i = (blockIdx * FIBONACCI_HASH) & u.srcCapMinusOne;
         loop {
             let k = srcKeys[i];
             if (k == blockIdx) {
@@ -133,6 +148,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
  * @returns WGSL source for the compact compute shader.
  */
 const compactWgsl = () => /* wgsl */`
+${dilationConstants}
+
 struct CompactUniforms {
     haloBx: u32, haloBy: u32, haloBz: u32,
     numXWords: u32,             // outer chunk's
@@ -188,12 +205,12 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     masksOut[innerBlockIdx * 2u] = lo;
     masksOut[innerBlockIdx * 2u + 1u] = hi;
 
-    var bt: u32 = 0u;  // EMPTY
+    var bt: u32 = BLOCK_EMPTY;
     if (lo != 0u || hi != 0u) {
         if (lo == 0xFFFFFFFFu && hi == 0xFFFFFFFFu) {
-            bt = 1u;  // SOLID
+            bt = BLOCK_SOLID;
         } else {
-            bt = 2u;  // MIXED
+            bt = BLOCK_MIXED;
         }
     }
 
