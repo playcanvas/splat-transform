@@ -74,6 +74,15 @@ type WriteImageOptions = {
      */
     focusDistance?: number;
 
+    /**
+     * Vertical sensor height in world units, used to give `fNumber` a
+     * defined physical meaning. Default `0.024` matches a 35mm
+     * full-frame sensor when world units are meters. Scale this with
+     * your scene's units (e.g. world unit = decimeter → 0.24, world
+     * unit = millimeter → 24). Has no effect without `fNumber`.
+     */
+    sensorSize?: number;
+
     /** Function returning a GraphicsDevice. Required — rasterization runs on GPU. */
     createDevice?: DeviceCreator;
 };
@@ -108,6 +117,7 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         background = { r: 0, g: 0, b: 0, a: 1 },
         fNumber,
         focusDistance,
+        sensorSize = 0.024,
         createDevice
     } = options;
 
@@ -125,6 +135,9 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         }
         if (focusDistance !== undefined) {
             throw new Error('writeImage: --focus-distance is not valid with --projection equirect.');
+        }
+        if (options.sensorSize !== undefined) {
+            throw new Error('writeImage: --sensor-size is not valid with --projection equirect.');
         }
         if (width === undefined && height === undefined) {
             width = 2048;
@@ -148,27 +161,31 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         if (focusDistance !== undefined && !(focusDistance > 0)) {
             throw new Error(`Invalid focus-distance: ${focusDistance}. Must be > 0.`);
         }
+        if (!(sensorSize > 0)) {
+            throw new Error(`Invalid sensor-size: ${sensorSize}. Must be > 0.`);
+        }
     }
 
     const g = logger.group('Render');
 
     const fovY = projection === 'equirect' ? 0 : (fov! * Math.PI) / 180;
 
-    // Resolve DoF for pinhole only. apertureScale carries the pixel-space
-    // CoC-per-unit-defocus scalar that the project shader consumes; we
-    // convert the user-facing photographic f-number using the rendered
-    // focal length (`focalY` = (height/2) / tan(fovY/2)`), matching the
-    // formula in `buildCameraBasis`. Focusing defaults to the look-at
-    // point — the most natural pick — measured as the forward-axis
-    // projection of `lookAt - cameraPosition`. apertureScale = 0 (the
-    // default when --f-number is omitted) makes the rasterizer's DoF
-    // path collapse to a no-op, preserving bit-identical default
-    // renders.
+    // Resolve DoF for pinhole only. The project shader consumes a single
+    // pre-baked scalar `apertureScale` (pixel CoC per unit relative
+    // defocus) and the focus distance. Physical CoC for a thin lens is:
+    //
+    //     CoC_pixels = (focal_real² / (N · focus)) × |1 − focus/cz|
+    //                  × image_height / sensor_height
+    //
+    // where focal_real is the real lens focal length implied by
+    // `fovY` and `sensorSize`. Apply image_height / sensor_height to
+    // convert physical CoC (sensor units) to pixels. Defaulting
+    // `sensorSize` to 0.024 makes f-numbers behave like a 35mm
+    // full-frame camera when world units are meters; scale to suit
+    // non-meter scenes. Focus defaults to the look-at point.
     let resolvedFocusDistance = 0;
     let resolvedApertureScale = 0;
     if (projection !== 'equirect' && fNumber !== undefined) {
-        const focalYPx = (height / 2) / Math.tan(fovY * 0.5);
-        resolvedApertureScale = focalYPx / fNumber;
         if (focusDistance !== undefined) {
             resolvedFocusDistance = focusDistance;
         } else {
@@ -179,10 +196,13 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
             if (fwdLen === 0) {
                 throw new Error('writeImage: cannot derive default --focus-distance because --camera equals --look-at.');
             }
-            // forward · (lookAt - cameraPosition) where forward is unit:
+            // forward · (lookAt - cameraPosition) where forward is unit
             // = fwdLen (the basis forward is the same vector normalized).
             resolvedFocusDistance = fwdLen;
         }
+        const focalRealWorld = (sensorSize / 2) / Math.tan(fovY * 0.5);
+        const focalYPx = (height / 2) / Math.tan(fovY * 0.5);
+        resolvedApertureScale = focalRealWorld * focalYPx / (fNumber * resolvedFocusDistance);
     }
 
     const camera: RenderCamera = {
@@ -211,7 +231,7 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     if (projection === 'equirect') {
         logger.info(`${width}x${height} equirect`);
     } else if (resolvedApertureScale > 0) {
-        logger.info(`${width}x${height} fov ${fov}° f/${fNumber} focus ${resolvedFocusDistance.toFixed(3)}`);
+        logger.info(`${width}x${height} fov ${fov}° f/${fNumber} focus ${resolvedFocusDistance.toFixed(3)} sensor ${sensorSize}`);
     } else {
         logger.info(`${width}x${height} fov ${fov}°`);
     }

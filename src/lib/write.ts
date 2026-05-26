@@ -200,6 +200,7 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
                 background: options.renderBackground,
                 fNumber: options.renderFNumber,
                 focusDistance: options.renderFocusDistance,
+                sensorSize: options.renderSensorSize,
                 createDevice
             }, fs);
             break;

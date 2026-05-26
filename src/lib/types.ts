@@ -96,6 +96,13 @@ type Options = {
      * projection only.
      */
     renderFocusDistance?: number;
+
+    /**
+     * Vertical sensor height in world units. Calibrates `renderFNumber`
+     * to your world scale. Default `0.024` (35mm full-frame in meters).
+     * No effect without `renderFNumber`. Pinhole projection only.
+     */
+    renderSensorSize?: number;
 };
 
 /**

@@ -149,6 +149,7 @@ const cliOptionsConfig = {
     'background': { type: 'string' },
     'f-number': { type: 'string' },
     'focus-distance': { type: 'string' },
+    'sensor-size': { type: 'string' },
 
     // per-file options
     translate: { type: 'string', short: 't', multiple: true },
@@ -417,6 +418,10 @@ const parseArguments = async () => {
     if (renderFocusDistance !== undefined && renderFocusDistance <= 0) {
         throw new Error(`Invalid --focus-distance value: ${v['focus-distance']}. Must be > 0.`);
     }
+    const renderSensorSize = v['sensor-size'] !== undefined ? parseNumber(v['sensor-size'], 0) : undefined;
+    if (renderSensorSize !== undefined && renderSensorSize <= 0) {
+        throw new Error(`Invalid --sensor-size value: ${v['sensor-size']}. Must be > 0.`);
+    }
     let renderBackground: { r: number; g: number; b: number; a: number } | undefined;
     if (v.background !== undefined) {
         const parts = v.background.split(',').map((p: string) => parseNumber(p.trim()));
@@ -467,7 +472,8 @@ const parseArguments = async () => {
         renderNear,
         renderBackground,
         renderFNumber,
-        renderFocusDistance
+        renderFocusDistance,
+        renderSensorSize
     };
 
     for (const t of tokens) {
@@ -762,6 +768,9 @@ IMAGE OUTPUT (.webp) — lossless WebP rendered via GPU rasterizer
                                             smaller = more blur. Pinhole only. Default: disabled (no defocus).
         --focus-distance   <n>              Camera-space Z of the focus plane (world units). Default: distance to --look-at.
                                             Pinhole only; only meaningful with --f-number.
+        --sensor-size      <n>              Vertical sensor height in world units. Gives --f-number a physical meaning.
+                                            Default: 0.024 (35mm full-frame, world units = meters). Scale to your world:
+                                            world unit = decimeter → 0.24, world unit = millimeter → 24.
 
 EXAMPLES
     # Convert formats
