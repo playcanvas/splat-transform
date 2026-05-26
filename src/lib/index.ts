@@ -52,7 +52,7 @@ export type { WriteImageOptions, WriteVoxelOptions, VoxelMetadata } from './writ
 
 // Renderer (for advanced use)
 export { renderSplats, buildCameraBasis } from './render';
-export type { RenderCamera, CameraBasis } from './render';
+export type { Projection, RenderCamera, CameraBasis } from './render';
 
 // Voxel
 export { carve, fillExterior, fillFloor, filterCluster, filterFloaters, findClusterVoxelFlood, voxelizeToBuffer } from './voxel';

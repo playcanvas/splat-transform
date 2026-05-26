@@ -55,6 +55,9 @@ type Options = {
     /** When set, a collision mesh (.collision.glb) is generated alongside the voxel output. `true` is equivalent to `smooth`. */
     collisionMesh?: boolean | CollisionMeshShape;
 
+    /** Camera projection for image output: `'pinhole'` (default) or `'equirect'` (360°×180° panorama). */
+    renderProjection?: 'pinhole' | 'equirect';
+
     /** Camera position (world space) for image output. Default: (2, 1, -2). */
     renderCameraPosition?: { x: number; y: number; z: number };
 
