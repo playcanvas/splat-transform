@@ -201,11 +201,14 @@ Apply when writing `.voxel.json` (sparse voxel octree for collision detection). 
 Apply when writing `.webp` (lossless WebP rendered via GPU rasterizer).
 
 ```none
+    --projection       <pinhole|equirect>  Camera projection. Default: pinhole.
+                                        equirect = 360°×180° panorama from --camera; ignores --fov;
+                                        --resolution must be 2:1 (default 2048x1024).
     --camera           <x,y,z>          Camera position in world space. Default: 2,1,-2
     --look-at          <x,y,z>          Camera target point. Default: 0,0,0
     --up               <x,y,z>          World up vector. Default: 0,1,0
-    --fov              <degrees>        Vertical field of view in degrees. Default: 60
-    --resolution       <WxH>            Output resolution, e.g. 1920x1080. Default: 1280x720
+    --fov              <degrees>        Vertical field of view in degrees. Default: 60. Unused for equirect.
+    --resolution       <WxH>            Output resolution, e.g. 1920x1080. Default: 1280x720 (pinhole) or 2048x1024 (equirect)
     --near             <n>              Near clip distance. Default: 0.2 (matches reference 3DGS)
     --background       <r,g,b[,a]>      Background color in [0,1]. Default: 0,0,0,1
 ```
@@ -388,6 +391,10 @@ splat-transform input.ply view.webp \
 
 # Transparent background
 splat-transform input.ply view.webp --background 0,0,0,0
+
+# 360° equirectangular panorama from camera position
+splat-transform input.ply pano.webp \
+    --projection equirect --camera 0,1,0 --look-at 0,1,1
 ```
 
 ### Device Selection for SOG Compression

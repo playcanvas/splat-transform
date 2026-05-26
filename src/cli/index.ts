@@ -738,12 +738,12 @@ VOXEL OUTPUT (.voxel.json)
 IMAGE OUTPUT (.webp) — lossless WebP rendered via GPU rasterizer
         --projection       <pinhole|equirect>  Camera projection. Default: pinhole.
                                             equirect = 360°×180° panorama from --camera; ignores --fov;
-                                            --resolution must be 2:1 (default 4096x2048).
+                                            --resolution must be 2:1 (default 2048x1024).
         --camera           <x,y,z>          Camera position in world space. Default: 2,1,-2
         --look-at          <x,y,z>          Camera target point. Default: 0,0,0
         --up               <x,y,z>          World up vector. Default: 0,1,0
         --fov              <degrees>        Vertical field of view in degrees. Default: 60. Unused for equirect.
-        --resolution       <WxH>            Output resolution, e.g. 1920x1080. Default: 1280x720 (pinhole) or 4096x2048 (equirect)
+        --resolution       <WxH>            Output resolution, e.g. 1920x1080. Default: 1280x720 (pinhole) or 2048x1024 (equirect)
         --near             <n>              Near clip distance. Default: 0.2 (matches reference 3DGS)
         --background       <r,g,b[,a]>      Background color in [0,1]. Default: 0,0,0,1
 

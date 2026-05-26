@@ -29,7 +29,7 @@ type WriteImageOptions = {
      * - `'pinhole'` — perspective camera using `fov`.
      * - `'equirect'` — full 360° × 180° equirectangular panorama from
      *   `cameraPosition`. Ignores `fov`. Requires `width === 2 × height`;
-     *   default resolution is 4096 × 2048.
+     *   default resolution is 2048 × 1024.
      */
     projection?: Projection;
 
@@ -45,10 +45,10 @@ type WriteImageOptions = {
     /** Vertical field of view in degrees. Default: 60. Unused for `equirect`. */
     fov?: number;
 
-    /** Output image width in pixels. Default: 1280 (pinhole) or 4096 (equirect). */
+    /** Output image width in pixels. Default: 1280 (pinhole) or 2048 (equirect). */
     width?: number;
 
-    /** Output image height in pixels. Default: 720 (pinhole) or 2048 (equirect). */
+    /** Output image height in pixels. Default: 720 (pinhole) or 1024 (equirect). */
     height?: number;
 
     /** Near clip distance in world units. Splats with camera-space depth <= near are culled. Default: 0.2 (matches the reference 3DGS rasterizer). */
@@ -102,10 +102,10 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
             throw new Error('writeImage: --fov is not valid with --projection equirect (the projection covers a full 360°×180° sphere).');
         }
         if (width === undefined && height === undefined) {
-            width = 4096;
-            height = 2048;
+            width = 2048;
+            height = 1024;
         } else if (width === undefined || height === undefined) {
-            throw new Error('writeImage: equirect requires either both width and height, or neither (defaults to 4096x2048).');
+            throw new Error('writeImage: equirect requires either both width and height, or neither (defaults to 2048x1024).');
         }
         if (width !== 2 * height) {
             throw new Error(`writeImage: equirect requires width === 2 × height (got ${width}x${height}).`);
