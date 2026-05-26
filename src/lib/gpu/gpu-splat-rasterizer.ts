@@ -119,8 +119,8 @@ interface SplatRasterizerOptions {
     /**
      * DoF strength as a pixel-space scalar: the CoC radius in pixels when
      * `|1 − focusDistance/cz| = 1`. `0` disables defocus. The writer
-     * derives this from `--f-number` as `focalY / fNumber` so visual
-     * blur is resolution-independent. Pinhole-only.
+     * derives this from `--f-stop` + `--sensor-size` using the thin-lens
+     * CoC formula. Pinhole-only.
      */
     apertureScale: number;
     /** RGBA background, each channel in [0, 1]. */

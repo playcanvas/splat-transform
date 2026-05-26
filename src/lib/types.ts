@@ -83,24 +83,24 @@ type Options = {
     renderBackground?: { r: number; g: number; b: number; a: number };
 
     /**
-     * Aperture as a photographic f-number (e.g. 2.8, 5.6, 11) for image
+     * Aperture as a photographic f-stop (e.g. 2.8, 5.6, 11) for image
      * output. Enables defocus blur / depth-of-field: smaller numbers =
      * stronger blur. Defaults to disabled. Pinhole projection only.
      */
-    renderFNumber?: number;
+    renderFStop?: number;
 
     /**
      * Camera-space Z of the focus plane in world units for image output.
      * Defaults to the distance from the camera to the look-at point when
-     * `renderFNumber` is set. No effect without `renderFNumber`. Pinhole
+     * `renderFStop` is set. No effect without `renderFStop`. Pinhole
      * projection only.
      */
     renderFocusDistance?: number;
 
     /**
-     * Vertical sensor height in world units. Calibrates `renderFNumber`
+     * Vertical sensor height in world units. Calibrates `renderFStop`
      * to your world scale. Default `0.024` (35mm full-frame in meters).
-     * No effect without `renderFNumber`. Pinhole projection only.
+     * No effect without `renderFStop`. Pinhole projection only.
      */
     renderSensorSize?: number;
 };
