@@ -73,6 +73,15 @@ export const DISCRIMINANT_FLOOR = 0.1;
 export const SIGMA_CUTOFF = 3.0;
 
 /**
+ * Value of the unit gaussian at the truncation radius. Subtracted from
+ * `exp(power)` in the rasterizer so each splat's alpha reaches exactly
+ * 0 at `SIGMA_CUTOFF · σ` instead of clipping at ≈ 1.1% (which would
+ * leave a faint ring at the splat boundary). Matches the PlayCanvas
+ * engine's edge compensation.
+ */
+export const GAUSSIAN_FLOOR = Math.exp(-0.5 * SIGMA_CUTOFF * SIGMA_CUTOFF);
+
+/**
  * Floor on the far-plane distance, expressed as a multiple of the near
  * plane. If every scene-AABB corner sits behind the camera the
  * computed far would otherwise be ≤ near; this prevents a degenerate

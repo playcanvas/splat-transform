@@ -83,7 +83,11 @@ fn main(
         let v1 = projected[splatIdx * 3u + 1u];
         let power = -0.5 * (v1.x * dx * dx + 2.0 * v1.y * dx * dy + v1.z * dy * dy);
         if (power > 0.0) { continue; }
-        let alpha = min(OPACITY_CAP, v1.w * exp(power));
+        // Subtract GAUSSIAN_FLOOR so each splat's alpha reaches 0 exactly
+        // at the 3σ truncation radius instead of clipping at ~1.1% —
+        // eliminates faint ring artifacts at splat edges. Matches the
+        // PlayCanvas engine.
+        let alpha = min(OPACITY_CAP, v1.w * max(0.0, exp(power) - GAUSSIAN_FLOOR));
         if (alpha < MIN_ALPHA) { continue; }
         let weight = T * alpha;
         let v2 = projected[splatIdx * 3u + 2u];

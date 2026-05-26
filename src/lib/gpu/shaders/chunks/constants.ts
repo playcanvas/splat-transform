@@ -1,6 +1,7 @@
 import {
     AA_DILATION_COV,
     DISCRIMINANT_FLOOR,
+    GAUSSIAN_FLOOR,
     JACOBIAN_LIMIT_FACTOR,
     MIN_ALPHA,
     MIN_TRANSMITTANCE,
@@ -42,6 +43,7 @@ const wgslF32 = (n: number): string => {
 const constantsChunk = /* wgsl */`
 const TILE_SIZE: u32 = ${TILE_SIZE}u;
 const SIGMA_CUTOFF: f32 = ${wgslF32(SIGMA_CUTOFF)};
+const GAUSSIAN_FLOOR: f32 = ${wgslF32(GAUSSIAN_FLOOR)};
 const AA_DILATION_COV: f32 = ${wgslF32(AA_DILATION_COV)};
 const DISCRIMINANT_FLOOR: f32 = ${wgslF32(DISCRIMINANT_FLOOR)};
 const JACOBIAN_LIMIT_FACTOR: f32 = ${wgslF32(JACOBIAN_LIMIT_FACTOR)};
