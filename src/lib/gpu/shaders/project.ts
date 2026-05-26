@@ -97,6 +97,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     cov00 = cov00 + AA_DILATION_COV;
     cov11 = cov11 + AA_DILATION_COV;
 
+#ifndef PROJECTION_EQUIRECT
+    // Defocus (DoF), pinhole only. Capture detPreDoF before dilating so the
+    // alpha rescale below conserves integrated energy — without it,
+    // defocused foreground splats over-occlude what is behind them.
+    let detPreDoF = cov00 * cov11 - cov01 * cov01;
+    let coc = uniforms.apertureScale * abs(1.0 - uniforms.focusDistance / cz);
+    let cocVar = coc * coc;
+    cov00 = cov00 + cocVar;
+    cov11 = cov11 + cocVar;
+#endif
+
     let det = cov00 * cov11 - cov01 * cov01;
     if (det <= 0.0) { writeInvalid(i); return; }
 
@@ -168,7 +179,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let colG = max(0.0, cG + 0.5);
     let colB = max(0.0, cB + 0.5);
 
-    let alpha = (1.0 / (1.0 + exp(-opacity))) * radiusFade;
+#ifndef PROJECTION_EQUIRECT
+    // Energy-preserving alpha rescale for DoF. When apertureScale == 0,
+    // detPreDoF == det so dofAlphaScale == 1 (no-op).
+    let dofAlphaScale = sqrt(max(0.0, detPreDoF) / det);
+#else
+    let dofAlphaScale = 1.0;
+#endif
+
+    let alpha = (1.0 / (1.0 + exp(-opacity))) * radiusFade * dofAlphaScale;
 
     projected[i * 3u + 0u] = vec4<f32>(screenX, screenY, radius, 0.0);
     projected[i * 3u + 1u] = vec4<f32>(covInvA, covInvB, covInvC, alpha);

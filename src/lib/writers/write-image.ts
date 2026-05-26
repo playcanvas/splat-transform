@@ -57,6 +57,23 @@ type WriteImageOptions = {
     /** RGBA background, each channel in [0, 1]. Default: (0, 0, 0, 1). */
     background?: { r: number; g: number; b: number; a: number };
 
+    /**
+     * Aperture as a photographic f-number (e.g. 2.8, 5.6, 11). Enables
+     * defocus blur / depth-of-field: smaller numbers = stronger blur.
+     * Defaults to disabled. Pinhole only — passing this with
+     * `projection: 'equirect'` is an error.
+     */
+    fNumber?: number;
+
+    /**
+     * Camera-space Z of the focus plane in world units. Defaults to the
+     * distance from `cameraPosition` to `lookAt` along the forward axis
+     * (i.e. focus on the look-at point) when `fNumber` is set. Has no
+     * effect without `fNumber`. Pinhole only — passing this with
+     * `projection: 'equirect'` is an error.
+     */
+    focusDistance?: number;
+
     /** Function returning a GraphicsDevice. Required — rasterization runs on GPU. */
     createDevice?: DeviceCreator;
 };
@@ -89,6 +106,8 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         up = { x: 0, y: 1, z: 0 },
         near = 0.2,
         background = { r: 0, g: 0, b: 0, a: 1 },
+        fNumber,
+        focusDistance,
         createDevice
     } = options;
 
@@ -100,6 +119,12 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     if (projection === 'equirect') {
         if (fov !== undefined) {
             throw new Error('writeImage: --fov is not valid with --projection equirect (the projection covers a full 360°×180° sphere).');
+        }
+        if (fNumber !== undefined) {
+            throw new Error('writeImage: --f-number is not valid with --projection equirect (defocus blur needs a focal length, which the equirect projection does not have).');
+        }
+        if (focusDistance !== undefined) {
+            throw new Error('writeImage: --focus-distance is not valid with --projection equirect.');
         }
         if (width === undefined && height === undefined) {
             width = 2048;
@@ -117,19 +142,60 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         if (fov <= 0 || fov >= 180) {
             throw new Error(`Invalid fov: ${fov}. Must be in (0, 180).`);
         }
+        if (fNumber !== undefined && !(fNumber > 0)) {
+            throw new Error(`Invalid f-number: ${fNumber}. Must be > 0.`);
+        }
+        if (focusDistance !== undefined && !(focusDistance > 0)) {
+            throw new Error(`Invalid focus-distance: ${focusDistance}. Must be > 0.`);
+        }
     }
 
     const g = logger.group('Render');
+
+    const fovY = projection === 'equirect' ? 0 : (fov! * Math.PI) / 180;
+
+    // Resolve DoF for pinhole only. apertureScale carries the pixel-space
+    // CoC-per-unit-defocus scalar that the project shader consumes; we
+    // convert the user-facing photographic f-number using the rendered
+    // focal length (`focalY` = (height/2) / tan(fovY/2)`), matching the
+    // formula in `buildCameraBasis`. Focusing defaults to the look-at
+    // point — the most natural pick — measured as the forward-axis
+    // projection of `lookAt - cameraPosition`. apertureScale = 0 (the
+    // default when --f-number is omitted) makes the rasterizer's DoF
+    // path collapse to a no-op, preserving bit-identical default
+    // renders.
+    let resolvedFocusDistance = 0;
+    let resolvedApertureScale = 0;
+    if (projection !== 'equirect' && fNumber !== undefined) {
+        const focalYPx = (height / 2) / Math.tan(fovY * 0.5);
+        resolvedApertureScale = focalYPx / fNumber;
+        if (focusDistance !== undefined) {
+            resolvedFocusDistance = focusDistance;
+        } else {
+            const fwdX = lookAt.x - cameraPosition.x;
+            const fwdY = lookAt.y - cameraPosition.y;
+            const fwdZ = lookAt.z - cameraPosition.z;
+            const fwdLen = Math.hypot(fwdX, fwdY, fwdZ);
+            if (fwdLen === 0) {
+                throw new Error('writeImage: cannot derive default --focus-distance because --camera equals --look-at.');
+            }
+            // forward · (lookAt - cameraPosition) where forward is unit:
+            // = fwdLen (the basis forward is the same vector normalized).
+            resolvedFocusDistance = fwdLen;
+        }
+    }
 
     const camera: RenderCamera = {
         projection,
         position: new Vec3(cameraPosition.x, cameraPosition.y, cameraPosition.z),
         target: new Vec3(lookAt.x, lookAt.y, lookAt.z),
         up: new Vec3(up.x, up.y, up.z),
-        fovY: projection === 'equirect' ? 0 : (fov! * Math.PI) / 180,
+        fovY,
         width,
         height,
-        near
+        near,
+        focusDistance: resolvedFocusDistance,
+        apertureScale: resolvedApertureScale
     };
 
     const device = await createDevice();
@@ -144,6 +210,8 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
 
     if (projection === 'equirect') {
         logger.info(`${width}x${height} equirect`);
+    } else if (resolvedApertureScale > 0) {
+        logger.info(`${width}x${height} fov ${fov}° f/${fNumber} focus ${resolvedFocusDistance.toFixed(3)}`);
     } else {
         logger.info(`${width}x${height} fov ${fov}°`);
     }

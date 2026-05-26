@@ -372,6 +372,8 @@ const renderRasterPass = async (
         eyeZ: basis.eye.z,
         focalX: basis.focalX,
         focalY: basis.focalY,
+        focusDistance: camera.focusDistance ?? 0,
+        apertureScale: camera.apertureScale ?? 0,
         bgR: background.r,
         bgG: background.g,
         bgB: background.b,
