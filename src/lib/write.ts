@@ -189,6 +189,7 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
             await writeImage({
                 filename,
                 dataTable,
+                projection: options.renderProjection,
                 cameraPosition: options.renderCameraPosition,
                 lookAt: options.renderLookAt,
                 up: options.renderUp,

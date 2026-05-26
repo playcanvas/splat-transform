@@ -102,22 +102,24 @@ const renderRasterPass = async (
 
     const width = camera.width;
     const height = camera.height;
+    const projection = camera.projection;
     const basis = buildCameraBasis(camera);
 
     // ---- Frustum cull ----
-    // Linear, centre-only near-plane test in camera space. For each splat:
-    //   - cz = forward · (p - eye)
-    //   - cull if cz <= near (matches the GPU project shader's near-plane
-    //     test exactly)
-    //
-    // We deliberately don't test the side cones on the CPU. A proper
-    // AABB-vs-cone test needs `exp(max(s))` per splat — on an 18 M scene
-    // that's ~275 ms of extra CPU work, and at typical reference-render
-    // FOVs (60–90°) the cone contains nearly every front-of-camera splat
-    // anyway (measured 95.8 % retention on windmill at 90°). The splats
-    // that the cone test *would* drop are caught by the GPU project
-    // shader's 2D image-rect test, which uses the actual screen-space
-    // radius — strictly tighter than the L∞-bound CPU test.
+    // Linear, centre-only near-plane test. Pinhole tests cz > near (the
+    // GPU project shader's exact near-plane condition). Equirect has no
+    // forward direction in the cull sense — instead we cull a sphere of
+    // radius `near` around the camera, matching the GPU project shader's
+    // `r > near` test. In both modes we deliberately don't test the side
+    // cones on the CPU. A proper AABB-vs-cone test needs `exp(max(s))`
+    // per splat — on an 18 M scene that's ~275 ms of extra CPU work,
+    // and at typical reference-render FOVs (60–90°) the cone contains
+    // nearly every front-of-camera splat anyway (measured 95.8 %
+    // retention on windmill at 90°). The splats that the cone test
+    // *would* drop are caught by the GPU project shader's 2D image-rect
+    // test, which uses the actual screen-space radius — strictly
+    // tighter than the L∞-bound CPU test. For equirect the cone test
+    // doesn't apply at all: every direction is in-view.
     const cullGroup = logger.group('Cull');
     const xCol = dataTable.getColumnByName('x')!.data as Float32Array;
     const yCol = dataTable.getColumnByName('y')!.data as Float32Array;
@@ -131,17 +133,39 @@ const renderRasterPass = async (
     // Worst-case visible-count allocation. Right-sized at the end via subarray.
     const candidates = new Uint32Array(numRows);
     let candidateCount = 0;
-    for (let i = 0; i < numRows; i++) {
-        const cz = fx * (xCol[i] - ex) + fy * (yCol[i] - ey) + fz * (zCol[i] - ez);
-        if (cz > near) candidates[candidateCount++] = i;
+    if (projection === 'pinhole') {
+        for (let i = 0; i < numRows; i++) {
+            const cz = fx * (xCol[i] - ex) + fy * (yCol[i] - ey) + fz * (zCol[i] - ez);
+            if (cz > near) candidates[candidateCount++] = i;
+        }
+    } else {
+        const nearSq = near * near;
+        for (let i = 0; i < numRows; i++) {
+            const dx = xCol[i] - ex;
+            const dy = yCol[i] - ey;
+            const dz = zCol[i] - ez;
+            if (dx * dx + dy * dy + dz * dz > nearSq) candidates[candidateCount++] = i;
+        }
     }
     cullGroup.end();
 
     // ---- Image tile grid + sub-frame partition ----
+    // Pinhole renders larger than ~1080p are split into sub-frames so
+    // per-splat tile coverage stays bounded (see MAX_SUB_FRAME_TILES_*).
+    // Equirect runs as a single sub-frame regardless of resolution: the
+    // sub-frame X-cull below relies on a perspective Jacobian bound
+    // that doesn't apply to equirect, and the wrap-around tile coverage
+    // assumes the X tile range covers the full longitude. TODO: derive
+    // an equirect-specific sub-frame bound (Jacobian magnitude ≤
+    // max(W/(2π), H/π · 1/POLE_EPS)) for >4K equirect renders.
     const imageTilesX = Math.ceil(width / TILE_SIZE);
     const imageTilesY = Math.ceil(height / TILE_SIZE);
-    const subFrameTilesX = Math.min(imageTilesX, MAX_SUB_FRAME_TILES_X);
-    const subFrameTilesY = Math.min(imageTilesY, MAX_SUB_FRAME_TILES_Y);
+    const subFrameTilesX = projection === 'equirect' ?
+        imageTilesX :
+        Math.min(imageTilesX, MAX_SUB_FRAME_TILES_X);
+    const subFrameTilesY = projection === 'equirect' ?
+        imageTilesY :
+        Math.min(imageTilesY, MAX_SUB_FRAME_TILES_Y);
     const numSubFramesX = Math.ceil(imageTilesX / subFrameTilesX);
     const numSubFramesY = Math.ceil(imageTilesY / subFrameTilesY);
     const numSubFrames = numSubFramesX * numSubFramesY;
@@ -151,7 +175,7 @@ const renderRasterPass = async (
     const inputStride = splatInputStride(numSHBands);
     const cols = getSplatColumnRefs(dataTable, numSHBands);
     const sortScratch = new SortScratch();
-    sortCandidatesByDepth(cols, candidates, candidateCount, basis, sortScratch);
+    sortCandidatesByDepth(cols, candidates, candidateCount, basis, projection, sortScratch);
 
     // ---- Per-sub-frame CPU cull ----
     // For multi-sub-frame renders, partition the depth-sorted candidate
@@ -326,6 +350,7 @@ const renderRasterPass = async (
 
     const rasterizer = new GpuSplatRasterizer(device, {
         numSHBands,
+        projection,
         groupTilesX: subFrameTilesX,
         groupTilesY: subFrameTilesY,
         chunkCap: effectiveChunkCap,

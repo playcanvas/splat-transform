@@ -87,6 +87,21 @@ export const FAR_PLANE_NEAR_FACTOR = 100;
  */
 export const TILE_SIZE = 16;
 
+/**
+ * Equirect projection pole-exclusion factor. The equirect Jacobian's
+ * latitude derivative diverges as the splat approaches the zenith /
+ * nadir (rxz → 0). We clamp `rxz` from below at `POLE_EPS · r` so the
+ * Jacobian (and hence the projected covariance, screen-space radius,
+ * and per-tile coverage) stays bounded for splats arbitrarily close to
+ * a pole. Splats *exactly* on the pole get a finite (but narrow) screen
+ * footprint at a longitude determined by tiny numerical noise — in
+ * practice this band is rarely visible because polar splats tend to be
+ * far from the camera. Lowering the floor sharpens detail near the
+ * poles at the cost of more aggressive footprint stretching for nearby
+ * splats; 0.005 (~0.29°) is a reasonable balance.
+ */
+export const POLE_EPS = 0.005;
+
 
 /**
  * Total GPU memory budget for ALL pair-sized buffers combined: the

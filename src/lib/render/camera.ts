@@ -1,7 +1,25 @@
 import { Vec3 } from 'playcanvas';
 
 /**
- * Parameters describing a pinhole camera for headless splat rendering.
+ * Camera projection mode for headless splat rendering.
+ *
+ * - `pinhole` — standard perspective projection with `fovY` as the
+ *   vertical field of view. Splats are culled by camera-space `cz <= near`.
+ * - `equirect` — full 360° × 180° equirectangular panorama from the
+ *   camera position. `fovY` is unused (the projection covers the entire
+ *   sphere); `width` must equal `2 × height` (standard 2:1 panorama
+ *   aspect). Splats are culled by radial distance `r <= near`.
+ *
+ * For both modes the `right`/`down`/`forward` basis derived from
+ * `position`, `target`, and `up` defines the orientation. In equirect
+ * mode, image-x = 0 maps to azimuth -π (behind the camera, left edge)
+ * and image-x = width/2 maps to the forward direction; image-y = 0 is
+ * the zenith and image-y = height is the nadir.
+ */
+type Projection = 'pinhole' | 'equirect';
+
+/**
+ * Parameters describing a camera for headless splat rendering.
  *
  * Convention: PlayCanvas right-handed, Y-up world. Camera-space axes are
  * `right` (image x increases), `down` (image y increases), `forward`
@@ -12,19 +30,21 @@ import { Vec3 } from 'playcanvas';
  * places world `+X` on the right of the image).
  */
 type RenderCamera = {
+    /** Projection mode. */
+    projection: Projection;
     /** Camera position in world space. */
     position: Vec3;
     /** Point the camera looks at, in world space. */
     target: Vec3;
     /** World-space up vector (used to define camera roll). */
     up: Vec3;
-    /** Vertical field of view in radians. */
+    /** Vertical field of view in radians. Used only for `pinhole` projection. */
     fovY: number;
-    /** Output image width in pixels. */
+    /** Output image width in pixels. Equirect requires `width === 2 × height`. */
     width: number;
     /** Output image height in pixels. */
     height: number;
-    /** Near clipping distance in world units. Splats with depth <= near are culled. */
+    /** Near clipping distance in world units. For pinhole, splats with `cz <= near` are culled; for equirect, splats with radial `r <= near`. */
     near: number;
 };
 
@@ -81,9 +101,18 @@ const buildCameraBasis = (camera: RenderCamera): CameraBasis => {
     // down = forward × right (image y increases downward)
     const down = cross(forward, right);
 
-    const halfTanY = Math.tan(camera.fovY * 0.5);
-    const focalY = (camera.height * 0.5) / halfTanY;
-    const focalX = focalY;
+    // Pinhole focal lengths (pixels). Equirect ignores these — the
+    // equirect shader path derives its scale from imageWidth/Height
+    // directly — so we leave them at zero rather than evaluating
+    // `tan(fovY/2)`, which is meaningless when the caller has no FOV
+    // to provide.
+    let focalX = 0;
+    let focalY = 0;
+    if (camera.projection === 'pinhole') {
+        const halfTanY = Math.tan(camera.fovY * 0.5);
+        focalY = (camera.height * 0.5) / halfTanY;
+        focalX = focalY;
+    }
 
     return {
         eye: new Vec3(camera.position.x, camera.position.y, camera.position.z),
@@ -95,4 +124,4 @@ const buildCameraBasis = (camera: RenderCamera): CameraBasis => {
     };
 };
 
-export { type RenderCamera, type CameraBasis, buildCameraBasis };
+export { type Projection, type RenderCamera, type CameraBasis, buildCameraBasis };

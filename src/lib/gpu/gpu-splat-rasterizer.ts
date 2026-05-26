@@ -17,6 +17,7 @@ import {
     UniformFormat
 } from 'playcanvas';
 
+import { type Projection } from '../render/camera';
 import {
     AA_DILATION_COV,
     DISCRIMINANT_FLOOR,
@@ -24,6 +25,7 @@ import {
     MIN_ALPHA,
     MIN_TRANSMITTANCE,
     OPACITY_CAP,
+    POLE_EPS,
     RADIUS_FADE_END_FRAC,
     RADIUS_FADE_START_FRAC,
     SIGMA_CUTOFF,
@@ -68,6 +70,15 @@ const OUTPUT_STRIDE_U32 = 1;
 interface SplatRasterizerOptions {
     /** Number of SH bands above DC (0–3). Determines input stride. */
     numSHBands: 0 | 1 | 2 | 3;
+    /**
+     * Camera projection mode. Specializes the project, emit-pairs and
+     * rasterize-binned shaders. `pinhole` (default) uses the classical
+     * perspective + EWA Jacobian path; `equirect` uses spherical
+     * (atan2/asin) screen mapping, a non-linear Jacobian, radial view
+     * depth, and tile-bin / rasterize paths that wrap the X axis at the
+     * ±π longitude seam.
+     */
+    projection: Projection;
     /** Tiles per group along X (≤ imageTilesX). Sizes runningState/output. */
     groupTilesX: number;
     /** Tiles per group along Y (≤ imageTilesY). Sizes runningState/output. */
@@ -125,9 +136,12 @@ const numSHCoeffsPerChannel = (bands: number): number => {
  * orchestrator sets this to the group's full tile area so the clamp is
  * geometrically unreachable in practice; emit-pairs walks the bbox
  * row-major and truncates at the bottom-right if the cap is ever hit.
+ * @param projection - Camera projection. `pinhole` swaps in the
+ * classical perspective + EWA path; `equirect` swaps in spherical
+ * mapping, a non-linear Jacobian, and wrap-aware X tile coverage.
  * @returns WGSL source for the project compute shader.
  */
-const projectWgsl = (coeffsPerChannel: number, maxCoveragePerSplat: number) => /* wgsl */`
+const projectWgsl = (coeffsPerChannel: number, maxCoveragePerSplat: number, projection: Projection) => /* wgsl */`
 struct Uniforms {
     rightX: f32, rightY: f32, rightZ: f32, _p0: f32,
     downX: f32, downY: f32, downZ: f32, _p1: f32,
@@ -199,11 +213,37 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let cy = uniforms.downX * wx + uniforms.downY * wy + uniforms.downZ * wz;
     let cz = uniforms.forwardX * wx + uniforms.forwardY * wy + uniforms.forwardZ * wz;
 
+${projection === 'pinhole' ? /* wgsl */`
     if (cz <= uniforms.near) { writeInvalid(i); return; }
 
     let invZ = 1.0 / cz;
     let screenX = uniforms.focalX * cx * invZ + f32(uniforms.imageWidth) * 0.5;
     let screenY = uniforms.focalY * cy * invZ + f32(uniforms.imageHeight) * 0.5;
+` : /* wgsl */`
+    // Equirect: cull by radial distance (splats inside the near sphere
+    // would otherwise project to a wildly unstable longitude). The
+    // longitude is undefined at the camera origin and degenerates near
+    // the poles; the POLE_EPS clamp on rxz below keeps the Jacobian
+    // bounded for splats arbitrarily close to the zenith/nadir.
+    let r2 = cx * cx + cy * cy + cz * cz;
+    if (r2 <= uniforms.near * uniforms.near) { writeInvalid(i); return; }
+    let r = sqrt(r2);
+    let rxz2 = cx * cx + cz * cz;
+    let rxz = sqrt(rxz2);
+    let rxzClamped = max(rxz, ${wgslF32(POLE_EPS)} * r);
+
+    let invTwoPi: f32 = 0.15915494309189535;
+    let invPi:    f32 = 0.3183098861837907;
+    let imgWf = f32(uniforms.imageWidth);
+    let imgHf = f32(uniforms.imageHeight);
+    let lon = atan2(cx, cz);
+    let sinLat = clamp(cy / r, -1.0, 1.0);
+    let lat = asin(sinLat);
+    let screenX = (lon * invTwoPi + 0.5) * imgWf;
+    // cy > 0 = camera-down axis = below horizon → lat > 0 → screenY in
+    // the bottom half. screenY = 0 maps to the zenith (above the camera).
+    let screenY = (lat * invPi + 0.5) * imgHf;
+`}
 
     // Quaternion normalize.
     let qlen2 = rotW * rotW + rotX * rotX + rotY * rotY + rotZ * rotZ;
@@ -264,7 +304,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let c12 = t10 * v20 + t11 * v21 + t12 * v22;
     let c22 = t20 * v20 + t21 * v21 + t22 * v22;
 
-    // Jacobian with x/z, y/z clamp.
+${projection === 'pinhole' ? /* wgsl */`
+    // Pinhole Jacobian with x/z, y/z clamp. J is the 2×3 matrix
+    //   [[jx0,   0, jx2],
+    //    [  0, jy1, jy2]]
+    // — the zero entries let us drop the u01·jy0 / u10 / u11·jy0 terms
+    // in cov = J·Σ·Jᵀ that the equirect path retains.
     let limX = ${wgslF32(JACOBIAN_LIMIT_FACTOR)} * (f32(uniforms.imageWidth) * 0.5) / uniforms.focalX;
     let limY = ${wgslF32(JACOBIAN_LIMIT_FACTOR)} * (f32(uniforms.imageHeight) * 0.5) / uniforms.focalY;
     let txtz = clamp(cx * invZ, -limX, limX);
@@ -285,6 +330,39 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var cov00 = u00 * jx0 + u02 * jx2;
     let cov01 = u01 * jy1 + u02 * jy2;
     var cov11 = u11 * jy1 + u12 * jy2;
+` : /* wgsl */`
+    // Equirect Jacobian. With longitude θ = atan2(cx, cz) and latitude
+    // φ = asin(cy/r) (cy is the camera-down axis, so φ>0 = below the
+    // horizon), the per-axis screen derivatives multiplied by the pixel
+    // scales (kx, ky) = (W/(2π), H/π) give the 2×3 Jacobian:
+    //   ∂screenX/∂(cx,cy,cz) = kx · ( cz/rxz²,  0,             -cx/rxz² )
+    //   ∂screenY/∂(cx,cy,cz) = ky · (-cx·cy/(r²·rxz),  rxz/r²,  -cy·cz/(r²·rxz) )
+    // rxzClamped (≥ POLE_EPS·r) keeps every denominator finite as a
+    // splat approaches the pole. j[0][1] = 0, j[1][0] ≠ 0 — the cov
+    // formula carries the extra u00·jy0 / u10·jy0 / u11·jy0 terms that
+    // the pinhole simplification dropped.
+    let kx = imgWf * invTwoPi;
+    let ky = imgHf * invPi;
+    let invRxzC2 = 1.0 / (rxzClamped * rxzClamped);
+    let invR2 = 1.0 / r2;
+    let invR2Rxz = invR2 / rxzClamped;
+    let jx0 =  kx * cz * invRxzC2;
+    let jx2 = -kx * cx * invRxzC2;
+    let jy0 = -ky * cx * cy * invR2Rxz;
+    let jy1 =  ky * rxzClamped * invR2;
+    let jy2 = -ky * cy * cz * invR2Rxz;
+
+    let u00 = jx0 * c00 + jx2 * c02;
+    let u01 = jx0 * c01 + jx2 * c12;
+    let u02 = jx0 * c02 + jx2 * c22;
+    let u10 = jy0 * c00 + jy1 * c01 + jy2 * c02;
+    let u11 = jy0 * c01 + jy1 * c11 + jy2 * c12;
+    let u12 = jy0 * c02 + jy1 * c12 + jy2 * c22;
+
+    var cov00 = u00 * jx0 + u02 * jx2;
+    let cov01 = u00 * jy0 + u01 * jy1 + u02 * jy2;
+    var cov11 = u10 * jy0 + u11 * jy1 + u12 * jy2;
+`}
 
     cov00 = cov00 + ${wgslF32(AA_DILATION_COV)};
     cov11 = cov11 + ${wgslF32(AA_DILATION_COV)};
@@ -415,6 +493,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let tsz: f32 = ${wgslF32(TILE_SIZE)};
     let gox = f32(uniforms.groupPixelOriginX);
     let goy = f32(uniforms.groupPixelOriginY);
+${projection === 'pinhole' ? /* wgsl */`
     let minTX = max(0, i32(floor((screenX - radius - gox) / tsz)));
     let maxTX = min(i32(uniforms.groupTilesX) - 1, i32(floor((screenX + radius - gox) / tsz)));
     let minTY = max(0, i32(floor((screenY - radius - goy) / tsz)));
@@ -425,6 +504,28 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let raw = u32(maxTX - minTX + 1) * u32(maxTY - minTY + 1);
         coverage[i] = min(raw, ${maxCoveragePerSplat}u);
     }
+` : /* wgsl */`
+    // Equirect: the X tile range can extend past the image edges into
+    // negative or > groupTilesX-1 indices — those represent the same
+    // splat seen across the ±π longitude seam. Coverage is the raw
+    // span (capped at groupTilesX so a splat with radius > image_width
+    // doesn't emit duplicate tile keys); emit-pairs walks [minTXraw ..
+    // maxTXraw] in lock-step and applies a modular wrap when writing
+    // tile keys. Y is clamped normally — equirect doesn't wrap across
+    // poles.
+    let minTXraw = i32(floor((screenX - radius - gox) / tsz));
+    let maxTXraw = i32(floor((screenX + radius - gox) / tsz));
+    let txCountRaw = maxTXraw - minTXraw + 1;
+    let txCount = min(txCountRaw, i32(uniforms.groupTilesX));
+    let minTY = max(0, i32(floor((screenY - radius - goy) / tsz)));
+    let maxTY = min(i32(uniforms.groupTilesY) - 1, i32(floor((screenY + radius - goy) / tsz)));
+    if (txCount <= 0 || maxTY < minTY) {
+        coverage[i] = 0u;
+    } else {
+        let raw = u32(txCount) * u32(maxTY - minTY + 1);
+        coverage[i] = min(raw, ${maxCoveragePerSplat}u);
+    }
+`}
 }
 `;
 
@@ -444,9 +545,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
  * preserves the chunk's depth order (splatIdx is monotonic in depth
  * from the CPU pre-sort).
  *
+ * @param projection - Camera projection. `pinhole` walks the clamped
+ * tile bbox directly; `equirect` walks the un-clamped X range and
+ * applies a modular wrap, so a splat near the ±π longitude seam emits
+ * tile keys on both sides of the image.
  * @returns WGSL source for the emit-pairs compute shader.
  */
-const tileBinEmitPairsWgsl = () => /* wgsl */`
+const tileBinEmitPairsWgsl = (projection: Projection) => /* wgsl */`
 struct Uniforms {
     rightX: f32, rightY: f32, rightZ: f32, _p0: f32,
     downX: f32, downY: f32, downZ: f32, _p1: f32,
@@ -481,6 +586,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Group-local tile indices (see project shader for rationale).
     let gox = f32(uniforms.groupPixelOriginX);
     let goy = f32(uniforms.groupPixelOriginY);
+${projection === 'pinhole' ? /* wgsl */`
     let minTX = max(0, i32(floor((sX - radius - gox) / tsz)));
     let maxTX = min(i32(uniforms.groupTilesX) - 1, i32(floor((sX + radius - gox) / tsz)));
     let minTY = max(0, i32(floor((sY - radius - goy) / tsz)));
@@ -499,6 +605,37 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             slot = slot + 1u;
         }
     }
+` : /* wgsl */`
+    // Equirect: raw X range (possibly wrapping past the seam) — must
+    // match the project shader's coverage computation exactly. Each
+    // emitted tx is wrapped into [0, groupTilesX-1] via modular
+    // arithmetic. The rasterize-binned shader compensates by wrapping
+    // its per-pixel dx into [-W/2, W/2], so a wrapped tile pulls the
+    // splat's footprint from the correct copy across the seam.
+    let minTXraw = i32(floor((sX - radius - gox) / tsz));
+    let maxTXraw = i32(floor((sX + radius - gox) / tsz));
+    let txCountRaw = maxTXraw - minTXraw + 1;
+    let groupTilesX_i = i32(uniforms.groupTilesX);
+    let txCount = min(txCountRaw, groupTilesX_i);
+    let minTY = max(0, i32(floor((sY - radius - goy) / tsz)));
+    let maxTY = min(i32(uniforms.groupTilesY) - 1, i32(floor((sY + radius - goy) / tsz)));
+    if (txCount <= 0 || maxTY < minTY) { return; }
+
+    var slot = emitOffset[i];
+    let end = slot + cap;
+    for (var ty: i32 = minTY; ty <= maxTY; ty = ty + 1) {
+        if (slot >= end) { break; }
+        for (var k: i32 = 0; k < txCount; k = k + 1) {
+            if (slot >= end) { break; }
+            var tx = (minTXraw + k) % groupTilesX_i;
+            if (tx < 0) { tx = tx + groupTilesX_i; }
+            let t = u32(ty) * uniforms.groupTilesX + u32(tx);
+            tileKeys[slot] = t;
+            splatValues[slot] = i;
+            slot = slot + 1u;
+        }
+    }
+`}
 }
 `;
 
@@ -750,9 +887,13 @@ fn main(
  * The shader's bindings mirror `rasterizeWgsl` and add bindings 3, 4 for
  * the tile lists.
  *
+ * @param projection - Camera projection. `equirect` wraps the per-pixel
+ * `dx = px - splat.x` into `[-W/2, W/2]` so a tile on the opposite side
+ * of the ±π longitude seam evaluates against the splat's nearer copy;
+ * `pinhole` uses the raw delta.
  * @returns WGSL source for the binned-rasterize compute shader.
  */
-const rasterizeBinnedWgsl = () => /* wgsl */`
+const rasterizeBinnedWgsl = (projection: Projection) => /* wgsl */`
 struct Uniforms {
     rightX: f32, rightY: f32, rightZ: f32, _p0: f32,
     downX: f32, downY: f32, downZ: f32, _p1: f32,
@@ -800,11 +941,25 @@ fn main(
     let px = f32(imagePixelX) + 0.5;
     let py = f32(imagePixelY) + 0.5;
 
+${projection === 'equirect' ? /* wgsl */`
+    let imgWf2 = f32(uniforms.imageWidth);
+    let halfImgW = imgWf2 * 0.5;
+` : ''}
     for (var i: u32 = sliceStart; i < sliceEnd; i = i + 1u) {
         if (T < ${wgslF32(MIN_TRANSMITTANCE)}) { break; }
         let splatIdx = sortedSplatIndices[i];
         let v0 = projected[splatIdx * 3u + 0u];
+${projection === 'pinhole' ? /* wgsl */`
         let dx = px - v0.x;
+` : /* wgsl */`
+        // Equirect: a splat near the ±π longitude seam is tile-binned on
+        // both sides of the image. Wrap dx into [-W/2, W/2] so a tile on
+        // the opposite side of the seam pulls the splat's footprint from
+        // the correct (nearer) copy.
+        var dx = px - v0.x;
+        if (dx > halfImgW) { dx = dx - imgWf2; }
+        else if (dx < -halfImgW) { dx = dx + imgWf2; }
+`}
         let dy = py - v0.y;
         let r = v0.z;
         if (r <= 0.0 || abs(dx) > r || abs(dy) > r) { continue; }
@@ -1126,13 +1281,14 @@ class GpuSplatRasterizer {
             new UniformFormat('boundariesSlotBase', UNIFORMTYPE_UINT)
         ];
 
-        this.projectShader = mkShader('splat-project', projectWgsl(coeffs, options.maxCoveragePerSplat), this.projectBgFormat);
+        const projection = options.projection;
+        this.projectShader = mkShader('splat-project', projectWgsl(coeffs, options.maxCoveragePerSplat, projection), this.projectBgFormat);
         this.prefixSumShader = mkShader('splat-tilebin-prefix-sum', prefixSumWgsl(scanPerThread), this.prefixSumBgFormat);
-        this.emitPairsShader = mkShader('splat-tilebin-emit-pairs', tileBinEmitPairsWgsl(), this.emitPairsBgFormat);
+        this.emitPairsShader = mkShader('splat-tilebin-emit-pairs', tileBinEmitPairsWgsl(projection), this.emitPairsBgFormat);
         this.prepareIndirectShader = mkShader('splat-tilebin-prepare-indirect', prepareIndirectWgsl(), this.prepareIndirectBgFormat, prepareIndirectUniforms);
         this.initTileOffsetsShader = mkShader('splat-tilebin-init-tile-offsets', initTileOffsetsWgsl(), this.initTileOffsetsBgFormat);
         this.findBoundariesShader = mkShader('splat-tilebin-find-boundaries', findBoundariesWgsl(), this.findBoundariesBgFormat);
-        this.rasterizeBinnedShader = mkShader('splat-rasterize-binned', rasterizeBinnedWgsl(), this.rasterizeBinnedBgFormat);
+        this.rasterizeBinnedShader = mkShader('splat-rasterize-binned', rasterizeBinnedWgsl(projection), this.rasterizeBinnedBgFormat);
         this.finalizeShader = mkShader('splat-finalize-pack', finalizeWgsl(), this.finalizeBgFormat);
 
         // Buffer sizing. runningState/output cover exactly the group's

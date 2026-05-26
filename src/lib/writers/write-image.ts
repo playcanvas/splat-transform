@@ -5,7 +5,7 @@ import { logWrittenFile } from './utils';
 import { convertToSpace, DataTable } from '../data-table';
 import { type FileSystem, writeFile } from '../io/write';
 import { renderSplats } from '../render';
-import { type RenderCamera } from '../render/camera';
+import { type Projection, type RenderCamera } from '../render/camera';
 import type { DeviceCreator } from '../types';
 import { logger, Transform, WebPCodec } from '../utils';
 
@@ -23,6 +23,16 @@ type WriteImageOptions = {
     /** Gaussian splat data to render. */
     dataTable: DataTable;
 
+    /**
+     * Camera projection mode. Default: `'pinhole'`.
+     *
+     * - `'pinhole'` — perspective camera using `fov`.
+     * - `'equirect'` — full 360° × 180° equirectangular panorama from
+     *   `cameraPosition`. Ignores `fov`. Requires `width === 2 × height`;
+     *   default resolution is 4096 × 2048.
+     */
+    projection?: Projection;
+
     /** Camera position in world space. Default: (2, 1, -2). */
     cameraPosition?: { x: number; y: number; z: number };
 
@@ -32,13 +42,13 @@ type WriteImageOptions = {
     /** World-space up vector. Default: (0, 1, 0). */
     up?: { x: number; y: number; z: number };
 
-    /** Vertical field of view in degrees. Default: 60. */
+    /** Vertical field of view in degrees. Default: 60. Unused for `equirect`. */
     fov?: number;
 
-    /** Output image width in pixels. Default: 1280. */
+    /** Output image width in pixels. Default: 1280 (pinhole) or 4096 (equirect). */
     width?: number;
 
-    /** Output image height in pixels. Default: 720. */
+    /** Output image height in pixels. Default: 720 (pinhole) or 2048 (equirect). */
     height?: number;
 
     /** Near clip distance in world units. Splats with camera-space depth <= near are culled. Default: 0.2 (matches the reference 3DGS rasterizer). */
@@ -73,12 +83,10 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     const {
         filename,
         dataTable,
+        projection = 'pinhole',
         cameraPosition = { x: 2, y: 1, z: -2 },
         lookAt = { x: 0, y: 0, z: 0 },
         up = { x: 0, y: 1, z: 0 },
-        fov = 60,
-        width = 1280,
-        height = 720,
         near = 0.2,
         background = { r: 0, g: 0, b: 0, a: 1 },
         createDevice
@@ -87,17 +95,38 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     if (!createDevice) {
         throw new Error('writeImage requires a createDevice function for GPU rasterization');
     }
-    if (fov <= 0 || fov >= 180) {
-        throw new Error(`Invalid fov: ${fov}. Must be in (0, 180).`);
+
+    let { fov, width, height } = options;
+    if (projection === 'equirect') {
+        if (fov !== undefined) {
+            throw new Error('writeImage: --fov is not valid with --projection equirect (the projection covers a full 360°×180° sphere).');
+        }
+        if (width === undefined && height === undefined) {
+            width = 4096;
+            height = 2048;
+        } else if (width === undefined || height === undefined) {
+            throw new Error('writeImage: equirect requires either both width and height, or neither (defaults to 4096x2048).');
+        }
+        if (width !== 2 * height) {
+            throw new Error(`writeImage: equirect requires width === 2 × height (got ${width}x${height}).`);
+        }
+    } else {
+        fov ??= 60;
+        width ??= 1280;
+        height ??= 720;
+        if (fov <= 0 || fov >= 180) {
+            throw new Error(`Invalid fov: ${fov}. Must be in (0, 180).`);
+        }
     }
 
     const g = logger.group('Render');
 
     const camera: RenderCamera = {
+        projection,
         position: new Vec3(cameraPosition.x, cameraPosition.y, cameraPosition.z),
         target: new Vec3(lookAt.x, lookAt.y, lookAt.z),
         up: new Vec3(up.x, up.y, up.z),
-        fovY: (fov * Math.PI) / 180,
+        fovY: projection === 'equirect' ? 0 : (fov! * Math.PI) / 180,
         width,
         height,
         near
@@ -113,7 +142,11 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     // writer may consume the table.
     const pcDataTable = convertToSpace(dataTable, Transform.IDENTITY, true);
 
-    logger.info(`${width}x${height} fov ${fov}°`);
+    if (projection === 'equirect') {
+        logger.info(`${width}x${height} equirect`);
+    } else {
+        logger.info(`${width}x${height} fov ${fov}°`);
+    }
 
     const rgba = await renderSplats(device, pcDataTable, camera, background);
 
