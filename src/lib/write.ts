@@ -201,6 +201,11 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
                 fStop: options.renderFStop,
                 focusDistance: options.renderFocusDistance,
                 sensorSize: options.renderSensorSize,
+                cameraEndPosition: options.renderCameraEndPosition,
+                lookAtEnd: options.renderLookAtEnd,
+                upEnd: options.renderUpEnd,
+                shutter: options.renderShutter,
+                motionSamples: options.renderMotionSamples,
                 createDevice
             }, fs);
             break;

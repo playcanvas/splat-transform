@@ -150,6 +150,11 @@ const cliOptionsConfig = {
     'f-stop': { type: 'string' },
     'focus-distance': { type: 'string' },
     'sensor-size': { type: 'string' },
+    'camera-end': { type: 'string' },
+    'look-at-end': { type: 'string' },
+    'up-end': { type: 'string' },
+    'shutter': { type: 'string' },
+    'motion-samples': { type: 'string' },
 
     // per-file options
     translate: { type: 'string', short: 't', multiple: true },
@@ -422,6 +427,29 @@ const parseArguments = async () => {
     if (renderSensorSize !== undefined && renderSensorSize <= 0) {
         throw new Error(`Invalid --sensor-size value: ${v['sensor-size']}. Must be > 0.`);
     }
+    let renderCameraEndPosition: { x: number; y: number; z: number } | undefined;
+    if (v['camera-end'] !== undefined) {
+        const [cx, cy, cz] = parseVec(v['camera-end'], 3);
+        renderCameraEndPosition = { x: cx, y: cy, z: cz };
+    }
+    let renderLookAtEnd: { x: number; y: number; z: number } | undefined;
+    if (v['look-at-end'] !== undefined) {
+        const [lx, ly, lz] = parseVec(v['look-at-end'], 3);
+        renderLookAtEnd = { x: lx, y: ly, z: lz };
+    }
+    let renderUpEnd: { x: number; y: number; z: number } | undefined;
+    if (v['up-end'] !== undefined) {
+        const [ux, uy, uz] = parseVec(v['up-end'], 3);
+        renderUpEnd = { x: ux, y: uy, z: uz };
+    }
+    const renderShutter = v.shutter !== undefined ? parseNumber(v.shutter) : undefined;
+    if (renderShutter !== undefined && (renderShutter < 0 || renderShutter > 1)) {
+        throw new Error(`Invalid --shutter value: ${v.shutter}. Must be in [0, 1].`);
+    }
+    const renderMotionSamples = v['motion-samples'] !== undefined ? parseInteger(v['motion-samples']) : undefined;
+    if (renderMotionSamples !== undefined && renderMotionSamples < 1) {
+        throw new Error(`Invalid --motion-samples value: ${v['motion-samples']}. Must be >= 1.`);
+    }
     let renderBackground: { r: number; g: number; b: number; a: number } | undefined;
     if (v.background !== undefined) {
         const parts = v.background.split(',').map((p: string) => parseNumber(p.trim()));
@@ -473,7 +501,12 @@ const parseArguments = async () => {
         renderBackground,
         renderFStop,
         renderFocusDistance,
-        renderSensorSize
+        renderSensorSize,
+        renderCameraEndPosition,
+        renderLookAtEnd,
+        renderUpEnd,
+        renderShutter,
+        renderMotionSamples
     };
 
     for (const t of tokens) {
@@ -771,6 +804,15 @@ IMAGE OUTPUT (.webp) — lossless WebP rendered via GPU rasterizer
         --sensor-size      <n>              Vertical sensor height in world units. Gives --f-stop a physical meaning.
                                             Default: 0.024 (35mm full-frame, world units = meters). Scale to your world:
                                             world unit = decimeter → 0.24, world unit = millimeter → 24.
+        --camera-end       <x,y,z>          End camera position. When set, enables camera motion blur: the renderer
+                                            averages sub-frames with the camera interpolated from --camera (shutter open)
+                                            to --camera-end (shutter close). Default: disabled (no motion blur).
+        --look-at-end      <x,y,z>          End camera target. Default: same as --look-at. Only with --camera-end.
+        --up-end           <x,y,z>          End up vector. Default: same as --up. Only with --camera-end.
+        --shutter          <0..1>           Fraction of the start→end segment integrated, centered on the midpoint
+                                            (1.0 = full motion; 0.5 = 180° shutter). Default: 1. Only with --camera-end.
+        --motion-samples   <n>              Sub-frames to accumulate for motion blur. Cost is N× a single render.
+                                            Default: 16. Only with --camera-end.
 
 EXAMPLES
     # Convert formats
