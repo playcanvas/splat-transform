@@ -83,6 +83,42 @@ type WriteImageOptions = {
      */
     sensorSize?: number;
 
+    /**
+     * End camera position for motion blur. When set, enables camera
+     * motion blur: the renderer averages `motionSamples` sub-frames
+     * with the camera interpolated from (`cameraPosition`, `lookAt`,
+     * `up`) at shutter-open to (`cameraEndPosition`, `lookAtEnd`,
+     * `upEnd`) at shutter-close.
+     */
+    cameraEndPosition?: { x: number; y: number; z: number };
+
+    /**
+     * End look-at target for motion blur. Defaults to `lookAt` when
+     * motion blur is enabled.
+     */
+    lookAtEnd?: { x: number; y: number; z: number };
+
+    /**
+     * End up vector for motion blur. Defaults to `up` when motion blur
+     * is enabled.
+     */
+    upEnd?: { x: number; y: number; z: number };
+
+    /**
+     * Shutter fraction in `[0, 1]`. Portion of the start→end segment
+     * actually integrated, centered on the midpoint (standard
+     * shutter-angle convention: 1.0 = full motion, 0.5 = 180° shutter).
+     * Default: `1`. Only meaningful with `cameraEndPosition`.
+     */
+    shutter?: number;
+
+    /**
+     * Number of sub-frames to accumulate for motion blur. Cost is N×
+     * a single render. Default: `16`. Only meaningful with
+     * `cameraEndPosition`.
+     */
+    motionSamples?: number;
+
     /** Function returning a GraphicsDevice. Required — rasterization runs on GPU. */
     createDevice?: DeviceCreator;
 };
@@ -118,6 +154,11 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         fStop,
         focusDistance,
         sensorSize = 0.024,
+        cameraEndPosition,
+        lookAtEnd,
+        upEnd,
+        shutter,
+        motionSamples,
         createDevice
     } = options;
 
@@ -166,9 +207,35 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         }
     }
 
+    // Motion blur: enabled iff `--camera-end` is supplied. The end pose
+    // for missing `look-at-end` / `up-end` defaults to the start pose so
+    // pure translations don't need redundant flags.
+    const motionBlur = cameraEndPosition !== undefined;
+    const motionN = motionBlur ? (motionSamples ?? 16) : 1;
+    const motionShutter = motionBlur ? (shutter ?? 1) : 0;
+    if (motionBlur && (motionShutter < 0 || motionShutter > 1)) {
+        throw new Error(`writeImage: --shutter must be in [0, 1], got ${motionShutter}.`);
+    }
+    if (motionBlur && (!Number.isInteger(motionN) || motionN < 1)) {
+        throw new Error(`writeImage: --motion-samples must be a positive integer, got ${motionN}.`);
+    }
+    const camStart = cameraPosition;
+    const camEnd = cameraEndPosition ?? cameraPosition;
+    const lookStart = lookAt;
+    const lookEnd = lookAtEnd ?? lookAt;
+    const upStart = up;
+    const upEndR = upEnd ?? up;
+
     const g = logger.group('Render');
 
     const fovY = projection === 'equirect' ? 0 : (fov! * Math.PI) / 180;
+
+    // Precompute focal scaling used by the DoF aperture-scale formula. Only
+    // depends on intrinsics (sensor, fov, height), not on the camera pose,
+    // so it's safe to share across motion-blur sub-frames.
+    const dofEnabled = projection !== 'equirect' && fStop !== undefined;
+    const focalRealWorld = dofEnabled ? (sensorSize / 2) / Math.tan(fovY * 0.5) : 0;
+    const focalYPx = dofEnabled ? (height / 2) / Math.tan(fovY * 0.5) : 0;
 
     // Resolve DoF for pinhole only. The project shader consumes a single
     // pre-baked scalar `apertureScale` (pixel CoC per unit relative
@@ -182,40 +249,38 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     // convert physical CoC (sensor units) to pixels. Defaulting
     // `sensorSize` to 0.024 makes f-stops behave like a 35mm
     // full-frame camera when world units are meters; scale to suit
-    // non-meter scenes. Focus defaults to the look-at point.
-    let resolvedFocusDistance = 0;
-    let resolvedApertureScale = 0;
-    if (projection !== 'equirect' && fStop !== undefined) {
-        if (focusDistance !== undefined) {
-            resolvedFocusDistance = focusDistance;
-        } else {
-            const fwdX = lookAt.x - cameraPosition.x;
-            const fwdY = lookAt.y - cameraPosition.y;
-            const fwdZ = lookAt.z - cameraPosition.z;
-            const fwdLen = Math.hypot(fwdX, fwdY, fwdZ);
-            if (fwdLen === 0) {
-                throw new Error('writeImage: cannot derive default --focus-distance because --camera equals --look-at.');
+    // non-meter scenes. Focus defaults to the look-at point — which,
+    // under motion blur, moves with the interpolated camera pose
+    // (recomputed per sub-frame below).
+    const buildCamera = (pos: { x: number; y: number; z: number },
+        tgt: { x: number; y: number; z: number },
+        u: { x: number; y: number; z: number }): RenderCamera => {
+        let fDist = 0;
+        let aScale = 0;
+        if (dofEnabled) {
+            if (focusDistance !== undefined) {
+                fDist = focusDistance;
+            } else {
+                const fwdLen = Math.hypot(tgt.x - pos.x, tgt.y - pos.y, tgt.z - pos.z);
+                if (fwdLen === 0) {
+                    throw new Error('writeImage: cannot derive default --focus-distance because --camera equals --look-at.');
+                }
+                fDist = fwdLen;
             }
-            // forward · (lookAt - cameraPosition) where forward is unit
-            // = fwdLen (the basis forward is the same vector normalized).
-            resolvedFocusDistance = fwdLen;
+            aScale = focalRealWorld * focalYPx / (fStop! * fDist);
         }
-        const focalRealWorld = (sensorSize / 2) / Math.tan(fovY * 0.5);
-        const focalYPx = (height / 2) / Math.tan(fovY * 0.5);
-        resolvedApertureScale = focalRealWorld * focalYPx / (fStop * resolvedFocusDistance);
-    }
-
-    const camera: RenderCamera = {
-        projection,
-        position: new Vec3(cameraPosition.x, cameraPosition.y, cameraPosition.z),
-        target: new Vec3(lookAt.x, lookAt.y, lookAt.z),
-        up: new Vec3(up.x, up.y, up.z),
-        fovY,
-        width,
-        height,
-        near,
-        focusDistance: resolvedFocusDistance,
-        apertureScale: resolvedApertureScale
+        return {
+            projection,
+            position: new Vec3(pos.x, pos.y, pos.z),
+            target: new Vec3(tgt.x, tgt.y, tgt.z),
+            up: new Vec3(u.x, u.y, u.z),
+            fovY,
+            width: width!,
+            height: height!,
+            near,
+            focusDistance: fDist,
+            apertureScale: aScale
+        };
     };
 
     const device = await createDevice();
@@ -228,15 +293,61 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     // writer may consume the table.
     const pcDataTable = convertToSpace(dataTable, Transform.IDENTITY, true);
 
+    // Pre-resolve the start-pose DoF info for the info log line.
+    const startCamera = buildCamera(camStart, lookStart, upStart);
+
     if (projection === 'equirect') {
         logger.info(`${width}x${height} equirect`);
-    } else if (resolvedApertureScale > 0) {
-        logger.info(`${width}x${height} fov ${fov}° f/${fStop} focus ${resolvedFocusDistance.toFixed(3)} sensor ${sensorSize}`);
+    } else if (startCamera.apertureScale! > 0) {
+        logger.info(`${width}x${height} fov ${fov}° f/${fStop} focus ${startCamera.focusDistance!.toFixed(3)} sensor ${sensorSize}`);
     } else {
         logger.info(`${width}x${height} fov ${fov}°`);
     }
+    if (motionBlur) {
+        logger.info(`motion blur: ${motionN} samples, shutter ${motionShutter}`);
+    }
 
-    const rgba = await renderSplats(device, pcDataTable, camera, background);
+    let rgba: Uint8Array;
+    if (!motionBlur) {
+        rgba = await renderSplats(device, pcDataTable, startCamera, background);
+    } else {
+        // Camera motion blur: average N sub-frames with the camera linearly
+        // interpolated between the start and end poses, stratified across
+        // the shutter window centered on the midpoint. Accumulate in float
+        // to avoid 8-bit truncation per sample.
+        const halfWin = motionShutter / 2;
+        const t0 = 0.5 - halfWin;
+        const t1 = 0.5 + halfWin;
+        const pixels = width! * height! * 4;
+        const accum = new Float32Array(pixels);
+        for (let i = 0; i < motionN; i++) {
+            const u = motionN === 1 ? 0.5 : (i + 0.5) / motionN;
+            const t = t0 + (t1 - t0) * u;
+            const pos = {
+                x: camStart.x + (camEnd.x - camStart.x) * t,
+                y: camStart.y + (camEnd.y - camStart.y) * t,
+                z: camStart.z + (camEnd.z - camStart.z) * t
+            };
+            const tgt = {
+                x: lookStart.x + (lookEnd.x - lookStart.x) * t,
+                y: lookStart.y + (lookEnd.y - lookStart.y) * t,
+                z: lookStart.z + (lookEnd.z - lookStart.z) * t
+            };
+            // Normalized lerp for `up` so it stays unit-length when the
+            // start/end up vectors differ in direction.
+            const ux = upStart.x + (upEndR.x - upStart.x) * t;
+            const uy = upStart.y + (upEndR.y - upStart.y) * t;
+            const uz = upStart.z + (upEndR.z - upStart.z) * t;
+            const ulen = Math.hypot(ux, uy, uz) || 1;
+            const upI = { x: ux / ulen, y: uy / ulen, z: uz / ulen };
+            const subCamera = buildCamera(pos, tgt, upI);
+            const frame = await renderSplats(device, pcDataTable, subCamera, background);
+            for (let p = 0; p < pixels; p++) accum[p] += frame[p];
+        }
+        rgba = new Uint8Array(pixels);
+        const inv = 1 / motionN;
+        for (let p = 0; p < pixels; p++) rgba[p] = Math.round(accum[p] * inv);
+    }
 
     const encodingGroup = logger.group('Encoding');
     if (!webPCodec) {

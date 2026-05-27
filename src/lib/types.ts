@@ -103,6 +103,43 @@ type Options = {
      * No effect without `renderFStop`. Pinhole projection only.
      */
     renderSensorSize?: number;
+
+    /**
+     * End camera position for motion blur. When set, enables camera
+     * motion blur: the renderer averages multiple sub-frames with the
+     * camera interpolated between `renderCameraPosition` (shutter open)
+     * and `renderCameraEndPosition` (shutter close).
+     */
+    renderCameraEndPosition?: { x: number; y: number; z: number };
+
+    /**
+     * End look-at target for motion blur. Defaults to `renderLookAt`
+     * when motion blur is enabled. Only meaningful with
+     * `renderCameraEndPosition`.
+     */
+    renderLookAtEnd?: { x: number; y: number; z: number };
+
+    /**
+     * End up vector for motion blur. Defaults to `renderUp` when
+     * motion blur is enabled. Only meaningful with
+     * `renderCameraEndPosition`.
+     */
+    renderUpEnd?: { x: number; y: number; z: number };
+
+    /**
+     * Shutter fraction in `[0, 1]`. Controls what portion of the
+     * start→end camera segment is integrated, centered on the midpoint
+     * (standard shutter-angle convention: 1.0 = full motion, 0.5 = 180°
+     * shutter). Default: `1`. No effect without `renderCameraEndPosition`.
+     */
+    renderShutter?: number;
+
+    /**
+     * Number of sub-frames to accumulate for motion blur. More samples =
+     * smoother streaks at proportionally higher cost. Default: `16`.
+     * No effect without `renderCameraEndPosition`.
+     */
+    renderMotionSamples?: number;
 };
 
 /**

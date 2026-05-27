@@ -218,6 +218,15 @@ Apply when writing `.webp` (lossless WebP rendered via GPU rasterizer).
     --sensor-size      <n>              Vertical sensor height in world units. Gives --f-stop a physical meaning.
                                         Default: 0.024 (35mm full-frame, world units = meters). Scale to your world:
                                         world unit = decimeter → 0.24, world unit = millimeter → 24.
+    --camera-end       <x,y,z>          End camera position. When set, enables camera motion blur: the renderer
+                                        averages sub-frames with the camera interpolated from --camera (shutter open)
+                                        to --camera-end (shutter close). Default: disabled (no motion blur).
+    --look-at-end      <x,y,z>          End camera target. Default: same as --look-at. Only with --camera-end.
+    --up-end           <x,y,z>          End up vector. Default: same as --up. Only with --camera-end.
+    --shutter          <0..1>           Fraction of the start→end segment integrated, centered on the midpoint
+                                        (1.0 = full motion; 0.5 = 180° shutter). Default: 1. Only with --camera-end.
+    --motion-samples   <n>              Sub-frames to accumulate for motion blur. Cost is N× a single render.
+                                        Default: 16. Only with --camera-end.
 ```
 
 ## Examples
@@ -409,6 +418,11 @@ splat-transform input.ply view.webp \
 # 360° equirectangular panorama from camera position
 splat-transform input.ply pano.webp \
     --projection equirect --camera 0,1,0 --look-at 0,1,1
+
+# Camera motion blur (dolly from start to end pose over the shutter)
+splat-transform input.ply view.webp \
+    --camera 2,1,-2 --camera-end 3,1,-2 \
+    --motion-samples 16 --shutter 1
 ```
 
 ### Device Selection for SOG Compression
