@@ -1,4 +1,4 @@
-# Gaussian Splatting Collision Generation Guide
+# Generating Collision Data from Gaussian Splats
 
 This guide explains how to generate collision data from a Gaussian splat scene using `splat-transform`. It covers both **voxel generation** (a sparse voxel octree, `.voxel.json` + `.voxel.bin`) and **mesh generation** (`.collision.glb`) suitable for runtime collision detection.
 

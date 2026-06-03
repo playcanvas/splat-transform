@@ -38,6 +38,12 @@ npm install @playcanvas/splat-transform
 
 For running on a backend with Docker (including GPU/Vulkan setup), see the [Docker Backend Guide](guides/DOCKER.md).
 
+## Guides
+
+- [Streamed SOG Guide](guides/STREAMED_SOG.md) — build a multi-LOD streamed SOG from a single PLY.
+- [Collision Mesh Guide](guides/COLLISION.md) — generate voxel/collision data from a splat scene.
+- [Docker Backend Guide](guides/DOCKER.md) — run splat-transform on a backend (incl. GPU/Vulkan setup).
+
 ## CLI Usage
 
 ```bash
@@ -66,7 +72,7 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 | `.csv` | ❌ | ✅ | Comma-separated values spreadsheet |
 | `.html` | ❌ | ✅ | HTML viewer app (single-page or unbundled) based on SOG |
 | `.voxel.json` | ❌ | ✅ | Sparse voxel octree for collision detection |
-| `lod-meta.json` | ❌ | ✅ | Multi-level-of-detail SOG bundle (accompanied by per-LOD `.sog` chunks) |
+| `lod-meta.json` | ❌ | ✅ | Streamed LOD data stored in SOG chunks |
 | `.webp` | ❌ | ✅ | Lossless WebP image rendered from a camera view via GPU rasterizer |
 | `null` | ❌ | ✅ | Discard output (useful with `--summary` for analysis-only runs) |
 
@@ -171,6 +177,8 @@ Apply when writing `lod-meta.json` (multi-LOD streaming SOG bundle).
 -C, --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
 -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
 ```
+
+See the [Generating Streamed SOG Data](guides/STREAMED_SOG.md) guide for an end-to-end walkthrough.
 
 ## Voxel Output Options
 
