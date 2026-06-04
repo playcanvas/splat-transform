@@ -873,11 +873,11 @@ const simplifyGaussians = async (
             let costs = new Float32Array(edgeCount);
 
             if (device) {
-            // GPU path: pack the per-splat cache into the layout the kernel
-            // expects — position + scalars interleaved 8-wide in one buffer,
-            // appearance split into 16-column chunks (each chunk stays under
-            // the ~2 GB per-binding limit). `R` is already Float32, so the
-            // rotation passes through directly.
+                // GPU path: pack the per-splat cache into the layout the kernel
+                // expects — position + scalars interleaved 8-wide in one buffer,
+                // appearance split into 16-column chunks (each chunk stays under
+                // the ~2 GB per-binding limit). `R` is already Float32, so the
+                // rotation passes through directly.
                 const costSub = logger.group('Computing edge costs (GPU)');
 
                 const C = appData.length;
