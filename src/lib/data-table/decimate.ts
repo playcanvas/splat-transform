@@ -847,9 +847,20 @@ const simplifyGaussians = async (
             // the comment at the declaration.
             allKnn = new Uint32Array(0);
 
+            // The loop only runs while n > targetCount, and a non-degenerate
+            // k-NN graph over n >= 2 splats always yields edges (splat 0's
+            // neighbours have higher indices). Zero edges here therefore means
+            // the GPU step failed (e.g. a swallowed out-of-memory left the k-NN
+            // buffer zeroed) — never a legitimate "can't decimate further". Fail
+            // rather than return an incompletely-decimated scene, regardless of
+            // how many earlier iterations succeeded.
             if (edgeCount === 0) {
                 g.end();
-                break;
+                throw new Error(
+                    `decimation produced no edges from the k-NN graph at ${n} splats (target ${targetCount}) — ` +
+                    'the GPU step likely failed (e.g. out-of-memory). ' +
+                    'Refusing to return an incompletely-decimated scene.'
+                );
             }
 
             const appData: any[] = [];
@@ -982,9 +993,18 @@ const simplifyGaussians = async (
             costs = new Float32Array(0);
             sorted = new Uint32Array(0);
 
+            // pairs.length === 0 only happens when every edge cost is non-finite
+            // (any finite cost yields at least one pair), i.e. a total
+            // cost-computation failure — GPU corruption / NaN. As above, the loop
+            // guarantees n > targetCount, so this is always a failure to reach
+            // the target, not a legitimate stop. Fatal regardless of prior progress.
             if (pairs.length === 0) {
                 g.end();
-                break;
+                throw new Error(
+                    `decimation found no valid merge pairs among ${edgeCount} edges at ${n} splats (target ${targetCount}) — ` +
+                    'the GPU step likely failed (e.g. out-of-memory) or produced non-finite costs. ' +
+                    'Refusing to return an incompletely-decimated scene.'
+                );
             }
 
             // Allocate output table
