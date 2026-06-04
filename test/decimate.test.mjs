@@ -278,6 +278,26 @@ describe('simplifyGaussians', () => {
         assertClose(result.getColumnByName('f_dc_2').data[0], 0,   1e-5, 'merged f_dc_2');
     });
 
+    it('should fail loud (throw) when every edge cost is non-finite', async () => {
+        // Degenerate input: finite positions (so the k-NN graph still yields
+        // edges) but non-finite appearance, which drives every edge cost to
+        // NaN. With no finite-cost pair to merge, the no-progress guard must
+        // throw rather than silently return an incompletely-decimated scene —
+        // locking in the fail-loud contract (and, via the CLI, a non-zero exit).
+        const inf = Infinity;
+        const testData = createVisibilityTestData({
+            count: 4,
+            x: new Float32Array([0, 1, 2, 3]),
+            f_dc_0: new Float32Array([inf, inf, inf, inf])
+        });
+
+        await assert.rejects(
+            () => simplifyGaussians(testData, 2),
+            /no valid merge pairs/,
+            'should throw when every edge cost is non-finite'
+        );
+    });
+
     it('should fall back to visibility pruning when rotation columns are missing', async () => {
         const testData = new DataTable([
             new Column('x', new Float32Array([0, 1, 2, 3])),

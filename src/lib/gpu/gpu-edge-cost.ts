@@ -86,7 +86,7 @@ const STRIDE_C: u32 = ${strideC}u;
 // Symmetric 3x3 covariance helpers — we pass them around as 6 f32 (xx, xy, xz, yy, yz, zz).
 
 // Σ = R · diag(v) · R^T for row-major R (a 9-float array starting at offset r9).
-// Variances v come from splatScalars[s5 + 2..4]. Result is 6 floats:
+// Variances v come from posScalars[s8 + 5..7]. Result is 6 floats:
 // (xx, xy, xz, yy, yz, zz).
 fn sigmaFromRotVar(r9: u32, s8: u32) -> array<f32, 6> {
     let r00 = rotR[r9 + 0u]; let r01 = rotR[r9 + 1u]; let r02 = rotR[r9 + 2u];
@@ -180,7 +180,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     // Entropy of the merged Gaussian: H = 0.5 (k log(2π) + log|Σ_m| + k), k=3.
     let EpNegLogQ = 0.5 * (3.0 * LOG2PI + logdet_m + 3.0);
 
-    // Read per-axis std for each input (variances live at splatScalars[s5+2..4]).
+    // Read per-axis std for each input (variances live at posScalars[s8+5..7]).
     let vix = posScalars[i8 + 5u]; let viy = posScalars[i8 + 6u]; let viz = posScalars[i8 + 7u];
     let vjx = posScalars[j8 + 5u]; let vjy = posScalars[j8 + 6u]; let vjz = posScalars[j8 + 7u];
     let stdix = sqrt(max(vix, 0.0));
@@ -359,6 +359,8 @@ class GpuEdgeCost {
         // limit so we fail with a clear message instead of a driver-side error.
         // Edges are uploaded per batch (batch-sized buffers), so they can't hit
         // the limit; the widest appearance chunk and rotR are the candidates.
+        // posScalars (8 floats/splat) is strictly smaller than rotR (9), so the
+        // rotR check already bounds it — no separate check needed.
         const maxStorage = (device as any).limits?.maxStorageBufferBindingSize;
         if (typeof maxStorage === 'number') {
             const checkLimit = (label: string, bytes: number) => {
