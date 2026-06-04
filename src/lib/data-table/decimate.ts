@@ -861,39 +861,52 @@ const simplifyGaussians = async (
             let costs = new Float32Array(edgeCount);
 
             if (device) {
-            // GPU path: pack per-splat cache into the layout the kernel
-            // expects (interleaved positions, interleaved scalars). The
-            // cache is already Float32, so `R` passes through directly.
+            // GPU path: pack the per-splat cache into the layout the kernel
+            // expects — position + scalars interleaved 8-wide in one buffer,
+            // appearance split into 16-column chunks (each chunk stays under
+            // the ~2 GB per-binding limit). `R` is already Float32, so the
+            // rotation passes through directly.
                 const costSub = logger.group('Computing edge costs (GPU)');
 
                 const C = appData.length;
-                const positionsPacked = new Float32Array(n * 3);
-                const splatScalars = new Float32Array(n * 5);
-                const appearance = new Float32Array(n * C);
+                const APP_CHUNK = 16;
+                const numChunks = Math.ceil(C / APP_CHUNK);
 
+                const posScalars = new Float32Array(n * 8);
                 for (let s = 0; s < n; s++) {
-                    positionsPacked[s * 3 + 0] = cx[s] as number;
-                    positionsPacked[s * 3 + 1] = cy[s] as number;
-                    positionsPacked[s * 3 + 2] = cz[s] as number;
-
-                    splatScalars[s * 5 + 0] = cache.mass[s];
-                    splatScalars[s * 5 + 1] = cache.logdet[s];
-                    splatScalars[s * 5 + 2] = cache.v[s * 3 + 0];
-                    splatScalars[s * 5 + 3] = cache.v[s * 3 + 1];
-                    splatScalars[s * 5 + 4] = cache.v[s * 3 + 2];
+                    const o = s * 8;
+                    posScalars[o + 0] = cx[s] as number;
+                    posScalars[o + 1] = cy[s] as number;
+                    posScalars[o + 2] = cz[s] as number;
+                    posScalars[o + 3] = cache.mass[s];
+                    posScalars[o + 4] = cache.logdet[s];
+                    posScalars[o + 5] = cache.v[s * 3 + 0];
+                    posScalars[o + 6] = cache.v[s * 3 + 1];
+                    posScalars[o + 7] = cache.v[s * 3 + 2];
                 }
-                // Pack appearance row-major.
-                for (let s = 0; s < n; s++) {
-                    const base = s * C;
-                    for (let k = 0; k < C; k++) {
-                        appearance[base + k] = appData[k][s] as number;
+
+                // Pack appearance into chunks of ≤16 columns. Each chunk's
+                // stride is its live width (only the final chunk may be < 16),
+                // so no padding is stored or uploaded. The width formula must
+                // match the strides baked into the kernel in GpuEdgeCost.
+                const appChunks: Float32Array[] = [];
+                for (let ch = 0; ch < numChunks; ch++) {
+                    const kStart = ch * APP_CHUNK;
+                    const width = Math.min(APP_CHUNK, C - kStart);
+                    const chunk = new Float32Array(n * width);
+                    for (let s = 0; s < n; s++) {
+                        const dst = s * width;
+                        for (let kk = 0; kk < width; kk++) {
+                            chunk[dst + kk] = appData[kStart + kk][s] as number;
+                        }
                     }
+                    appChunks.push(chunk);
                 }
+
                 const cacheGpu: EdgeCostCache = {
-                    positions: positionsPacked,
+                    posScalars,
                     rotR: cache.R,
-                    splatScalars,
-                    appearance,
+                    appChunks,
                     numAppCols: C,
                     numSplats: n
                 };
