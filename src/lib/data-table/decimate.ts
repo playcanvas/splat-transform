@@ -850,16 +850,19 @@ const simplifyGaussians = async (
             // The loop only runs while n > targetCount, and a non-degenerate
             // k-NN graph over n >= 2 splats always yields edges (splat 0's
             // neighbours have higher indices). Zero edges here therefore means
-            // the GPU step failed (e.g. a swallowed out-of-memory left the k-NN
-            // buffer zeroed) — never a legitimate "can't decimate further". Fail
-            // rather than return an incompletely-decimated scene, regardless of
-            // how many earlier iterations succeeded.
+            // the neighbour step produced nothing usable — on the GPU path a
+            // swallowed out-of-memory leaving the k-NN buffer zeroed, on the CPU
+            // path a degenerate input — never a legitimate "can't decimate
+            // further". Fail rather than return an incompletely-decimated scene,
+            // regardless of how many earlier iterations succeeded.
             if (edgeCount === 0) {
                 g.end();
+                const cause = device ?
+                    'the GPU step likely failed (e.g. out-of-memory)' :
+                    'the input is likely degenerate (e.g. non-finite positions)';
                 throw new Error(
                     `decimation produced no edges from the k-NN graph at ${n} splats (target ${targetCount}) — ` +
-                    'the GPU step likely failed (e.g. out-of-memory). ' +
-                    'Refusing to return an incompletely-decimated scene.'
+                    `${cause}. Refusing to return an incompletely-decimated scene.`
                 );
             }
 
@@ -995,15 +998,18 @@ const simplifyGaussians = async (
 
             // pairs.length === 0 only happens when every edge cost is non-finite
             // (any finite cost yields at least one pair), i.e. a total
-            // cost-computation failure — GPU corruption / NaN. As above, the loop
-            // guarantees n > targetCount, so this is always a failure to reach
-            // the target, not a legitimate stop. Fatal regardless of prior progress.
+            // cost-computation failure — GPU corruption on the GPU path, or
+            // non-finite inputs on either path. As above, the loop guarantees
+            // n > targetCount, so this is always a failure to reach the target,
+            // not a legitimate stop. Fatal regardless of prior progress.
             if (pairs.length === 0) {
                 g.end();
+                const cause = device ?
+                    'the GPU step likely failed (e.g. out-of-memory) or produced non-finite costs' :
+                    'cost computation produced only non-finite values (e.g. non-finite inputs)';
                 throw new Error(
                     `decimation found no valid merge pairs among ${edgeCount} edges at ${n} splats (target ${targetCount}) — ` +
-                    'the GPU step likely failed (e.g. out-of-memory) or produced non-finite costs. ' +
-                    'Refusing to return an incompletely-decimated scene.'
+                    `${cause}. Refusing to return an incompletely-decimated scene.`
                 );
             }
 

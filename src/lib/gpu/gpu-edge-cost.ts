@@ -320,6 +320,11 @@ class GpuEdgeCost {
         const appStrides = [0, 1, 2].map((ch) => {
             return Math.min(APP_CHUNK, Math.max(0, maxAppCols - ch * APP_CHUNK));
         });
+        // Non-empty chunk count the kernel reads. execute() validates the cache
+        // supplies exactly this many: a short count would leave a hoisted (reused
+        // across iterations) appearance buffer holding the previous iteration's
+        // data, which the kernel would then read as this iteration's appearance.
+        const numAppChunks = appStrides.filter(stride => stride > 0).length;
 
         const bindGroupFormat = new BindGroupFormat(device, [
             new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
@@ -422,6 +427,9 @@ class GpuEdgeCost {
             if (e > maxE) throw new Error(`GpuEdgeCost: E=${e} exceeds maxE=${maxE}`);
             if (cache.numAppCols !== maxAppCols) {
                 throw new Error(`GpuEdgeCost: numAppCols=${cache.numAppCols} must equal maxAppCols=${maxAppCols} (baked into the kernel)`);
+            }
+            if (cache.appChunks.length !== numAppChunks) {
+                throw new Error(`GpuEdgeCost: cache supplies ${cache.appChunks.length} appearance chunks but the kernel layout expects ${numAppChunks}`);
             }
             if (edgeJ.length !== e || outCosts.length !== e) {
                 throw new Error('GpuEdgeCost: edgeI / edgeJ / outCosts must have same length');
