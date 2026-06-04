@@ -1,10 +1,12 @@
 import { Vec3 } from 'playcanvas';
 
+import type { Bounds } from '../data-table';
+import type { GpuDilation } from '../gpu';
+import { logger } from '../utils';
+
 import { gpuDilate3 } from './dilation';
 import { twoLevelBFS } from './flood-fill';
 import { sparseOrGrids } from './grid-ops';
-import type { Bounds } from '../data-table';
-import type { GpuDilation } from '../gpu';
 import {
     BLOCK_MIXED,
     BLOCK_SOLID,
@@ -14,7 +16,7 @@ import {
     SOLID_LO,
     SparseVoxelGrid
 } from './sparse-voxel-grid';
-import { logger } from '../utils';
+
 
 type NavSeed = {
     x: number;

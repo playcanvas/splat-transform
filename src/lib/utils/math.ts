@@ -1,4 +1,5 @@
-import { Mat4, Quat, Vec3 } from 'playcanvas';
+import type { Mat4} from 'playcanvas';
+import { Quat, Vec3 } from 'playcanvas';
 
 const sigmoid = (v: number) => 1 / (1 + Math.exp(-v));
 

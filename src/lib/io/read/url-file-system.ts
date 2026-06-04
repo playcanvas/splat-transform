@@ -1,4 +1,5 @@
-import { type ReadFileSystem, type ProgressCallback, type ReadSource, ReadStream } from './file-system';
+import {    ReadStream } from './file-system';
+import type {ReadFileSystem, ProgressCallback, ReadSource} from './file-system';
 import { MemoryReadSource } from './memory-file-system';
 
 /**
@@ -48,8 +49,8 @@ class UrlReadStream extends ReadStream {
     private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
     private response: Response | null = null;
     private buffer: Uint8Array | null = null;
-    private bufferOffset: number = 0;
-    private closed: boolean = false;
+    private bufferOffset = 0;
+    private closed = false;
     private progress: ProgressCallback | undefined;
     private totalSize: number | undefined;
 
@@ -145,7 +146,7 @@ class LazyUrlReadStream extends ReadStream {
     private headers: Record<string, string>;
     private innerStream: UrlReadStream | null = null;
     private fetchPromise: Promise<UrlReadStream> | null = null;
-    private closed: boolean = false;
+    private closed = false;
     private progress: ProgressCallback | undefined;
 
     constructor(url: string, headers: Record<string, string>, expectedSize?: number, progress?: ProgressCallback) {
@@ -208,7 +209,7 @@ class UrlReadSource implements ReadSource {
     readonly seekable: boolean = true;
 
     private url: string;
-    private closed: boolean = false;
+    private closed = false;
     private progress: ProgressCallback | undefined;
 
     constructor(url: string, size: number | undefined, progress?: ProgressCallback) {
@@ -267,7 +268,7 @@ class UrlReadFileSystem implements ReadFileSystem {
     /**
      * @param baseUrl - Optional base URL to prepend to filenames
      */
-    constructor(baseUrl: string = '') {
+    constructor(baseUrl = '') {
         this.baseUrl = baseUrl;
     }
 

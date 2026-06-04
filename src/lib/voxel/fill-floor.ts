@@ -1,8 +1,10 @@
+import type { Bounds } from '../data-table';
+import type { GpuDilation } from '../gpu';
+import { logger } from '../utils';
+
 import { gpuDilate3 } from './dilation';
 import type { NavSimplifyResult } from './fill-exterior';
 import { sparseOrGrids } from './grid-ops';
-import type { Bounds } from '../data-table';
-import type { GpuDilation } from '../gpu';
 import {
     BLOCK_EMPTY,
     BLOCK_SOLID,
@@ -11,7 +13,7 @@ import {
     SparseVoxelGrid,
     readBlockType
 } from './sparse-voxel-grid';
-import { logger } from '../utils';
+
 
 /**
  * Floor-fill via XZ dilate -> per-column upward walk -> XZ dilate -> OR.
@@ -52,7 +54,7 @@ const fillFloor = async (
     grid: SparseVoxelGrid,
     gridBounds: Bounds,
     voxelResolution: number,
-    dilation: number = 0,
+    dilation = 0,
     gpu: GpuDilation | null = null
 ): Promise<NavSimplifyResult> => {
     if (!Number.isFinite(voxelResolution) || voxelResolution <= 0) {

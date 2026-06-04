@@ -1,13 +1,16 @@
 import { basename } from 'pathe';
 import { Vec3 } from 'playcanvas';
 
-import { logWrittenFile } from './utils';
-import { convertToSpace, DataTable } from '../data-table';
-import { type FileSystem, writeFile } from '../io/write';
+import type { DataTable } from '../data-table';
+import { convertToSpace } from '../data-table';
+import {  writeFile } from '../io/write';
+import type {FileSystem} from '../io/write';
 import { renderSplats } from '../render';
-import { type Projection, type RenderCamera } from '../render/camera';
+import type {Projection, RenderCamera} from '../render/camera';
 import type { DeviceCreator } from '../types';
 import { logger, Transform, WebPCodec } from '../utils';
+
+import { logWrittenFile } from './utils';
 
 // Cache the WebP codec across invocations; `WebPCodec.create()` instantiates
 // the WASM module which is expensive to repeat. Same pattern as write-sog.ts.

@@ -52,7 +52,7 @@ type LogEvent =
  * at the façade (see {@link LoggerCore.isLevelVisible}) before reaching
  * the renderer; `error` is always delivered.
  */
-interface Renderer {
+type Renderer = {
     /**
      * Handle a log event.
      * @param event - The event to render.
@@ -74,7 +74,7 @@ interface Renderer {
  * can adopt `using bar = logger.bar(...)` because `using` only requires
  * the `[Symbol.dispose]` shape structurally.
  */
-interface Bar {
+type Bar = {
     /**
      * Advance the bar by `n` ticks.
      * @param n - Number of ticks to advance (default 1).
@@ -115,7 +115,7 @@ interface Bar {
  * can adopt `using g = logger.group(...)` because `using` only requires
  * the `[Symbol.dispose]` shape structurally.
  */
-interface Group {
+type Group = {
     /**
      * Close the group, popping anything still open above it on the stack
      * (defensively handles forgotten inner scopes) and emit the timing event.

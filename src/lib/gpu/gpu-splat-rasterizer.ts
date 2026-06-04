@@ -1,3 +1,5 @@
+import type {
+    GraphicsDevice} from 'playcanvas';
 import {
     BUFFERUSAGE_COPY_DST,
     BUFFERUSAGE_COPY_SRC,
@@ -9,12 +11,14 @@ import {
     BindUniformBufferFormat,
     Compute,
     ComputeRadixSort,
-    GraphicsDevice,
     Shader,
     StorageBuffer,
     UniformBufferFormat,
     UniformFormat
 } from 'playcanvas';
+
+import type {Projection} from '../render/camera';
+import { TILE_SIZE } from '../render/config';
 
 import { constantsChunk } from './shaders/chunks/constants';
 import { covariance3D } from './shaders/chunks/covariance-3d';
@@ -39,8 +43,6 @@ import { projectWgsl } from './shaders/project';
 import { rasterizeBinnedWgsl } from './shaders/rasterize-binned';
 import { tileBinEmitPairsWgsl } from './shaders/tile-bin-emit-pairs';
 import { uniformsStruct, uniformFormatEntries } from './shaders/uniforms';
-import { type Projection } from '../render/camera';
-import { TILE_SIZE } from '../render/config';
 
 /** 12 floats per projected splat: vec4 × 3. */
 const PROJECTION_STRIDE_F32 = 12;
@@ -64,7 +66,7 @@ const OUTPUT_STRIDE_U32 = 1;
  * shader's group-AABB cull and group-pixel-origin uniforms still
  * exercise this code path.
  */
-interface SplatRasterizerOptions {
+type SplatRasterizerOptions = {
     /** Number of SH bands above DC (0–3). Determines input stride. */
     numSHBands: 0 | 1 | 2 | 3;
     /**
@@ -132,7 +134,7 @@ const numSHCoeffsPerChannel = (bands: number): number => {
 };
 
 
-interface PipelineBuffers {
+type PipelineBuffers = {
     inputBuffer: StorageBuffer;
     projBuffer: StorageBuffer;
     runningStateBuffer: StorageBuffer;
@@ -232,8 +234,8 @@ class GpuSplatRasterizer {
     private sortKeyBits: number;
     private clearStatePattern: Float32Array;
     /** Active group's tile dimensions, set by `beginGroup`. */
-    private activeTilesX: number = 0;
-    private activeTilesY: number = 0;
+    private activeTilesX = 0;
+    private activeTilesY = 0;
 
     /** Floats per gaussian in the input buffer (depends on SH band count). */
     readonly inputStride: number;

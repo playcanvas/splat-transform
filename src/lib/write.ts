@@ -1,6 +1,6 @@
-import { DataTable } from './data-table';
-import { type FileSystem } from './io/write';
-import { type DeviceCreator, type Options } from './types';
+import type { DataTable } from './data-table';
+import type {FileSystem} from './io/write';
+import type {DeviceCreator, Options} from './types';
 import { writeCompressedPly, writeCsv, writeGlb, writeHtml, writeImage, writeLod, writePly, writeSog, writeSpz, writeVoxel } from './writers';
 
 /**

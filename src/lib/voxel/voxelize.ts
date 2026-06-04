@@ -1,23 +1,25 @@
 import { Vec3 } from 'playcanvas';
 
-import { BlockMaskBuffer } from './block-mask-buffer';
 import type { Bounds } from '../data-table';
 import {
-    GpuVoxelization,
-    type BatchSpec,
-    type MultiBatchResult
+    GpuVoxelization
+    
+    
 } from '../gpu';
-import { type GaussianBVH } from '../spatial';
+import type {BatchSpec, MultiBatchResult} from '../gpu';
+import type {GaussianBVH} from '../spatial';
 import { logger } from '../utils';
 
-interface PendingBatch extends BatchSpec {
+import { BlockMaskBuffer } from './block-mask-buffer';
+
+type PendingBatch = {
     bx: number;
     by: number;
     bz: number;
     numBlocksX: number;
     numBlocksY: number;
     numBlocksZ: number;
-}
+} & BatchSpec
 
 /**
  * GPU-accelerated voxelization of Gaussian splat data into a block mask buffer.

@@ -1,11 +1,12 @@
-import { TypedArray } from './data-table';
 import { sigmoid } from '../utils';
+
+import type { TypedArray } from './data-table';
 
 /**
  * Pre-computed per-Gaussian inverse transform data for evaluating
  * Gaussian contribution at arbitrary 3D points.
  */
-interface GaussianInverseTransform {
+type GaussianInverseTransform = {
     /** Inverse rotation quaternion (w, x, y, z) with xyz negated */
     qw: number;
     qx: number;
@@ -94,7 +95,7 @@ const evaluateGaussianAt = (
 /**
  * Column arrays needed for Gaussian contribution evaluation.
  */
-interface GaussianColumns {
+type GaussianColumns = {
     posX: TypedArray;
     posY: TypedArray;
     posZ: TypedArray;

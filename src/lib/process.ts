@@ -1,8 +1,10 @@
 import { Vec3 } from 'playcanvas';
 
-import { Column, DataTable, simplifyGaussians, sortMortonOrder, computeSummary, type SummaryData, convertToSpace, getSHBands } from './data-table';
+import { Column, DataTable, simplifyGaussians, sortMortonOrder, computeSummary,  convertToSpace, getSHBands } from './data-table';
+import type {SummaryData} from './data-table';
 import type { DeviceCreator } from './types';
-import { fmtCount, type Group, logger, Transform } from './utils';
+import { fmtCount,  logger, Transform } from './utils';
+import type {Group} from './utils';
 import { filterCluster as filterClusterFn } from './voxel/filter-cluster';
 import { filterFloaters as filterFloatersFn } from './voxel/filter-floaters';
 

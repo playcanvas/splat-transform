@@ -1,4 +1,4 @@
-import { Column, DataTable, TypedArray } from './data-table';
+import type { Column, DataTable, TypedArray } from './data-table';
 
 /** Number of bins for histogram. */
 const NUM_BINS = 16;

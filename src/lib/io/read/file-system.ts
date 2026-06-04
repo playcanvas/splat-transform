@@ -12,7 +12,7 @@ abstract class ReadStream {
     /**
      * Total bytes read from this stream so far.
      */
-    bytesRead: number = 0;
+    bytesRead = 0;
 
     /**
      * @param expectedSize - Optional size hint for buffer pre-allocation
@@ -67,7 +67,7 @@ abstract class ReadStream {
  * Interface representing a readable data source.
  * Provides size information and creates streams for reading.
  */
-interface ReadSource {
+type ReadSource = {
     /**
      * The size of the source in bytes, or undefined if unknown.
      * For compressed sources (e.g., gzipped HTTP), this may be approximate.
@@ -106,7 +106,7 @@ type ProgressCallback = (bytesLoaded: number, totalBytes: number | undefined) =>
  * Interface for a file system that can create readable sources.
  * Implementations exist for various backends (URL, Node FS, Zip, Memory).
  */
-interface ReadFileSystem {
+type ReadFileSystem = {
     /**
      * Create a readable source for the given path/identifier.
      * @param filename - Path or identifier for the resource

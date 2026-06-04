@@ -1,3 +1,5 @@
+import type {
+    GraphicsDevice} from 'playcanvas';
 import {
     BUFFERUSAGE_COPY_DST,
     BUFFERUSAGE_COPY_SRC,
@@ -8,12 +10,13 @@ import {
     BindStorageBufferFormat,
     BindUniformBufferFormat,
     Compute,
-    GraphicsDevice,
     Shader,
     StorageBuffer,
     UniformBufferFormat,
     UniformFormat
 } from 'playcanvas';
+
+import type { SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
 
 import {
     clearWgsl,
@@ -22,7 +25,6 @@ import {
     dilateYZWgsl,
     extractWgsl
 } from './shaders/dilation';
-import type { SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
 
 /**
  * One double-buffered slot — the four `Compute` instances (X, Y, Z, clear)
@@ -30,7 +32,7 @@ import type { SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
  * dispatch on the same submit, plus the ping-pong storage buffers. Two
  * slots let the CPU prepare chunk N+1 while the GPU is busy with chunk N.
  */
-interface DilationSlot {
+type DilationSlot = {
     bufferA: StorageBuffer;
     bufferB: StorageBuffer;
     capacity: number;

@@ -3,13 +3,11 @@ import { basename, dirname, join, resolve } from 'node:path';
 import process, { exit } from 'node:process';
 import { parseArgs } from 'node:util';
 
-import { GraphicsDevice, Vec3 } from 'playcanvas';
+import type { GraphicsDevice} from 'playcanvas';
+import { Vec3 } from 'playcanvas';
 
-import { createDevice, enumerateAdapters } from './node-device';
-import { NodeFileSystem, NodeReadFileSystem } from './node-file-system';
 import {
     combine,
-    DataTable,
     fmtBytes,
     fmtCount,
     fmtTime,
@@ -23,19 +21,24 @@ import {
     TextRenderer,
     UrlReadFileSystem,
     version,
-    type ProcessAction,
-    type FilterFloaters,
-    type FilterCluster,
-    type Options as LibOptions,
-    type CollisionMeshShape,
-    type ReadFileSystem,
+    
+    
+    
+    
+    
+    
     logger
 } from '../lib';
+import type {
+    DataTable,ProcessAction, FilterFloaters, FilterCluster, Options as LibOptions, CollisionMeshShape, ReadFileSystem} from '../lib';
+
+import { createDevice, enumerateAdapters } from './node-device';
+import { NodeFileSystem, NodeReadFileSystem } from './node-file-system';
 
 /**
  * CLI-specific options extending library options.
  */
-interface CliOptions extends LibOptions {
+type CliOptions = {
     overwrite: boolean;
     help: boolean;
     version: boolean;
@@ -45,7 +48,7 @@ interface CliOptions extends LibOptions {
     noTty: boolean | undefined;
     listGpus: boolean;
     deviceIdx: number;  // -1 = auto, -2 = CPU, 0+ = GPU index
-}
+} & LibOptions
 
 const fileExists = async (filename: string) => {
     try {
@@ -186,7 +189,7 @@ const isCollisionMeshShape = (s: string) => /^(?:smooth|faces)$/i.test(s);
 // next argv token is consumed as the value; when omitted (or rejected) the
 // option is normalized to an empty `--option=` form.
 type OptionalValueValidator = (next: string) => boolean;
-const optionalValueOptions: Map<string, OptionalValueValidator> = new Map([
+const optionalValueOptions = new Map<string, OptionalValueValidator>([
     ['--filter-cluster', isNumericValue],
     ['-D', isNumericValue],
     ['--filter-floaters', isNumericValue],

@@ -1,16 +1,18 @@
 import { Vec3 } from 'playcanvas';
 
+import type { Bounds } from '../data-table';
+import type { GpuDilation } from '../gpu';
+import { logger } from '../utils';
+
 import { gpuDilate3 } from './dilation';
 import type { NavSeed, NavSimplifyResult } from './fill-exterior';
 import { twoLevelBFS } from './flood-fill';
 import { computeEmptyGrid } from './grid-ops';
-import type { Bounds } from '../data-table';
-import type { GpuDilation } from '../gpu';
 import {
     BLOCK_EMPTY,
     SparseVoxelGrid
 } from './sparse-voxel-grid';
-import { logger } from '../utils';
+
 
 const carve = async (
     gridA: SparseVoxelGrid,

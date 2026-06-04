@@ -1,4 +1,5 @@
-import { GraphicsDevice, WebgpuGraphicsDevice } from 'playcanvas';
+import type { GraphicsDevice} from 'playcanvas';
+import { WebgpuGraphicsDevice } from 'playcanvas';
 import { create, globals } from 'webgpu';
 
 import { logger } from '../lib';
@@ -69,7 +70,7 @@ const getDawnAdapterNames = async (): Promise<string[]> => {
 };
 
 // Cache enumerated adapters so we don't query Dawn multiple times
-let cachedAdapters: Array<{ index: number; name: string }> | null = null;
+let cachedAdapters: { index: number; name: string }[] | null = null;
 
 const enumerateAdapters = async () => {
     if (cachedAdapters) {

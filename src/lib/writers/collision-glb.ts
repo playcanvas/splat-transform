@@ -1,8 +1,9 @@
 import type { Bounds } from '../data-table';
-import { coplanarMerge, marchingCubes, voxelFaces, type Mesh } from '../mesh';
+import { coplanarMerge, marchingCubes, voxelFaces  } from '../mesh';
+import type {Mesh} from '../mesh';
 import type { CollisionMeshShape } from '../types';
 import { fmtCount, logger } from '../utils';
-import { SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
+import type { SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
 
 /**
  * Build a minimal GLB (glTF 2.0 binary) file containing a single triangle mesh.

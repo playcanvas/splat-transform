@@ -3,13 +3,14 @@ import { Vec3 } from 'playcanvas';
 import type { Bounds } from '../data-table';
 import { logger } from '../utils';
 import { popcount, xyzToMorton } from '../voxel/morton';
+import type {
+    SparseVoxelGrid} from '../voxel/sparse-voxel-grid';
 import {
     BLOCK_EMPTY,
     BLOCK_MIXED,
     BLOCK_SOLID,
     BLOCKS_PER_WORD,
     EVEN_BITS,
-    SparseVoxelGrid,
     TYPE_MASK,
     readBlockType,
     writeBlockType
@@ -41,7 +42,7 @@ const DENSE_SOLID_STREAM_THRESHOLD = 8_000_000;
 /**
  * Sparse voxel octree using Laine-Karras node format.
  */
-interface SparseOctree {
+type SparseOctree = {
     /** Grid bounds aligned to 4x4x4 block boundaries */
     gridBounds: Bounds;
 
@@ -70,7 +71,7 @@ interface SparseOctree {
     leafData: Uint32Array;
 }
 
-interface BuildSparseOctreeOptions {
+type BuildSparseOctreeOptions = {
     /** Release the input grid's backing storage after the octree has copied the data it needs. */
     consumeGrid?: boolean;
     /** Force dense-mip construction; intended for tests and benchmarks. */
@@ -96,7 +97,7 @@ const enum BlockType {
  * (in `solidStream` + `mixedStream` + `mixedMasks`), so every entry stored
  * here is an interior node and `childMasks` is always non-null.
  */
-interface LevelData {
+type LevelData = {
     /** Sorted Morton codes for nodes at this level */
     mortons: number[];
     /** Block type for each node (Solid or Mixed) */
@@ -109,14 +110,14 @@ interface LevelData {
  * Interior nodes waiting for child emission during BFS flattening.
  * Children are written immediately, so this wave never contains leaves.
  */
-interface InteriorWave {
+type InteriorWave = {
     pos: Uint32Array;
     li: Uint32Array;
     ii: Uint32Array;
     length: number;
 }
 
-interface DenseLevel {
+type DenseLevel = {
     types: Uint32Array;
     nbx: number;
     nby: number;
@@ -415,7 +416,7 @@ function buildDenseTypeLevels(grid: SparseVoxelGrid, maxDepth: number): DenseLev
  * @returns Sparse octree structure.
  */
 function flattenDenseLevels(
-    levels: Array<DenseLevel | null>,
+    levels: (DenseLevel | null)[],
     grid: SparseVoxelGrid,
     gridBounds: Bounds,
     sceneBounds: Bounds,

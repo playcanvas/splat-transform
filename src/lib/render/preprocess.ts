@@ -1,6 +1,8 @@
-import { DataTable, getSHBands } from '../data-table';
-import { type CameraBasis, type Projection } from './camera';
+import type { DataTable} from '../data-table';
+import { getSHBands } from '../data-table';
 import { RadixSortScratch, radixSortIndicesByFloat } from '../spatial/radix-sort';
+
+import type {CameraBasis, Projection} from './camera';
 
 /**
  * Number of SH coefficients per color channel for the scene's SH band

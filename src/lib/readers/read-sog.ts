@@ -1,7 +1,10 @@
 import { Column, DataTable } from '../data-table';
-import { basename, dirname, join, type ReadFileSystem, readFile } from '../io/read';
+import { basename, dirname, join,  readFile } from '../io/read';
+import type {ReadFileSystem} from '../io/read';
 import { logger, Transform, WebPCodec } from '../utils';
-import { readSogV1, type MetaV1 } from './read-sog-v1';
+
+import { readSogV1  } from './read-sog-v1';
+import type {MetaV1} from './read-sog-v1';
 
 // V2 (current) SOG meta layout - codebook-based quantization for scales /
 // sh0 / shN. Legacy V1 uses a different per-channel mins/maxs scheme and is

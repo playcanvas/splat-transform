@@ -1,17 +1,18 @@
 import type { Bounds } from '../data-table';
+import type {
+    SparseVoxelGrid} from '../voxel/sparse-voxel-grid';
 import {
     BLOCK_EMPTY,
     BLOCK_SOLID,
     BLOCKS_PER_WORD,
     EVEN_BITS,
-    SparseVoxelGrid,
     readBlockType
 } from '../voxel/sparse-voxel-grid';
 
 /**
  * A simple triangle mesh with positions and indices.
  */
-interface Mesh {
+type Mesh = {
     /** Vertex positions (3 floats per vertex) */
     positions: Float32Array;
 
@@ -27,7 +28,7 @@ type MarchingCubesMesh = Mesh;
 /**
  * Options for marching cubes extraction.
  */
-interface MarchingCubesOptions {
+type MarchingCubesOptions = {
     /**
      * Pre-merge exact full-face cells on flat axis-aligned regions before
      * creating the mesh. Ambiguous and bevel cases still use normal marching
@@ -1288,10 +1289,10 @@ function marchingCubes(
 
                         if (collectFlatFace(cubeIndex, vx, vy, vz)) continue;
 
-                        const edges = EDGE_TABLE[cubeIndex]; // eslint-disable-line no-use-before-define
+                        const edges = EDGE_TABLE[cubeIndex];  
                         if (edges === 0) continue;
 
-                        const triRow = TRI_TABLE[cubeIndex]; // eslint-disable-line no-use-before-define
+                        const triRow = TRI_TABLE[cubeIndex];  
                         const triLen = triRow.length;
                         const usedMask = collectDiagFaces(triRow, vx, vy, vz);
                         let neededEdges = 0;

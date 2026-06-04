@@ -1,5 +1,6 @@
-import type { PlyData } from './read-ply';
 import { Column, DataTable } from '../data-table';
+
+import type { PlyData } from './read-ply';
 
 // Size of a chunk in the compressed PLY format (number of splats per chunk)
 const CHUNK_SIZE = 256;

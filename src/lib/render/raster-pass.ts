@@ -1,6 +1,11 @@
-import { GraphicsDevice } from 'playcanvas';
+import type { GraphicsDevice } from 'playcanvas';
 
-import { type Projection, type RenderCamera, buildCameraBasis } from './camera';
+import type { DataTable } from '../data-table';
+import { GpuSplatRasterizer } from '../gpu';
+import { logger } from '../utils';
+
+import {   buildCameraBasis } from './camera';
+import type {Projection, RenderCamera} from './camera';
 import {
     AA_DILATION_COV,
     DISCRIMINANT_FLOOR,
@@ -18,9 +23,6 @@ import {
     sortCandidatesByDepth,
     splatInputStride
 } from './preprocess';
-import { DataTable } from '../data-table';
-import { GpuSplatRasterizer } from '../gpu';
-import { logger } from '../utils';
 
 /**
  * Max gaussians per GPU dispatch. Bounds per-render input/projection
@@ -53,7 +55,7 @@ const CHUNK_CAP = 200_000;
 const MAX_SUB_FRAME_TILES_X = Math.ceil(1920 / TILE_SIZE);  // 120
 const MAX_SUB_FRAME_TILES_Y = Math.ceil(1080 / TILE_SIZE);  // 68
 
-interface BackgroundRGBA {
+type BackgroundRGBA = {
     r: number;
     g: number;
     b: number;

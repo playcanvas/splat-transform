@@ -1,5 +1,5 @@
 import { Column, DataTable } from '../data-table';
-import { Param } from '../types';
+import type { Param } from '../types';
 
 type Generator = {
     count: number;

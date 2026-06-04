@@ -1,6 +1,7 @@
+import { logger } from '../utils';
+
 import { BlockMaskBuffer } from './block-mask-buffer';
 import { popcount } from './morton';
-import { logger } from '../utils';
 
 // ============================================================================
 // Edge mask constants for 4x4x4 voxel blocks

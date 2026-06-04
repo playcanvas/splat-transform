@@ -1,6 +1,6 @@
-import { DataTable } from '../data-table';
+import type { DataTable } from '../data-table';
 
-interface KdTreeNode {
+type KdTreeNode = {
     index: number;
     count: number;          // self + children indices
     left?: KdTreeNode;

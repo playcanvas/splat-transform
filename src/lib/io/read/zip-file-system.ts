@@ -1,4 +1,5 @@
-import { type ReadFileSystem, type ProgressCallback, type ReadSource, ReadStream } from './file-system';
+import {    ReadStream } from './file-system';
+import type {ReadFileSystem, ProgressCallback, ReadSource} from './file-system';
 
 /**
  * Metadata for a zip file entry.
@@ -41,9 +42,9 @@ class DeflateEntryReadStream extends ReadStream {
     private sourceStream: ReadStream;
     private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
     private buffer: Uint8Array | null = null;
-    private bufferOffset: number = 0;
-    private closed: boolean = false;
-    private initialized: boolean = false;
+    private bufferOffset = 0;
+    private closed = false;
+    private initialized = false;
 
     constructor(sourceStream: ReadStream, expectedSize: number) {
         super(expectedSize);
@@ -152,7 +153,7 @@ class ZipEntrySource implements ReadSource {
     private source: ReadSource;
     private entry: ZipEntry;
     private dataOffset: number;
-    private closed: boolean = false;
+    private closed = false;
 
     constructor(source: ReadSource, entry: ZipEntry, dataOffset: number) {
         this.source = source;
@@ -208,7 +209,7 @@ class ZipReadFileSystem implements ReadFileSystem {
     private source: ReadSource;
     private entries: Map<string, ZipEntry> | null = null;
     private parsePromise: Promise<Map<string, ZipEntry>> | null = null;
-    private closed: boolean = false;
+    private closed = false;
 
     constructor(source: ReadSource) {
         this.source = source;

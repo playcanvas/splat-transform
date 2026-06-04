@@ -1,12 +1,12 @@
-import { Vec3 } from 'playcanvas';
+import type { Vec3 } from 'playcanvas';
 
-import { DataTable, type TypedArray } from '../data-table';
+import type { DataTable, TypedArray } from '../data-table';
 import { quickselect } from '../utils';
 
 /**
  * Axis-aligned bounding box for BVH nodes.
  */
-interface BVHBounds {
+type BVHBounds = {
     minX: number;
     minY: number;
     minZ: number;
@@ -18,7 +18,7 @@ interface BVHBounds {
 /**
  * BVH node for Gaussian AABBs.
  */
-interface GaussianBVHNode {
+type GaussianBVHNode = {
     /** Number of Gaussians in this subtree */
     count: number;
 

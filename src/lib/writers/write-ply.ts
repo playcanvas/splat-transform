@@ -1,10 +1,11 @@
 import { basename } from 'pathe';
 
-import { logWrittenFile } from './utils';
 import { convertToSpace } from '../data-table';
-import { type FileSystem } from '../io/write';
-import { PlyData } from '../readers';
+import type {FileSystem} from '../io/write';
+import type { PlyData } from '../readers';
 import { logger, Transform } from '../utils';
+
+import { logWrittenFile } from './utils';
 
 const columnTypeToPlyType = (type: string): string => {
     switch (type) {

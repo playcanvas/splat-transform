@@ -1,13 +1,15 @@
 import type { Bounds } from '../data-table';
-import type { Mesh } from './marching-cubes';
+import type {
+    SparseVoxelGrid} from '../voxel/sparse-voxel-grid';
 import {
     BLOCK_EMPTY,
     BLOCK_SOLID,
     BLOCKS_PER_WORD,
     EVEN_BITS,
-    SparseVoxelGrid,
     readBlockType
 } from '../voxel/sparse-voxel-grid';
+
+import type { Mesh } from './marching-cubes';
 
 const HASH_MUL = 0x9E3779B9;
 

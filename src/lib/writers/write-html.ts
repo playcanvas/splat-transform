@@ -1,12 +1,14 @@
 import { html, css, js } from '@playcanvas/supersplat-viewer';
 import { basename, dirname, join } from 'pathe';
 
-import { logWrittenFile } from './utils';
-import { writeSog } from './write-sog';
-import { DataTable } from '../data-table';
-import { type FileSystem, MemoryFileSystem, writeFile } from '../io/write';
+import type { DataTable } from '../data-table';
+import {  MemoryFileSystem, writeFile } from '../io/write';
+import type {FileSystem} from '../io/write';
 import type { DeviceCreator } from '../types';
 import { logger, toBase64 } from '../utils';
+
+import { logWrittenFile } from './utils';
+import { writeSog } from './write-sog';
 
 const defaultSettings = {
     version: 2,

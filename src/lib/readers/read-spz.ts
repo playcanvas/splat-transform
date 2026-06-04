@@ -1,5 +1,5 @@
-import { DataTable } from '../data-table';
-import { ReadSource } from '../io/read';
+import type { DataTable } from '../data-table';
+import type { ReadSource } from '../io/read';
 import { gaussianCloudToDataTable, getSpzModule } from '../spz-module';
 
 /**

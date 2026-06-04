@@ -1,4 +1,5 @@
-import { type ReadFileSystem, type ProgressCallback, type ReadSource, ReadStream } from './file-system';
+import {    ReadStream } from './file-system';
+import type {ReadFileSystem, ProgressCallback, ReadSource} from './file-system';
 
 /**
  * ReadStream implementation for reading from memory buffers.
@@ -38,14 +39,14 @@ class MemoryReadSource implements ReadSource {
     readonly seekable: boolean = true;
 
     private data: Uint8Array;
-    private closed: boolean = false;
+    private closed = false;
 
     constructor(data: Uint8Array | ArrayBuffer) {
         this.data = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
         this.size = this.data.length;
     }
 
-    read(start: number = 0, end: number = this.size): ReadStream {
+    read(start = 0, end: number = this.size): ReadStream {
         if (this.closed) {
             throw new Error('Source has been closed');
         }
@@ -67,7 +68,7 @@ class MemoryReadSource implements ReadSource {
  * Useful for testing or when data is already in memory.
  */
 class MemoryReadFileSystem implements ReadFileSystem {
-    private buffers: Map<string, Uint8Array> = new Map();
+    private buffers = new Map<string, Uint8Array>();
 
     /**
      * Store a named buffer.

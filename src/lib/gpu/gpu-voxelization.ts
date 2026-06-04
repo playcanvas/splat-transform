@@ -1,3 +1,5 @@
+import type {
+    GraphicsDevice} from 'playcanvas';
 import {
     BUFFERUSAGE_COPY_DST,
     BUFFERUSAGE_COPY_SRC,
@@ -9,14 +11,13 @@ import {
     BindStorageBufferFormat,
     BindUniformBufferFormat,
     Compute,
-    GraphicsDevice,
     Shader,
     StorageBuffer,
     UniformBufferFormat,
     UniformFormat
 } from 'playcanvas';
 
-import { DataTable } from '../data-table';
+import type { DataTable } from '../data-table';
 
 /**
  * WGSL shader for multi-batch voxelization of 4x4x4 blocks.
@@ -213,7 +214,7 @@ fn main(
 /**
  * Specification for a single batch in a multi-batch dispatch.
  */
-interface BatchSpec {
+type BatchSpec = {
     /** Offset into the concatenated index array */
     indexOffset: number;
 
@@ -236,7 +237,7 @@ interface BatchSpec {
 /**
  * Result of a multi-batch voxelization dispatch.
  */
-interface MultiBatchResult {
+type MultiBatchResult = {
     /**
      * Raw u32 masks for all batches.
      * For batch i, block j: masks[(i * maxBlocksPerBatch + j) * 2] = low, [+1] = high
@@ -252,7 +253,7 @@ interface MultiBatchResult {
  * Two slots allow double-buffered pipelining: while the GPU executes
  * a dispatch on slot A, the CPU can prepare data for slot B.
  */
-interface DispatchSlot {
+type DispatchSlot = {
     indexBuffer: StorageBuffer;
     resultsBuffer: StorageBuffer;
     batchInfoBuffer: StorageBuffer;
@@ -282,7 +283,7 @@ class GpuVoxelization {
     // Double-buffered dispatch slots
     private slots: DispatchSlot[];
 
-    private totalGaussians: number = 0;
+    private totalGaussians = 0;
 
     /** Floats per Gaussian in the interleaved buffer (16 for alignment) */
     private static readonly FLOATS_PER_GAUSSIAN = 16;

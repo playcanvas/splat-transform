@@ -1,9 +1,11 @@
 import { basename } from 'pathe';
 
-import { logWrittenFile } from './utils';
-import { type FileSystem, writeFile } from '../io/write';
+import {  writeFile } from '../io/write';
+import type {FileSystem} from '../io/write';
 import { dataTableToGaussianCloud, getSpzModule, makeSpzPackOptions } from '../spz-module';
 import { logger } from '../utils';
+
+import { logWrittenFile } from './utils';
 
 type WriteSpzOptions = {
     filename: string;

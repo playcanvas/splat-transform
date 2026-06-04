@@ -1,5 +1,5 @@
 // defines the interface for a stream writer class
-interface Writer {
+type Writer = {
     // total bytes successfully passed to write() so far
     readonly bytesWritten: number;
 
@@ -10,7 +10,7 @@ interface Writer {
     close(): void | Promise<void>;
 }
 
-interface FileSystem {
+type FileSystem = {
     // create a writer for the given filename
     createWriter(filename: string): Writer | Promise<Writer>;
 

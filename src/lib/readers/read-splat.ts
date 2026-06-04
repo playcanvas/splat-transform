@@ -1,5 +1,5 @@
 import { Column, DataTable } from '../data-table';
-import { ReadSource } from '../io/read';
+import type { ReadSource } from '../io/read';
 import { logger, Transform } from '../utils';
 
 const TICK_BATCH = 1 << 16;

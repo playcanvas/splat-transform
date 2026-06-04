@@ -1,4 +1,4 @@
-import { DataTable } from '../data-table';
+import type { DataTable } from '../data-table';
 import { quickselect } from '../utils';
 
 class Aabb {
@@ -49,7 +49,7 @@ class Aabb {
     }
 }
 
-interface BTreeNode {
+type BTreeNode = {
     count: number;
     aabb: Aabb;
     indices?: Uint32Array;       // only for leaf nodes

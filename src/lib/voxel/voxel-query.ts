@@ -1,14 +1,16 @@
-import { BlockMaskBuffer } from './block-mask-buffer';
 import {
     computeGaussianInverse,
-    evaluateGaussianAt,
-    type GaussianColumns
+    evaluateGaussianAt
+    
 } from '../data-table';
+import type {GaussianColumns} from '../data-table';
+
+import type { BlockMaskBuffer } from './block-mask-buffer';
 
 /**
  * Pre-computed lookup structures for efficient voxel block queries.
  */
-interface BlockLookup {
+type BlockLookup = {
     solidSet: Set<number>;
     mixedMap: Map<number, number>;
     masks: Uint32Array;
@@ -17,7 +19,7 @@ interface BlockLookup {
 /**
  * Grid parameters for block-based voxel queries.
  */
-interface BlockGridParams {
+type BlockGridParams = {
     gridMinX: number;
     gridMinY: number;
     gridMinZ: number;
@@ -132,7 +134,7 @@ const gaussianContributesToVoxels = (
     lookup: BlockLookup,
     minContribution: number,
     blockFilter?: Set<number>,
-    minHits: number = 1
+    minHits = 1
 ): boolean => {
     const px = columns.posX[gaussianIdx];
     const py = columns.posY[gaussianIdx];

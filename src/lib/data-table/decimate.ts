@@ -1,5 +1,5 @@
-import { Column, DataTable } from './data-table';
-import { type EdgeCostCache, GpuEdgeCost } from '../gpu/gpu-edge-cost';
+import {  GpuEdgeCost } from '../gpu/gpu-edge-cost';
+import type {EdgeCostCache} from '../gpu/gpu-edge-cost';
 import { GpuKnn } from '../gpu/gpu-knn';
 import { KdTree } from '../spatial/kd-tree';
 import {
@@ -7,8 +7,10 @@ import {
     RadixSortScratch,
     radixSortIndicesByFloat
 } from '../spatial/radix-sort';
-import { type DeviceCreator } from '../types';
+import type {DeviceCreator} from '../types';
 import { logger } from '../utils';
+
+import { Column, DataTable } from './data-table';
 
 const LOG2PI = Math.log(2 * Math.PI);
 const KNN_K = 16;
@@ -228,7 +230,7 @@ const ellipsoidArea = (sx: number, sy: number, sz: number): number => {
 // precision is fine. `Rt` is dropped (derivable from `R` via index swap at
 // call sites); `invdiag` is kept since it amortises ~6 divisions per edge
 // across ~k edges per splat.
-interface SplatCache {
+type SplatCache = {
     R: Float32Array;       // row-major 3×3 rotation per splat
     v: Float32Array;       // variances (scale^2 + eps) per axis
     invdiag: Float32Array; // 1 / v per axis, precomputed
@@ -303,7 +305,7 @@ const buildPerSplatCache = (
 // once per `simplifyGaussians` invocation (not per call) so concurrent
 // invocations don't share state. Per-call allocation at ~9M merges/iter
 // would burn ~5 GB of throwaway garbage; per-decimate allocation is ~600 B.
-interface MergeScratch {
+type MergeScratch = {
     sigm: Float64Array;  // computeEdgeCost: merged covariance
     sigI: Float64Array;  // momentMatch: input i covariance
     sigJ: Float64Array;  // momentMatch: input j covariance

@@ -1,13 +1,16 @@
 import { basename, dirname, resolve } from 'pathe';
 import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
-import { logWrittenFile } from './utils';
-import { writeSog } from './write-sog.js';
-import { type TypedArray, DataTable, sortMortonOrder, convertToSpace } from '../data-table';
-import { type FileSystem } from '../io/write';
-import { BTreeNode, BTree } from '../spatial';
+import {  DataTable, sortMortonOrder, convertToSpace } from '../data-table';
+import type {TypedArray} from '../data-table';
+import type {FileSystem} from '../io/write';
+import type { BTreeNode} from '../spatial';
+import { BTree } from '../spatial';
 import type { DeviceCreator } from '../types';
 import { logger, Transform } from '../utils';
+
+import { logWrittenFile } from './utils';
+import { writeSog } from './write-sog.js';
 
 type Aabb = {
     min: number[],
@@ -23,7 +26,7 @@ type MetaLod = {
 type MetaNode = {
     bound: Aabb;
     children?: MetaNode[];
-    lods?: { [key: number]: MetaLod };
+    lods?: Record<number, MetaLod>;
 };
 
 type LodMeta = {
@@ -189,7 +192,7 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
 
     // map of lod -> fileBin[]
     // fileBin: number[][]
-    const lodFiles: Map<number, number[][][]> = new Map();
+    const lodFiles = new Map<number, number[][][]>();
     const lodColumn = dataTable.getColumnByName('lod')?.data;
     const filenames: string[] = [];
     let lodLevels = 0;
@@ -214,7 +217,7 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
             return { bound, children };
         }
 
-        const lods: { [key: number]: MetaLod } = { };
+        const lods: Record<number, MetaLod> = { };
         const bins = binIndices(node, lodColumn);
 
         for (const [lodValue, indices] of bins) {

@@ -1,3 +1,5 @@
+import type {
+    GraphicsDevice} from 'playcanvas';
 import {
     BUFFERUSAGE_COPY_DST,
     BUFFERUSAGE_COPY_SRC,
@@ -9,7 +11,6 @@ import {
     BindStorageBufferFormat,
     BindUniformBufferFormat,
     Compute,
-    GraphicsDevice,
     Shader,
     StorageBuffer,
     UniformBufferFormat,
@@ -224,7 +225,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
  * Per-splat cache for the edge cost kernel. Packed layouts to stay within
  * the WebGPU per-stage storage-buffer limit (max 10).
  */
-interface EdgeCostCache {
+type EdgeCostCache = {
     /** N positions interleaved xyz (length 3N). */
     positions: Float32Array;
     /** Row-major 3×3 rotation per splat (length 9N). */

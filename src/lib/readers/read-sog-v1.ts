@@ -1,5 +1,6 @@
 import { Column, DataTable } from '../data-table';
-import { join, type ReadFileSystem } from '../io/read';
+import { join  } from '../io/read';
+import type {ReadFileSystem} from '../io/read';
 import { logger, Transform, WebPCodec } from '../utils';
 
 // V1 (legacy) SOG meta layout. Quantization is a per-channel linear lerp

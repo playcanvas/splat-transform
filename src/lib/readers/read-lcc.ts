@@ -1,8 +1,9 @@
 import { Vec3 } from 'playcanvas';
 
 import { Column, DataTable } from '../data-table';
-import { dirname, join, ReadFileSystem, ReadSource, readFile } from '../io/read';
-import { Options } from '../types';
+import type { ReadFileSystem, ReadSource} from '../io/read';
+import { dirname, join, readFile } from '../io/read';
+import type { Options } from '../types';
 import { logger, Transform } from '../utils';
 
 const kSH_C0 = 0.28209479177387814;
@@ -23,7 +24,7 @@ type LccLod = {
 type LccUnitInfo = {
     x: number;          // x index
     y: number;          // y index
-    lods: Array<LccLod>;    //  lods
+    lods: LccLod[];    //  lods
 }
 
 // Used to decompress scale in data.bin and sh in shcoef.bin
@@ -40,7 +41,7 @@ type CompressInfo = {
 
 // parse .lcc files, such as meta.lcc
 const parseMeta = (obj: any): CompressInfo => {
-    const attributes: { [key: string]: any } = {};
+    const attributes: Record<string, any> = {};
     obj.attributes.forEach((attr: any) => {
         attributes[attr.name] = attr;
     });
@@ -57,11 +58,11 @@ const parseMeta = (obj: any): CompressInfo => {
     return { scaleMin, scaleMax, shMin, shMax, envScaleMin, envScaleMax, envShMin, envShMax };
 };
 
-const parseIndexBin = (raw: ArrayBuffer, meta: any): Array<LccUnitInfo> => {
+const parseIndexBin = (raw: ArrayBuffer, meta: any): LccUnitInfo[] => {
     let offset = 0;
 
     const buff = new DataView(raw);
-    const infos: Array<LccUnitInfo> = [];
+    const infos: LccUnitInfo[] = [];
     while (true) {
         if (offset > buff.byteLength - 1) {
             break;
@@ -72,7 +73,7 @@ const parseIndexBin = (raw: ArrayBuffer, meta: any): Array<LccUnitInfo> => {
         const y = buff.getInt16(offset, true);
         offset += 2;
 
-        const lods: Array<LccLod> = [];
+        const lods: LccLod[] = [];
         for (let i = 0; i < meta.totalLevel; i++) {
             const ldPoints = buff.getInt32(offset, true);
             offset += 4;

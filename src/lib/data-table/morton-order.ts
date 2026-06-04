@@ -1,5 +1,6 @@
-import { DataTable } from './data-table';
 import { logger } from '../utils';
+
+import type { DataTable } from './data-table';
 
 // sort the provided indices into morton order
 const sortMortonOrder = (dataTable: DataTable, indices: Uint32Array): void => {

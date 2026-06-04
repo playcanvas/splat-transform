@@ -1,3 +1,6 @@
+import { GpuDilation } from '../gpu';
+import { logger } from '../utils';
+
 import {
     BLOCK_EMPTY,
     BLOCK_SOLID,
@@ -5,8 +8,6 @@ import {
     SparseVoxelGrid,
     readBlockType
 } from './sparse-voxel-grid';
-import { GpuDilation } from '../gpu';
-import { logger } from '../utils';
 
 // ============================================================================
 // GPU Dilation
@@ -276,7 +277,7 @@ async function gpuDilate3(
     const numChunksZ = Math.ceil(src.nz / innerStep);
     const totalChunks = numChunksX * numChunksY * numChunksZ;
 
-    interface InFlight {
+    type InFlight = {
         typesPromise: Promise<Uint32Array>;
         masksPromise: Promise<Uint32Array>;
         cx: number; cy: number; cz: number;

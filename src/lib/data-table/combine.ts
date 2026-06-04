@@ -1,6 +1,9 @@
-import { Column, DataTable, TypedArray } from './data-table';
-import { convertToSpace } from './transform';
 import { logger, Transform } from '../utils';
+
+import type { TypedArray } from './data-table';
+import { Column, DataTable } from './data-table';
+import { convertToSpace } from './transform';
+
 
 /**
  * Combines multiple DataTables into a single DataTable.

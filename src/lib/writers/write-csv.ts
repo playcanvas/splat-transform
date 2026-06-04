@@ -1,9 +1,10 @@
 import { basename } from 'pathe';
 
-import { logWrittenFile } from './utils';
-import { DataTable } from '../data-table';
-import { type FileSystem } from '../io/write';
+import type { DataTable } from '../data-table';
+import type {FileSystem} from '../io/write';
 import { logger } from '../utils';
+
+import { logWrittenFile } from './utils';
 
 type WriteCSVOptions = {
     filename: string;

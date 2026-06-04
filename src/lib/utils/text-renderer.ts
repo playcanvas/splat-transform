@@ -1,10 +1,11 @@
 import { fmtBytes, fmtTime } from './fmt';
-import { logger, verbosityRank, type LogEvent, type Renderer } from './logger';
+import { logger, verbosityRank   } from './logger';
+import type {LogEvent, Renderer} from './logger';
 
 /**
  * Output streams and optional memory-usage probe for {@link TextRenderer}.
  */
-interface TextRendererOptions {
+type TextRendererOptions = {
     /**
      * Receives all status chunks (scopes, bars, messages). May contain
      * partial-line writes (e.g. progress-bar `#` ticks). For TTY output,

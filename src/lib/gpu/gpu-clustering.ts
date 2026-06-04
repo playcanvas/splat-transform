@@ -1,3 +1,6 @@
+import type {
+    GraphicsDevice
+} from 'playcanvas';
 import {
     BUFFERUSAGE_COPY_DST,
     BUFFERUSAGE_COPY_SRC,
@@ -12,11 +15,10 @@ import {
     Shader,
     StorageBuffer,
     UniformBufferFormat,
-    UniformFormat,
-    GraphicsDevice
+    UniformFormat
 } from 'playcanvas';
 
-import { DataTable } from '../data-table';
+import type { DataTable } from '../data-table';
 
 const clusterWgsl = (numColumns: number, useF16: boolean) => {
     const floatType = useF16 ? 'f16' : 'f32';

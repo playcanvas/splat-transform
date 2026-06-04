@@ -1,10 +1,12 @@
 import { basename } from 'pathe';
 
-import { logWrittenFile } from './utils';
-import { DataTable, convertToSpace, getSHBands, shRestNames } from '../data-table';
-import { type FileSystem } from '../io/write';
+import type { DataTable} from '../data-table';
+import { convertToSpace, getSHBands, shRestNames } from '../data-table';
+import type {FileSystem} from '../io/write';
 import { logger, Transform, sigmoid } from '../utils';
 import { version } from '../version';
+
+import { logWrittenFile } from './utils';
 
 const SH_C0 = 0.2820947917738781;
 

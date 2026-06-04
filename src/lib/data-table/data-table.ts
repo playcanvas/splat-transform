@@ -54,9 +54,7 @@ class Column {
  * A row object mapping column names to numeric values.
  * @ignore
  */
-type Row = {
-    [colName: string]: number;
-};
+type Row = Record<string, number>;
 
 /**
  * A table of columnar data representing Gaussian splat properties.

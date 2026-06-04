@@ -1,18 +1,20 @@
+import type { DataTable } from '../data-table';
+import type { DeviceCreator } from '../types';
+import { fmtCount, fmtDistance, logger } from '../utils';
+
 import {
     setupVoxelFilter,
     buildGaussianColumns,
-    buildBlockGridParams,
-    type VoxelFilterContext
+    buildBlockGridParams
+    
 } from './filter-pipeline';
+import type {VoxelFilterContext} from './filter-pipeline';
 import {
     buildBlockLookup,
     isCenterInOccupiedVoxel,
     gaussianContributesToVoxels
 } from './voxel-query';
 import { alignGridBounds, voxelizeToBuffer } from './voxelize';
-import { DataTable } from '../data-table';
-import type { DeviceCreator } from '../types';
-import { fmtCount, fmtDistance, logger } from '../utils';
 
 /**
  * Remove Gaussians that don't meaningfully contribute to any solid voxel.
@@ -32,8 +34,8 @@ import { fmtCount, fmtDistance, logger } from '../utils';
 const filterFloaters = async (
     dataTable: DataTable,
     createDevice: DeviceCreator,
-    voxelResolution: number = 0.05,
-    opacityCutoff: number = 0.1,
+    voxelResolution = 0.05,
+    opacityCutoff = 0.1,
     minContribution: number = 1 / 255
 ): Promise<DataTable> => {
     if (!Number.isFinite(voxelResolution) || voxelResolution <= 0) {

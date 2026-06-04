@@ -1,12 +1,17 @@
 import { Vec3 } from 'playcanvas';
 
-import { BlockMaskBuffer } from './block-mask-buffer';
+import type { DataTable } from '../data-table';
+import type { DeviceCreator } from '../types';
+import { fmtCount, fmtDistance, logger } from '../utils';
+
+import type { BlockMaskBuffer } from './block-mask-buffer';
 import {
     setupVoxelFilter,
     buildGaussianColumns,
-    buildBlockGridParams,
-    type VoxelFilterContext
+    buildBlockGridParams
+    
 } from './filter-pipeline';
+import type {VoxelFilterContext} from './filter-pipeline';
 import { twoLevelBFS } from './flood-fill';
 import {
     BLOCK_EMPTY,
@@ -22,9 +27,6 @@ import {
     gaussianContributesToVoxels
 } from './voxel-query';
 import { alignGridBounds, voxelizeToBuffer } from './voxelize';
-import { DataTable } from '../data-table';
-import type { DeviceCreator } from '../types';
-import { fmtCount, fmtDistance, logger } from '../utils';
 
 /**
  * Build an inverted SparseVoxelGrid from a BlockMaskBuffer for flood-filling
@@ -156,10 +158,10 @@ const findClusterVoxelFlood = (
 const filterCluster = async (
     dataTable: DataTable,
     createDevice: DeviceCreator,
-    voxelResolution: number = 1.0,
+    voxelResolution = 1.0,
     seed: Vec3 = Vec3.ZERO,
-    opacityCutoff: number = 0.999,
-    minContribution: number = 0.1
+    opacityCutoff = 0.999,
+    minContribution = 0.1
 ): Promise<DataTable> => {
     if (!Number.isFinite(voxelResolution) || voxelResolution <= 0) {
         throw new Error(`filterCluster: voxelResolution must be a positive finite number, got ${voxelResolution}`);

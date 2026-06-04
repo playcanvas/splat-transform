@@ -1,7 +1,8 @@
-import { DataTable } from './data-table';
-import { ReadFileSystem, ZipReadFileSystem } from './io/read';
+import type { DataTable } from './data-table';
+import type { ReadFileSystem} from './io/read';
+import { ZipReadFileSystem } from './io/read';
 import { readKsplat, readLcc, readMjs, readPly, readSog, readSplat, readSpz } from './readers';
-import { Options, Param } from './types';
+import type { Options, Param } from './types';
 
 /**
  * Supported input file formats for Gaussian splat data.

@@ -1,11 +1,11 @@
 import { Column, DataTable } from '../data-table';
-import { ReadSource } from '../io/read';
+import type { ReadSource } from '../io/read';
 import { logger, Transform } from '../utils';
 
 const TICK_BATCH = 1 << 16;
 
 // Format configuration for different compression modes
-interface CompressionConfig {
+type CompressionConfig = {
     centerBytes: number;
     scaleBytes: number;
     rotationBytes: number;

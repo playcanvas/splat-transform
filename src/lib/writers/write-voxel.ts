@@ -1,25 +1,30 @@
 import { basename } from 'pathe';
 import { Vec3 } from 'playcanvas';
 
-import { buildCollisionMesh } from './collision-glb';
-import { logWrittenFile } from './utils';
-import { Column, DataTable, computeGaussianExtents, computeWriteTransform, transformColumns, type Bounds } from '../data-table';
+import { Column, DataTable, computeGaussianExtents, computeWriteTransform, transformColumns  } from '../data-table';
+import type {Bounds} from '../data-table';
 import { GpuDilation, GpuVoxelization } from '../gpu';
-import { type FileSystem, writeFile } from '../io/write';
+import {  writeFile } from '../io/write';
+import type {FileSystem} from '../io/write';
 import { GaussianBVH } from '../spatial';
 import type { CollisionMeshShape, DeviceCreator } from '../types';
 import { fmtCount, logger, Transform } from '../utils';
-import { buildSparseOctree, type SparseOctree } from './sparse-octree';
 import {
     filterAndFillBlocks,
     alignGridBounds,
     carve,
     fillExterior,
     fillFloor,
-    type NavSeed,
+    
     voxelizeToBuffer
 } from '../voxel';
+import type {NavSeed} from '../voxel';
 import { SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
+
+import { buildCollisionMesh } from './collision-glb';
+import { buildSparseOctree  } from './sparse-octree';
+import type {SparseOctree} from './sparse-octree';
+import { logWrittenFile } from './utils';
 
 /**
  * Options for writing a voxel octree file.
@@ -62,7 +67,7 @@ type WriteVoxelOptions = {
 /**
  * Metadata for a voxel octree file.
  */
-interface VoxelMetadata {
+type VoxelMetadata = {
     /** File format version */
     version: string;
 
