@@ -1,5 +1,5 @@
 import { Column, DataTable } from './data-table';
-import { type EdgeCostCache, GpuEdgeCost } from '../gpu/gpu-edge-cost';
+import { APP_CHUNK, type EdgeCostCache, GpuEdgeCost } from '../gpu/gpu-edge-cost';
 import { GpuKnn } from '../gpu/gpu-knn';
 import { KdTree } from '../spatial/kd-tree';
 import {
@@ -881,7 +881,6 @@ const simplifyGaussians = async (
                 const costSub = logger.group('Computing edge costs (GPU)');
 
                 const C = appData.length;
-                const APP_CHUNK = 16;
                 const numChunks = Math.ceil(C / APP_CHUNK);
 
                 const posScalars = new Float32Array(n * 8);
@@ -897,10 +896,11 @@ const simplifyGaussians = async (
                     posScalars[o + 7] = cache.v[s * 3 + 2];
                 }
 
-                // Pack appearance into chunks of ≤16 columns. Each chunk's
-                // stride is its live width (only the final chunk may be < 16),
-                // so no padding is stored or uploaded. The width formula must
-                // match the strides baked into the kernel in GpuEdgeCost.
+                // Pack appearance into chunks of ≤APP_CHUNK columns. Each
+                // chunk's stride is its live width (only the final chunk may be
+                // partial), so no padding is stored or uploaded. APP_CHUNK is
+                // the same constant the kernel bakes its strides from, so the
+                // host packing and the kernel layout stay in lockstep.
                 const appChunks: Float32Array[] = [];
                 for (let ch = 0; ch < numChunks; ch++) {
                     const kStart = ch * APP_CHUNK;

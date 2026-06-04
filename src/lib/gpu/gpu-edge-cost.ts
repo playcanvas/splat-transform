@@ -17,6 +17,15 @@ import {
 } from 'playcanvas';
 
 /**
+ * Appearance columns per storage chunk. The kernel exposes three appearance
+ * bindings (appA/appB/appC), so the layout holds up to 3·APP_CHUNK columns; at
+ * 16 the widest chunk reaches the ~2 GB per-binding limit around ~33.5M splats.
+ * The CPU-side packing in `data-table/decimate.ts` imports this same constant,
+ * so the kernel strides and the host packing can't drift.
+ */
+export const APP_CHUNK = 16;
+
+/**
  * WGSL kernel: per-edge KL-style cost (matches `computeEdgeCost` in
  * `data-table/decimate.ts`).
  *
@@ -301,13 +310,12 @@ class GpuEdgeCost {
     constructor(device: GraphicsDevice, maxN: number, maxE: number, maxAppCols: number) {
         const workgroupSize = 64;
         const edgesPerBatch = 1024 * workgroupSize;  // 65,536
-        // Appearance is split at fixed 16-column boundaries (the chunk *count*),
-        // but each chunk's *stride* is its live column count — only the last
-        // non-empty chunk is ever partial, so partial chunks neither allocate
-        // nor upload padding. The widest possible chunk (16 cols) reaches the
-        // ~2 GB limit at ~33.5M splats, past the ~11.2M wall the single 48-col
-        // buffer hit. These strides must match the packing in decimate.ts.
-        const APP_CHUNK = 16;
+        // Appearance is split at fixed APP_CHUNK-column boundaries, but each
+        // chunk's *stride* is its live column count — only the last non-empty
+        // chunk is ever partial, so partial chunks neither allocate nor upload
+        // padding. The widest possible chunk reaches the ~2 GB limit at ~33.5M
+        // splats, past the ~11.2M wall the single 48-col buffer hit. The three
+        // kernel bindings (appA/appB/appC) cap the layout at three chunks.
         // e.g. [16, 11, 0] for 27 cols, [3, 0, 0] for DC-only.
         const appStrides = [0, 1, 2].map((ch) => {
             return Math.min(APP_CHUNK, Math.max(0, maxAppCols - ch * APP_CHUNK));
