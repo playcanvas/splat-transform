@@ -33,7 +33,6 @@ import {
  */
 const edgeCostWgsl = (strideA: number, strideB: number, strideC: number) => /* wgsl */`
 struct Uniforms {
-    edgeOffset: u32,
     edgeCount: u32,
     z0: f32,
     z1: f32,
@@ -41,8 +40,10 @@ struct Uniforms {
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
-// Edge list split into two parallel arrays — avoids the host having to
-// allocate an edgeCount*2 Uint32 scratch to interleave (i, j) on every call.
+// Edge list for the current dispatch batch only, split into two parallel
+// arrays (avoids a host-side (i, j) interleave). The host uploads each batch's
+// slice to offset 0, so we index edgesI/J[bid] directly — keeping these
+// buffers batch-sized instead of N·k keeps them off the per-binding limit.
 @group(0) @binding(1) var<storage, read> edgesI: array<u32>;
 @group(0) @binding(2) var<storage, read> edgesJ: array<u32>;
 // Per-splat geometry, interleaved 8-wide:
@@ -122,10 +123,9 @@ fn logAddExp(a: f32, b: f32) -> f32 {
 fn main(@builtin(global_invocation_id) gid: vec3u) {
     let bid = gid.x;
     if (bid >= uniforms.edgeCount) { return; }
-    let eIdx = bid + uniforms.edgeOffset;
 
-    let i = edgesI[eIdx];
-    let j = edgesJ[eIdx];
+    let i = edgesI[bid];
+    let j = edgesJ[bid];
 
     let i8 = i * 8u;
     let j8 = j * 8u;
@@ -332,7 +332,6 @@ class GpuEdgeCost {
             // @ts-ignore
             computeUniformBufferFormats: {
                 uniforms: new UniformBufferFormat(device, [
-                    new UniformFormat('edgeOffset', UNIFORMTYPE_UINT),
                     new UniformFormat('edgeCount', UNIFORMTYPE_UINT),
                     new UniformFormat('z0', UNIFORMTYPE_FLOAT),
                     new UniformFormat('z1', UNIFORMTYPE_FLOAT),
@@ -343,10 +342,10 @@ class GpuEdgeCost {
             computeBindGroupFormat: bindGroupFormat
         });
 
-        // Pre-flight the largest bindings against the device's storage limit so
-        // we fail with a clear message instead of a driver-side error. After the
-        // split, the widest appearance chunk and the edge buffers are the two
-        // that can still reach the limit (maxN*width*4 and maxE*4 bytes).
+        // Pre-flight the largest per-N bindings against the device's storage
+        // limit so we fail with a clear message instead of a driver-side error.
+        // Edges are uploaded per batch (batch-sized buffers), so they can't hit
+        // the limit; the widest appearance chunk and rotR are the candidates.
         const maxStorage = (device as any).limits?.maxStorageBufferBindingSize;
         if (typeof maxStorage === 'number') {
             const checkLimit = (label: string, bytes: number) => {
@@ -359,7 +358,7 @@ class GpuEdgeCost {
             };
             const maxChunkCols = Math.max(...appStrides);
             checkLimit(`appearance chunk (${maxN} splats × ${maxChunkCols} cols)`, maxN * maxChunkCols * 4);
-            checkLimit(`edge (${maxE} edges)`, maxE * 4);
+            checkLimit(`rotR (${maxN} splats × 9)`, maxN * 9 * 4);
         }
 
         const posScalarsBuf = new StorageBuffer(device, maxN * 8 * 4, BUFFERUSAGE_COPY_DST);
@@ -376,11 +375,13 @@ class GpuEdgeCost {
                 appDummy;
         });
 
-        // Two parallel u32 buffers — uploading `edgeI` / `edgeJ` directly is
-        // ~1 GB cheaper than packing into a single interleaved scratch on a
-        // 17.9M-splat run, since the host never has to materialise the pack.
-        const edgesIBuf = new StorageBuffer(device, maxE * 4, BUFFERUSAGE_COPY_DST);
-        const edgesJBuf = new StorageBuffer(device, maxE * 4, BUFFERUSAGE_COPY_DST);
+        // Two parallel u32 buffers, sized to a single dispatch batch (not the
+        // full N·k edge list): execute uploads each batch's slice before its
+        // dispatch. Batch-sizing keeps these ~256 KB instead of N·k·4 — off the
+        // ~2 GB per-binding limit (so edges never cap scene size) and ~1.6 GB
+        // less VRAM at 13M splats. Two parallel arrays avoid a host-side pack.
+        const edgesIBuf = new StorageBuffer(device, edgesPerBatch * 4, BUFFERUSAGE_COPY_DST);
+        const edgesJBuf = new StorageBuffer(device, edgesPerBatch * 4, BUFFERUSAGE_COPY_DST);
 
         const outBuf = new StorageBuffer(
             device,
@@ -429,10 +430,6 @@ class GpuEdgeCost {
                 appBufs[ch].write(0, cache.appChunks[ch], 0, n * appStrides[ch]);
             }
 
-            // Upload edges as two parallel u32 buffers — no host-side pack.
-            edgesIBuf.write(0, edgeI, 0, e);
-            edgesJBuf.write(0, edgeJ, 0, e);
-
             compute.setParameter('z0', z[0]);
             compute.setParameter('z1', z[1]);
             compute.setParameter('z2', z[2]);
@@ -443,7 +440,11 @@ class GpuEdgeCost {
                 const edgeCount = Math.min(edgesPerBatch, e - edgeOffset);
                 const groups = Math.ceil(edgeCount / workgroupSize);
 
-                compute.setParameter('edgeOffset', edgeOffset);
+                // Upload just this batch's edges to offset 0; the kernel indexes
+                // edgesI/J[bid] within the batch.
+                edgesIBuf.write(0, edgeI, edgeOffset, edgeCount);
+                edgesJBuf.write(0, edgeJ, edgeOffset, edgeCount);
+
                 compute.setParameter('edgeCount', edgeCount);
 
                 compute.setupDispatch(groups);

@@ -696,10 +696,11 @@ const simplifyGaussians = async (
     // the per-iteration version has a transient destroy/create overlap where
     // GpuKnn buffers haven't been reclaimed by the WebGPU backend before
     // GpuEdgeCost allocates fresh ones. Hoisting reuses the same backing
-    // storage across iterations. Edge buffer is sized to the true upper
-    // bound n·k (not n·k/2 — that's only the expected count; per-iteration
-    // variance lets the actual edgeCount exceed n·k/2 by a few percent, and
-    // GPU buffers are fixed-size so we'd OOM mid-decimate if we under-size).
+    // storage across iterations. `initialMaxE` is the true upper bound on edge
+    // count, n·k (not n·k/2 — that's only the expected count; per-iteration
+    // variance lets the actual edgeCount exceed n·k/2 by a few percent). It's a
+    // validation bound, not a buffer size: GpuEdgeCost uploads edges per
+    // dispatch batch, so its edge buffers are batch-sized regardless.
     const initialN = current.numRows;
     const kEffMax = Math.min(Math.max(1, KNN_K), Math.max(1, initialN - 1));
     const initialMaxE = initialN * kEffMax;
