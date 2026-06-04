@@ -1,5 +1,5 @@
 import { Column, DataTable } from './data-table';
-import { type EdgeCostCache, GpuEdgeCost } from '../gpu/gpu-edge-cost';
+import { APP_CHUNK, type EdgeCostCache, GpuEdgeCost } from '../gpu/gpu-edge-cost';
 import { GpuKnn } from '../gpu/gpu-knn';
 import { KdTree } from '../spatial/kd-tree';
 import {
@@ -696,10 +696,11 @@ const simplifyGaussians = async (
     // the per-iteration version has a transient destroy/create overlap where
     // GpuKnn buffers haven't been reclaimed by the WebGPU backend before
     // GpuEdgeCost allocates fresh ones. Hoisting reuses the same backing
-    // storage across iterations. Edge buffer is sized to the true upper
-    // bound n·k (not n·k/2 — that's only the expected count; per-iteration
-    // variance lets the actual edgeCount exceed n·k/2 by a few percent, and
-    // GPU buffers are fixed-size so we'd OOM mid-decimate if we under-size).
+    // storage across iterations. `initialMaxE` is the true upper bound on edge
+    // count, n·k (not n·k/2 — that's only the expected count; per-iteration
+    // variance lets the actual edgeCount exceed n·k/2 by a few percent). It's a
+    // validation bound, not a buffer size: GpuEdgeCost uploads edges per
+    // dispatch batch, so its edge buffers are batch-sized regardless.
     const initialN = current.numRows;
     const kEffMax = Math.min(Math.max(1, KNN_K), Math.max(1, initialN - 1));
     const initialMaxE = initialN * kEffMax;
@@ -846,9 +847,23 @@ const simplifyGaussians = async (
             // the comment at the declaration.
             allKnn = new Uint32Array(0);
 
+            // The loop only runs while n > targetCount, and a non-degenerate
+            // k-NN graph over n >= 2 splats always yields edges (splat 0's
+            // neighbours have higher indices). Zero edges here therefore means
+            // the neighbour step produced nothing usable — on the GPU path a
+            // swallowed out-of-memory leaving the k-NN buffer zeroed, on the CPU
+            // path a degenerate input — never a legitimate "can't decimate
+            // further". Fail rather than return an incompletely-decimated scene,
+            // regardless of how many earlier iterations succeeded.
             if (edgeCount === 0) {
                 g.end();
-                break;
+                const cause = device ?
+                    'the GPU step likely failed (e.g. out-of-memory)' :
+                    'the input is likely degenerate (e.g. non-finite positions)';
+                throw new Error(
+                    `decimation produced no edges from the k-NN graph at ${n} splats (target ${targetCount}) — ` +
+                    `${cause}. Refusing to return an incompletely-decimated scene.`
+                );
             }
 
             const appData: any[] = [];
@@ -861,39 +876,52 @@ const simplifyGaussians = async (
             let costs = new Float32Array(edgeCount);
 
             if (device) {
-            // GPU path: pack per-splat cache into the layout the kernel
-            // expects (interleaved positions, interleaved scalars). The
-            // cache is already Float32, so `R` passes through directly.
+                // GPU path: pack the per-splat cache into the layout the kernel
+                // expects — position + scalars interleaved 8-wide in one buffer,
+                // appearance split into 16-column chunks (each chunk stays under
+                // the ~2 GB per-binding limit). `R` is already Float32, so the
+                // rotation passes through directly.
                 const costSub = logger.group('Computing edge costs (GPU)');
 
                 const C = appData.length;
-                const positionsPacked = new Float32Array(n * 3);
-                const splatScalars = new Float32Array(n * 5);
-                const appearance = new Float32Array(n * C);
+                const numChunks = Math.ceil(C / APP_CHUNK);
 
+                const posScalars = new Float32Array(n * 8);
                 for (let s = 0; s < n; s++) {
-                    positionsPacked[s * 3 + 0] = cx[s] as number;
-                    positionsPacked[s * 3 + 1] = cy[s] as number;
-                    positionsPacked[s * 3 + 2] = cz[s] as number;
-
-                    splatScalars[s * 5 + 0] = cache.mass[s];
-                    splatScalars[s * 5 + 1] = cache.logdet[s];
-                    splatScalars[s * 5 + 2] = cache.v[s * 3 + 0];
-                    splatScalars[s * 5 + 3] = cache.v[s * 3 + 1];
-                    splatScalars[s * 5 + 4] = cache.v[s * 3 + 2];
+                    const o = s * 8;
+                    posScalars[o + 0] = cx[s] as number;
+                    posScalars[o + 1] = cy[s] as number;
+                    posScalars[o + 2] = cz[s] as number;
+                    posScalars[o + 3] = cache.mass[s];
+                    posScalars[o + 4] = cache.logdet[s];
+                    posScalars[o + 5] = cache.v[s * 3 + 0];
+                    posScalars[o + 6] = cache.v[s * 3 + 1];
+                    posScalars[o + 7] = cache.v[s * 3 + 2];
                 }
-                // Pack appearance row-major.
-                for (let s = 0; s < n; s++) {
-                    const base = s * C;
-                    for (let k = 0; k < C; k++) {
-                        appearance[base + k] = appData[k][s] as number;
+
+                // Pack appearance into chunks of ≤APP_CHUNK columns. Each
+                // chunk's stride is its live width (only the final chunk may be
+                // partial), so no padding is stored or uploaded. APP_CHUNK is
+                // the same constant the kernel bakes its strides from, so the
+                // host packing and the kernel layout stay in lockstep.
+                const appChunks: Float32Array[] = [];
+                for (let ch = 0; ch < numChunks; ch++) {
+                    const kStart = ch * APP_CHUNK;
+                    const width = Math.min(APP_CHUNK, C - kStart);
+                    const chunk = new Float32Array(n * width);
+                    for (let s = 0; s < n; s++) {
+                        const dst = s * width;
+                        for (let kk = 0; kk < width; kk++) {
+                            chunk[dst + kk] = appData[kStart + kk][s] as number;
+                        }
                     }
+                    appChunks.push(chunk);
                 }
+
                 const cacheGpu: EdgeCostCache = {
-                    positions: positionsPacked,
+                    posScalars,
                     rotR: cache.R,
-                    splatScalars,
-                    appearance,
+                    appChunks,
                     numAppCols: C,
                     numSplats: n
                 };
@@ -968,9 +996,21 @@ const simplifyGaussians = async (
             costs = new Float32Array(0);
             sorted = new Uint32Array(0);
 
+            // pairs.length === 0 only happens when every edge cost is non-finite
+            // (any finite cost yields at least one pair), i.e. a total
+            // cost-computation failure — GPU corruption on the GPU path, or
+            // non-finite inputs on either path. As above, the loop guarantees
+            // n > targetCount, so this is always a failure to reach the target,
+            // not a legitimate stop. Fatal regardless of prior progress.
             if (pairs.length === 0) {
                 g.end();
-                break;
+                const cause = device ?
+                    'the GPU step likely failed (e.g. out-of-memory) or produced non-finite costs' :
+                    'cost computation produced only non-finite values (e.g. non-finite inputs)';
+                throw new Error(
+                    `decimation found no valid merge pairs among ${edgeCount} edges at ${n} splats (target ${targetCount}) — ` +
+                    `${cause}. Refusing to return an incompletely-decimated scene.`
+                );
             }
 
             // Allocate output table

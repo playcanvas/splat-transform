@@ -118,15 +118,41 @@ const createDevice = async (adapterName?: string): Promise<GraphicsDevice> => {
 
     await graphicsDevice.createDevice();
 
-    // Surface Dawn's device-lost reason directly. PlayCanvas logs this only via
-    // Debug.warn (debug builds) and then attempts to recreate the device, which
-    // can fail noisily (e.g. DXGI_ERROR_DEVICE_REMOVED on D3D12 TDR) and bury
-    // the original cause. Skip the `destroyed` reason — that fires on intentional
-    // device.destroy() during normal shutdown.
+    // Centralized GPU error handling. WebGPU never throws OOM/validation errors
+    // into JS — they arrive asynchronously via `uncapturederror` (when no error
+    // scope is active) or as device-lost, and PlayCanvas only Debug.warns then
+    // tries to recreate the device, burying the cause. Left unsurfaced, an OOM
+    // (e.g. a large scene on a smaller GPU) leaves buffers invalid/zeroed and
+    // consumers silently produce degenerate output — which is how a streamed-SOG
+    // LOD chain ended up with several identical full-resolution levels. Handling
+    // it here once means every GPU consumer (decimate, filters, voxelization, …)
+    // fails loudly without wrapping each call site in its own error scope.
     // @ts-ignore - wgpu is private on WebgpuGraphicsDevice but exposed in practice
-    (graphicsDevice.wgpu as any)?.lost?.then((info: any) => {
+    const wgpu = (graphicsDevice as any).wgpu;
+
+    // A corrupted GPU result must never be written out, so we escalate to a hard
+    // failure: re-raise on the next tick so main()'s uncaughtException handler
+    // turns it into a non-zero exit. logger.error first so the precise cause is
+    // recorded even if the rethrow races process teardown.
+    const escalateGpuError = (summary: string) => {
+        logger.error(`WebGPU ${summary} — aborting (a corrupted GPU result must not be written)`);
+        const err = new Error(`WebGPU ${summary}`);
+        setImmediate(() => {
+            throw err;
+        });
+    };
+
+    wgpu?.addEventListener?.('uncapturederror', (ev: any) => {
+        const e = ev?.error;
+        const kind = e?.constructor?.name === 'GPUOutOfMemoryError' ? 'out-of-memory' : 'error';
+        escalateGpuError(`${kind}: ${e?.message || '(no message)'}`);
+    });
+
+    // Skip the `destroyed` reason — that fires on intentional device.destroy()
+    // during normal shutdown.
+    wgpu?.lost?.then((info: any) => {
         if (info?.reason === 'destroyed') return;
-        logger.error(`WebGPU device was lost: reason=${info.reason || 'unknown'}, message=${info.message || '(none)'}`);
+        escalateGpuError(`device lost: reason=${info?.reason || 'unknown'}, message=${info?.message || '(none)'}`);
     });
 
     return graphicsDevice;
