@@ -199,8 +199,10 @@ describe('PLY Format', () => {
         // a space-padded vertex count, duplicate spaces, a whitespace-only line, and a comment
         // with leading whitespace — all of which previously caused 'invalid ply header'.
         const clean = encodePlyBinary(testData);
-        const headerEnd = new TextDecoder('ascii').decode(clean.subarray(0, 4096)).indexOf('end_header\n') + 'end_header\n'.length;
-        const body = clean.subarray(headerEnd);
+        const term = 'end_header\n';
+        const termIdx = new TextDecoder('ascii').decode(clean).indexOf(term);
+        assert(termIdx !== -1, 'end_header terminator not found in encoded PLY');
+        const body = clean.subarray(termIdx + term.length);
 
         const plyType = { float32: 'float', float64: 'double', int8: 'char', uint8: 'uchar', int16: 'short', uint16: 'ushort', int32: 'int', uint32: 'uint' };
         const headerLines = [
