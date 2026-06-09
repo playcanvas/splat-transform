@@ -66,17 +66,18 @@ const isFloatElement = (element: PlyElement): boolean => {
 // parse the ply header text and return an array of Element structures and a
 // string containing the ply format
 const parseHeader = (data: Uint8Array): PlyHeader => {
-    // decode header and split into lines
+    // decode header and split into lines (tolerate CRLF line endings)
     const strings = new TextDecoder('ascii')
     .decode(data)
-    .split('\n')
+    .split(/\r?\n/)
     .filter(line => line);
 
     const elements: PlyElement[] = [];
     const comments: string[] = [];
     let element;
     for (let i = 1; i < strings.length; ++i) {
-        const words = strings[i].split(' ');
+        // tolerate trailing/duplicate whitespace (e.g. space-padded counts written by some tools)
+        const words = strings[i].trim().split(/\s+/);
 
         switch (words[0]) {
             case 'ply':
