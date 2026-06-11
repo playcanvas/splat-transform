@@ -44,7 +44,7 @@ export { MemoryFileSystem, ZipFileSystem } from './io/write';
 export type { FileSystem, Writer } from './io/write';
 
 // Individual readers (for advanced use)
-export { readKsplat, readLcc, readMjs, readPly, readSog, readSplat, readSpz } from './readers';
+export { readKsplat, readLcc, readLcc2, readMjs, readPly, readSog, readSplat, readSpz } from './readers';
 
 // Individual writers (for advanced use)
 export { writeSog, writeSpz, writePly, writeCompressedPly, writeCsv, writeHtml, writeImage, writeLod, writeGlb, writeVoxel } from './writers';
