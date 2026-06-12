@@ -1,6 +1,6 @@
 import { DataTable } from './data-table';
 import { ReadFileSystem, ZipReadFileSystem } from './io/read';
-import { readKsplat, readLcc, readMjs, readPly, readSog, readSplat, readSpz } from './readers';
+import { readKsplat, readLcc, readLcc2, readMjs, readPly, readSog, readSplat, readSpz } from './readers';
 import { Options, Param } from './types';
 
 /**
@@ -12,9 +12,10 @@ import { Options, Param } from './types';
  * - `spz` - Niantic Labs compressed format
  * - `sog` - PlayCanvas SOG format (WebP-compressed)
  * - `lcc` - XGrids LCC format
+ * - `lcc2` - XGrids LCC2 (octree) format
  * - `mjs` - JavaScript module generator
  */
-type InputFormat = 'mjs' | 'ksplat' | 'splat' | 'sog' | 'ply' | 'spz' | 'lcc';
+type InputFormat = 'mjs' | 'ksplat' | 'splat' | 'sog' | 'ply' | 'spz' | 'lcc' | 'lcc2';
 
 /**
  * Determines the input format based on file extension.
@@ -60,6 +61,8 @@ const getInputFormat = (filename: string): InputFormat => {
         return 'ply';
     } else if (lowerFilename.endsWith('.spz')) {
         return 'spz';
+    } else if (lowerFilename.endsWith('.lcc2')) {
+        return 'lcc2';
     } else if (lowerFilename.endsWith('.lcc')) {
         return 'lcc';
     }
@@ -135,6 +138,8 @@ const readFile = async (readFileOptions: ReadFileOptions): Promise<DataTable[]> 
         }
     } else if (inputFormat === 'lcc') {
         result = await readLcc(fileSystem, filename, options);
+    } else if (inputFormat === 'lcc2') {
+        result = await readLcc2(fileSystem, filename, options);
     } else {
         const source = await fileSystem.createSource(filename);
         try {
