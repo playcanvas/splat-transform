@@ -44,8 +44,6 @@ const generateIndices = (dataTable: DataTable) => {
     return result;
 };
 
-let webPCodec: WebPCodec;
-
 type WriteSogOptions = {
     filename: string;
     dataTable: DataTable;
@@ -103,10 +101,8 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     const writeWebp = async (filename: string, data: Uint8Array, w = width, h = height) => {
         const pathname = zipFs ? filename : resolve(dirname(outputFilename), filename);
 
-        // construct the encoder on first use
-        if (!webPCodec) {
-            webPCodec = await WebPCodec.create();
-        }
+        // cheap after the first call: create() memoizes the wasm module
+        const webPCodec = await WebPCodec.create();
 
         const webp = await webPCodec.encodeLosslessRGBA(data, w, h);
 
