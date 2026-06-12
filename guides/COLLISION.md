@@ -6,7 +6,7 @@ This guide explains how to generate collision data from a Gaussian splat scene u
 
 Two outputs are produced from the same voxelization pass:
 
-- **`.voxel.json` / `.voxel.bin`** — sparse voxel octree (SVO) for raycasts and broad-phase collision queries. This is the format consumed by **supersplat-viewer** for runtime collision detection.
+- **`.voxel.json` / `.voxel.bin`** — sparse voxel octree (SVO) for raycasts and broad-phase collision queries. This is the format consumed by **supersplat-viewer** for runtime collision detection. The on-disk structure is specified in [VOXEL_FORMAT.md](VOXEL_FORMAT.md).
 - **`.collision.glb`** — triangulated mesh built from the voxel grid (only when `-K` / `--collision-mesh` is passed).
 
 A typical pipeline runs four stages, with the latter two being optional depending on the scene type:

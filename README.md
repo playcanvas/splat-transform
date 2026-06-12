@@ -43,6 +43,7 @@ For running on a backend with Docker (including GPU/Vulkan setup), see the [Dock
 - [Streamed SOG Guide](guides/STREAMED_SOG.md) — build a multi-LOD streamed SOG from a single PLY.
 - [Streamed SOG Format Specification](guides/STREAMED_SOG_FORMAT.md) — the on-disk format of streamed SOG output.
 - [Collision Mesh Guide](guides/COLLISION.md) — generate voxel/collision data from a splat scene.
+- [Voxel Format Specification](guides/VOXEL_FORMAT.md) — the on-disk format of `.voxel.json` / `.voxel.bin` output.
 - [Docker Backend Guide](guides/DOCKER.md) — run splat-transform on a backend (incl. GPU/Vulkan setup).
 
 ## CLI Usage
