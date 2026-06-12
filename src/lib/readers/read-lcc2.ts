@@ -1,7 +1,7 @@
 import { Column, combine, DataTable } from '../data-table';
 import { readSog } from './read-sog';
 import { readSpz } from './read-spz';
-import { basename, dirname, join, readFile, ReadFileSystem, ZipReadFileSystem } from '../io/read';
+import { basename, dirname, join, readFile, ReadFileSystem, ReadSource, ZipReadFileSystem } from '../io/read';
 import { Options } from '../types';
 import { logger, Transform } from '../utils';
 
@@ -147,8 +147,14 @@ const parseLcc2Meta = (metaText: string, filename: string): Lcc2Meta => {
     }
 
     // 2) Old protocol compatibility branch: only triggered when all three
-    // legacy fields are present.
-    if (meta.total_splats && meta.lod_3dgs_info && meta.lod_level) {
+    // legacy fields are present. Use explicit presence checks (not truthiness)
+    // so legitimate zero values (e.g. total_splats: 0, lod_level: 0) don't
+    // incorrectly skip the legacy normalization branch.
+    if (
+        meta.total_splats !== undefined &&
+        meta.lod_3dgs_info !== undefined &&
+        meta.lod_level !== undefined
+    ) {
         // Recursively normalize node field names.
         const normalizeNode = (node: RawLcc2Node) => {
             if (node.datatype !== undefined) {
@@ -181,12 +187,37 @@ const parseLcc2Meta = (metaText: string, filename: string): Lcc2Meta => {
         meta.root.data.env.name :
         undefined;
 
-    // 4) Return normalized model.
+    // 4) Validate required fields rather than masking absence with type
+    // assertions. totalLevels and root.splatFiles are mandatory for the reader
+    // to resolve LODs and address chunk files; totalSplats / lodSplats are
+    // scene metadata that downstream consumers may rely on.
+    if (typeof meta.totalLevels !== 'number') {
+        throw new Error(
+            `Invalid meta.lcc2 (missing or non-numeric totalLevels): ${filename}`
+        );
+    }
+    if (!Array.isArray(meta.root?.splatFiles)) {
+        throw new Error(
+            `Invalid meta.lcc2 (missing root.splatFiles): ${filename}`
+        );
+    }
+    if (typeof meta.totalSplats !== 'number') {
+        throw new Error(
+            `Invalid meta.lcc2 (missing or non-numeric totalSplats): ${filename}`
+        );
+    }
+    if (!Array.isArray(meta.lodSplats)) {
+        throw new Error(
+            `Invalid meta.lcc2 (missing lodSplats): ${filename}`
+        );
+    }
+
+    // 5) Return normalized model.
     return {
-        totalSplats: meta.totalSplats as number,
-        lodSplats: meta.lodSplats as number[],
-        totalLevels: meta.totalLevels as number,
-        splatFiles: meta.root.splatFiles as string[],
+        totalSplats: meta.totalSplats,
+        lodSplats: meta.lodSplats,
+        totalLevels: meta.totalLevels,
+        splatFiles: meta.root.splatFiles,
         splatType: meta.splatType ?? '.sog',
         boundingBox: meta.boundingBox,
         envFileIndex,
@@ -258,24 +289,57 @@ const resolveLodSelection = (
 };
 
 /**
- * Resolve a chunk file's path, falling back to its basename when the full path
- * cannot be opened (e.g. drag-and-drop imports that only provide filenames).
+ * Whether an error from opening/decoding a chunk indicates the file is simply
+ * missing (as opposed to a permission, I/O or corruption error). Covers Node's
+ * `ENOENT`, the zip/memory file systems' "Entry not found" and HTTP 404.
  *
- * @param fileSystem - File system used to probe the path.
- * @param fullPath - The full path recorded in meta.lcc2.
- * @returns The full path if it opens, otherwise its basename.
+ * @param err - The thrown error.
+ * @returns True if the error means the file was not found.
  * @ignore
  */
-const resolveChunkPath = async (
+const isMissingError = (err: unknown): boolean => {
+    const code = (err as { code?: string })?.code;
+    const message = (err as Error)?.message ?? '';
+    return code === 'ENOENT' ||
+        message.startsWith('Entry not found') ||
+        message.startsWith('HTTP error 404');
+};
+
+/**
+ * Open a chunk file's read source, trying the full path first and falling back
+ * to its basename only when the full path is not found (e.g. drag-and-drop
+ * imports that provide filenames without directories).
+ *
+ * The happy path opens the file exactly once. The basename retry only runs when
+ * the full path is missing, so remote/HTTP file systems avoid a redundant probe
+ * round-trip per chunk. Non-"missing" failures (permission, I/O, corruption)
+ * are surfaced immediately rather than masked by a basename retry. If the
+ * fallback also fails, the original (full-path) error is surfaced as it is the
+ * more informative one.
+ *
+ * @param fileSystem - File system used to open the chunk.
+ * @param fullPath - The full path recorded in meta.lcc2.
+ * @returns An open {@link ReadSource} for the chunk.
+ * @ignore
+ */
+const openChunkSource = async (
     fileSystem: ReadFileSystem,
     fullPath: string
-): Promise<string> => {
+): Promise<ReadSource> => {
     try {
-        const probe = await fileSystem.createSource(fullPath); // probe whether it opens
-        probe.close(); // close the probe source
-        return fullPath;
-    } catch {
-        return basename(fullPath); // fall back to bare filename
+        return await fileSystem.createSource(fullPath);
+    } catch (err) {
+        const base = basename(fullPath);
+        // Only retry with the bare filename when the full path is genuinely
+        // missing; other failures are real and must not be masked.
+        if (!isMissingError(err) || base === fullPath) {
+            throw err;
+        }
+        try {
+            return await fileSystem.createSource(base); // fall back to bare filename
+        } catch {
+            throw err; // surface the original full-path error
+        }
     }
 };
 
@@ -284,36 +348,37 @@ const resolveChunkPath = async (
  *
  * SOG chunks are ZIP containers decoded via {@link readSog} (wrapped in a
  * {@link ZipReadFileSystem}); SPZ chunks are raw binaries decoded via
- * {@link readSpz}. Both return a `Transform.PLY` DataTable.
+ * {@link readSpz}. Both return a `Transform.PLY` DataTable. The chunk source is
+ * opened once (full path, with a basename fallback) and always closed.
  *
  * @param fileSystem - File system to read the chunk from.
  * @param splatType - Chunk encoding type ('.sog' or '.spz').
- * @param path - Resolved chunk file path.
+ * @param fullPath - The chunk file path recorded in meta.lcc2.
  * @returns Decoded DataTable.
  * @ignore
  */
 const decodeChunk = async (
     fileSystem: ReadFileSystem,
     splatType: string,
-    path: string
+    fullPath: string
 ): Promise<DataTable> => {
-    if (splatType === '.sog') {
-        const source = await fileSystem.createSource(path);
-        try {
+    const source = await openChunkSource(fileSystem, fullPath);
+    try {
+        if (splatType === '.sog') {
             const zipFs = new ZipReadFileSystem(source); // SOG is a ZIP container
-            return await readSog(zipFs, 'meta.json'); // call readSog directly to avoid circular deps
-        } finally {
-            source.close();
+            try {
+                return await readSog(zipFs, 'meta.json'); // call readSog directly to avoid circular deps
+            } finally {
+                zipFs.close(); // close the zip wrapper (also closes the source)
+            }
         }
-    } else if (splatType === '.spz') {
-        const source = await fileSystem.createSource(path);
-        try {
+        if (splatType === '.spz') {
             return await readSpz(source); // SPZ is a raw binary
-        } finally {
-            source.close();
         }
+        throw new Error(`Unsupported LCC2 splatType: ${splatType}`);
+    } finally {
+        source.close(); // idempotent; safe even after zipFs closed it
     }
-    throw new Error(`Unsupported LCC2 splatType: ${splatType}`);
 };
 
 /**
@@ -398,8 +463,7 @@ const readLcc2 = async (
             if (i >= tasks.length) break;
             const task = tasks[i];
             const fullPath = related(splatFiles[task.fileIndex]);
-            const path = await resolveChunkPath(fileSystem, fullPath);
-            const dt = await decodeChunk(fileSystem, splatType, path);
+            const dt = await decodeChunk(fileSystem, splatType, fullPath);
             // Write lod column = output LOD index.
             dt.addColumn(
                 new Column('lod', new Float32Array(dt.numRows).fill(task.outputLod))
@@ -424,20 +488,15 @@ const readLcc2 = async (
     if (envFileIndex !== undefined) {
         try {
             const envFull = related(splatFiles[envFileIndex]);
-            const envPath = await resolveChunkPath(fileSystem, envFull);
-            const envTable = await decodeChunk(fileSystem, splatType, envPath);
+            const envTable = await decodeChunk(fileSystem, splatType, envFull);
             envTable.addColumn(
                 new Column('lod', new Float32Array(envTable.numRows).fill(-1))
             );
             envTable.transform = LCC2_TRANSFORM();
             result.push(envTable);
         } catch (err) {
-            const code = (err as { code?: string })?.code;
-            const message = (err as Error)?.message ?? '';
-            const isMissing = code === 'ENOENT' ||
-                message.startsWith('Entry not found') ||
-                message.startsWith('HTTP error 404');
-            if (!isMissing) {
+            if (!isMissingError(err)) {
+                const message = (err as Error)?.message ?? '';
                 logger.warn(`failed to load LCC2 environment chunk: ${message || err}`);
             }
         }
@@ -453,7 +512,8 @@ export {
     getChildren,
     collectFileIndicesForLod,
     resolveLodSelection,
-    resolveChunkPath,
+    isMissingError,
+    openChunkSource,
     decodeChunk,
     readLcc2
 };
