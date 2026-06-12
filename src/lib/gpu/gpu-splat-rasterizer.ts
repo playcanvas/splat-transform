@@ -505,7 +505,12 @@ class GpuSplatRasterizer {
             this.clearStatePattern[i * 4 + 3] = 1; // T = 1
         }
 
-        this.radixSort = new ComputeRadixSort(device);
+        // `indirect: true` is required since engine 2.19 — indirect mode
+        // moved from a per-call `sortIndirect()` behaviour to a constructor
+        // option. Without it, `sortIndirect()` silently dispatches directly
+        // with `maxElementCount` (the full pair-buffer capacity), sorting
+        // uninitialized zeros to the front and producing empty tile slices.
+        this.radixSort = new ComputeRadixSort(device, { indirect: true });
 
         // The per-chunk pipeline reserves 2 slots in the device's
         // indirect-dispatch buffer (one for the radix sort, one for
