@@ -40,8 +40,8 @@ For running on a backend with Docker (including GPU/Vulkan setup), see the [Dock
 
 ## Guides
 
-- [Streamed SOG Guide](guides/STREAMED_SOG.md) — build a multi-LOD streamed SOG from a single PLY.
-- [Streamed SOG Format Specification](guides/STREAMED_SOG_FORMAT.md) — the on-disk format of streamed SOG output.
+- [Streamed SOG Guide](https://developer.playcanvas.com/user-manual/splat-transform/#generating-lod-format) — build a multi-LOD streamed SOG from a single PLY.
+- [Streamed SOG Format Specification](https://developer.playcanvas.com/user-manual/gaussian-splatting/formats/streamed-sog/) — the on-disk format of streamed SOG output.
 - [Collision Mesh Guide](guides/COLLISION.md) — generate voxel/collision data from a splat scene.
 - [Voxel Format Specification](guides/VOXEL_FORMAT.md) — the on-disk format of `.voxel.json` / `.voxel.bin` output.
 - [Docker Backend Guide](guides/DOCKER.md) — run splat-transform on a backend (incl. GPU/Vulkan setup).
@@ -181,7 +181,7 @@ Apply when writing `lod-meta.json` (multi-LOD streaming SOG bundle).
 -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
 ```
 
-See the [Generating Streamed SOG Data](guides/STREAMED_SOG.md) guide for an end-to-end walkthrough.
+See [Generating Streamed SOG](https://developer.playcanvas.com/user-manual/splat-transform/#generating-lod-format) for an end-to-end walkthrough.
 
 ## Voxel Output Options
 
