@@ -11,7 +11,7 @@
 
 SplatTransform is an open source library and CLI tool for converting and editing Gaussian splats. It can:
 
-📥 Read PLY, Compressed PLY, SOG, SPZ, SPLAT, KSPLAT and LCC formats  
+📥 Read PLY, Compressed PLY, SOG, SPZ, SPLAT, KSPLAT, LCC and LCC2 formats  
 📤 Write PLY, Compressed PLY, SOG, SPZ, GLB, CSV, HTML Viewer, LOD, Voxel and WebP image formats  
 📊 Generate statistical summaries for data analysis  
 🔗 Merge multiple splats  
@@ -65,6 +65,7 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 | `.compressed.ply` | ✅ | ✅ | Compressed PLY format (auto-detected and decompressed on read) |
 | `.spz` | ✅ | ✅ | Compressed splat format (Niantic format, v2–4) |
 | `.lcc` | ✅ | ❌ | LCC file format (XGRIDS) |
+| `.lcc2` | ✅ | ❌ | LCC2 file format (XGRIDS, octree) |
 | `.ksplat` | ✅ | ❌ | Compressed splat format (mkkellogg format) |
 | `.splat` | ✅ | ❌ | Compressed splat format (antimatter15 format) |
 | `.mjs` | ✅ | ❌ | Generate a scene using an mjs script (Beta) |
@@ -161,12 +162,12 @@ Apply when writing `.html` outputs.
 > [!NOTE]
 > See the [SuperSplat Viewer Settings Schema](https://github.com/playcanvas/supersplat-viewer?tab=readme-ov-file#settings-schema) for details on how to pass data to the `-E` option.
 
-## LCC Input Options
+## LCC / LCC2 Input Options
 
-Apply when reading `.lcc` files.
+Apply when reading `.lcc` and `.lcc2` files.
 
 ```none
--O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC input
+-O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC / LCC2 input
 ```
 
 ## LOD Output Options

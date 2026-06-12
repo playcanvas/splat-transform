@@ -721,7 +721,7 @@ USAGE
   • Use 'null' as output to discard file output.
 
 SUPPORTED INPUTS
-    .ply   .compressed.ply   .sog   .spz   meta.json   .ksplat   .splat   .mjs   .lcc
+    .ply   .compressed.ply   .sog   .spz   meta.json   .ksplat   .splat   .mjs   .lcc   .lcc2
 
     Input filenames may also be http(s):// URLs (downloaded on demand;
     .mjs generators are local-only).
@@ -771,8 +771,8 @@ HTML VIEWER OUTPUT (.html)
     -E, --viewer-settings  <settings.json>  HTML viewer settings JSON file
     -U, --unbundled                         Generate unbundled HTML viewer with separate files
 
-LCC INPUT (.lcc)
-    -O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC input
+LCC / LCC2 INPUT (.lcc, .lcc2)
+    -O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC / LCC2 input
 
 LOD OUTPUT (lod-meta.json)
     -C, --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
