@@ -1,7 +1,7 @@
-import { Column, combine, DataTable } from '../data-table';
+import { Column, DataTable, TypedArray } from '../data-table';
 import { readSog } from './read-sog';
 import { readSpz } from './read-spz';
-import { basename, dirname, join, readFile, ReadFileSystem, ReadSource, ZipReadFileSystem } from '../io/read';
+import { basename, dirname, join, readFile, ReadFileSystem, ReadSource, ReadStream, ZipReadFileSystem } from '../io/read';
 import { Options } from '../types';
 import { logger, Transform } from '../utils';
 
@@ -19,9 +19,11 @@ const LCC2_TRANSFORM = () => new Transform().fromEulers(90, 0, 180);
 // splatFiles / childNum / dataType.
 type RawLcc2Node = {
     // Node data: '3dgs' points to this node's main chunk file index; env
-    // points to the optional environment chunk.
+    // points to the optional environment chunk. A chunk file may be shared by
+    // several nodes (same level), each owning the [start, start + count) range
+    // of its rows.
     data?: {
-        '3dgs'?: { name: number };
+        '3dgs'?: { name: number; start?: number; count?: number };
         env?: { name: number };
         [key: string]: any;
     };
@@ -67,11 +69,11 @@ type RawLcc2Meta = {
 
 // --- Normalized model (post-parse) ------------------------------------------
 
-// Normalized octree node. collectFileIndicesForLod only relies on
-// data['3dgs'].name and child.
+// Normalized octree node. collectChunksByLevel only relies on
+// data['3dgs'] and child.
 type Lcc2TreeNode = {
     data?: {
-        '3dgs'?: { name: number };
+        '3dgs'?: { name: number; start?: number; count?: number };
         env?: { name: number };
         [key: string]: any;
     };
@@ -122,11 +124,58 @@ const getChildren = (node: Lcc2TreeNode): Lcc2TreeNode[] => {
 };
 
 /**
+ * Strip trailing commas before `}` or `]` outside string literals, so
+ * non-strict JSON (as emitted by some LCC2 exporters) still parses. A linear
+ * scan tracking in-string and escape state; string contents (e.g. file names
+ * containing ",}") pass through untouched.
+ *
+ * @param text - The raw (non-strict) JSON text.
+ * @returns The text with trailing commas removed.
+ * @ignore
+ */
+const stripTrailingCommas = (text: string): string => {
+    let result = '';
+    let inString = false;
+    let escaped = false;
+    for (let i = 0; i < text.length; i++) {
+        const c = text[i];
+        if (inString) {
+            if (escaped) {
+                escaped = false;
+            } else if (c === '\\') {
+                escaped = true;
+            } else if (c === '"') {
+                inString = false;
+            }
+            result += c;
+            continue;
+        }
+        if (c === '"') {
+            inString = true;
+            result += c;
+            continue;
+        }
+        if (c === ',') {
+            // Drop the comma when the next non-whitespace char closes the
+            // current object/array.
+            let j = i + 1;
+            while (j < text.length && /\s/.test(text[j])) j++;
+            if (j < text.length && (text[j] === '}' || text[j] === ']')) {
+                continue;
+            }
+        }
+        result += c;
+    }
+    return result;
+};
+
+/**
  * Parse meta.lcc2 text into a normalized {@link Lcc2Meta}.
  *
- * Tolerates trailing commas before `}` (non-strict JSON). Handles both the
- * old protocol (total_splats / lod_3dgs_info / lod_level + files / child_num /
- * datatype) and the new protocol (canonical field names) field naming.
+ * Tolerates trailing commas before `}` / `]` (non-strict JSON). Handles both
+ * the old protocol (total_splats / lod_3dgs_info / lod_level + files /
+ * child_num / datatype) and the new protocol (canonical field names) field
+ * naming.
  *
  * @param metaText - Raw meta.lcc2 file contents.
  * @param filename - Source filename, used to build descriptive parse errors.
@@ -134,16 +183,20 @@ const getChildren = (node: Lcc2TreeNode): Lcc2TreeNode[] => {
  * @ignore
  */
 const parseLcc2Meta = (metaText: string, filename: string): Lcc2Meta => {
-    // 1) Strip trailing commas before `}` so non-strict JSON still parses.
-    const cleaned = metaText.replace(/,\s*\}/g, '}');
+    // 1) Strict parse first (real-world metas are valid JSON); only on failure
+    // retry with trailing commas stripped.
     let meta: RawLcc2Meta;
     try {
-        meta = JSON.parse(cleaned) as RawLcc2Meta;
-    } catch (e) {
-        const reason = (e as Error)?.message ?? String(e);
-        throw new Error(
-            `Failed to parse meta.lcc2 as JSON: ${filename}: ${reason}`
-        );
+        meta = JSON.parse(metaText) as RawLcc2Meta;
+    } catch {
+        try {
+            meta = JSON.parse(stripTrailingCommas(metaText)) as RawLcc2Meta;
+        } catch (e) {
+            const reason = (e as Error)?.message ?? String(e);
+            throw new Error(
+                `Failed to parse meta.lcc2 as JSON: ${filename}: ${reason}`
+            );
+        }
     }
 
     // 2) Old protocol compatibility branch: only triggered when all three
@@ -226,34 +279,47 @@ const parseLcc2Meta = (metaText: string, filename: string): Lcc2Meta => {
 };
 
 /**
- * Collect the chunk file indices belonging to a target LOD level by traversing
- * the octree.
+ * Collect the chunk files of every LOD level in a single octree traversal,
+ * along with each file's splat count when the meta provides one.
  *
  * Traversal starts from the root's children with `depth` counting from 1; each
  * node's LOD level is `totalLevels - depth`. Only nodes carrying `data['3dgs']`
- * are collected, and indices equal to `envFileIndex` are skipped.
+ * are collected, and indices equal to `envFileIndex` are skipped. A chunk file
+ * may be shared by several nodes of the same level (each owning a row range),
+ * so a file's count is the sum of its nodes' `count` fields; if any
+ * contributing node lacks a valid count, the file's count is `undefined` and
+ * the caller falls back to reading it from the chunk itself.
  *
  * @param tree - The octree root node.
- * @param targetLod - The target LOD level to collect.
  * @param totalLevels - Total LOD level count.
  * @param envFileIndex - Optional environment chunk file index to exclude.
- * @returns Set of chunk file indices for the target LOD.
+ * @returns Map of LOD level to (file index -> splat count or undefined).
  * @ignore
  */
-const collectFileIndicesForLod = (
+const collectChunksByLevel = (
     tree: Lcc2TreeNode,
-    targetLod: number,
     totalLevels: number,
     envFileIndex: number | undefined
-): Set<number> => {
-    const result = new Set<number>();
+): Map<number, Map<number, number | undefined>> => {
+    const result = new Map<number, Map<number, number | undefined>>();
     const traverse = (node: Lcc2TreeNode, depth: number) => {
         for (const child of getChildren(node)) {
-            const level = totalLevels - depth;
-            if (level === targetLod && child.data?.['3dgs']) {
-                const fileIndex = child.data['3dgs'].name;
-                if (fileIndex !== envFileIndex) {
-                    result.add(fileIndex);
+            const data = child.data?.['3dgs'];
+            if (data && data.name !== envFileIndex) {
+                const level = totalLevels - depth;
+                let files = result.get(level);
+                if (!files) {
+                    files = new Map();
+                    result.set(level, files);
+                }
+                const count = data.count;
+                if (!Number.isInteger(count) || (count as number) < 0) {
+                    files.set(data.name, undefined);
+                } else if (files.has(data.name)) {
+                    const prev = files.get(data.name);
+                    files.set(data.name, prev === undefined ? undefined : prev + (count as number));
+                } else {
+                    files.set(data.name, count);
                 }
             }
             traverse(child, depth + 1);
@@ -367,7 +433,10 @@ const decodeChunk = async (
         if (splatType === '.sog') {
             const zipFs = new ZipReadFileSystem(source); // SOG is a ZIP container
             try {
-                return await readSog(zipFs, 'meta.json'); // call readSog directly to avoid circular deps
+                // call readSog directly to avoid circular deps; silence its
+                // internal bar - logger bars are strictly LIFO and chunks
+                // decode concurrently under readLcc2's own bar
+                return await readSog(zipFs, 'meta.json', { logging: 'silent' });
             } finally {
                 zipFs.close(); // close the zip wrapper (also closes the source)
             }
@@ -381,6 +450,162 @@ const decodeChunk = async (
     }
 };
 
+// SPZ header: u32 magic 'NGSP', u32 version, u32 numPoints, u8 shDegree,
+// u8 fractionalBits, u8 flags, u8 reserved. v4 files start with this header
+// in plaintext; v1-3 files are gzip-compressed end-to-end with the same
+// header at the start of the decompressed stream.
+const SPZ_HEADER_SIZE = 16;
+
+// Compressed prefix to pull when gunzipping just the SPZ header. 64KB of
+// compressed input always yields >= 16 decompressed bytes for a real gzip
+// stream while keeping remote range reads small.
+const GZIP_PREFIX_LIMIT = 65536;
+
+/**
+ * Read up to `length` bytes from a stream into a buffer. May return fewer
+ * bytes if the stream ends early. The caller closes the stream.
+ *
+ * @param stream - The stream to read from.
+ * @param length - Maximum number of bytes to read.
+ * @returns The bytes read (length <= `length`).
+ * @ignore
+ */
+const readPrefix = async (stream: ReadStream, length: number): Promise<Uint8Array> => {
+    const result = new Uint8Array(length);
+    let read = 0;
+    while (read < length) {
+        const n = await stream.pull(result.subarray(read));
+        if (n === 0) break;
+        read += n;
+    }
+    return result.subarray(0, read);
+};
+
+/**
+ * Stream-gunzip only the first `length` bytes of a gzip stream, then cancel
+ * the decompressor without consuming the rest of the input.
+ *
+ * @param stream - Stream over the (bounded) compressed input. The caller closes it.
+ * @param length - Number of decompressed bytes wanted.
+ * @returns The first `length` decompressed bytes.
+ * @ignore
+ */
+const gunzipPrefix = async (stream: ReadStream, length: number): Promise<Uint8Array> => {
+    const inputStream = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+            const chunk = new Uint8Array(32768);
+            const n = await stream.pull(chunk);
+            if (n === 0) {
+                controller.close();
+            } else {
+                controller.enqueue(chunk.subarray(0, n));
+            }
+        }
+    });
+    // Type assertion needed due to TypeScript's strict typing of DecompressionStream
+    const reader = inputStream.pipeThrough(
+        new DecompressionStream('gzip') as unknown as TransformStream<Uint8Array, Uint8Array>
+    ).getReader();
+    try {
+        const result = new Uint8Array(length);
+        let read = 0;
+        while (read < length) {
+            const { done, value } = await reader.read();
+            if (done) {
+                throw new Error('Unexpected end of gzip stream');
+            }
+            const n = Math.min(value.length, length - read);
+            result.set(value.subarray(0, n), read);
+            read += n;
+        }
+        return result;
+    } finally {
+        // Stop decompression early; the bounded input is truncated, so
+        // draining it to EOF would throw.
+        await reader.cancel().catch(() => {});
+    }
+};
+
+/**
+ * Validate the 'NGSP' magic and extract numPoints from an SPZ header.
+ *
+ * @param header - The (decompressed) leading bytes of the SPZ data.
+ * @param context - Chunk path, used to build descriptive errors.
+ * @returns The header's numPoints field.
+ * @ignore
+ */
+const parseSpzNumPoints = (header: Uint8Array, context: string): number => {
+    if (header.length < SPZ_HEADER_SIZE ||
+        header[0] !== 0x4e || header[1] !== 0x47 || header[2] !== 0x53 || header[3] !== 0x50) {
+        throw new Error(`Invalid SPZ chunk header: ${context}`);
+    }
+    const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
+    return view.getUint32(8, true);
+};
+
+/**
+ * Read a chunk's exact splat count without decoding it. Used as a fallback
+ * when meta.lcc2 doesn't provide per-node counts: costs one extra open plus a
+ * small read per chunk (noticeable mainly on remote file systems).
+ *
+ * SOG: opens the ZIP and reads only meta.json (`count` for V2,
+ * `means.shape[0]` for V1, mirroring readSog's version dispatch). SPZ: parses
+ * `numPoints` from the 16-byte header (gunzipping just the header for the
+ * gzip-wrapped v1-3 container).
+ *
+ * @param fileSystem - File system to read the chunk from.
+ * @param splatType - Chunk encoding type ('.sog' or '.spz').
+ * @param fullPath - The chunk file path recorded in meta.lcc2.
+ * @returns The chunk's splat count.
+ * @ignore
+ */
+const readChunkCount = async (
+    fileSystem: ReadFileSystem,
+    splatType: string,
+    fullPath: string
+): Promise<number> => {
+    const source = await openChunkSource(fileSystem, fullPath);
+    try {
+        if (splatType === '.sog') {
+            const zipFs = new ZipReadFileSystem(source);
+            try {
+                const sogMeta = JSON.parse(new TextDecoder().decode(await readFile(zipFs, 'meta.json')));
+                const version = sogMeta.version;
+                const count = version === undefined ?
+                    sogMeta.means?.shape?.[0] : // V1: texture shape
+                    (version === 2 ? sogMeta.count : undefined);
+                if (!Number.isInteger(count) || count < 0) {
+                    throw new Error(`Cannot determine SOG chunk splat count: ${fullPath}`);
+                }
+                return count;
+            } finally {
+                zipFs.close();
+            }
+        }
+        if (splatType === '.spz') {
+            const headStream = source.read(0, SPZ_HEADER_SIZE);
+            let header: Uint8Array;
+            try {
+                header = await readPrefix(headStream, SPZ_HEADER_SIZE);
+            } finally {
+                headStream.close();
+            }
+            if (header.length >= 2 && header[0] === 0x1f && header[1] === 0x8b) {
+                const zipped = source.read(0, GZIP_PREFIX_LIMIT);
+                try {
+                    header = await gunzipPrefix(zipped, SPZ_HEADER_SIZE);
+                } finally {
+                    zipped.close();
+                }
+            }
+            return parseSpzNumPoints(header, fullPath);
+        }
+        throw new Error(`Unsupported LCC2 splatType: ${splatType}`);
+    } finally {
+        source.close();
+    }
+};
+
 /**
  * Reads an XGrids LCC2 format containing multi-LOD Gaussian splat data.
  *
@@ -390,9 +615,12 @@ const decodeChunk = async (
  * paths, LOD levels and bounding box.
  *
  * Chunks for the selected LODs are decoded (reusing the internal `readSog` /
- * `readSpz` decoders), tagged with an output `lod` column, combined into a
- * single DataTable and re-tagged with the LCC2 coordinate transform. An
- * optional environment chunk is loaded as an additional table (lod = -1).
+ * `readSpz` decoders) directly into a single preallocated DataTable, tagged
+ * with an output `lod` column and the LCC2 coordinate transform. Output
+ * arrays are sized up front from the per-node splat counts in meta.lcc2
+ * (falling back to reading each chunk's header when absent), so peak memory
+ * stays at ~one copy of the scene plus the chunks currently being decoded.
+ * An optional environment chunk is loaded as an additional table (lod = -1).
  *
  * Behavior (multi-LOD selection, `lod` column, coordinate transform) mirrors
  * `readLcc`.
@@ -424,38 +652,97 @@ const readLcc2 = async (
     }
 
     // 3) Collect decode tasks in deterministic order: by LOD order, then by
-    // ascending file index within each LOD.
-    const tasks: { outputLod: number; fileIndex: number }[] = [];
+    // ascending file index within each LOD. A single traversal yields every
+    // level's chunk files along with their meta-provided splat counts.
+    const byLevel = collectChunksByLevel(tree, totalLevels, envFileIndex);
+    const tasks: { outputLod: number; fileIndex: number; count: number | undefined }[] = [];
     for (let outputLod = 0; outputLod < inputLods.length; outputLod++) {
-        const inputLod = inputLods[outputLod];
-        const indices = Array.from(
-            collectFileIndicesForLod(tree, inputLod, totalLevels, envFileIndex)
-        ).sort((a, b) => a - b);
+        const files = byLevel.get(inputLods[outputLod]);
+        const indices = files ? Array.from(files.keys()).sort((a, b) => a - b) : [];
         for (const fileIndex of indices) {
-            tasks.push({ outputLod, fileIndex });
+            if (!Number.isInteger(fileIndex) || fileIndex < 0 ||
+                fileIndex >= splatFiles.length || !splatFiles[fileIndex]) {
+                throw new Error(
+                    `Invalid chunk file index ${fileIndex} (root.splatFiles has ${splatFiles.length} entries) in LCC2 input file: ${filename}`
+                );
+            }
+            tasks.push({ outputLod, fileIndex, count: files.get(fileIndex) });
         }
     }
 
     // No decodable chunks for the selected LODs: bail out with a descriptive
-    // error rather than letting combine() throw on an empty array below.
+    // error rather than producing an empty table below.
     if (tasks.length === 0) {
         throw new Error(
             `No chunks found for selected LODs in LCC2 input file: ${filename} lods: ${JSON.stringify(inputLods)}`
         );
     }
 
-    // 4) Pre-allocate output slots so combine input order stays reproducible.
-    // Every slot is filled by exactly one worker below; any decode failure
-    // rejects Promise.all and aborts before combine, so there are no holes.
-    const tables: DataTable[] = new Array(tasks.length);
+    // 4) Resolve per-chunk splat counts. Counts from meta.lcc2 are preferred;
+    // chunks lacking one fall back to a cheap header read (no decode). The
+    // fallback costs an extra open plus a small read per chunk - noticeable
+    // mainly on remote file systems - so meta counts are used when present.
+    const counts = new Array<number>(tasks.length);
+    const missing: number[] = [];
+    for (let i = 0; i < tasks.length; i++) {
+        const count = tasks[i].count;
+        if (count === undefined) {
+            missing.push(i);
+        } else {
+            counts[i] = count;
+        }
+    }
+    if (missing.length > 0) {
+        const scanBar = logger.bar('scanning', missing.length);
+        let scanned = 0;
+        let nextScan = 0;
+        const scanWorker = async () => {
+            while (true) {
+                const m = nextScan++;
+                if (m >= missing.length) break;
+                const i = missing[m];
+                counts[i] = await readChunkCount(
+                    fileSystem, splatType, related(splatFiles[tasks[i].fileIndex])
+                );
+                scanBar.update(++scanned);
+            }
+        };
+        await Promise.all(
+            Array.from({ length: Math.min(LOAD_CONCURRENCY, missing.length) }, () => scanWorker())
+        );
+        // Close the bar only on success path (matches the decode bar below).
+        scanBar.end();
+    }
 
-    // 5) One progress bar covering all chunks.
+    // 5) Prefix-sum write offsets in task order: the output layout is fixed
+    // before decoding starts, so workers completing out of order still write
+    // into disjoint regions and the result stays deterministic (mirrors
+    // readLcc's decodeUnitsForLod).
+    const offsets = new Array<number>(tasks.length);
+    let totalRows = 0;
+    for (let i = 0; i < tasks.length; i++) {
+        offsets[i] = totalRows;
+        totalRows += counts[i];
+    }
+
+    // 6) Output columns, preallocated at the final row count. The column set
+    // isn't known until chunks decode (it depends on each chunk's SH bands),
+    // so each column is allocated on first sighting - still a single
+    // exact-size allocation; rows from chunks lacking a column stay zero
+    // (matching combine()'s behavior for missing columns). The first sighting
+    // (task, position) is recorded so the assembled column order is
+    // deterministic regardless of decode completion order.
+    type OutputColumn = { data: TypedArray; task: number; pos: number };
+    const outputs = new Map<string, OutputColumn>();
+    const lodData = new Float32Array(totalRows);
+
+    // 7) Bounded-concurrency decode pool: decode each chunk, validate its row
+    // count against the expected count, copy it into the output arrays at its
+    // precomputed offset and drop it. Any failure propagates: the bar is
+    // intentionally not end()ed on the error path, leaving it open so
+    // logger's error path can mark it as failed instead of finalizing it first.
     const bar = logger.bar('decoding', tasks.length);
     let done = 0;
-
-    // 6) Bounded-concurrency worker pool. Any failure here propagates: the bar
-    // is intentionally not end()ed on the error path, leaving it open so
-    // logger's error path can mark it as failed instead of finalizing it first.
     let next = 0;
     const worker = async () => {
         while (true) {
@@ -464,27 +751,46 @@ const readLcc2 = async (
             const task = tasks[i];
             const fullPath = related(splatFiles[task.fileIndex]);
             const dt = await decodeChunk(fileSystem, splatType, fullPath);
+            if (dt.numRows !== counts[i]) {
+                throw new Error(
+                    `LCC2 chunk splat count mismatch for ${fullPath}: expected ${counts[i]}, decoded ${dt.numRows}`
+                );
+            }
+            for (let pos = 0; pos < dt.columns.length; pos++) {
+                const column = dt.columns[pos];
+                let output = outputs.get(column.name);
+                if (!output) {
+                    const Ctor = column.data.constructor as new (length: number) => TypedArray;
+                    output = { data: new Ctor(totalRows), task: i, pos };
+                    outputs.set(column.name, output);
+                } else if (i < output.task) {
+                    output.task = i;
+                    output.pos = pos;
+                }
+                output.data.set(column.data, offsets[i]);
+            }
             // Write lod column = output LOD index.
-            dt.addColumn(
-                new Column('lod', new Float32Array(dt.numRows).fill(task.outputLod))
-            );
-            tables[i] = dt; // write pre-allocated slot (no push, keeps order)
+            lodData.fill(task.outputLod, offsets[i], offsets[i] + dt.numRows);
             bar.update(++done);
+            // dt goes out of scope here, releasing the chunk's memory.
         }
     };
     await Promise.all(
         Array.from({ length: Math.min(LOAD_CONCURRENCY, tasks.length) }, () => worker())
     );
 
-    // 7) Combine + override transform.
-    const merged = combine(tables);
-    merged.transform = LCC2_TRANSFORM();
+    // 8) Assemble the merged table, columns ordered by first sighting.
+    const columns = [...outputs.entries()]
+    .sort(([, a], [, b]) => (a.task - b.task) || (a.pos - b.pos))
+    .map(([name, output]) => new Column(name, output.data));
+    columns.push(new Column('lod', lodData));
+    const merged = new DataTable(columns, LCC2_TRANSFORM());
     // Close the bar only on success path.
     bar.end();
 
     const result: DataTable[] = [merged];
 
-    // 8) Optional environment chunk (approach B): a missing file is normal.
+    // 9) Optional environment chunk (approach B): a missing file is normal.
     if (envFileIndex !== undefined) {
         try {
             const envFull = related(splatFiles[envFileIndex]);
@@ -508,13 +814,16 @@ const readLcc2 = async (
 export {
     LOAD_CONCURRENCY,
     LCC2_TRANSFORM,
+    stripTrailingCommas,
     parseLcc2Meta,
     getChildren,
-    collectFileIndicesForLod,
+    collectChunksByLevel,
     resolveLodSelection,
     isMissingError,
     openChunkSource,
     decodeChunk,
+    parseSpzNumPoints,
+    readChunkCount,
     readLcc2
 };
 

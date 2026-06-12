@@ -2,31 +2,69 @@
  * Unit tests for the LCC2 reader.
  *
  * Covers the pure helpers (meta parsing for new/legacy protocols, octree LOD
- * collection, LOD selection) and the main readLcc2 flow (deterministic task
- * ordering, the output lod column, environment-chunk handling and failure
- * modes), exercised against in-memory .spz chunks built with writeSpz.
+ * collection with per-chunk counts, LOD selection, chunk-count fallbacks) and
+ * the main readLcc2 flow (deterministic task ordering, the output lod column,
+ * environment-chunk handling and failure modes), exercised against in-memory
+ * .spz / .sog chunks built with writeSpz / writeSog.
  */
 
 import assert from 'node:assert';
+import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { createTestDataTable } from './helpers/test-utils.mjs';
 import {
     MemoryReadFileSystem,
     MemoryFileSystem,
+    WebPCodec,
+    writeSog,
     writeSpz
 } from '../src/lib/index.js';
 import {
+    stripTrailingCommas,
     parseLcc2Meta,
     getChildren,
-    collectFileIndicesForLod,
+    collectChunksByLevel,
     resolveLodSelection,
     isMissingError,
     openChunkSource,
+    parseSpzNumPoints,
+    readChunkCount,
     readLcc2,
     LOAD_CONCURRENCY
 } from '../src/lib/readers/read-lcc2.js';
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+WebPCodec.wasmUrl = join(__dirname, '..', 'lib', 'webp.wasm');
+
+
+describe('stripTrailingCommas', () => {
+    it('strips trailing commas before } and ]', () => {
+        const text = '{ "a": [1, 2, ], "b": { "c": 3, }, }';
+        assert.deepStrictEqual(
+            JSON.parse(stripTrailingCommas(text)),
+            { a: [1, 2], b: { c: 3 } }
+        );
+    });
+
+    it('preserves string contents containing ",}" and ",]"', () => {
+        const text = '{ "name": "weird,}.sog", "arr": ["x,]" ], }';
+        const parsed = JSON.parse(stripTrailingCommas(text));
+        assert.strictEqual(parsed.name, 'weird,}.sog');
+        assert.deepStrictEqual(parsed.arr, ['x,]']);
+    });
+
+    it('handles escaped quotes inside strings', () => {
+        const text = '{ "a": "q\\",}", }';
+        assert.strictEqual(JSON.parse(stripTrailingCommas(text)).a, 'q",}');
+    });
+
+    it('leaves valid JSON unchanged', () => {
+        const text = JSON.stringify({ a: [1, 2], b: 'x,}' });
+        assert.strictEqual(stripTrailingCommas(text), text);
+    });
+});
 
 describe('parseLcc2Meta', () => {
     it('parses the new protocol verbatim', () => {
@@ -117,6 +155,21 @@ describe('parseLcc2Meta', () => {
         assert.deepStrictEqual(meta.splatFiles, ['a.sog']);
     });
 
+    it('does not corrupt string values containing ",}"', () => {
+        // Valid JSON is parsed strictly, so a file name containing ",}" must
+        // survive (the old regex-based cleanup rewrote it to "}").
+        const meta = parseLcc2Meta(
+            JSON.stringify({
+                totalSplats: 1,
+                lodSplats: [1],
+                totalLevels: 1,
+                root: { splatFiles: ['weird,}.sog'] }
+            }),
+            'meta.lcc2'
+        );
+        assert.deepStrictEqual(meta.splatFiles, ['weird,}.sog']);
+    });
+
     it('throws a descriptive error on invalid JSON', () => {
         assert.throws(
             () => parseLcc2Meta('{ not json', 'bad.lcc2'),
@@ -183,7 +236,7 @@ describe('getChildren', () => {
     });
 });
 
-describe('collectFileIndicesForLod', () => {
+describe('collectChunksByLevel', () => {
     // depth counts from 1 at the root's children; level = totalLevels - depth.
     // totalLevels = 2: depth 1 -> level 1, depth 2 -> level 0 (finest).
     const tree = {
@@ -198,28 +251,67 @@ describe('collectFileIndicesForLod', () => {
         ]
     };
 
-    it('collects the deepest nodes for LOD 0', () => {
-        const set = collectFileIndicesForLod(tree, 0, 2, undefined);
+    it('collects every level in a single traversal', () => {
+        const byLevel = collectChunksByLevel(tree, 2, undefined);
         assert.deepStrictEqual(
-            [...set].sort((a, b) => a - b),
+            [...byLevel.get(0).keys()].sort((a, b) => a - b),
             [1, 2]
         );
-    });
-
-    it('collects shallower nodes for higher LOD', () => {
-        const set = collectFileIndicesForLod(tree, 1, 2, undefined);
-        assert.deepStrictEqual([...set], [0]);
+        assert.deepStrictEqual([...byLevel.get(1).keys()], [0]);
     });
 
     it('skips the environment file index', () => {
-        const set = collectFileIndicesForLod(tree, 0, 2, 2);
-        assert.deepStrictEqual([...set], [1]);
+        const byLevel = collectChunksByLevel(tree, 2, 2);
+        assert.deepStrictEqual([...byLevel.get(0).keys()], [1]);
     });
 
     it('handles object-map children', () => {
         const mapTree = { child: { 0: { data: { '3dgs': { name: 7 } } } } };
-        const set = collectFileIndicesForLod(mapTree, 0, 1, undefined);
-        assert.deepStrictEqual([...set], [7]);
+        const byLevel = collectChunksByLevel(mapTree, 1, undefined);
+        assert.deepStrictEqual([...byLevel.get(0).keys()], [7]);
+    });
+
+    it('has no entry for levels without chunks', () => {
+        const byLevel = collectChunksByLevel(tree, 2, undefined);
+        assert.strictEqual(byLevel.get(5), undefined);
+    });
+
+    it('sums per-file counts across nodes sharing a chunk file', () => {
+        // Real LCC2 metas share one chunk file between several same-level
+        // nodes, each owning a [start, start + count) row range.
+        const shared = {
+            child: [
+                { data: { '3dgs': { name: 0, start: 0, count: 5 } } },
+                { data: { '3dgs': { name: 0, start: 5, count: 7 } } },
+                { data: { '3dgs': { name: 1, count: 3 } } }
+            ]
+        };
+        const byLevel = collectChunksByLevel(shared, 1, undefined);
+        assert.strictEqual(byLevel.get(0).get(0), 12);
+        assert.strictEqual(byLevel.get(0).get(1), 3);
+    });
+
+    it('marks a file count unknown when any node lacks a valid count', () => {
+        const partial = {
+            child: [
+                { data: { '3dgs': { name: 0, count: 5 } } },
+                { data: { '3dgs': { name: 0 } } }, // no count -> file 0 unknown
+                { data: { '3dgs': { name: 1, count: -2 } } } // invalid count
+            ]
+        };
+        const byLevel = collectChunksByLevel(partial, 1, undefined);
+        assert.strictEqual(byLevel.get(0).has(0), true);
+        assert.strictEqual(byLevel.get(0).get(0), undefined);
+        assert.strictEqual(byLevel.get(0).get(1), undefined);
+
+        // An uncounted node arriving before a counted one must also poison.
+        const reversed = {
+            child: [
+                { data: { '3dgs': { name: 0 } } },
+                { data: { '3dgs': { name: 0, count: 5 } } }
+            ]
+        };
+        assert.strictEqual(collectChunksByLevel(reversed, 1, undefined).get(0).get(0), undefined);
     });
 });
 
@@ -243,14 +335,30 @@ describe('resolveLodSelection', () => {
 
 // --- Main readLcc2 flow -----------------------------------------------------
 
-// Build an in-memory .spz chunk with the given number of splats.
-const makeSpzBytes = async (count) => {
+// Build an in-memory .spz chunk with the given number of splats. The default
+// version (4) emits a plaintext NGSP header; version 3 emits the legacy
+// gzip-wrapped container.
+const makeSpzBytes = async (count, { version, includeSH } = {}) => {
     const writeFs = new MemoryFileSystem();
     await writeSpz(
-        { filename: 'chunk.spz', dataTable: createTestDataTable(count) },
+        {
+            filename: 'chunk.spz',
+            dataTable: createTestDataTable(count, includeSH ? { includeSH, shBands: 3 } : {}),
+            ...(version ? { version } : {})
+        },
         writeFs
     );
     return writeFs.results.get('chunk.spz');
+};
+
+// Build an in-memory bundled .sog chunk with the given number of splats.
+const makeSogBytes = async (count) => {
+    const writeFs = new MemoryFileSystem();
+    await writeSog(
+        { filename: 'chunk.sog', dataTable: createTestDataTable(count), bundle: true, iterations: 5 },
+        writeFs
+    );
+    return writeFs.results.get('chunk.sog');
 };
 
 // Default options for readLcc2 (only lodSelect matters here).
@@ -386,6 +494,249 @@ describe('readLcc2 (main flow)', () => {
         fs.set('meta.lcc2', new TextEncoder().encode(JSON.stringify(meta)));
 
         await assert.rejects(() => readLcc2(fs, 'meta.lcc2', opts()));
+    });
+});
+
+describe('parseSpzNumPoints', () => {
+    it('parses numPoints from a v4 SPZ header', async () => {
+        const bytes = await makeSpzBytes(7);
+        assert.strictEqual(parseSpzNumPoints(bytes.subarray(0, 16), 'chunk.spz'), 7);
+    });
+
+    it('throws on garbage or truncated headers', () => {
+        assert.throws(() => parseSpzNumPoints(new Uint8Array(16), 'x.spz'), /Invalid SPZ chunk header/);
+        assert.throws(() => parseSpzNumPoints(new Uint8Array(4), 'x.spz'), /Invalid SPZ chunk header/);
+    });
+});
+
+describe('readChunkCount', () => {
+    it('reads the count from a v4 (plaintext header) SPZ chunk', async () => {
+        const fs = new MemoryReadFileSystem();
+        fs.set('chunk.spz', await makeSpzBytes(9));
+        assert.strictEqual(await readChunkCount(fs, '.spz', 'chunk.spz'), 9);
+    });
+
+    it('reads the count from a v3 (gzip-wrapped) SPZ chunk', async () => {
+        const fs = new MemoryReadFileSystem();
+        const bytes = await makeSpzBytes(9, { version: 3 });
+        assert.strictEqual(bytes[0], 0x1f); // sanity: legacy container is gzip
+        fs.set('chunk.spz', bytes);
+        assert.strictEqual(await readChunkCount(fs, '.spz', 'chunk.spz'), 9);
+    });
+
+    it('reads the count from a SOG chunk meta.json without decoding textures', async () => {
+        const fs = new MemoryReadFileSystem();
+        fs.set('chunk.sog', await makeSogBytes(9));
+        assert.strictEqual(await readChunkCount(fs, '.sog', 'chunk.sog'), 9);
+    });
+
+    it('throws on an unsupported splatType', async () => {
+        const fs = new MemoryReadFileSystem();
+        fs.set('x.ply', new Uint8Array(4));
+        await assert.rejects(() => readChunkCount(fs, '.ply', 'x.ply'), /Unsupported LCC2 splatType/);
+    });
+});
+
+// Wraps a MemoryReadFileSystem, recording every createSource path. Used to
+// prove the meta-count path opens each chunk exactly once (no fallback scan).
+class RecordingFileSystem {
+    constructor(inner) {
+        this.inner = inner;
+        this.attempts = [];
+    }
+
+    createSource(filename) {
+        this.attempts.push(filename);
+        return this.inner.createSource(filename);
+    }
+}
+
+describe('readLcc2 (meta-provided counts)', () => {
+    it('uses meta counts without extra chunk reads', async () => {
+        const inner = new MemoryReadFileSystem();
+        inner.set('chunk1.spz', await makeSpzBytes(5));
+        inner.set('chunk2.spz', await makeSpzBytes(3));
+
+        const meta = {
+            totalSplats: 8,
+            lodSplats: [8],
+            totalLevels: 1,
+            splatType: '.spz',
+            root: {
+                splatFiles: ['chunk1.spz', 'chunk2.spz'],
+                child: [
+                    { data: { '3dgs': { name: 0, start: 0, count: 5 } } },
+                    { data: { '3dgs': { name: 1, start: 0, count: 3 } } }
+                ]
+            }
+        };
+        inner.set('meta.lcc2', new TextEncoder().encode(JSON.stringify(meta)));
+
+        const fs = new RecordingFileSystem(inner);
+        const result = await readLcc2(fs, 'meta.lcc2', opts());
+        assert.strictEqual(result[0].numRows, 8);
+        assert.deepStrictEqual(Array.from(result[0].getColumnByName('lod').data), [0, 0, 0, 0, 0, 0, 0, 0]);
+
+        // Each chunk opened exactly once (decode only - no scanning pass).
+        const chunkOpens = fs.attempts.filter(p => p.endsWith('.spz'));
+        assert.deepStrictEqual(chunkOpens.sort(), ['chunk1.spz', 'chunk2.spz']);
+    });
+
+    it('rejects when a meta count disagrees with the decoded chunk', async () => {
+        const fs = new MemoryReadFileSystem();
+        fs.set('chunk1.spz', await makeSpzBytes(5));
+
+        const meta = {
+            totalSplats: 4,
+            lodSplats: [4],
+            totalLevels: 1,
+            splatType: '.spz',
+            root: {
+                splatFiles: ['chunk1.spz'],
+                child: [{ data: { '3dgs': { name: 0, start: 0, count: 4 } } }] // actual chunk has 5
+            }
+        };
+        fs.set('meta.lcc2', new TextEncoder().encode(JSON.stringify(meta)));
+
+        await assert.rejects(
+            () => readLcc2(fs, 'meta.lcc2', opts()),
+            /splat count mismatch .* expected 4, decoded 5/
+        );
+    });
+});
+
+describe('readLcc2 (chunk format coverage)', () => {
+    it('decodes SOG chunks end-to-end', async () => {
+        const fs = new MemoryReadFileSystem();
+        fs.set('chunk1.sog', await makeSogBytes(5));
+        fs.set('chunk2.sog', await makeSogBytes(3));
+
+        const meta = {
+            totalSplats: 8,
+            lodSplats: [8],
+            totalLevels: 1,
+            splatType: '.sog',
+            root: {
+                splatFiles: ['chunk1.sog', 'chunk2.sog'],
+                child: [
+                    { data: { '3dgs': { name: 0 } } },
+                    { data: { '3dgs': { name: 1 } } }
+                ]
+            }
+        };
+        fs.set('meta.lcc2', new TextEncoder().encode(JSON.stringify(meta)));
+
+        const result = await readLcc2(fs, 'meta.lcc2', opts());
+        const merged = result[0];
+        assert.strictEqual(merged.numRows, 8);
+        assert.ok(merged.getColumnByName('x'));
+        assert.ok(Array.from(merged.getColumnByName('lod').data).every(v => v === 0));
+    });
+
+    it('decodes v3 (gzip-wrapped) SPZ chunks end-to-end', async () => {
+        // No meta counts, so the scanning fallback exercises the gzip header
+        // path on every chunk before decoding.
+        const fs = new MemoryReadFileSystem();
+        fs.set('chunk1.spz', await makeSpzBytes(5, { version: 3 }));
+        fs.set('chunk2.spz', await makeSpzBytes(3, { version: 3 }));
+
+        const meta = {
+            totalSplats: 8,
+            lodSplats: [8],
+            totalLevels: 1,
+            splatType: '.spz',
+            root: {
+                splatFiles: ['chunk1.spz', 'chunk2.spz'],
+                child: [
+                    { data: { '3dgs': { name: 0 } } },
+                    { data: { '3dgs': { name: 1 } } }
+                ]
+            }
+        };
+        fs.set('meta.lcc2', new TextEncoder().encode(JSON.stringify(meta)));
+
+        const result = await readLcc2(fs, 'meta.lcc2', opts());
+        assert.strictEqual(result[0].numRows, 8);
+    });
+
+    it('zero-fills columns missing from some chunks (heterogeneous SH)', async () => {
+        const fs = new MemoryReadFileSystem();
+        fs.set('plain.spz', await makeSpzBytes(3));
+        fs.set('sh.spz', await makeSpzBytes(4, { includeSH: true }));
+
+        const meta = {
+            totalSplats: 7,
+            lodSplats: [7],
+            totalLevels: 1,
+            splatType: '.spz',
+            root: {
+                splatFiles: ['plain.spz', 'sh.spz'],
+                child: [
+                    { data: { '3dgs': { name: 0 } } },
+                    { data: { '3dgs': { name: 1 } } }
+                ]
+            }
+        };
+        fs.set('meta.lcc2', new TextEncoder().encode(JSON.stringify(meta)));
+
+        const result = await readLcc2(fs, 'meta.lcc2', opts());
+        const merged = result[0];
+        assert.strictEqual(merged.numRows, 7);
+
+        const fRest = merged.getColumnByName('f_rest_0');
+        assert.ok(fRest, 'merged table has SH columns');
+        // Rows of the SH-less chunk (task order: plain.spz first) stay zero.
+        assert.deepStrictEqual(Array.from(fRest.data.slice(0, 3)), [0, 0, 0]);
+        // The SH chunk's region carries actual (quantized, nonzero) SH data
+        // in at least one coefficient.
+        let nonzero = false;
+        for (let c = 0; c < 45 && !nonzero; c++) {
+            const col = merged.getColumnByName(`f_rest_${c}`);
+            nonzero = Array.from(col.data.slice(3)).some(v => v !== 0);
+        }
+        assert.ok(nonzero, 'SH chunk region contains nonzero SH data');
+    });
+});
+
+describe('readLcc2 (file index validation)', () => {
+    it('rejects an out-of-range chunk file index', async () => {
+        const fs = new MemoryReadFileSystem();
+        const meta = {
+            totalSplats: 1,
+            lodSplats: [1],
+            totalLevels: 1,
+            splatType: '.spz',
+            root: {
+                splatFiles: ['a.spz'],
+                child: [{ data: { '3dgs': { name: 5 } } }]
+            }
+        };
+        fs.set('meta.lcc2', new TextEncoder().encode(JSON.stringify(meta)));
+
+        await assert.rejects(
+            () => readLcc2(fs, 'meta.lcc2', opts()),
+            /Invalid chunk file index 5/
+        );
+    });
+
+    it('rejects an empty chunk file path', async () => {
+        const fs = new MemoryReadFileSystem();
+        const meta = {
+            totalSplats: 1,
+            lodSplats: [1],
+            totalLevels: 1,
+            splatType: '.spz',
+            root: {
+                splatFiles: [''],
+                child: [{ data: { '3dgs': { name: 0 } } }]
+            }
+        };
+        fs.set('meta.lcc2', new TextEncoder().encode(JSON.stringify(meta)));
+
+        await assert.rejects(
+            () => readLcc2(fs, 'meta.lcc2', opts()),
+            /Invalid chunk file index 0/
+        );
     });
 });
 

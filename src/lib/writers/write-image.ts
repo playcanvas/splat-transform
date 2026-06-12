@@ -9,10 +9,6 @@ import { type Projection, type RenderCamera } from '../render/camera';
 import type { DeviceCreator } from '../types';
 import { logger, Transform, WebPCodec } from '../utils';
 
-// Cache the WebP codec across invocations; `WebPCodec.create()` instantiates
-// the WASM module which is expensive to repeat. Same pattern as write-sog.ts.
-let webPCodec: WebPCodec | undefined;
-
 /**
  * Options for writing a rendered splat image.
  */
@@ -350,9 +346,7 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     }
 
     const encodingGroup = logger.group('Encoding');
-    if (!webPCodec) {
-        webPCodec = await WebPCodec.create();
-    }
+    const webPCodec = await WebPCodec.create(); // cheap: create() memoizes the wasm module
     const webp = webPCodec.encodeLosslessRGBA(rgba, width, height);
     encodingGroup.end();
 

@@ -4,6 +4,8 @@ class WebPCodec {
     /**
      * URL to the webp.wasm file. Set this before any SOG read/write operations
      * in browser environments where the default path resolution doesn't work.
+     * Must be set before the first `create()` call: the compiled module is
+     * cached, so later changes have no effect.
      *
      * @example
      * import { WebPCodec } from '@playcanvas/splat-transform';
@@ -12,18 +14,35 @@ class WebPCodec {
      */
     static wasmUrl: string | null = null;
 
+    private static modulePromise: Promise<any> | null = null;
+
     Module: any;
 
     static async create() {
-        const instance = new WebPCodec();
-        instance.Module = await createModule({
-            locateFile: (path: string) => {
-                if (path.endsWith('.wasm') && WebPCodec.wasmUrl) {
-                    return WebPCodec.wasmUrl;
+        // Compile/instantiate the wasm module once and share it across all
+        // instances; per-call instantiation pays a fresh Emscripten heap each
+        // time (readers like readLcc2 call create() once per chunk). Memoize
+        // the promise so concurrent first calls share a single instantiation,
+        // but reset on rejection so a failed load (e.g. wasmUrl set late in a
+        // browser) can be retried.
+        if (!WebPCodec.modulePromise) {
+            const promise = createModule({
+                locateFile: (path: string) => {
+                    if (path.endsWith('.wasm') && WebPCodec.wasmUrl) {
+                        return WebPCodec.wasmUrl;
+                    }
+                    return new URL(`../lib/${path}`, import.meta.url).toString();
                 }
-                return new URL(`../lib/${path}`, import.meta.url).toString();
-            }
-        });
+            });
+            promise.catch(() => {
+                if (WebPCodec.modulePromise === promise) {
+                    WebPCodec.modulePromise = null;
+                }
+            });
+            WebPCodec.modulePromise = promise;
+        }
+        const instance = new WebPCodec();
+        instance.Module = await WebPCodec.modulePromise;
         return instance;
     }
 
