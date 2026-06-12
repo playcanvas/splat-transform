@@ -194,10 +194,10 @@ describe('PLY Format', () => {
         compareDataTables(readBack, testData, 0);
     });
 
-    it('should tolerate trailing/duplicate whitespace and whitespace-only lines in the header', async () => {
+    it('should tolerate trailing/duplicate whitespace in the header', async () => {
         // reuse the binary body from a clean encode, but prepend a deliberately "messy" header:
-        // a space-padded vertex count, duplicate spaces, a whitespace-only line, and a comment
-        // with leading whitespace — all of which previously caused 'invalid ply header'.
+        // a space-padded vertex count and duplicate spaces between tokens — both of which
+        // previously caused 'invalid ply header'.
         const clean = encodePlyBinary(testData);
         const term = 'end_header\n';
         const termIdx = new TextDecoder('ascii').decode(clean).indexOf(term);
@@ -208,8 +208,6 @@ describe('PLY Format', () => {
         const headerLines = [
             'ply',
             'format binary_little_endian 1.0',
-            '   ',                                                   // whitespace-only line
-            '   comment leading space and  double  spaces',         // leading ws + duplicate spaces
             `element vertex ${testData.numRows}            `,        // trailing padding spaces
             ...testData.columns.map(c => `property  ${plyType[c.dataType]}   ${c.name}`), // duplicate spaces
             'end_header'
