@@ -36,15 +36,15 @@ For library usage, install as a dependency:
 npm install @playcanvas/splat-transform
 ```
 
-For running on a backend with Docker (including GPU/Vulkan setup), see the [Docker Backend Guide](guides/DOCKER.md).
+For running on a backend with Docker (including GPU/Vulkan setup), see the [Docker Backend Guide](https://developer.playcanvas.com/user-manual/splat-transform/docker/).
 
 ## Guides
 
 - [Streamed SOG Guide](https://developer.playcanvas.com/user-manual/splat-transform/#generating-lod-format) — build a multi-LOD streamed SOG from a single PLY.
 - [Streamed SOG Format Specification](https://developer.playcanvas.com/user-manual/gaussian-splatting/formats/streamed-sog/) — the on-disk format of streamed SOG output.
-- [Collision Mesh Guide](guides/COLLISION.md) — generate voxel/collision data from a splat scene.
-- [Voxel Format Specification](guides/VOXEL_FORMAT.md) — the on-disk format of `.voxel.json` / `.voxel.bin` output.
-- [Docker Backend Guide](guides/DOCKER.md) — run splat-transform on a backend (incl. GPU/Vulkan setup).
+- [Collision Mesh Guide](https://developer.playcanvas.com/user-manual/splat-transform/collision/) — generate voxel/collision data from a splat scene.
+- [Voxel Format Specification](https://developer.playcanvas.com/user-manual/splat-transform/voxel-format/) — the on-disk format of `.voxel.json` / `.voxel.bin` output.
+- [Docker Backend Guide](https://developer.playcanvas.com/user-manual/splat-transform/docker/) — run splat-transform on a backend (incl. GPU/Vulkan setup).
 
 ## CLI Usage
 
@@ -185,7 +185,7 @@ See [Generating Streamed SOG](https://developer.playcanvas.com/user-manual/splat
 
 ## Voxel Output Options
 
-Apply when writing `.voxel.json` (sparse voxel octree for collision detection). See the [Collision Mesh Guide](guides/COLLISION.md) for a deep dive on each step and tuning.
+Apply when writing `.voxel.json` (sparse voxel octree for collision detection). See the [Collision Mesh Guide](https://developer.playcanvas.com/user-manual/splat-transform/collision/) for a deep dive on each step and tuning.
 
 ```none
     --voxel-params     [size,opacity]   Voxel size and opacity threshold. Default: 0.05,0.1
@@ -354,7 +354,7 @@ splat-transform gen-grid.mjs -p width=10,height=10,scale=10,color=0.1 scenes/gri
 
 The voxel format stores sparse voxel octree data for collision detection. It consists of two files: `.voxel.json` (metadata) and `.voxel.bin` (binary octree data). Pass `-K` to also emit a `.collision.glb` mesh derived from the voxel grid.
 
-For a step-by-step walkthrough of each option (with illustrations), see the [Collision Mesh Guide](guides/COLLISION.md).
+For a step-by-step walkthrough of each option (with illustrations), see the [Collision Mesh Guide](https://developer.playcanvas.com/user-manual/splat-transform/collision/).
 
 #### Recommended pipeline
 
