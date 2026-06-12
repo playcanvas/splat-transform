@@ -9,6 +9,7 @@ import { type FileSystem, writeFile } from '../io/write';
 import { GaussianBVH } from '../spatial';
 import type { CollisionMeshShape, DeviceCreator } from '../types';
 import { fmtCount, logger, Transform } from '../utils';
+import { version } from '../version';
 import { buildSparseOctree, type SparseOctree } from './sparse-octree';
 import {
     filterAndFillBlocks,
@@ -65,6 +66,12 @@ type WriteVoxelOptions = {
 interface VoxelMetadata {
     /** File format version */
     version: string;
+
+    /** Asset metadata */
+    asset: {
+        /** Tool that generated the file */
+        generator: string;
+    };
 
     /** Grid bounds aligned to 4x4x4 block boundaries */
     gridBounds: { min: number[]; max: number[] };
@@ -241,6 +248,9 @@ const writeOctreeFiles = async (
     // Build metadata object
     const metadata: VoxelMetadata = {
         version: '1.1',
+        asset: {
+            generator: `splat-transform v${version}`
+        },
         gridBounds: {
             min: [octree.gridBounds.min.x, octree.gridBounds.min.y, octree.gridBounds.min.z],
             max: [octree.gridBounds.max.x, octree.gridBounds.max.y, octree.gridBounds.max.z]
