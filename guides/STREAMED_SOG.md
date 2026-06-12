@@ -4,6 +4,8 @@ This guide explains how to turn a single PLY scene into the PlayCanvas **streame
 
 Streamed SOG splits the scene into SOG chunks at several levels of detail. The viewer can then stream in only the chunks and detail levels it needs for the current camera. This lets large scenes (tens of millions of Gaussians) load progressively and stay interactive.
 
+For a description of the generated files, see the [Streamed SOG Format Specification](STREAMED_SOG_FORMAT.md).
+
 ## Overview
 
 The pipeline has two stages:

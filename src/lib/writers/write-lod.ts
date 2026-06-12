@@ -8,6 +8,7 @@ import { type FileSystem } from '../io/write';
 import { BTreeNode, BTree } from '../spatial';
 import type { DeviceCreator } from '../types';
 import { logger, Transform } from '../utils';
+import { version } from '../version';
 
 type Aabb = {
     min: number[],
@@ -27,7 +28,13 @@ type MetaNode = {
 };
 
 type LodMeta = {
-    lodLevels: number,
+    version: number;
+    asset: {
+        generator: string;
+    };
+    count: number;
+    counts: number[];
+    lodLevels: number;
     environment?: string;
     filenames: string[];
     tree: MetaNode;
@@ -255,9 +262,24 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
     };
 
     const tree = build(bTree.root);
+
+    // count splats per lod level
+    const counts = new Array(lodLevels).fill(0);
+    for (const [lodValue, fileUnits] of lodFiles) {
+        for (const fileUnit of fileUnits) {
+            counts[lodValue] += fileUnit.reduce((acc, curr) => acc + curr.length, 0);
+        }
+    }
+
     const meta: LodMeta = {
+        version: 1,
+        asset: {
+            generator: `splat-transform v${version}`
+        },
+        count: counts.reduce((acc, curr) => acc + curr, 0),
+        counts,
         lodLevels,
-        environment: (envDataTable?.numRows > 0) ? 'env/meta.json' : null,
+        ...(envDataTable?.numRows > 0 ? { environment: 'env/meta.json' } : {}),
         filenames,
         tree
     };
