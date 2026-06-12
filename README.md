@@ -7,7 +7,7 @@
 [![Reddit](https://img.shields.io/badge/Reddit-FF4500?style=flat&logo=reddit&logoColor=white&color=black)](https://www.reddit.com/r/PlayCanvas)
 [![X](https://img.shields.io/badge/X-000000?style=flat&logo=x&logoColor=white&color=black)](https://x.com/intent/follow?screen_name=playcanvas)
 
-| [User Guide](https://developer.playcanvas.com/user-manual/gaussian-splatting/editing/splat-transform/) | [API Reference](https://api.playcanvas.com/splat-transform/) | [Blog](https://blog.playcanvas.com/) | [Forum](https://forum.playcanvas.com/) |
+| [User Guide](https://developer.playcanvas.com/user-manual/splat-transform/) | [API Reference](https://api.playcanvas.com/splat-transform/) | [Blog](https://blog.playcanvas.com/) | [Forum](https://forum.playcanvas.com/) |
 
 SplatTransform is an open source library and CLI tool for converting and editing Gaussian splats. It can:
 
@@ -38,13 +38,24 @@ npm install @playcanvas/splat-transform
 
 For running on a backend with Docker (including GPU/Vulkan setup), see the [Docker Backend Guide](https://developer.playcanvas.com/user-manual/splat-transform/docker/).
 
+> [!TIP]
+> For one-off conversions without installing anything, try [SuperSplat Convert](https://superspl.at/convert) — a browser-based frontend to splat-transform. See the [Convert page docs](https://developer.playcanvas.com/user-manual/supersplat/convert/) for details.
+
 ## Guides
 
 - [Streamed SOG Guide](https://developer.playcanvas.com/user-manual/splat-transform/#generating-lod-format) — build a multi-LOD streamed SOG from a single PLY.
-- [Streamed SOG Format Specification](https://developer.playcanvas.com/user-manual/gaussian-splatting/formats/streamed-sog/) — the on-disk format of streamed SOG output.
+- [LOD Streaming Guide](https://developer.playcanvas.com/user-manual/gaussian-splatting/building/lod-streaming/) — load and render streamed SOG output in a PlayCanvas app.
 - [Collision Mesh Guide](https://developer.playcanvas.com/user-manual/splat-transform/collision/) — generate voxel/collision data from a splat scene.
-- [Voxel Format Specification](https://developer.playcanvas.com/user-manual/splat-transform/voxel-format/) — the on-disk format of `.voxel.json` / `.voxel.bin` output.
 - [Docker Backend Guide](https://developer.playcanvas.com/user-manual/splat-transform/docker/) — run splat-transform on a backend (incl. GPU/Vulkan setup).
+
+## Format Specifications
+
+| Format | Description |
+| ------ | ----------- |
+| [PLY](https://developer.playcanvas.com/user-manual/gaussian-splatting/formats/ply/) | Industry-standard uncompressed format for source, editing and interchange |
+| [SOG](https://developer.playcanvas.com/user-manual/gaussian-splatting/formats/sog/) | Super-compressed format for web delivery (`meta.json` + WebP textures, bundled or unbundled) |
+| [Streamed SOG](https://developer.playcanvas.com/user-manual/gaussian-splatting/formats/streamed-sog/) | Multi-LOD chunked SOG for streaming very large scenes (`lod-meta.json`) |
+| [Voxel](https://developer.playcanvas.com/user-manual/splat-transform/voxel-format/) | Sparse voxel octree for collision detection (`.voxel.json` / `.voxel.bin`) |
 
 ## CLI Usage
 
