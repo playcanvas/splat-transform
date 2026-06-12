@@ -193,6 +193,34 @@ describe('PLY Format', () => {
         // Compare data tables (should be identical)
         compareDataTables(readBack, testData, 0);
     });
+
+    it('should tolerate trailing/duplicate whitespace in the header', async () => {
+        // reuse the binary body from a clean encode, but prepend a deliberately "messy" header:
+        // a space-padded vertex count and duplicate spaces between tokens — both of which
+        // previously caused 'invalid ply header'.
+        const clean = encodePlyBinary(testData);
+        const term = 'end_header\n';
+        const termIdx = new TextDecoder('ascii').decode(clean).indexOf(term);
+        assert(termIdx !== -1, 'end_header terminator not found in encoded PLY');
+        const body = clean.subarray(termIdx + term.length);
+
+        const plyType = { float32: 'float', float64: 'double', int8: 'char', uint8: 'uchar', int16: 'short', uint16: 'ushort', int32: 'int', uint32: 'uint' };
+        const headerLines = [
+            'ply',
+            'format binary_little_endian 1.0',
+            `element vertex ${testData.numRows}            `,        // trailing padding spaces
+            ...testData.columns.map(c => `property  ${plyType[c.dataType]}   ${c.name}`), // duplicate spaces
+            'end_header'
+        ];
+        const header = new TextEncoder().encode(`${headerLines.join('\n')}\n`);
+        const messy = new Uint8Array(header.length + body.length);
+        messy.set(header, 0);
+        messy.set(body, header.length);
+
+        const dataTable = await readPly(new BufferReadSource(messy));
+        assert.strictEqual(dataTable.numRows, testData.numRows);
+        assert.strictEqual(dataTable.numColumns, testData.columns.length);
+    });
 });
 
 describe('Compressed PLY Format', () => {

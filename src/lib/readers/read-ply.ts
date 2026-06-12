@@ -76,7 +76,8 @@ const parseHeader = (data: Uint8Array): PlyHeader => {
     const comments: string[] = [];
     let element;
     for (let i = 1; i < strings.length; ++i) {
-        const words = strings[i].split(' ');
+        // tolerate trailing/duplicate whitespace (e.g. space-padded counts written by some tools)
+        const words = strings[i].split(' ').filter(Boolean);
 
         switch (words[0]) {
             case 'ply':
