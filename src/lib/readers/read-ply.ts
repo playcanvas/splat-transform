@@ -77,12 +77,11 @@ const parseHeader = (data: Uint8Array): PlyHeader => {
     let element;
     for (let i = 1; i < strings.length; ++i) {
         // tolerate trailing/duplicate whitespace (e.g. space-padded counts written by some tools)
-        const line = strings[i].trim();
-        if (!line) {
+        const words = strings[i].split(' ').filter(Boolean);
+        if (words.length === 0) {
             // skip blank / whitespace-only lines
             continue;
         }
-        const words = line.split(/\s+/);
 
         switch (words[0]) {
             case 'ply':
@@ -91,7 +90,7 @@ const parseHeader = (data: Uint8Array): PlyHeader => {
                 // skip
                 break;
             case 'comment':
-                comments.push(line.substring(8)); // skip 'comment '
+                comments.push(strings[i].substring(8)); // skip 'comment '
                 break;
             case 'element': {
                 if (words.length !== 3) {
