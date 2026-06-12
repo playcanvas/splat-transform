@@ -16,6 +16,16 @@ type MetaV2 = {
     shN?: { count: number; bands: number; codebook: number[]; files: string[] };
 };
 
+type ReadSogOptions = {
+    // Controls how readSog reports its own progress (mirrors writeSog's
+    // `logging` option, reduced to the modes a bar-only reader needs):
+    //   'own'    — open readSog's internal 'decoding' bar (default)
+    //   'silent' — no bar; the caller drives its own progress (e.g. readLcc2
+    //              decoding many chunks concurrently — logger bars are strictly
+    //              LIFO, so concurrent per-chunk bars would corrupt each other)
+    logging?: 'own' | 'silent';
+};
+
 const decodeMeans = (lo: Uint8Array, hi: Uint8Array, count: number) => {
     const xs = new Uint16Array(count);
     const ys = new Uint16Array(count);
@@ -75,10 +85,11 @@ const sigmoidInv = (y: number) => {
  * The basename is used verbatim for the initial meta fetch so
  * any URL querystring/fragment (e.g. presigned `?token=...`)
  * is preserved.
+ * @param options - Options controlling progress reporting.
  * @returns DataTable with Gaussian splat data
  * @ignore
  */
-const readSog = async (fileSystem: ReadFileSystem, filename: string): Promise<DataTable> => {
+const readSog = async (fileSystem: ReadFileSystem, filename: string, options: ReadSogOptions = {}): Promise<DataTable> => {
     const baseDir = dirname(filename);
     const metaName = basename(filename);
     const resolve = (name: string) => (baseDir ? join(baseDir, name) : name);
@@ -94,7 +105,7 @@ const readSog = async (fileSystem: ReadFileSystem, filename: string): Promise<Da
     //     downstream failures (missing `means.shape`, etc.).
     const version = rawMeta.version;
     if (version === undefined) {
-        return readSogV1(fileSystem, baseDir, rawMeta as MetaV1);
+        return readSogV1(fileSystem, baseDir, rawMeta as MetaV1, options);
     }
     if (version !== 2) {
         throw new Error(`Unsupported SOG meta version: ${version}`);
@@ -134,10 +145,10 @@ const readSog = async (fileSystem: ReadFileSystem, filename: string): Promise<Da
     // (means, quats, scales, sh0, plus an optional shN pass). Each pass ticks
     // with `count` once it has finished writing into the output columns.
     const numPasses = 4 + (meta.shN ? 1 : 0);
-    const bar = logger.bar('decoding', numPasses * count);
+    const bar = options.logging === 'silent' ? null : logger.bar('decoding', numPasses * count);
     let passesDone = 0;
     const tickPass = () => {
-        bar.update(++passesDone * count);
+        bar?.update(++passesDone * count);
     };
 
     // means: two textures means_l (low byte) + means_u (high byte) packed as
@@ -271,9 +282,10 @@ const readSog = async (fileSystem: ReadFileSystem, filename: string): Promise<Da
     // Close the bar only on success: leaving it open on the error path lets
     // `logger.error() -> unwindAll(true)` mark it as failed instead of
     // finalizing it as a successful bar first.
-    bar.end();
+    bar?.end();
 
     return new DataTable(columns, Transform.PLY);
 };
 
 export { readSog };
+export type { ReadSogOptions };

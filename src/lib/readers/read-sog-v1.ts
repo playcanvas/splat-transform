@@ -1,6 +1,7 @@
 import { Column, DataTable } from '../data-table';
 import { join, type ReadFileSystem } from '../io/read';
 import { logger, Transform, WebPCodec } from '../utils';
+import type { ReadSogOptions } from './read-sog';
 
 // V1 (legacy) SOG meta layout. Quantization is a per-channel linear lerp
 // between mins/maxs, with no codebook. The engine's SOG parser still loads
@@ -90,10 +91,11 @@ const v1ShBandsWidths: Record<number, number> = { 192: 1, 512: 2, 960: 3 };
  * @param baseDir - Directory containing the SOG textures (relative paths in
  * meta are resolved from here)
  * @param meta - The parsed V1 meta.json payload
+ * @param options - Options controlling progress reporting.
  * @returns DataTable with Gaussian splat data
  * @ignore
  */
-const readSogV1 = async (fileSystem: ReadFileSystem, baseDir: string, meta: MetaV1): Promise<DataTable> => {
+const readSogV1 = async (fileSystem: ReadFileSystem, baseDir: string, meta: MetaV1, options: ReadSogOptions = {}): Promise<DataTable> => {
     const decoder = await WebPCodec.create();
     const count = meta.means.shape[0];
 
@@ -124,10 +126,10 @@ const readSogV1 = async (fileSystem: ReadFileSystem, baseDir: string, meta: Meta
     ];
 
     const numPasses = 4 + (meta.shN ? 1 : 0);
-    const bar = logger.bar('decoding', numPasses * count);
+    const bar = options.logging === 'silent' ? null : logger.bar('decoding', numPasses * count);
     let passesDone = 0;
     const tickPass = () => {
-        bar.update(++passesDone * count);
+        bar?.update(++passesDone * count);
     };
 
     // means: two textures means_l (low byte) + means_u (high byte) packed as
@@ -274,7 +276,7 @@ const readSogV1 = async (fileSystem: ReadFileSystem, baseDir: string, meta: Meta
     // Close the bar only on success: leaving it open on the error path lets
     // `logger.error() -> unwindAll(true)` mark it as failed instead of
     // finalizing it as a successful bar first.
-    bar.end();
+    bar?.end();
 
     return new DataTable(columns, Transform.PLY);
 };
