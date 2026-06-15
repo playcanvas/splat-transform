@@ -182,7 +182,7 @@ async function ensureSpawned() {
             const cores = isNode ?
                 (await import('node:os')).availableParallelism() :
                 (navigator.hardwareConcurrency || 2);
-            resolvedMaxWorkers = Math.max(1, Math.min(6, cores - 1));
+            resolvedMaxWorkers = Math.max(1, Math.min(4, cores - 1));
         }
 
         const max = maxWorkers ?? resolvedMaxWorkers;
@@ -322,7 +322,9 @@ class WorkerQueue {
 
     /**
      * Maximum number of worker threads. Defaults to one less than the
-     * available hardware concurrency, capped at 6.
+     * available hardware concurrency, capped at 4. (Peak memory scales with
+     * worker count, since each holds its own WebP WASM heap; 4 captures most
+     * of the parallelism for SOG writes.)
      *
      * @returns The configured limit, or null when auto-sized.
      */

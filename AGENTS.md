@@ -124,6 +124,8 @@ Four Rollup targets, all emitting to `dist/`:
 
 `dist/worker.mjs` is the self-contained worker entry, shipped and exported as `@playcanvas/splat-transform/worker`. `WorkerQueue` spawns it from a URL: Node and bundlers that rewrite `new Worker(new URL('./worker.mjs', import.meta.url))` (Vite, webpack 5) resolve it automatically; other bundlers (e.g. plain Rollup, as SuperSplat uses) set `WorkerQueue.workerUrl` explicitly to a copied/vendored asset, mirroring how `WebPCodec.wasmUrl` is set. The `mark-worker-bundled` plugin flips the `workerBundled` flag true in the library/CLI builds; from source via tsx (dev, tests) it stays false and all worker tasks run inline on the calling thread. The worker bundle must stay lean: it must not pull in `DataTable` (whose `Transform` member drags in the playcanvas engine) - see `src/lib/spatial/quantize-1d-core.ts`.
 
+The pool defaults to `min(4, cores - 1)` workers (`WorkerQueue.maxWorkers`); peak memory scales with worker count since each worker holds its own WebP WASM heap. The CLI exposes `--max-workers <n>` (0 = inline/serial) to trade speed for peak.
+
 Type declarations go to `dist/lib/`. A post-build step copies `index.d.ts` to `index.d.cts` for CJS consumers.
 
 ### CLI Binary
