@@ -99,18 +99,22 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     // Texture texels follow the provided or generated index order.
     const layout = identity;
 
-    // Encodes may complete concurrently but file writes must not interleave:
-    // ZipFileSystem emits entries contiguously into a single stream, so all
-    // writes are serialized through this chain.
+    // Encodes run concurrently, but writes are committed in call order: the
+    // write step is enqueued onto this chain synchronously (so archive entry
+    // order follows call order rather than encode-completion order) and awaits
+    // its own encode inside the chained section. ZipFileSystem emits entries
+    // contiguously into a single stream, so writes must run one at a time.
     let writeChain: Promise<void> = Promise.resolve();
 
-    const writeWebp = async (filename: string, data: Uint8Array, w = width, h = height) => {
+    const writeWebp = (filename: string, data: Uint8Array, w = width, h = height) => {
         const pathname = zipFs ? filename : resolve(dirname(outputFilename), filename);
 
-        // NOTE: data may be transferred to a worker and unusable afterwards
-        const webp = await runEncodeWebp(data, w, h);
+        // start the encode now, in parallel; NOTE: data may be transferred to a
+        // worker and is unusable afterwards
+        const encoded = runEncodeWebp(data, w, h);
 
         const write = writeChain.then(async () => {
+            const webp = await encoded;
             await writeFile(outputFs, pathname, webp);
 
             // For bundled output the per-file sizes are an internal detail; we
@@ -124,7 +128,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
         // propagated to the caller below
         writeChain = write.catch(() => {});
 
-        await write;
+        return write;
     };
 
     const writeTableData = (filename: string, dataTable: DataTable, w = width, h = height) => {

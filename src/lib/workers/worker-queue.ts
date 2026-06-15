@@ -275,15 +275,17 @@ const destroyPool = async () => {
 
 /**
  * A small cross-platform (Node + browser) worker pool running the CPU-heavy
- * tasks defined in tasks.ts off the main thread. The worker code is bundled
- * into the library itself at build time and spawned from a Blob URL
- * (browser) or data: URL (Node), so no separate worker file ships and
- * consumers need no bundler configuration.
+ * tasks defined in tasks.ts off the main thread. The worker entry is built and
+ * shipped as `dist/worker.mjs`; the pool spawns it from a URL resolved
+ * relative to the library bundle. Node and bundlers that rewrite
+ * `new Worker(new URL('./worker.mjs', import.meta.url))` (e.g. Vite, webpack)
+ * pick it up automatically; with other bundlers, set `WorkerQueue.workerUrl`
+ * to the deployed worker asset (mirroring `WebPCodec.wasmUrl`).
  *
- * Workers spawn lazily on demand and run one task at a time. When workers
- * are unavailable (running from source via tsx, `maxWorkers = 0`, spawn
- * blocked by CSP, unsupported browser) every task runs inline on the calling
- * thread instead - same code, same results, just serial.
+ * Workers spawn lazily on demand and run one task at a time. When workers are
+ * unavailable (running from source via tsx, `maxWorkers = 0`, or spawn fails)
+ * every task runs inline on the calling thread instead - same code, same
+ * results, just serial.
  */
 class WorkerQueue {
     /**

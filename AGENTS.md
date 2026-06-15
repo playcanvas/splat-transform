@@ -8,7 +8,7 @@ splat-transform is a library and CLI tool for 3D Gaussian splat format conversio
 
 - **Language**: TypeScript (ES2022)
 - **Module System**: ES Modules (`"type": "module"`)
-- **Node Version**: >=22.0.0. The `--fp16` mode uses native `Float16Array`, which is enabled by default in Node 24+; on Node 22 it requires the `--js-float16array` flag. Without it, `--fp16` errors at runtime; the rest of the tool keeps working.
+- **Node Version**: >=18.0.0 (per `package.json` `engines`)
 - **Build System**: Rollup
 - **Testing**: Node.js built-in test runner (`node:test`)
 - **Linting**: ESLint with `@playcanvas/eslint-config`
@@ -77,11 +77,12 @@ src/
 │   │   └── write/          # Write abstractions (FileSystem, helpers)
 │   ├── readers/            # Format-specific readers (one per file)
 │   │   ├── read-ply.ts
-│   │   ├── read-sog.ts
+│   │   ├── read-sog.ts     # (read-sog-v1.ts handles the legacy SOG layout)
 │   │   ├── read-splat.ts
 │   │   ├── read-ksplat.ts
 │   │   ├── read-spz.ts
 │   │   ├── read-lcc.ts
+│   │   ├── read-lcc2.ts
 │   │   └── read-mjs.ts
 │   ├── writers/            # Format-specific writers (one per file)
 │   │   ├── write-ply.ts
@@ -90,9 +91,15 @@ src/
 │   │   ├── write-csv.ts
 │   │   ├── write-html.ts
 │   │   ├── write-lod.ts
+│   │   ├── write-spz.ts
+│   │   ├── write-glb.ts
+│   │   ├── write-image.ts
 │   │   └── write-voxel.ts
-│   ├── spatial/            # Spatial algorithms (k-means, kd-tree, b-tree)
+│   ├── workers/            # Cross-platform worker pool (WorkerQueue, tasks)
+│   ├── spatial/            # Spatial algorithms (k-means, kd-tree, b-tree, quantize-1d)
 │   ├── voxel/              # Voxel generation (BVH, octree, GPU voxelization)
+│   ├── mesh/               # Mesh generation (collision/marching cubes)
+│   ├── render/             # GPU splat rasterizer (for image output)
 │   ├── gpu/                # WebGPU compute (clustering)
 │   └── utils/              # Logger, math, SH rotation, WebP codec
 └── cli/                    # Node.js CLI (NOT platform-agnostic)
@@ -141,17 +148,20 @@ The central data structure is `DataTable` -- a columnar store of typed arrays:
 ```typescript
 class Column {
     name: string;
-    data: TypedArray;  // Int8Array | Uint8Array | ... | Float16Array | Float32Array | Float64Array
+    data: TypedArray;  // Int8Array | Uint8Array | ... | Float32Array | Float64Array
 }
 
 class DataTable {
     columns: Column[];
-    numRows: number;
+    get numRows(): number;
+    get numColumns(): number;
 
     addColumn(column: Column): void;
-    getColumn(name: string): Column | undefined;
+    getColumn(index: number): Column;            // by index
+    getColumnByName(name: string): Column | null; // by name
     removeColumn(name: string): void;
-    clone(): DataTable;
+    getRow(index: number, row?: Row, columns?: Column[]): Row;
+    clone(options?: { rows?: Uint32Array | number[]; columns?: string[] }): DataTable;
 }
 ```
 
@@ -163,22 +173,6 @@ Standard Gaussian splat columns:
 - **Opacity**: `opacity` (Float32, logit)
 - **Spherical Harmonics**: `f_rest_0` through `f_rest_44`
 
-### Float Precision (`--fp16`)
-
-Readers can allocate non-position float columns (rotations, scales, opacity,
-SH coefficients) as `Float16Array` instead of `Float32Array` when the global
-`--fp16` CLI flag (or `Options.fp16 === true`) is set. This roughly halves
-the in-memory footprint at the cost of minor precision loss. Position
-columns (`x`, `y`, `z`) always remain `Float32Array` to preserve spatial
-accuracy for Morton ordering, AABB and KD-tree operations.
-
-The `floatArray(length, fp16)` helper in `src/lib/readers/utils.ts`
-centralizes the conditional allocation logic and is used by every reader.
-`combine.ts` matches columns by name and widens to `Float32Array` when input
-tables disagree on precision. `transform.ts` preserves the source column's
-typed-array constructor for out-of-place outputs so an `fp16` input stays
-`fp16` through the pipeline.
-
 ### File System Abstractions
 
 Read and write operations use abstract interfaces so the same code works in browsers and Node:
@@ -188,9 +182,9 @@ Read and write operations use abstract interfaces so the same code works in brow
 
 ### Supported Formats
 
-**Input**: PLY, splat, KSplat, SOG, SPZ, LCC, MJS
+**Input**: PLY, splat, KSplat, SOG, SPZ, LCC, LCC2, MJS
 
-**Output**: PLY, compressed PLY, SOG, SOG-bundle, CSV, HTML, HTML-bundle, LOD, voxel
+**Output**: PLY, compressed PLY, SOG, SOG-bundle, SPZ, GLB, CSV, HTML, HTML-bundle, LOD, voxel, image (WebP)
 
 Each reader lives in `src/lib/readers/read-<format>.ts` and each writer in `src/lib/writers/write-<format>.ts`.
 
@@ -236,8 +230,8 @@ describe('Feature Name', () => {
         testData = createMinimalTestData();
     });
 
-    it('should do something specific', () => {
-        const result = processDataTable(testData.clone(), [/* actions */]);
+    it('should do something specific', async () => {
+        const result = await processDataTable(testData.clone(), [/* actions */]);
         assert.strictEqual(result.numRows, testData.numRows);
     });
 });
@@ -279,7 +273,7 @@ Generate docs with `npm run docs`. Published at https://api.playcanvas.com/splat
 
 ## Dependencies
 
-- **Runtime**: `webgpu` (for CLI GPU operations)
+- **Runtime**: `webgpu` (for CLI GPU operations), `@adobe/spz` (SPZ format codec)
 - **Peer**: `playcanvas` (>=2.0.0) -- used for Vec3, GraphicsDevice, etc.
 - **Dev**: Rollup, TypeScript, ESLint, Typedoc, tsx (for running TypeScript tests)
 
@@ -305,17 +299,17 @@ Generate docs with `npm run docs`. Published at https://api.playcanvas.com/splat
 
 ### Processing Actions
 
-Transformations are applied via `processDataTable(dataTable, actions)`:
+Transformations are applied via `await processDataTable(dataTable, actions)` (it is async):
 
 ```typescript
-const result = processDataTable(dataTable, [
+const result = await processDataTable(dataTable, [
     { kind: 'translate', value: new Vec3(10, 0, 0) },
     { kind: 'scale', value: new Vec3(2, 2, 2) },
-    { kind: 'filter-nan' }
+    { kind: 'filterNaN' }
 ]);
 ```
 
-Action types: `translate`, `rotate`, `scale`, `filter-nan`, `filter-by-value`, `filter-bands`, `filter-box`, `filter-sphere`, `lod`, `summary`, `morton-order`, `decimate`.
+Action `kind` values (camelCase): `translate`, `rotate`, `scale`, `filterNaN`, `filterByValue`, `filterBands`, `filterBox`, `filterSphere`, `filterFloaters`, `filterCluster`, `param`, `lod`, `summary`, `mortonOrder`, `decimate`.
 
 ## Things to Avoid
 

@@ -11,10 +11,10 @@ import assert from 'node:assert';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { Column, DataTable, WorkerQueue } from '../src/lib/index.ts';
-import { quantize1d } from '../src/lib/spatial/quantize-1d.ts';
-import { runQuantize1d, runEncodeWebp } from '../src/lib/workers/index.ts';
-import { WebPCodec } from '../src/lib/utils/webp-codec.ts';
+import { Column, DataTable, WorkerQueue } from '../src/lib/index.js';
+import { quantize1d } from '../src/lib/spatial/quantize-1d.js';
+import { runQuantize1d, runEncodeWebp } from '../src/lib/workers/index.js';
+import { WebPCodec } from '../src/lib/utils/webp-codec.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
