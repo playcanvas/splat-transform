@@ -142,11 +142,10 @@ async function spawnSlot(slot: Slot) {
             slot.unref = () => worker.unref();
             worker.on('message', (message: WorkerMessage) => onSlotMessage(slot, message));
             worker.on('error', (err: Error) => onSlotDeath(slot, err));
-            worker.on('exit', (code: number) => {
-                if (code !== 0) {
-                    onSlotDeath(slot, new Error(`worker exited with code ${code}`));
-                }
-            });
+            // any exit we didn't initiate (onSlotDeath sets slot.dead before
+            // terminating) means this worker is gone - drop the slot so it
+            // can't stall the queue, whatever the exit code
+            worker.on('exit', (code: number) => onSlotDeath(slot, new Error(`worker exited with code ${code}`)));
         } else {
             const worker = new Worker(url, { type: 'module' });
             slot.post = (message, transfer) => worker.postMessage(message, transfer);

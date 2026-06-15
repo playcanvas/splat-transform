@@ -2,10 +2,9 @@ import { taskHandlers, type HostMessage, type WorkerMessage } from './tasks';
 import { WebPCodec } from '../utils/webp-codec';
 
 /**
- * Worker-side entry point, built as a self-contained bundle and inlined as a
- * string into the library/CLI bundles (see rollup.config.mjs), then spawned
- * by WorkerQueue from a Blob URL (browser) or data: URL (Node). Runs one
- * task at a time and posts the result back with its buffers transferred.
+ * Worker-side entry point, built and shipped as `dist/worker.mjs` (see
+ * rollup.config.mjs) and spawned by WorkerQueue from a URL. Runs one task at a
+ * time and posts the result back with its buffers transferred.
  */
 
 const bind = (
@@ -14,8 +13,8 @@ const bind = (
 ) => {
     listen(async (message) => {
         if (message.type === 'init') {
-            // resolved host-side: import.meta.url is useless in a blob/data
-            // worker, so the wasm location must be handed in
+            // resolved host-side and handed in, so the worker uses the same
+            // wasm location as the host regardless of its own module URL
             WebPCodec.wasmUrl = message.wasmUrl;
             return;
         }
@@ -38,7 +37,10 @@ const bind = (
     post({ type: 'ready' }, []);
 };
 
-if (typeof process !== 'undefined' && process.versions?.node) {
+// same guard as WorkerQueue's isNode: a real worker_threads worker, not an
+// Electron renderer (where process.versions.node is present but messaging goes
+// through the Web Worker scope)
+if (typeof process !== 'undefined' && !!process.versions?.node && (process as any).type !== 'renderer') {
     // node MessagePorts buffer messages until a listener attaches, so the
     // host's init message survives this async import
     import('node:worker_threads').then(({ parentPort }) => {

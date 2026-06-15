@@ -19,16 +19,17 @@ class WebPCodec {
     Module: any;
 
     /**
-     * The effective webp.wasm location as an absolute URL: `wasmUrl` if set,
-     * otherwise the default resolution relative to this module. Worker
-     * threads receive this from the host, since inside a blob/data worker
-     * `import.meta.url` cannot resolve the wasm location.
+     * The effective webp.wasm location to hand to worker threads (which can't
+     * resolve it from their own module URL). Returns `wasmUrl` verbatim when
+     * set - exactly the value `locateFile` uses, so a Windows file path or a
+     * URL both pass through unchanged - otherwise the default resolution
+     * relative to this module.
      *
-     * @returns Absolute URL of the webp.wasm binary.
+     * @returns The configured `wasmUrl`, or the default webp.wasm URL.
      * @ignore
      */
     static resolveWasmUrl() {
-        return new URL(WebPCodec.wasmUrl ?? '../lib/webp.wasm', import.meta.url).toString();
+        return WebPCodec.wasmUrl ?? new URL('../lib/webp.wasm', import.meta.url).toString();
     }
 
     static async create() {
