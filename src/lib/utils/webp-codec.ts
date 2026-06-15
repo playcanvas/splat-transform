@@ -18,6 +18,19 @@ class WebPCodec {
 
     Module: any;
 
+    /**
+     * The effective webp.wasm location as an absolute URL: `wasmUrl` if set,
+     * otherwise the default resolution relative to this module. Worker
+     * threads receive this from the host, since inside a blob/data worker
+     * `import.meta.url` cannot resolve the wasm location.
+     *
+     * @returns Absolute URL of the webp.wasm binary.
+     * @ignore
+     */
+    static resolveWasmUrl() {
+        return new URL(WebPCodec.wasmUrl ?? '../lib/webp.wasm', import.meta.url).toString();
+    }
+
     static async create() {
         // Compile/instantiate the wasm module once and share it across all
         // instances; per-call instantiation pays a fresh Emscripten heap each
