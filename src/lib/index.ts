@@ -37,6 +37,9 @@ export type {
     Decimate
 } from './process';
 
+// Worker pool for CPU-heavy tasks
+export { WorkerQueue } from './workers';
+
 // File system abstractions
 export { ReadStream, BufferedReadStream, MemoryReadFileSystem, UrlReadFileSystem, ZipReadFileSystem } from './io/read';
 export type { ReadSource, ReadFileSystem, ProgressCallback, ZipEntry } from './io/read';

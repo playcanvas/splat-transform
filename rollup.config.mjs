@@ -1,4 +1,5 @@
 import { execSync } from 'node:child_process';
+import { resolve as resolvePath } from 'node:path';
 
 import json from '@rollup/plugin-json';
 import resolve from '@rollup/plugin-node-resolve';
@@ -23,6 +24,49 @@ const versionReplace = () => replace({
     }
 });
 
+// Flips the workerBundled build flag to true in the library/CLI bundles. From
+// source (tsx: dev, tests) the flag stays false and WorkerQueue runs tasks
+// inline; in a build, dist/worker.mjs exists and is spawned from a URL.
+const workerBundledPath = resolvePath('src/lib/workers/worker-bundled.ts');
+const markWorkerBundled = () => ({
+    name: 'mark-worker-bundled',
+    load(id) {
+        if (id === workerBundledPath) {
+            return 'export const workerBundled = true;';
+        }
+        return null;
+    }
+});
+
+// node builtins dynamically imported behind runtime guards in
+// src/lib/workers; browser bundlers never execute those branches
+const nodeExternals = ['node:worker_threads', 'node:os'];
+
+// Worker build - self-contained worker entry shipped as dist/worker.mjs and
+// spawned from a URL by WorkerQueue (built first so it exists before the
+// other bundles, though they no longer depend on it at build time).
+const worker = {
+    input: 'src/lib/workers/worker-entry.ts',
+    output: {
+        dir: 'dist',
+        format: 'esm',
+        sourcemap: true,
+        entryFileNames: 'worker.mjs'
+    },
+    external: nodeExternals,
+    plugins: [
+        versionReplace(),
+        typescript({
+            tsconfig: './tsconfig.json',
+            declaration: false,
+            declarationDir: undefined
+        }),
+        resolve(),
+        json()
+    ],
+    cache: false
+};
+
 // Library build - ESM (platform agnostic)
 const esm = {
     input: 'src/lib/index.ts',
@@ -32,8 +76,9 @@ const esm = {
         sourcemap: true,
         entryFileNames: 'index.mjs'
     },
-    external: ['playcanvas'],
+    external: ['playcanvas', ...nodeExternals],
     plugins: [
+        markWorkerBundled(),
         versionReplace(),
         typescript({
             tsconfig: './tsconfig.json',
@@ -56,8 +101,9 @@ const cjs = {
         entryFileNames: 'index.cjs',
         exports: 'named'
     },
-    external: ['playcanvas'],
+    external: ['playcanvas', ...nodeExternals],
     plugins: [
+        markWorkerBundled(),
         versionReplace(),
         typescript({
             tsconfig: './tsconfig.json',
@@ -79,8 +125,9 @@ const cli = {
         sourcemap: true,
         entryFileNames: 'cli.mjs'
     },
-    external: ['webgpu'],
+    external: ['webgpu', ...nodeExternals],
     plugins: [
+        markWorkerBundled(),
         versionReplace(),
         typescript({
             tsconfig: './tsconfig.json',
@@ -93,4 +140,4 @@ const cli = {
     cache: false
 };
 
-export default [esm, cjs, cli];
+export default [worker, esm, cjs, cli];

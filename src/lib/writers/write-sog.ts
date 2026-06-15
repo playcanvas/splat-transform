@@ -3,10 +3,11 @@ import { basename, dirname, resolve } from 'pathe';
 import { logWrittenFile } from './utils';
 import { Column, DataTable, sortMortonOrder, convertToSpace, getSHBands, shRestNames } from '../data-table';
 import { type FileSystem, writeFile, ZipFileSystem } from '../io/write';
-import { kmeans, quantize1d } from '../spatial';
+import { kmeans } from '../spatial';
 import type { DeviceCreator } from '../types';
-import { logger, sigmoid, Transform, WebPCodec } from '../utils';
+import { logger, sigmoid, Transform } from '../utils';
 import { version } from '../version';
+import { runEncodeWebp, runQuantize1d } from '../workers';
 
 const calcMinMax = (dataTable: DataTable, columnNames: string[], indices: Uint32Array) => {
     const columns = columnNames.map(name => dataTable.getColumnByName(name));
@@ -98,21 +99,36 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     // Texture texels follow the provided or generated index order.
     const layout = identity;
 
-    const writeWebp = async (filename: string, data: Uint8Array, w = width, h = height) => {
+    // Encodes run concurrently, but writes are committed in call order: the
+    // write step is enqueued onto this chain synchronously (so archive entry
+    // order follows call order rather than encode-completion order) and awaits
+    // its own encode inside the chained section. ZipFileSystem emits entries
+    // contiguously into a single stream, so writes must run one at a time.
+    let writeChain: Promise<void> = Promise.resolve();
+
+    const writeWebp = (filename: string, data: Uint8Array, w = width, h = height) => {
         const pathname = zipFs ? filename : resolve(dirname(outputFilename), filename);
 
-        // cheap after the first call: create() memoizes the wasm module
-        const webPCodec = await WebPCodec.create();
+        // start the encode now, in parallel; NOTE: data may be transferred to a
+        // worker and is unusable afterwards
+        const encoded = runEncodeWebp(data, w, h);
 
-        const webp = await webPCodec.encodeLosslessRGBA(data, w, h);
+        const write = writeChain.then(async () => {
+            const webp = await encoded;
+            await writeFile(outputFs, pathname, webp);
 
-        await writeFile(outputFs, pathname, webp);
+            // For bundled output the per-file sizes are an internal detail; we
+            // report a single bundle size after the archive closes.
+            if (emitInfo && !zipFs) {
+                logWrittenFile(filename, webp.byteLength);
+            }
+        });
 
-        // For bundled output the per-file sizes are an internal detail; we
-        // report a single bundle size after the archive closes.
-        if (emitInfo && !zipFs) {
-            logWrittenFile(filename, webp.byteLength);
-        }
+        // keep the chain usable if this write fails; the failure itself is
+        // propagated to the caller below
+        writeChain = write.catch(() => {});
+
+        return write;
     };
 
     const writeTableData = (filename: string, dataTable: DataTable, w = width, h = height) => {
@@ -159,8 +175,10 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
             meansU[ti * 4 + 2] = (z >> 8) & 0xff;
             meansU[ti * 4 + 3] = 0xff;
         }
-        await writeWebp('means_l.webp', meansL);
-        await writeWebp('means_u.webp', meansU);
+        await Promise.all([
+            writeWebp('means_l.webp', meansL),
+            writeWebp('means_u.webp', meansU)
+        ]);
 
         return {
             mins: meansMinMax.map(v => v[0]),
@@ -222,7 +240,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     };
 
     const writeScales = async () => {
-        const scaleData = quantize1d(
+        const scaleData = await runQuantize1d(
             new DataTable(['scale_0', 'scale_1', 'scale_2'].map(name => dataTable.getColumnByName(name)))
         );
 
@@ -232,7 +250,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     };
 
     const writeColors = async () => {
-        const colorData = quantize1d(
+        const colorData = await runQuantize1d(
             new DataTable(['f_dc_0', 'f_dc_1', 'f_dc_2'].map(name => dataTable.getColumnByName(name)))
         );
 
@@ -268,9 +286,24 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
 
         const { centroids, labels } = await kmeans(shDataTable, paletteSize, iterations, gpuDevice);
 
-        const codebook = quantize1d(centroids);
+        // quantize the centroids while the labels buffer is built below
+        const codebookPromise = runQuantize1d(centroids);
 
-        // write centroids
+        // build labels
+        const labelsBuf = new Uint8Array(width * height * channels);
+        for (let i = 0; i < indices.length; ++i) {
+            const label = labels[indices[i]];
+            const ti = layout(i);
+
+            labelsBuf[ti * 4 + 0] = 0xff & label;
+            labelsBuf[ti * 4 + 1] = 0xff & (label >> 8);
+            labelsBuf[ti * 4 + 2] = 0;
+            labelsBuf[ti * 4 + 3] = 0xff;
+        }
+
+        const codebook = await codebookPromise;
+
+        // build centroids
         const centroidsBuf = new Uint8Array(64 * shCoeffs * Math.ceil(centroids.numRows / 64) * channels);
         const centroidsRow: any = {};
         for (let i = 0; i < centroids.numRows; ++i) {
@@ -287,20 +320,11 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
                 centroidsBuf[i * shCoeffs * 4 + j * 4 + 3] = 0xff;
             }
         }
-        await writeWebp('shN_centroids.webp', centroidsBuf, 64 * shCoeffs, Math.ceil(centroids.numRows / 64));
 
-        // write labels
-        const labelsBuf = new Uint8Array(width * height * channels);
-        for (let i = 0; i < indices.length; ++i) {
-            const label = labels[indices[i]];
-            const ti = layout(i);
-
-            labelsBuf[ti * 4 + 0] = 0xff & label;
-            labelsBuf[ti * 4 + 1] = 0xff & (label >> 8);
-            labelsBuf[ti * 4 + 2] = 0;
-            labelsBuf[ti * 4 + 3] = 0xff;
-        }
-        await writeWebp('shN_labels.webp', labelsBuf);
+        await Promise.all([
+            writeWebp('shN_centroids.webp', centroidsBuf, 64 * shCoeffs, Math.ceil(centroids.numRows / 64)),
+            writeWebp('shN_labels.webp', labelsBuf)
+        ]);
 
         return {
             count: paletteSize,
@@ -318,15 +342,24 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
     const writingGroup = openGroup ? logger.group('Writing') : null;
 
     try {
-        const meansMinMax = await writeMeans();
-        await writeQuaternions();
-        const scalesCodebook = await writeScales();
-        const colorsCodebook = await writeColors();
+        // The texture pipelines are independent, so run them concurrently:
+        // quantization and encoding overlap across worker threads (or run
+        // inline and serial when workers are unavailable). Quantize-bearing
+        // pipelines are started first so workers receive work immediately.
+        const pipelines = [
+            writeScales(),
+            writeColors(),
+            shBands > 0 ? writeSH(shBands) : Promise.resolve(null),
+            writeMeans(),
+            writeQuaternions()
+        ] as const;
 
-        let shN = null;
-        if (shBands > 0) {
-            shN = await writeSH(shBands);
-        }
+        // when one pipeline fails, Promise.all rejects immediately while the
+        // others are still in flight; mark their later rejections as handled
+        // so the original error propagates instead of an unhandled rejection
+        pipelines.forEach(p => p.catch(() => {}));
+
+        const [scalesCodebook, colorsCodebook, shN, meansMinMax] = await Promise.all(pipelines);
 
         // construct meta.json
         const meta: any = {

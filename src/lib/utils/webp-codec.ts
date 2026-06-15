@@ -18,6 +18,20 @@ class WebPCodec {
 
     Module: any;
 
+    /**
+     * The effective webp.wasm location to hand to worker threads (which can't
+     * resolve it from their own module URL). Returns `wasmUrl` verbatim when
+     * set - exactly the value `locateFile` uses, so a Windows file path or a
+     * URL both pass through unchanged - otherwise the default resolution
+     * relative to this module.
+     *
+     * @returns The configured `wasmUrl`, or the default webp.wasm URL.
+     * @ignore
+     */
+    static resolveWasmUrl() {
+        return WebPCodec.wasmUrl ?? new URL('../lib/webp.wasm', import.meta.url).toString();
+    }
+
     static async create() {
         // Compile/instantiate the wasm module once and share it across all
         // instances; per-call instantiation pays a fresh Emscripten heap each

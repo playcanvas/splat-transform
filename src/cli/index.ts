@@ -23,6 +23,7 @@ import {
     TextRenderer,
     UrlReadFileSystem,
     version,
+    WorkerQueue,
     type ProcessAction,
     type FilterFloaters,
     type FilterCluster,
@@ -125,6 +126,7 @@ const cliOptionsConfig = {
     mem: { type: 'boolean', default: false },
     tty: { type: 'boolean' },
     iterations: { type: 'string', short: 'i', default: '10' },
+    'max-workers': { type: 'string' },
     'list-gpus': { type: 'boolean', short: 'L', default: false },
     gpu: { type: 'string', short: 'g', default: '-1' },
     'lod-select': { type: 'string', short: 'O', default: '' },
@@ -310,6 +312,16 @@ const parseArguments = async () => {
         if (deviceIdx < -1) {
             throw new Error(`Invalid GPU index: ${deviceIdx}. Must be >= 0 or 'cpu'.`);
         }
+    }
+
+    // Cap the SOG worker pool (0 = inline/serial). Lower trades speed for peak
+    // memory, since each worker holds its own WebP WASM heap.
+    if (v['max-workers'] !== undefined) {
+        const maxWorkers = parseInteger(v['max-workers']);
+        if (maxWorkers < 0) {
+            throw new Error(`Invalid max-workers: ${maxWorkers}. Must be >= 0.`);
+        }
+        WorkerQueue.maxWorkers = maxWorkers;
     }
 
     const readJsonFile = async (path: string) => {
@@ -763,6 +775,7 @@ GPU (used by SOG compression and GPU voxelization: --filter-cluster, --filter-fl
 
 SOG COMPRESSION (.sog, meta.json, lod-meta.json, .html outputs)
     -i, --iterations       <n>              SH compression iterations (more=better). Default: 10
+        --max-workers      <n>              Worker threads for SOG encoding (0 = inline/serial). Default: 4
 
 SPZ OUTPUT (.spz)
         --spz-version      <3|4>            The SPZ format version to write. Default: 4
