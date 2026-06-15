@@ -1,5 +1,5 @@
 import { taskHandlers, type TaskName, type TaskArgs, type TaskResult, type WorkerMessage } from './tasks';
-import { workerSource } from './worker-source';
+import { workerBundled } from './worker-bundled';
 import { WebPCodec } from '../utils/webp-codec';
 
 type PendingTask = {
@@ -39,9 +39,14 @@ let everReady = false;
 
 let resolvedMaxWorkers: number | null = null;
 let spawnLoopActive = false;
-let blobUrl: string | null = null;
 
-const inlineMode = () => workerSource === null || unavailable || maxWorkers === 0;
+// user-configurable: URL of the shipped worker file (dist/worker.mjs). When
+// null, resolved relative to this module - which works in Node and in
+// bundlers that rewrite new URL('./worker.mjs', import.meta.url), but not in
+// bundlers that don't (set this explicitly there, mirroring WebPCodec.wasmUrl)
+let workerUrl: string | null = null;
+
+const inlineMode = () => !workerBundled || unavailable || maxWorkers === 0;
 
 const runTaskInline = async (task: PendingTask) => {
     try {
@@ -119,12 +124,16 @@ function onSlotMessage(slot: Slot, message: WorkerMessage) {
 
 async function spawnSlot(slot: Slot) {
     try {
+        // resolve relative to this module: dist/worker.mjs sits next to the
+        // bundle (dist/index.mjs, dist/cli.mjs)
+        const url = workerUrl ?? new URL('./worker.mjs', import.meta.url);
+
         if (isNode) {
             const { Worker } = await import('node:worker_threads');
             if (slot.dead) {
                 return;
             }
-            const worker = new Worker(new URL(`data:text/javascript,${encodeURIComponent(workerSource)}`));
+            const worker = new Worker(url);
             slot.post = (message, transfer) => worker.postMessage(message, transfer);
             slot.terminate = () => {
                 worker.terminate();
@@ -139,8 +148,7 @@ async function spawnSlot(slot: Slot) {
                 }
             });
         } else {
-            blobUrl = blobUrl ?? URL.createObjectURL(new Blob([workerSource], { type: 'text/javascript' }));
-            const worker = new Worker(blobUrl, { type: 'module' });
+            const worker = new Worker(url, { type: 'module' });
             slot.post = (message, transfer) => worker.postMessage(message, transfer);
             slot.terminate = () => worker.terminate();
             worker.onmessage = (event: MessageEvent) => onSlotMessage(slot, event.data);
@@ -278,6 +286,30 @@ const destroyPool = async () => {
  * thread instead - same code, same results, just serial.
  */
 class WorkerQueue {
+    /**
+     * Sets the URL of the worker script (the shipped dist/worker.mjs). Set
+     * this before first use in browser environments whose bundler does not
+     * rewrite `new Worker(new URL('./worker.mjs', import.meta.url))` - e.g.
+     *
+     * import workerUrl from '@playcanvas/splat-transform/worker?url';
+     * WorkerQueue.workerUrl = workerUrl;
+     *
+     * @param value - Absolute URL of the worker script, or null to auto-resolve.
+     */
+    static set workerUrl(value: string | null) {
+        workerUrl = value;
+    }
+
+    /**
+     * URL of the worker script, or null when auto-resolved relative to the
+     * bundle.
+     *
+     * @returns The configured worker URL, or null.
+     */
+    static get workerUrl() {
+        return workerUrl;
+    }
+
     /**
      * Sets the maximum number of worker threads. Set to 0 to force inline
      * execution on the calling thread, or null to auto-size.

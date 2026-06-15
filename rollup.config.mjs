@@ -1,5 +1,4 @@
 import { execSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 
 import json from '@rollup/plugin-json';
@@ -25,24 +24,15 @@ const versionReplace = () => replace({
     }
 });
 
-// Replaces the worker-source placeholder module with the bundled worker code
-// built by the `worker` config below (which must come first in the config
-// array - rollup builds array configs in order). The worker code travels
-// inside the library/CLI bundles as a string and is spawned from a Blob/data
-// URL at runtime, so no separate worker file ships with the package.
-const workerSourcePath = resolvePath('src/lib/workers/worker-source.ts');
-const workerBundlePath = resolvePath('build/worker.mjs');
-const inlineWorkerSource = () => ({
-    name: 'inline-worker-source',
+// Flips the workerBundled build flag to true in the library/CLI bundles. From
+// source (tsx: dev, tests) the flag stays false and WorkerQueue runs tasks
+// inline; in a build, dist/worker.mjs exists and is spawned from a URL.
+const workerBundledPath = resolvePath('src/lib/workers/worker-bundled.ts');
+const markWorkerBundled = () => ({
+    name: 'mark-worker-bundled',
     load(id) {
-        if (id === workerSourcePath) {
-            this.addWatchFile(workerBundlePath);
-            // the emscripten glue (lib/webp.mjs) calls
-            // createRequire(import.meta.url), which throws inside a data: URL
-            // worker; node builtins resolve from any base, so substitute one
-            const source = readFileSync(workerBundlePath, 'utf8')
-                .replace('createRequire(import.meta.url)', "createRequire(globalThis.process.cwd() + '/')");
-            return `export const workerSource = ${JSON.stringify(source)};`;
+        if (id === workerBundledPath) {
+            return 'export const workerBundled = true;';
         }
         return null;
     }
@@ -52,14 +42,15 @@ const inlineWorkerSource = () => ({
 // src/lib/workers; browser bundlers never execute those branches
 const nodeExternals = ['node:worker_threads', 'node:os'];
 
-// Worker build - self-contained bundle of the worker entry point, inlined
-// into the other bundles by inlineWorkerSource()
+// Worker build - self-contained worker entry shipped as dist/worker.mjs and
+// spawned from a URL by WorkerQueue (built first so it exists before the
+// other bundles, though they no longer depend on it at build time).
 const worker = {
     input: 'src/lib/workers/worker-entry.ts',
     output: {
-        dir: 'build',
+        dir: 'dist',
         format: 'esm',
-        sourcemap: false,
+        sourcemap: true,
         entryFileNames: 'worker.mjs'
     },
     external: nodeExternals,
@@ -68,10 +59,7 @@ const worker = {
         typescript({
             tsconfig: './tsconfig.json',
             declaration: false,
-            declarationDir: undefined,
-            outDir: 'build',
-            sourceMap: false,
-            inlineSources: false
+            declarationDir: undefined
         }),
         resolve(),
         json()
@@ -90,7 +78,7 @@ const esm = {
     },
     external: ['playcanvas', ...nodeExternals],
     plugins: [
-        inlineWorkerSource(),
+        markWorkerBundled(),
         versionReplace(),
         typescript({
             tsconfig: './tsconfig.json',
@@ -115,7 +103,7 @@ const cjs = {
     },
     external: ['playcanvas', ...nodeExternals],
     plugins: [
-        inlineWorkerSource(),
+        markWorkerBundled(),
         versionReplace(),
         typescript({
             tsconfig: './tsconfig.json',
@@ -139,7 +127,7 @@ const cli = {
     },
     external: ['webgpu', ...nodeExternals],
     plugins: [
-        inlineWorkerSource(),
+        markWorkerBundled(),
         versionReplace(),
         typescript({
             tsconfig: './tsconfig.json',

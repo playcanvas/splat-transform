@@ -27,6 +27,7 @@
         "default": "./dist/index.cjs"
       }
     },
+    "./worker": "./dist/worker.mjs",
     "./lib/*": "./lib/*"
   },
   "bin": {

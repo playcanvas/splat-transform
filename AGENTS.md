@@ -113,16 +113,16 @@ Do not break this separation. If you need platform-specific behavior in `lib/`, 
 
 ### Build Outputs
 
-Four Rollup targets build in order (the worker first - its output is inlined into the others):
+Four Rollup targets, all emitting to `dist/`:
 
 | Output | Input | Format | External |
 |--------|-------|--------|----------|
-| `build/worker.mjs` | `src/lib/workers/worker-entry.ts` | ESM | `node:*` (guarded dynamic imports) |
+| `dist/worker.mjs` | `src/lib/workers/worker-entry.ts` | ESM | `node:*` (guarded dynamic imports) |
 | `dist/index.mjs` | `src/lib/index.ts` | ESM | `playcanvas`, `node:*` |
 | `dist/index.cjs` | `src/lib/index.ts` | CJS | `playcanvas`, `node:*` |
 | `dist/cli.mjs` | `src/cli/index.ts` | ESM | `webgpu`, `node:*` |
 
-`build/worker.mjs` (not shipped) is the self-contained worker bundle; the `inline-worker-source` plugin in `rollup.config.mjs` replaces the `src/lib/workers/worker-source.ts` placeholder with its text, so the worker code travels inside the other bundles and is spawned from a Blob URL (browser) or data: URL (Node) at runtime - no separate worker file ships and consumers need no bundler configuration. When running from source via tsx (dev, tests) the placeholder stays `null` and all worker tasks run inline on the calling thread. The worker bundle must stay lean: it must not pull in `DataTable` (whose `Transform` member drags in the playcanvas engine) - see `src/lib/spatial/quantize-1d-core.ts`.
+`dist/worker.mjs` is the self-contained worker entry, shipped and exported as `@playcanvas/splat-transform/worker`. `WorkerQueue` spawns it from a URL: Node and bundlers that rewrite `new Worker(new URL('./worker.mjs', import.meta.url))` (Vite, webpack 5) resolve it automatically; other bundlers (e.g. plain Rollup, as SuperSplat uses) set `WorkerQueue.workerUrl` explicitly to a copied/vendored asset, mirroring how `WebPCodec.wasmUrl` is set. The `mark-worker-bundled` plugin flips the `workerBundled` flag true in the library/CLI builds; from source via tsx (dev, tests) it stays false and all worker tasks run inline on the calling thread. The worker bundle must stay lean: it must not pull in `DataTable` (whose `Transform` member drags in the playcanvas engine) - see `src/lib/spatial/quantize-1d-core.ts`.
 
 Type declarations go to `dist/lib/`. A post-build step copies `index.d.ts` to `index.d.cts` for CJS consumers.
 
