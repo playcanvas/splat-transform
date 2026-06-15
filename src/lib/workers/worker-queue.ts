@@ -313,7 +313,9 @@ class WorkerQueue {
 
     /**
      * Sets the maximum number of worker threads. Set to 0 to force inline
-     * execution on the calling thread, or null to auto-size.
+     * execution on the calling thread, or null to auto-size. Configure once
+     * before the first `run()` (as the CLI does); changing it while tasks are
+     * in flight is not supported.
      *
      * @param value - Maximum worker threads, or null to auto-size.
      */
