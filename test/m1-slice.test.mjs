@@ -98,7 +98,7 @@ describe('M1 vertical slice (lazy PLY -> translate -> streaming PLY)', () => {
     });
 
     it('is byte-identical for a rotate (positions + quaternions + SH rotation)', async () => {
-        const dt = makeCanonicalDataTable(50, 1); // SH1 so SH rotation is exercised
+        const dt = makeCanonicalDataTable(50, 3); // SH3 exercises all SH-rotation bands
         const plyBytes = encodePlyBinary(dt);
         const euler = new Vec3(90, 30, 0);
 

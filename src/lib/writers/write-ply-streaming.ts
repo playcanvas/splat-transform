@@ -21,6 +21,10 @@ type WritePlyStreamingOptions = {
 // it's a u32 (an `other` extra) rather than f32.
 type OutColumn = { name: string; layer: ChunkLayer; layerByteOffset: number; uint: boolean };
 
+// A "run": a maximal contiguous span of output columns fed by a single layer.
+// Interleaving each run is a straight per-row block copy (see writePlyStreaming).
+type LayerRun = { layer: ChunkLayer; dstStart: number; words: number; srcStrideWords: number };
+
 /**
  * Stream a {@link ChunkSource} out to a binary little-endian PLY file.
  *
@@ -76,11 +80,36 @@ const writePlyStreaming = async (
     }
 
     const recordStride = columns.length * 4;
-    const recordF = recordStride >> 2; // floats per output record
+    const recordF = recordStride >> 2; // 32-bit words per output record
 
-    // Per-column source plan as float/u32 indices, hoisted out of the hot loop.
-    const colSrcFloat = columns.map(c => c.layerByteOffset >> 2);
-    const colUint = columns.map(c => c.uint);
+    // Re-interleave plan. The interleave step is the writer hot path; instead of
+    // scattering column-by-column (a per-element type branch + array-of-arrays
+    // indirection) we exploit a structural invariant of the layer model:
+    //
+    //   Within a layer, the source field order (how the reader packed the layer
+    //   buffer) is identical to the output column order (both canonical). So each
+    //   layer contributes a *contiguous block* of the output record, copied per
+    //   row as one straight block move. And because interleaving only relocates
+    //   32-bit words — it never interprets values — we copy as Uint32 regardless
+    //   of float/uint column type, so no per-element branch is needed.
+    //
+    // A "run" captures one such block: copy `words` words per row from the layer
+    // buffer (row stride `srcStrideWords`) into the record at word offset `dstStart`.
+    const runs: LayerRun[] = [];
+    for (let c = 0; c < columns.length;) {
+        const layer = columns[c].layer;
+        let e = c;
+        while (e < columns.length && columns[e].layer === layer) {
+            // Invariant the block copy relies on: output word (e - c) reads source
+            // word (e - c). Fail loud if column ordering ever stops matching.
+            if ((columns[e].layerByteOffset >> 2) !== e - c) {
+                throw new Error('writePlyStreaming: layer columns not in packed canonical order');
+            }
+            e++;
+        }
+        runs.push({ layer, dstStart: c, words: e - c, srcStrideWords: meta.layouts[layer]!.stride >> 2 });
+        c = e;
+    }
 
     // Header (matches writePly: no comments here, single vertex element).
     const header = [
@@ -97,7 +126,6 @@ const writePlyStreaming = async (
     const chunkSize = meta.chunkSize;
     const numChunks = meta.numChunks[0] ?? 0;
     const outRecord = new Uint8Array(chunkSize * recordStride);
-    const outF32 = new Float32Array(outRecord.buffer);
     const outU32 = new Uint32Array(outRecord.buffer);
 
     for (let k = 0; k < numChunks; k++) {
@@ -117,23 +145,18 @@ const writePlyStreaming = async (
             other: acquired.other
         });
 
-        // Interleave the (already-baked) chunk data into the output record via
-        // typed-array views (not DataView). Little-endian only, which matches
-        // the binary PLY format and every supported runtime.
-        const nCols = columns.length;
-        const colF32 = columns.map(c => new Float32Array(acquired[c.layer]!.data));
-        const colU32 = columns.map(c => new Uint32Array(acquired[c.layer]!.data));
-        const colStrideF = columns.map(c => acquired[c.layer]!.stride >> 2);
-
-        for (let i = 0; i < count; i++) {
-            const ob = i * recordF;
-            for (let c = 0; c < nCols; c++) {
-                const si = i * colStrideF[c] + colSrcFloat[c];
-                if (colUint[c]) {
-                    outU32[ob + c] = colU32[c][si];
-                } else {
-                    outF32[ob + c] = colF32[c][si];
-                }
+        // Re-interleave the (already-baked) chunk into the output record: one
+        // contiguous block copy per layer, as raw 32-bit words. Little-endian
+        // only, matching the binary PLY format and every supported runtime.
+        for (const run of runs) {
+            const src = new Uint32Array(acquired[run.layer]!.data);
+            const ss = run.srcStrideWords;
+            const ds = run.dstStart;
+            const w = run.words;
+            for (let i = 0; i < count; i++) {
+                const s = i * ss;
+                const d = i * recordF + ds;
+                for (let j = 0; j < w; j++) outU32[d + j] = src[s + j];
             }
         }
 

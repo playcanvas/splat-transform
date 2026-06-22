@@ -1,4 +1,4 @@
-import { Mat3, Quat, Vec3 } from 'playcanvas';
+import { Mat3 } from 'playcanvas';
 
 import {
     type ChunkData,
@@ -42,25 +42,32 @@ const bakeTransform = (src: ChunkSource, targetSpace: Transform): ChunkSource =>
 
     const r = delta.rotation;
     const s = delta.scale;
+    const rx = r.x, ry = r.y, rz = r.z, rw = r.w;
+    const tx = delta.translation.x, ty = delta.translation.y, tz = delta.translation.z;
     const shBands = src.meta.shBands;
     const shPerCh = SH_PER_CHANNEL[shBands];
-    const rotIdentity = Math.abs(Math.abs(r.w) - 1) < 1e-6;
+    const rotIdentity = Math.abs(Math.abs(rw) - 1) < 1e-6;
     const logS = Math.log(s);
 
-    const _v = new Vec3();
-    const _q = new Quat();
     const rotateSH = (!rotIdentity && shPerCh > 0) ? new RotateSH(new Mat3().setFromQuat(r)) : null;
     const shScratch = rotateSH ? new Float32Array(shPerCh) : null;
 
+    // Inlined per-element kernels (no Vec3/Quat objects). The float-op order
+    // mirrors PlayCanvas's Quat.transformVector / Quat.mul2 exactly — and JS
+    // arithmetic is float64 with rounding only on the Float32Array store, just
+    // like the legacy path — so output stays byte-identical to convertToSpace.
     const bakePosition = (cd: ChunkData): void => {
         const p = new Float32Array(cd.data);
         for (let i = 0; i < cd.count; i++) {
             const o = i * 3;
-            _v.set(p[o], p[o + 1], p[o + 2]);
-            delta.transformPoint(_v, _v);
-            p[o] = _v.x;
-            p[o + 1] = _v.y;
-            p[o + 2] = _v.z;
+            const x = p[o] * s, y = p[o + 1] * s, z = p[o + 2] * s;     // point * scale
+            const ix = rw * x + ry * z - rz * y;                        // rotation.transformVector
+            const iy = rw * y + rz * x - rx * z;
+            const iz = rw * z + rx * y - ry * x;
+            const iw = -rx * x - ry * y - rz * z;
+            p[o]     = (ix * rw + iw * -rx + iy * -rz - iz * -ry) + tx;  // + translation
+            p[o + 1] = (iy * rw + iw * -ry + iz * -rx - ix * -rz) + ty;
+            p[o + 2] = (iz * rw + iw * -rz + ix * -ry - iy * -rx) + tz;
         }
     };
 
@@ -69,12 +76,12 @@ const bakeTransform = (src: ChunkSource, targetSpace: Transform): ChunkSource =>
         for (let i = 0; i < cd.count; i++) {
             const o = i * 8;
             if (!rotIdentity) {
-                // rot_0 = w, rot_1..3 = x,y,z; q' = r * q
-                _q.set(g[o + 1], g[o + 2], g[o + 3], g[o]).mul2(r, _q);
-                g[o] = _q.w;
-                g[o + 1] = _q.x;
-                g[o + 2] = _q.y;
-                g[o + 3] = _q.z;
+                // rot_0 = w, rot_1..3 = x,y,z; q' = r * q  (Quat.mul2, lhs = r)
+                const qx = g[o + 1], qy = g[o + 2], qz = g[o + 3], qw = g[o];
+                g[o]     = rw * qw - rx * qx - ry * qy - rz * qz;
+                g[o + 1] = rw * qx + rx * qw + ry * qz - rz * qy;
+                g[o + 2] = rw * qy + ry * qw + rz * qx - rx * qz;
+                g[o + 3] = rw * qz + rz * qw + rx * qy - ry * qx;
             }
             if (s !== 1) {
                 g[o + 4] += logS;
