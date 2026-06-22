@@ -1,5 +1,5 @@
 /**
- * M0 tests for the CPU-primary ChunkSource data model:
+ * Tests for the CPU-primary ChunkSource data model:
  *  - DataTable <-> source round-trip byte-equality (via the migration shims)
  *  - ChunkDataPool pooling / reuse / trim
  *  - ChunkData strided field extraction
@@ -32,7 +32,7 @@ function assertTablesEqual(actual, expected, msg) {
     }
 }
 
-describe('ChunkSource data model (M0)', () => {
+describe('ChunkSource data model', () => {
     describe('DataTable <-> source round-trip', () => {
         it('round-trips byte-equal across multiple chunks with a short final chunk', async () => {
             const dt = createTestDataTable(10, { includeSH: true, shBands: 2 });

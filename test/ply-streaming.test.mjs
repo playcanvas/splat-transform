@@ -1,6 +1,6 @@
 /**
- * M1 vertical-slice tests: lazy PLY ChunkSource -> mapSource(translate) ->
- * streaming PLY writer.
+ * Streaming PLY pipeline tests: lazy PLY ChunkSource -> ops -> streaming PLY
+ * writer.
  *
  *  - byte-identical to the legacy readPly -> processDataTable([translate]) ->
  *    writePly path (canonical-order input);
@@ -69,7 +69,7 @@ function sourceFromBytes(bytes, name = 'in.ply') {
     return rfs.createSource(name);
 }
 
-describe('M1 vertical slice (lazy PLY -> translate -> streaming PLY)', () => {
+describe('streaming PLY pipeline (chunked read -> transform -> streaming write)', () => {
     it('is byte-identical to the legacy read -> process([translate]) -> write path', async () => {
         const dt = makeCanonicalDataTable(50, 1); // multi-chunk + short last at chunkSize 16
         const plyBytes = encodePlyBinary(dt);
@@ -160,7 +160,7 @@ describe('M1 vertical slice (lazy PLY -> translate -> streaming PLY)', () => {
     });
 
     it('streams from disk with a bounded, scene-size-independent memory footprint', async () => {
-        const dir = await mkdtemp(join(tmpdir(), 'm1-slice-'));
+        const dir = await mkdtemp(join(tmpdir(), 'ply-streaming-'));
         const inPath = join(dir, 'in.ply');
         try {
             const N = 500_000;
