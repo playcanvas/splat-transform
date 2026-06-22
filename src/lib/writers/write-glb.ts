@@ -160,12 +160,12 @@ const buildBinaryBuffer = (dataTable: DataTable, numSplats: number, shBands: num
         count: numSplats
     });
 
-    // KHR_gaussian_splatting:SCALE (VEC3 float, log-space)
+    // KHR_gaussian_splatting:SCALE (VEC3 float, exp-activated to linear space)
     const scaleData = new Float32Array(numSplats * 3);
     for (let i = 0; i < numSplats; i++) {
-        scaleData[i * 3] = scale0[i];
-        scaleData[i * 3 + 1] = scale1[i];
-        scaleData[i * 3 + 2] = scale2[i];
+        scaleData[i * 3] = Math.exp(scale0[i]);
+        scaleData[i * 3 + 1] = Math.exp(scale1[i]);
+        scaleData[i * 3 + 2] = Math.exp(scale2[i]);
     }
     segments.push({
         name: 'KHR_gaussian_splatting:SCALE',
