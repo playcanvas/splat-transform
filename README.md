@@ -119,7 +119,7 @@ Actions execute in the order specified and can be repeated. Any action may appea
                                           Default: res=1.0, opacity=0.999, min=0.1.
                                           Bare flag (no value) uses all defaults.
 -p, --params           <key=val,...>    Pass parameters to .mjs generator script
--l, --lod              <n>              Tag the Gaussians with LOD level n (n >= 0)
+-l, --lod              <n>              Tag the Gaussians with LOD level n (n >= 0, or -1 for environment)
 -m, --summary                           Print per-column statistics to stdout
 -M, --morton-order                      Reorder Gaussians by Morton code (Z-order curve)
 ```
