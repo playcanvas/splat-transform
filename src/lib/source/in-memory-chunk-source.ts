@@ -39,6 +39,9 @@ type LayerChunkBuffers = {
 class InMemoryChunkSource implements ChunkSource {
     meta: ChunkSourceMetadata;
     private buffers: LayerChunkBuffers | null;
+    // One u32 view per chunk buffer, per (layer, lod), built on first use and
+    // reused — a gather pass touches every chunk, so views are made once.
+    private viewCache: Map<string, Uint32Array[]> = new Map();
 
     constructor(meta: ChunkSourceMetadata, buffers: LayerChunkBuffers) {
         this.meta = meta;
@@ -82,8 +85,66 @@ class InMemoryChunkSource implements ChunkSource {
         return Promise.resolve();
     }
 
+    // Lazily build (and cache) one u32 view per chunk buffer of a (layer, lod),
+    // so a multi-chunk gather doesn't re-create views on every call.
+    private layerViews(layer: ChunkLayer, lod: number): Uint32Array[] {
+        const key = `${layer}:${lod}`;
+        let views = this.viewCache.get(key);
+        if (!views) {
+            const layerBuffers = this.buffers![layer];
+            if (!layerBuffers) {
+                throw new Error(`InMemoryChunkSource.gatherRows: layer '${layer}' not available`);
+            }
+            views = layerBuffers[lod].map(b => new Uint32Array(b));
+            this.viewCache.set(key, views);
+        }
+        return views;
+    }
+
+    /**
+     * Gather `count` gaussians' records for one layer into `dst`, packed: output
+     * row `j` receives parent row `indices[indexOffset + j]`. A tight 32-bit-word
+     * copy with per-layer constants and chunk views hoisted out of the loop — the
+     * batch form of a per-row copy, for permute/gather combinators random-
+     * accessing a resident scene.
+     *
+     * @param layer - Which layer to gather.
+     * @param lod - LOD index.
+     * @param indices - Source gaussian indices.
+     * @param indexOffset - Offset into `indices` of the first row to gather.
+     * @param count - Number of rows to gather.
+     * @param dst - Destination buffer; receives `count` packed records.
+     */
+    gatherRows(
+        layer: ChunkLayer,
+        lod: number,
+        indices: Uint32Array,
+        indexOffset: number,
+        count: number,
+        dst: ArrayBuffer
+    ): void {
+        if (this.buffers === null) {
+            throw new Error('InMemoryChunkSource.gatherRows: source has been closed');
+        }
+        const views = this.layerViews(layer, lod);
+        const sw = this.meta.layouts[layer]!.stride >>> 2; // u32 words per gaussian
+        const chunkSize = this.meta.chunkSize;
+        const out = new Uint32Array(dst);
+        for (let j = 0; j < count; j++) {
+            const g = indices[indexOffset + j];
+            const chunk = Math.floor(g / chunkSize);
+            const src = views[chunk];
+            const so = (g - chunk * chunkSize) * sw;
+            const dof = j * sw;
+            for (let w = 0; w < sw; w++) {
+                out[dof + w] = src[so + w];
+            }
+        }
+    }
+
     close(): Promise<void> {
         this.buffers = null;
+        this.viewCache.clear();
         return Promise.resolve();
     }
 }
