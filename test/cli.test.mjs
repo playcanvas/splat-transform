@@ -80,4 +80,32 @@ describe('CLI parsing', () => {
 
         assert.strictEqual(result.code, 0, `CLI failed:\n${result.stderr}\n${result.stdout}`);
     });
+
+    it('accepts --lod -1 to tag an input as environment', async () => {
+        const result = await runCli([
+            '--gpu',
+            'cpu',
+            'test/fixtures/splat/minimal.splat',
+            'test/fixtures/splat/minimal.splat',
+            '--lod',
+            '-1',
+            'null'
+        ]);
+
+        assert.strictEqual(result.code, 0, `CLI failed:\n${result.stderr}\n${result.stdout}`);
+    });
+
+    it('rejects --lod values below -1', async () => {
+        const result = await runCli([
+            '--gpu',
+            'cpu',
+            'test/fixtures/splat/minimal.splat',
+            '--lod',
+            '-2',
+            'null'
+        ]);
+
+        assert.notStrictEqual(result.code, 0, 'CLI should reject --lod -2');
+        assert.match(result.stderr, /Must be >= 0, or -1/);
+    });
 });

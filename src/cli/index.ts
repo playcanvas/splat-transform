@@ -632,8 +632,8 @@ const parseArguments = async () => {
                 }
                 case 'lod': {
                     const lod = parseInteger(t.value);
-                    if (lod < 0) {
-                        throw new Error(`Invalid lod value: ${t.value}. Must be a non-negative integer.`);
+                    if (lod < -1) {
+                        throw new Error(`Invalid lod value: ${t.value}. Must be >= 0, or -1 for environment.`);
                     }
                     current.processActions.push({
                         kind: 'lod',
@@ -755,7 +755,7 @@ ACTIONS (executed in order; can be repeated)
     -G, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel. Default: 0.05,0.1,0.004
     -D, --filter-cluster   [res,op,min]     Keep only the connected cluster at --seed-pos. Default: 1.0,0.999,0.1
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
-    -l, --lod              <n>              Tag the Gaussians with LOD level n (n >= 0)
+    -l, --lod              <n>              Tag the Gaussians with LOD level n (n >= 0, or -1 for environment)
     -m, --summary                           Print per-column statistics to stdout
     -M, --morton-order                      Reorder Gaussians by Morton code (Z-order curve)
 
@@ -1145,6 +1145,10 @@ const main = async () => {
         // special-case the environment dataTable
         const envDataTables = inputDataTables.filter(dt => dt.hasColumn('lod') && dt.getColumnByName('lod').data.every(v => v === -1));
         const nonEnvDataTables = inputDataTables.filter(dt => !dt.hasColumn('lod') || dt.getColumnByName('lod').data.some(v => v !== -1));
+
+        if (envDataTables.length > 0 && outputFormat !== null && outputFormat !== 'lod') {
+            logger.warn(`Environment splats (--lod -1) are only written for lod-meta.json output; they will be discarded for '${outputFormat}' output.`);
+        }
 
         // combine inputs into a single output dataTable
         const dataTable = nonEnvDataTables.length > 0 && await processDataTable(
