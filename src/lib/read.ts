@@ -1,6 +1,8 @@
+import { materializeToDataTable } from './compat/data-table';
 import { DataTable } from './data-table';
 import { ReadFileSystem, ZipReadFileSystem } from './io/read';
 import { readKsplat, readLcc, readLcc2, readMjs, readPly, readSog, readSplat, readSpz } from './readers';
+import { createChunkDataPool } from './source';
 import { Options, Param } from './types';
 
 /**
@@ -144,7 +146,10 @@ const readFile = async (readFileOptions: ReadFileOptions): Promise<DataTable[]> 
         const source = await fileSystem.createSource(filename);
         try {
             if (inputFormat === 'ply') {
-                result = [await readPly(source)];
+                // single public PLY reader; materialize to a DataTable for the
+                // (still DataTable-based) processing/writing pipeline.
+                const pool = createChunkDataPool();
+                result = [await materializeToDataTable(await readPly(source, pool), pool)];
             } else if (inputFormat === 'ksplat') {
                 result = [await readKsplat(source)];
             } else if (inputFormat === 'splat') {

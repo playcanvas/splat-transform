@@ -16,8 +16,6 @@ import {
     GraphicsDevice
 } from 'playcanvas';
 
-import { DataTable } from '../data-table';
-
 const clusterWgsl = (numColumns: number, useF16: boolean) => {
     const floatType = useF16 ? 'f16' : 'f32';
 
@@ -118,30 +116,10 @@ const roundUp = (value: number, multiple: number) => {
     return Math.ceil(value / multiple) * multiple;
 };
 
-const interleaveData = (result: Uint16Array | Float32Array, dataTable: DataTable, numRows: number, rowOffset: number) => {
-    const { numColumns } = dataTable;
-
-    if (result instanceof Uint16Array) {
-        // interleave shorts
-        for (let c = 0; c < numColumns; ++c) {
-            const column = dataTable.columns[c];
-            for (let r = 0; r < numRows; ++r) {
-                result[r * numColumns + c] = FloatPacking.float2Half(column.data[rowOffset + r]);
-            }
-        }
-    } else {
-        // interleave floats
-        for (let c = 0; c < numColumns; ++c) {
-            const column = dataTable.columns[c];
-            for (let r = 0; r < numRows; ++r) {
-                result[r * numColumns + c] = column.data[rowOffset + r];
-            }
-        }
-    }
-};
-
 class GpuClustering {
-    execute: (points: DataTable, centroids: DataTable, labels: Uint32Array) => Promise<void>;
+    // `points` and `centroids` are row-major interleaved Float32Arrays
+    // (numPoints×numColumns and numCentroids×numColumns).
+    execute: (points: Float32Array, numPoints: number, centroids: Float32Array, labels: Uint32Array) => Promise<void>;
     destroy: () => void;
 
     constructor(device: GraphicsDevice, numColumns: number, numCentroids: number) {
@@ -202,22 +180,34 @@ class GpuClustering {
         compute.setParameter('centroidsBuffer', centroidsBuffer);
         compute.setParameter('resultsBuffer', resultsBuffer);
 
-        this.execute = async (points: DataTable, centroids: DataTable, labels: Uint32Array) => {
-            const numPoints = points.numRows;
+        this.execute = async (points: Float32Array, numPoints: number, centroids: Float32Array, labels: Uint32Array) => {
             const numBatches = Math.ceil(numPoints / batchSize);
 
-            // upload centroid data to gpu
-            interleaveData(interleavedCentroids, centroids, numCentroids, 0);
-            centroidsBuffer.write(0, interleavedCentroids, 0, interleavedCentroids.length);
+            // upload centroid data to gpu (points/centroids arrive interleaved)
+            if (useF16) {
+                const cn = numCentroids * numColumns;
+                for (let i = 0; i < cn; ++i) interleavedCentroids[i] = FloatPacking.float2Half(centroids[i]);
+                centroidsBuffer.write(0, interleavedCentroids, 0, cn);
+            } else {
+                centroidsBuffer.write(0, centroids, 0, numCentroids * numColumns);
+            }
             compute.setParameter('numCentroids', numCentroids);
 
             for (let batch = 0; batch < numBatches; batch++) {
                 const currentBatchSize = Math.min(numPoints - batch * batchSize, batchSize);
                 const groups = Math.ceil(currentBatchSize / 64);
+                const off = batch * batchSize * numColumns;
+                const len = currentBatchSize * numColumns;
 
-                // write this batch of point data to gpu
-                interleaveData(interleavedPoints, points, currentBatchSize, batch * batchSize);
-                pointsBuffer.write(0, interleavedPoints, 0, useF16 ? roundUp(numColumns * currentBatchSize, 2) : numColumns * currentBatchSize);
+                // write this batch of point data to gpu. f32 uploads the slice
+                // directly; f16 packs the slice to halves first (no re-interleave
+                // either way — points are already row-major).
+                if (useF16) {
+                    for (let i = 0; i < len; ++i) interleavedPoints[i] = FloatPacking.float2Half(points[off + i]);
+                    pointsBuffer.write(0, interleavedPoints, 0, roundUp(len, 2));
+                } else {
+                    pointsBuffer.write(0, points, off, len);
+                }
                 compute.setParameter('numPoints', currentBatchSize);
 
                 // start compute job

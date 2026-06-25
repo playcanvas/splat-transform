@@ -21,6 +21,7 @@ import {
     processDataTable,
     revision,
     TextRenderer,
+    Transform,
     UrlReadFileSystem,
     version,
     WorkerQueue,
@@ -32,6 +33,14 @@ import {
     type ReadFileSystem,
     logger
 } from '../lib';
+// Streaming chunk pipeline (ply load -> transform -> ply/sog write, no DataTable).
+// Deep imports keep these internal/`@ignore` APIs off the public lib surface
+// until the migration is complete.
+import { mapSource } from '../lib/ops';
+import { readPly } from '../lib/readers/read-ply';
+import { createChunkDataPool } from '../lib/source';
+import { writePlyStreaming } from '../lib/writers/write-ply-streaming';
+import { writeSogSource } from '../lib/writers/write-sog';
 
 /**
  * CLI-specific options extending library options.
@@ -1082,6 +1091,55 @@ const main = async () => {
 
         // declare phase total: one Read phase per input + one Write phase
         const phaseTotal = inputArgs.length + (isNullOutput ? 0 : 1);
+
+        // Fast streaming chunk path: a single local-.ply input -> .ply or .sog
+        // output, with only coordinate transforms (-t/-r/-s) applied. Reads the
+        // ply lazily as a ChunkSource, composes the transforms with mapSource, and
+        // writes one layer/chunk at a time — the whole scene is never resident.
+        // Anything else (filters, decimate, multiple inputs, URLs, other formats)
+        // falls through to the DataTable pipeline below.
+        const onlyInput = inputArgs.length === 1 ? inputArgs[0] : null;
+        const chunkActions = onlyInput ? [...onlyInput.processActions, ...outputArg.processActions] : [];
+        const isTransformAction = (a: ProcessAction) => a.kind === 'translate' || a.kind === 'rotate' || a.kind === 'scale';
+        if (
+            onlyInput &&
+            !isNullOutput &&
+            (outputFormat === 'sog' || outputFormat === 'sog-bundle' || outputFormat === 'ply') &&
+            !isHttpUrl(onlyInput.filename) &&
+            chunkActions.every(isTransformAction) &&
+            getInputFormat(resolveInput(onlyInput.filename).classifyName) === 'ply'
+        ) {
+            const { filename: inFile, fileSystem } = resolveInput(onlyInput.filename);
+            const phase = logger.group(`Output ${outputArg.filename}`, { index: phaseTotal, total: phaseTotal });
+            const pool = createChunkDataPool();
+            let source = await readPly(await fileSystem.createSource(inFile), pool);
+
+            // compose -t/-r/-s (input actions then output actions), matching the
+            // left-multiply order of the DataTable path (see process.ts).
+            let xform = new Transform();
+            for (const a of chunkActions) {
+                if (a.kind === 'translate') xform = new Transform(a.value).mul(xform);
+                else if (a.kind === 'rotate') xform = new Transform().fromEulers(a.value.x, a.value.y, a.value.z).mul(xform);
+                else if (a.kind === 'scale') xform = new Transform(undefined, undefined, a.value).mul(xform);
+            }
+            if (!xform.isIdentity()) source = mapSource(source, xform);
+
+            logger.info(`${fmtCount(source.meta.numGaussians)} gaussians · ${source.meta.shBands} SH bands (streaming)`);
+            if (outputFormat === 'ply') {
+                await writePlyStreaming(source, pool, { filename: outputFilename }, new NodeFileSystem());
+            } else {
+                await writeSogSource(source, pool, {
+                    filename: outputFilename,
+                    bundle: outputFormat === 'sog-bundle',
+                    iterations: options.iterations,
+                    createDevice: deviceCreator
+                }, new NodeFileSystem());
+            }
+            await source.close();
+            phase.end();
+            reportDone();
+            exit(0);
+        }
 
         // read, filter, process input files
         const inputDataTables: DataTable[] = [];

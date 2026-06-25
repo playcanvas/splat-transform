@@ -32,6 +32,10 @@ import {
     WebPCodec
 } from '../src/lib/index.js';
 
+import { materializeToDataTable } from '../src/lib/compat/data-table.js';
+import { decodePlyToDataTable } from '../src/lib/readers/read-ply.js';
+import { createChunkDataPool } from '../src/lib/source/index.js';
+
 import { compareSummaries, compareDataTables } from './helpers/summary-compare.mjs';
 import { createMinimalTestData, createTestDataTable, encodePlyBinary } from './helpers/test-utils.mjs';
 
@@ -162,7 +166,7 @@ describe('PLY Format', () => {
 
     it('should read PLY binary data', async () => {
         const source = new BufferReadSource(plyBytes);
-        const dataTable = await readPly(source);
+        const dataTable = await decodePlyToDataTable(source);
 
         assert.strictEqual(dataTable.numRows, 16);
         assert.strictEqual(dataTable.numColumns, 14);
@@ -188,7 +192,7 @@ describe('PLY Format', () => {
 
         // Read back
         const source = new BufferReadSource(writtenPly);
-        const readBack = await readPly(source);
+        const readBack = await decodePlyToDataTable(source);
 
         // Compare data tables (should be identical)
         compareDataTables(readBack, testData, 0);
@@ -217,7 +221,7 @@ describe('PLY Format', () => {
         messy.set(header, 0);
         messy.set(body, header.length);
 
-        const dataTable = await readPly(new BufferReadSource(messy));
+        const dataTable = await decodePlyToDataTable(new BufferReadSource(messy));
         assert.strictEqual(dataTable.numRows, testData.numRows);
         assert.strictEqual(dataTable.numColumns, testData.columns.length);
     });
@@ -245,9 +249,10 @@ describe('Compressed PLY Format', () => {
         assert(writtenPly, 'Compressed PLY file should be written');
         assert(writtenPly.length > 0, 'Compressed PLY file should not be empty');
 
-        // Read back (readPly auto-detects compressed format)
+        // Read back via the public reader (readPly detects + decodes compressed)
         const source = new BufferReadSource(writtenPly);
-        const readBack = await readPly(source);
+        const pool = createChunkDataPool();
+        const readBack = await materializeToDataTable(await readPly(source, pool), pool);
 
         assert.strictEqual(readBack.numRows, testData.numRows);
 

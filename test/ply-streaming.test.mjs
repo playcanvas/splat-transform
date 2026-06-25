@@ -2,7 +2,7 @@
  * Streaming PLY pipeline tests: lazy PLY ChunkSource -> ops -> streaming PLY
  * writer.
  *
- *  - byte-identical to the legacy readPly -> processDataTable([translate]) ->
+ *  - byte-identical to the legacy decode -> processDataTable([translate]) ->
  *    writePly path (canonical-order input);
  *  - value round-trip with non-canonical input (the layer model canonicalises
  *    column order but preserves every value);
@@ -22,11 +22,11 @@ import { encodePlyBinary } from './helpers/test-utils.mjs';
 import { NodeReadFileSystem } from '../src/cli/node-file-system.js';
 import {
     Column, DataTable, Transform,
-    processDataTable, readPly, writePly,
+    processDataTable, writePly,
     MemoryReadFileSystem, MemoryFileSystem
 } from '../src/lib/index.js';
 import { mapSource } from '../src/lib/ops/index.js';
-import { readPlyChunked } from '../src/lib/readers/read-ply-chunked.js';
+import { decodePlyToDataTable, readPly } from '../src/lib/readers/read-ply.js';
 import { createChunkDataPool } from '../src/lib/source/index.js';
 import { writePlyStreaming } from '../src/lib/writers/write-ply-streaming.js';
 
@@ -76,7 +76,7 @@ describe('streaming PLY pipeline (chunked read -> transform -> streaming write)'
         const translate = new Vec3(1.5, -2.0, 3.25);
 
         // legacy path
-        const dtOld = await readPly(await sourceFromBytes(plyBytes));
+        const dtOld = await decodePlyToDataTable(await sourceFromBytes(plyBytes));
         const dtProc = await processDataTable(dtOld, [{ kind: 'translate', value: translate.clone() }]);
         const oldFs = new MemoryFileSystem();
         await writePly({
@@ -87,7 +87,7 @@ describe('streaming PLY pipeline (chunked read -> transform -> streaming write)'
 
         // new streaming path
         const pool = createChunkDataPool({ chunkSize: 16 });
-        const src = await readPlyChunked(await sourceFromBytes(plyBytes), pool);
+        const src = await readPly(await sourceFromBytes(plyBytes), pool);
         const mapped = mapSource(src, new Transform(translate.clone()));
         const newFs = new MemoryFileSystem();
         await writePlyStreaming(mapped, pool, { filename: 'out.ply' }, newFs);
@@ -102,14 +102,14 @@ describe('streaming PLY pipeline (chunked read -> transform -> streaming write)'
         const plyBytes = encodePlyBinary(dt);
         const euler = new Vec3(90, 30, 0);
 
-        const dtOld = await readPly(await sourceFromBytes(plyBytes));
+        const dtOld = await decodePlyToDataTable(await sourceFromBytes(plyBytes));
         const dtProc = await processDataTable(dtOld, [{ kind: 'rotate', value: euler.clone() }]);
         const oldFs = new MemoryFileSystem();
         await writePly({ filename: 'out.ply', plyData: { comments: [], elements: [{ name: 'vertex', dataTable: dtProc }] } }, oldFs);
         const oldBytes = oldFs.results.get('out.ply');
 
         const pool = createChunkDataPool({ chunkSize: 16 });
-        const src = await readPlyChunked(await sourceFromBytes(plyBytes), pool);
+        const src = await readPly(await sourceFromBytes(plyBytes), pool);
         const mapped = mapSource(src, new Transform().fromEulers(euler.x, euler.y, euler.z));
         const newFs = new MemoryFileSystem();
         await writePlyStreaming(mapped, pool, { filename: 'out.ply' }, newFs);
@@ -122,14 +122,14 @@ describe('streaming PLY pipeline (chunked read -> transform -> streaming write)'
         const dt = makeCanonicalDataTable(50, 0);
         const plyBytes = encodePlyBinary(dt);
 
-        const dtOld = await readPly(await sourceFromBytes(plyBytes));
+        const dtOld = await decodePlyToDataTable(await sourceFromBytes(plyBytes));
         const dtProc = await processDataTable(dtOld, [{ kind: 'scale', value: 2.0 }]);
         const oldFs = new MemoryFileSystem();
         await writePly({ filename: 'out.ply', plyData: { comments: [], elements: [{ name: 'vertex', dataTable: dtProc }] } }, oldFs);
         const oldBytes = oldFs.results.get('out.ply');
 
         const pool = createChunkDataPool({ chunkSize: 16 });
-        const src = await readPlyChunked(await sourceFromBytes(plyBytes), pool);
+        const src = await readPly(await sourceFromBytes(plyBytes), pool);
         const mapped = mapSource(src, new Transform(undefined, undefined, 2.0));
         const newFs = new MemoryFileSystem();
         await writePlyStreaming(mapped, pool, { filename: 'out.ply' }, newFs);
@@ -146,12 +146,12 @@ describe('streaming PLY pipeline (chunked read -> transform -> streaming write)'
         const plyBytes = encodePlyBinary(dt);
 
         const pool = createChunkDataPool({ chunkSize: 7 });
-        const src = await readPlyChunked(await sourceFromBytes(plyBytes), pool);
+        const src = await readPly(await sourceFromBytes(plyBytes), pool);
         const fs = new MemoryFileSystem();
         await writePlyStreaming(src, pool, { filename: 'out.ply' }, fs);
         await src.close();
 
-        const out = await readPly(await sourceFromBytes(fs.results.get('out.ply')));
+        const out = await decodePlyToDataTable(await sourceFromBytes(fs.results.get('out.ply')));
         assert.strictEqual(out.numRows, dt.numRows);
         assert.deepStrictEqual([...out.columnNames].sort(), [...dt.columnNames].sort());
         for (const name of dt.columnNames) {
@@ -170,7 +170,7 @@ describe('streaming PLY pipeline (chunked read -> transform -> streaming write)'
 
             const pool = createChunkDataPool({ chunkSize });
             const rfs = new NodeReadFileSystem();
-            const src = await readPlyChunked(await rfs.createSource(inPath), pool);
+            const src = await readPly(await rfs.createSource(inPath), pool);
             const mapped = mapSource(src, new Transform(new Vec3(1, 2, 3)));
             const outFs = new MemoryFileSystem();
             await writePlyStreaming(mapped, pool, { filename: 'out.ply' }, outFs);
@@ -178,7 +178,7 @@ describe('streaming PLY pipeline (chunked read -> transform -> streaming write)'
 
             // Output is correct size.
             const outBytes = outFs.results.get('out.ply');
-            const decoded = await readPly(await sourceFromBytes(outBytes));
+            const decoded = await decodePlyToDataTable(await sourceFromBytes(outBytes));
             assert.strictEqual(decoded.numRows, N);
 
             // Memory proof: the pool only ever allocated ONE set of layer buffers
