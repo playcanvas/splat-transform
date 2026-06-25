@@ -21,7 +21,6 @@ import {
     processDataTable,
     revision,
     TextRenderer,
-    Transform,
     UrlReadFileSystem,
     version,
     WorkerQueue,
@@ -33,10 +32,10 @@ import {
     type ReadFileSystem,
     logger
 } from '../lib';
-// Streaming chunk pipeline (ply load -> transform -> ply/sog write, no DataTable).
+// Streaming chunk pipeline (ply load -> process -> ply/sog write, no DataTable).
 // Deep imports keep these internal/`@ignore` APIs off the public lib surface
 // until the migration is complete.
-import { mapSource } from '../lib/ops';
+import { processSource, canProcessSource } from '../lib/process-source';
 import { readPly } from '../lib/readers/read-ply';
 import { createChunkDataPool } from '../lib/source';
 import { writePlyStreaming } from '../lib/writers/write-ply-streaming';
@@ -1093,36 +1092,35 @@ const main = async () => {
         const phaseTotal = inputArgs.length + (isNullOutput ? 0 : 1);
 
         // Fast streaming chunk path: a single local-.ply input -> .ply or .sog
-        // output, with only coordinate transforms (-t/-r/-s) applied. Reads the
-        // ply lazily as a ChunkSource, composes the transforms with mapSource, and
-        // writes one layer/chunk at a time — the whole scene is never resident.
-        // Anything else (filters, decimate, multiple inputs, URLs, other formats)
-        // falls through to the DataTable pipeline below.
+        // output, with only chunk-path actions (-t/-r/-s, filters, summary)
+        // applied. Reads the ply lazily as a ChunkSource, applies the actions via
+        // processSource, and writes one layer/chunk at a time — the whole scene is
+        // never resident. Anything else (decimate, lod, morton-order, band drop,
+        // GPU voxel filters, multiple inputs, URLs, other formats) falls through
+        // to the DataTable pipeline below.
         const onlyInput = inputArgs.length === 1 ? inputArgs[0] : null;
         const chunkActions = onlyInput ? [...onlyInput.processActions, ...outputArg.processActions] : [];
-        const isTransformAction = (a: ProcessAction) => a.kind === 'translate' || a.kind === 'rotate' || a.kind === 'scale';
         if (
             onlyInput &&
             !isNullOutput &&
             (outputFormat === 'sog' || outputFormat === 'sog-bundle' || outputFormat === 'ply') &&
             !isHttpUrl(onlyInput.filename) &&
-            chunkActions.every(isTransformAction) &&
+            canProcessSource(chunkActions) &&
             getInputFormat(resolveInput(onlyInput.filename).classifyName) === 'ply'
         ) {
             const { filename: inFile, fileSystem } = resolveInput(onlyInput.filename);
             const phase = logger.group(`Output ${outputArg.filename}`, { index: phaseTotal, total: phaseTotal });
             const pool = createChunkDataPool();
-            let source = await readPly(await fileSystem.createSource(inFile), pool);
 
-            // compose -t/-r/-s (input actions then output actions), matching the
-            // left-multiply order of the DataTable path (see process.ts).
-            let xform = new Transform();
-            for (const a of chunkActions) {
-                if (a.kind === 'translate') xform = new Transform(a.value).mul(xform);
-                else if (a.kind === 'rotate') xform = new Transform().fromEulers(a.value.x, a.value.y, a.value.z).mul(xform);
-                else if (a.kind === 'scale') xform = new Transform(undefined, undefined, a.value).mul(xform);
+            // Input actions then output actions, matching the DataTable path's
+            // apply-on-input then apply-on-combined order (single input, so the
+            // two collapse to one sequence).
+            let source = await readPly(await fileSystem.createSource(inFile), pool);
+            source = await processSource(source, chunkActions, pool);
+
+            if (source.meta.numGaussians === 0) {
+                throw new Error('No Gaussians to write');
             }
-            if (!xform.isIdentity()) source = mapSource(source, xform);
 
             logger.info(`${fmtCount(source.meta.numGaussians)} gaussians · ${source.meta.shBands} SH bands (streaming)`);
             if (outputFormat === 'ply') {
