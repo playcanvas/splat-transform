@@ -51,9 +51,6 @@ type PlyData = {
 const GEOMETRIC_COLS = ['rot_0', 'rot_1', 'rot_2', 'rot_3', 'scale_0', 'scale_1', 'scale_2', 'opacity'];
 const COLOR_DC_COLS = ['f_dc_0', 'f_dc_1', 'f_dc_2'];
 
-// Compressed-PLY chunk size (gaussians per bounds block).
-const COMPRESSED_CHUNK = 256;
-
 const getDataType = (type: string) => {
     switch (type) {
         case 'char': return Int8Array;
@@ -283,49 +280,21 @@ const decodePlyToDataTable = async (source: ReadSource): Promise<DataTable> => {
     return result;
 };
 
-// Interleave a decompressed-chunk DataTable's columns into the requested layer
-// buffers (position / geometric / color). Compressed gaussian PLY has no `other`.
-const fillChunkData = (request: ChunkReadRequest, dt: DataTable, restCount: number): void => {
-    const n = dt.numRows;
-    const col = (name: string): Float32Array => dt.getColumnByName(name)!.data as Float32Array;
-
-    if (request.position) {
-        const out = new Float32Array(request.position.data);
-        const x = col('x'), y = col('y'), z = col('z');
-        for (let i = 0; i < n; i++) {
-            const o = i * 3;
-            out[o] = x[i]; out[o + 1] = y[i]; out[o + 2] = z[i];
-        }
-    }
-    if (request.geometric) {
-        const out = new Float32Array(request.geometric.data);
-        const r0 = col('rot_0'), r1 = col('rot_1'), r2 = col('rot_2'), r3 = col('rot_3');
-        const s0 = col('scale_0'), s1 = col('scale_1'), s2 = col('scale_2'), op = col('opacity');
-        for (let i = 0; i < n; i++) {
-            const o = i * 8;
-            out[o] = r0[i]; out[o + 1] = r1[i]; out[o + 2] = r2[i]; out[o + 3] = r3[i];
-            out[o + 4] = s0[i]; out[o + 5] = s1[i]; out[o + 6] = s2[i]; out[o + 7] = op[i];
-        }
-    }
-    if (request.color) {
-        const out = new Float32Array(request.color.data);
-        const sw = 3 + restCount;
-        const d0 = col('f_dc_0'), d1 = col('f_dc_1'), d2 = col('f_dc_2');
-        const rest: Float32Array[] = [];
-        for (let r = 0; r < restCount; r++) rest.push(col(`f_rest_${r}`));
-        for (let i = 0; i < n; i++) {
-            const o = i * sw;
-            out[o] = d0[i]; out[o + 1] = d1[i]; out[o + 2] = d2[i];
-            for (let r = 0; r < restCount; r++) out[o + 3 + r] = rest[r][i];
-        }
-    }
+// --- Compressed-PLY dequant primitives (mirror decompress-ply.ts) ---
+const SH_C0 = 0.28209479177387814;
+const ROT_NORM = 1.0 / (Math.sqrt(2) * 0.5);
+const unpackUnorm = (value: number, bits: number): number => {
+    const t = (1 << bits) - 1;
+    return (value & t) / t;
 };
+const lerp = (a: number, b: number, t: number): number => a * (1 - t) + b * t;
 
 // Lazy reader for compressed PLY (packed chunk + vertex [+ sh] elements). The
-// `chunk` bounds element is small and read resident once; each `read` range-reads
-// just that output-chunk's vertex (+ sh) rows, dequantizes them via the existing
-// `decompressPly`, and interleaves the result into the layer buffers. Output
-// chunks align to the format's 256-blocks (chunkSize must be a multiple of 256).
+// small `chunk` bounds element is read resident once (indexed by absolute
+// 256-block); each `read` range-reads only that output-chunk's packed vertex
+// (+ sh, for color) rows and dequantizes **just the requested layer's
+// attributes** straight into the layer buffers — no whole-scene decode, no
+// intermediate DataTable, no per-gaussian object churn.
 const readCompressedChunked = (source: ReadSource, header: PlyHeader, pool: ChunkDataPool): ChunkSource => {
     const chunkEl = header.elements.find(e => e.name === 'chunk');
     const vertexEl = header.elements.find(e => e.name === 'vertex');
@@ -337,6 +306,21 @@ const readCompressedChunked = (source: ReadSource, header: PlyHeader, pool: Chun
     const chunkRowSize = rowSizeOf(chunkEl.properties);
     const vertexRowSize = rowSizeOf(vertexEl.properties);
     const shRowSize = shEl ? rowSizeOf(shEl.properties) : 0;
+
+    // word index of each packed vertex column within the (all-uint32) record
+    const vWord = (name: string): number => {
+        let off = 0;
+        for (const p of vertexEl.properties) {
+            if (p.name === name) return off >> 2;
+            off += typeSize(p.type);
+        }
+        throw new Error(`readPly: compressed vertex missing '${name}'`);
+    };
+    const ppIdx = vWord('packed_position');
+    const prIdx = vWord('packed_rotation');
+    const psIdx = vWord('packed_scale');
+    const pcIdx = vWord('packed_color');
+    const vWords = vertexRowSize >> 2;
 
     // Binary offset of an element (header order, immediately after the header).
     const elementOffset = (target: PlyElement): number => {
@@ -357,11 +341,18 @@ const readCompressedChunked = (source: ReadSource, header: PlyHeader, pool: Chun
     if (shBands === undefined) {
         throw new Error(`readPly: unrecognized compressed sh column count ${restCount}`);
     }
+    // byte offset of each f_rest_* within the sh record (uint8 columns)
+    const shByteOffset = (name: string): number => {
+        let off = 0;
+        for (const p of shEl!.properties) {
+            if (p.name === name) return off;
+            off += typeSize(p.type);
+        }
+        throw new Error(`readPly: compressed sh missing '${name}'`);
+    };
+    const shOff = shEl ? Array.from({ length: restCount }, (_, r) => shByteOffset(`f_rest_${r}`)) : [];
 
     const chunkSize = pool.chunkSize;
-    if (chunkSize % COMPRESSED_CHUNK !== 0) {
-        throw new Error(`readPly: compressed PLY requires a chunkSize multiple of ${COMPRESSED_CHUNK} (got ${chunkSize})`);
-    }
     const numChunks = Math.max(1, Math.ceil(numGaussians / chunkSize));
 
     const availableLayers = new Set<ChunkLayer>(['position', 'geometric', 'color']);
@@ -395,6 +386,10 @@ const readCompressedChunked = (source: ReadSource, header: PlyHeader, pool: Chun
         return bounds;
     };
 
+    // Reusable scratch for one chunk's packed records (reads are sequential).
+    let vScratch: Uint8Array | null = null;
+    let sScratch: Uint8Array | null = null;
+
     const read = async (request: ChunkReadRequest): Promise<void> => {
         if ((request.lod ?? 0) !== 0) {
             throw new Error('readPly: only lod 0 is supported');
@@ -405,32 +400,105 @@ const readCompressedChunked = (source: ReadSource, header: PlyHeader, pool: Chun
             throw new Error(`readPly: chunkIndex ${request.chunkIndex} out of range`);
         }
 
-        // bounds subset (resident slice), aligned to 256-blocks since start is a
-        // multiple of chunkSize (which is a multiple of 256).
-        const allBounds = await ensureBounds();
-        const boundStart = start / COMPRESSED_CHUNK;
-        const numBoundRows = Math.ceil(count / COMPRESSED_CHUNK);
-        const chunkSubset = new DataTable(allBounds.columns.map((c) => {
-            return new Column(c.name, (c.data as Float32Array).subarray(boundStart, boundStart + numBoundRows));
-        }));
+        const bnd = await ensureBounds();
+        const bcol = (name: string): Float32Array => bnd.getColumnByName(name)!.data as Float32Array;
 
-        // vertex subset (range read + decode)
-        const vStart = vertexOffset + start * vertexRowSize;
-        const vertexSubset = await decodeElement(source.read(vStart, vStart + count * vertexRowSize), vertexEl.properties, count);
+        // range-read this chunk's packed vertex records (uint32 words); the
+        // bounds for gaussian g live at absolute 256-block `g >> 8`.
+        vScratch ??= new Uint8Array(chunkSize * vertexRowSize);
+        const vBytes = vScratch.subarray(0, count * vertexRowSize);
+        if (await readExact(source.read(vertexOffset + start * vertexRowSize, vertexOffset + (start + count) * vertexRowSize), vBytes, 0, vBytes.length) !== vBytes.length) {
+            throw new Error(`readPly: short vertex read for chunk ${request.chunkIndex}`);
+        }
+        const vU32 = new Uint32Array(vScratch.buffer, 0, count * vWords);
 
-        const elements = [
-            { name: 'chunk', dataTable: chunkSubset },
-            { name: 'vertex', dataTable: vertexSubset }
-        ];
-        // SH only feeds the color layer — skip the read/unpack for other phases.
-        if (shEl && request.color) {
-            const sStart = shOffset + start * shRowSize;
-            const shSubset = await decodeElement(source.read(sStart, sStart + count * shRowSize), shEl.properties, count);
-            elements.push({ name: 'sh', dataTable: shSubset });
+        if (request.position) {
+            const out = new Float32Array(request.position.data);
+            const minX = bcol('min_x'), minY = bcol('min_y'), minZ = bcol('min_z');
+            const maxX = bcol('max_x'), maxY = bcol('max_y'), maxZ = bcol('max_z');
+            for (let i = 0; i < count; i++) {
+                const ci = (start + i) >> 8;
+                const pp = vU32[i * vWords + ppIdx];
+                const o = i * 3;
+                out[o]     = lerp(minX[ci], maxX[ci], unpackUnorm(pp >>> 21, 11));
+                out[o + 1] = lerp(minY[ci], maxY[ci], unpackUnorm(pp >>> 11, 10));
+                out[o + 2] = lerp(minZ[ci], maxZ[ci], unpackUnorm(pp, 11));
+            }
         }
 
-        const decompressed = decompressPly({ comments: [], elements });
-        fillChunkData(request, decompressed, request.color ? restCount : 0);
+        if (request.geometric) {
+            const out = new Float32Array(request.geometric.data);
+            const minSX = bcol('min_scale_x'), minSY = bcol('min_scale_y'), minSZ = bcol('min_scale_z');
+            const maxSX = bcol('max_scale_x'), maxSY = bcol('max_scale_y'), maxSZ = bcol('max_scale_z');
+            for (let i = 0; i < count; i++) {
+                const ci = (start + i) >> 8;
+                const o = i * 8;
+                // rotation (largest-3 quaternion)
+                const pr = vU32[i * vWords + prIdx];
+                const ra = (unpackUnorm(pr >>> 20, 10) - 0.5) * ROT_NORM;
+                const rb = (unpackUnorm(pr >>> 10, 10) - 0.5) * ROT_NORM;
+                const rc = (unpackUnorm(pr, 10) - 0.5) * ROT_NORM;
+                const rm = Math.sqrt(Math.max(0, 1 - (ra * ra + rb * rb + rc * rc)));
+                switch (pr >>> 30) {
+                    case 0: out[o] = rm; out[o + 1] = ra; out[o + 2] = rb; out[o + 3] = rc; break;
+                    case 1: out[o] = ra; out[o + 1] = rm; out[o + 2] = rb; out[o + 3] = rc; break;
+                    case 2: out[o] = ra; out[o + 1] = rb; out[o + 2] = rm; out[o + 3] = rc; break;
+                    default: out[o] = ra; out[o + 1] = rb; out[o + 2] = rc; out[o + 3] = rm;
+                }
+                // scale
+                const ps = vU32[i * vWords + psIdx];
+                out[o + 4] = lerp(minSX[ci], maxSX[ci], unpackUnorm(ps >>> 21, 11));
+                out[o + 5] = lerp(minSY[ci], maxSY[ci], unpackUnorm(ps >>> 11, 10));
+                out[o + 6] = lerp(minSZ[ci], maxSZ[ci], unpackUnorm(ps, 11));
+                // opacity (alpha of packed_color)
+                const cw = unpackUnorm(vU32[i * vWords + pcIdx], 8);
+                out[o + 7] = -Math.log(1 / cw - 1);
+            }
+        }
+
+        if (request.color) {
+            const out = new Float32Array(request.color.data);
+            const sw = 3 + restCount;
+            const hasColors = bnd.hasColumn('min_r');
+            const minR = hasColors ? bcol('min_r') : null;
+            const minG = hasColors ? bcol('min_g') : null;
+            const minB = hasColors ? bcol('min_b') : null;
+            const maxR = hasColors ? bcol('max_r') : null;
+            const maxG = hasColors ? bcol('max_g') : null;
+            const maxB = hasColors ? bcol('max_b') : null;
+
+            let sBytes: Uint8Array | null = null;
+            if (shEl) {
+                sScratch ??= new Uint8Array(chunkSize * shRowSize);
+                sBytes = sScratch.subarray(0, count * shRowSize);
+                if (await readExact(source.read(shOffset + start * shRowSize, shOffset + (start + count) * shRowSize), sBytes, 0, sBytes.length) !== sBytes.length) {
+                    throw new Error(`readPly: short sh read for chunk ${request.chunkIndex}`);
+                }
+            }
+
+            for (let i = 0; i < count; i++) {
+                const ci = (start + i) >> 8;
+                const o = i * sw;
+                const pc = vU32[i * vWords + pcIdx];
+                const cx = unpackUnorm(pc >>> 24, 8);
+                const cy = unpackUnorm(pc >>> 16, 8);
+                const cz = unpackUnorm(pc >>> 8, 8);
+                const cr = hasColors ? lerp(minR![ci], maxR![ci], cx) : cx;
+                const cg = hasColors ? lerp(minG![ci], maxG![ci], cy) : cy;
+                const cb = hasColors ? lerp(minB![ci], maxB![ci], cz) : cz;
+                out[o] = (cr - 0.5) / SH_C0;
+                out[o + 1] = (cg - 0.5) / SH_C0;
+                out[o + 2] = (cb - 0.5) / SH_C0;
+                if (sBytes) {
+                    const sb = i * shRowSize;
+                    for (let r = 0; r < restCount; r++) {
+                        const byte = sBytes[sb + shOff[r]];
+                        const nrm = (byte === 0) ? 0 : (byte === 255) ? 1 : (byte + 0.5) / 256;
+                        out[o + 3 + r] = (nrm - 0.5) * 8;
+                    }
+                }
+            }
+        }
     };
 
     const close = (): Promise<void> => {
