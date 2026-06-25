@@ -88,3 +88,29 @@ describe('writeSogSource: native SOG from a ChunkSource', () => {
         compareSummaries(computeSummary(decoded), expected, { tolerance: 0.5, allowExtraColumns: true });
     });
 });
+
+describe('writeSogSource: indices ordering contract', () => {
+    it('rejects a sub-length indices (must be a full-length ordering, not a subset filter)', async () => {
+        const dt = createTestDataTable(200);
+        const pool = createChunkDataPool();
+        const src = dataTableToChunkSource(dt, pool.chunkSize);
+        await assert.rejects(
+            writeSogSource(src, pool,
+                { filename: 'out.sog', bundle: false, iterations: 5, logging: 'silent', indices: new Uint32Array(100) },
+                new MemoryFileSystem()),
+            /full-length ordering|must equal the source's gaussian count/
+        );
+    });
+
+    it('accepts a full-length ordering (a permutation of all rows)', async () => {
+        const dt = createTestDataTable(200);
+        const pool = createChunkDataPool();
+        const src = dataTableToChunkSource(dt, pool.chunkSize);
+        const order = new Uint32Array(dt.numRows);
+        for (let i = 0; i < order.length; i++) order[i] = order.length - 1 - i; // reverse permutation
+        const fs = new MemoryFileSystem();
+        await writeSogSource(src, pool,
+            { filename: 'out.sog', bundle: true, iterations: 5, logging: 'silent', indices: order }, fs);
+        assert.ok(fs.results.get('out.sog'), 'wrote the bundled sog');
+    });
+});

@@ -78,9 +78,12 @@ type WriteSogSourceOptions = {
     iterations: number;
     createDevice?: DeviceCreator;
     logging?: 'own' | 'flat' | 'silent';
-    // Optional pre-computed gaussian ordering (texel placement order). When
-    // supplied, the internal Morton sort is skipped and this order is used as-is
-    // (the LOD writer passes its own per-unit ordering).
+    // Optional pre-computed gaussian ordering (texel placement order): a
+    // **full-length permutation** of `[0, meta.numGaussians)`. When supplied the
+    // internal Morton sort is skipped and this order is used as-is. It is an
+    // ordering, NOT a subset filter — to write a subset, filter the source
+    // upstream (`filterSource` / `gatherRows`) so the source *is* the subset,
+    // then pass its within-source ordering here.
     indices?: Uint32Array;
 };
 
@@ -119,6 +122,18 @@ const writeSogSource = async (
     const { meta } = baked;
     const numRows = meta.numGaussians;
     const shBands = meta.shBands;
+
+    // `indices`, when supplied, is a full-length ordering (permutation) of
+    // `[0, numRows)`, not a subset filter — a short array would mis-size the
+    // textures / `meta.count` and read past the order in the per-texel loops.
+    // Validate before any writer is opened. To write a subset, filter the source
+    // upstream (`filterSource`) so the source itself is the subset.
+    if (options.indices && options.indices.length !== numRows) {
+        throw new Error(
+            `writeSogSource: indices length ${options.indices.length} must equal the source's gaussian count ${numRows} ` +
+            '(indices is a full-length ordering, not a subset filter — filter the source upstream with filterSource)'
+        );
+    }
 
     const width = Math.ceil(Math.sqrt(numRows) / 4) * 4;
     const height = Math.ceil(numRows / width / 4) * 4;
