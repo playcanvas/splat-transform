@@ -6,6 +6,7 @@ import {
     type ChunkData,
     type ChunkLayer,
     type ChunkReadRequest,
+    type RowReadRequest,
     type ChunkSource,
     type ChunkSourceMetadata,
     type ChunkDataPool,
@@ -735,7 +736,62 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
         }
     };
 
-    return fileChunkSource(source, meta, read);
+    // Random-access gather (the ChunkSource.readRows capability): fetch arbitrary
+    // rows by byte-range reads. Output rows are sorted into source-file order so
+    // reads run forward and consecutive source rows coalesce into one range read;
+    // each record is then de-interleaved into its (scattered) output row. Only the
+    // requested rows' bytes (including SH) are read — the basis of the LOD writer's
+    // "positions resident, heavy data fetched per output chunk" gather.
+    let gatherScratch: Uint8Array | null = null;
+    const readRows = async (request: RowReadRequest): Promise<void> => {
+        const { indices, indexOffset, count } = request;
+        if (count <= 0) return;
+
+        const requested: ChunkLayer[] = (['position', 'geometric', 'color', 'other'] as ChunkLayer[])
+        .filter(layer => request[layer]);
+        for (const layer of requested) {
+            if (!plans[layer]) {
+                throw new Error(`readPly: layer '${layer}' not available`);
+            }
+        }
+
+        // Output slots ordered by their source row: forward file reads, and
+        // consecutive source rows merge into a single range read.
+        const slot = new Uint32Array(count);
+        for (let j = 0; j < count; j++) slot[j] = j;
+        slot.sort((a, b) => indices[indexOffset + a] - indices[indexOffset + b]);
+
+        let j = 0;
+        while (j < count) {
+            const first = indices[indexOffset + slot[j]];
+            let k = j + 1;
+            while (k < count && indices[indexOffset + slot[k]] === first + (k - j)) k++;
+            const runLen = k - j;
+
+            const need = runLen * recordStride;
+            if (!gatherScratch || gatherScratch.length < need) {
+                gatherScratch = new Uint8Array(need);
+            }
+            const recordBytes = gatherScratch.subarray(0, need);
+            const got = await readExact(
+                source.read(headerBytes + first * recordStride, headerBytes + (first + runLen) * recordStride),
+                recordBytes, 0, need
+            );
+            if (got !== need) {
+                throw new Error(`readPly: short gather read (${got}/${need}) at row ${first}`);
+            }
+
+            for (let t = 0; t < runLen; t++) {
+                const rec = recordBytes.subarray(t * recordStride, (t + 1) * recordStride);
+                for (const layer of requested) {
+                    fill(rec, 1, request[layer]!, plans[layer]!, slot[j + t]);
+                }
+            }
+            j = k;
+        }
+    };
+
+    return fileChunkSource(source, meta, read, readRows);
 };
 
 export { PlyData, decodePlyToDataTable, readPly };

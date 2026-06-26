@@ -259,7 +259,9 @@ const materializeToDataTable = async (
     pool: ChunkDataPool
 ): Promise<DataTable> => {
     const { meta } = src;
-    const N = meta.numGaussians;
+    // Flatten every LOD (lod 0, 1, …) into one table; `numGaussians` is only the
+    // LOD-0 count, so size to the sum across all LODs.
+    const N = meta.lodCounts.reduce((acc, c) => acc + c, 0);
 
     const x = new Float32Array(N);
     const y = new Float32Array(N);
@@ -294,18 +296,30 @@ const materializeToDataTable = async (
     const wantsOther = meta.availableLayers.has('other') && extraArrays.length > 0;
 
     const chunkSize = meta.chunkSize;
-    const numChunks = meta.numChunks[0] ?? 0;
 
-    for (let k = 0; k < numChunks; k++) {
-        const rowStart = k * chunkSize;
-        const count = Math.min(chunkSize, N - rowStart);
+    // Precompute every chunk's (lod, index, row count, global row offset),
+    // laying LODs out contiguously in order (lod 0 first, then 1, …).
+    const chunkRefs: { lod: number; chunkIndex: number; count: number; rowStart: number }[] = [];
+    {
+        let offset = 0;
+        for (let lod = 0; lod < meta.numLods; lod++) {
+            const lodCount = meta.lodCounts[lod];
+            const lodChunks = meta.numChunks[lod] ?? 0;
+            for (let k = 0; k < lodChunks; k++) {
+                const count = Math.min(chunkSize, lodCount - k * chunkSize);
+                chunkRefs.push({ lod, chunkIndex: k, count, rowStart: offset });
+                offset += count;
+            }
+        }
+    }
 
+    for (const { lod, chunkIndex: k, count, rowStart } of chunkRefs) {
         const layouts = meta.layouts;
         const acquired: { layer: ChunkLayer; chunkData: ChunkData }[] = [];
         const req: {
             chunkIndex: number; lod: number;
             position?: ChunkData; geometric?: ChunkData; color?: ChunkData; other?: ChunkData;
-        } = { chunkIndex: k, lod: 0 };
+        } = { chunkIndex: k, lod };
 
         if (wantsPosition) {
             const c = pool.acquire('position', layouts.position!, count);

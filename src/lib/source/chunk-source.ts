@@ -56,6 +56,27 @@ type ChunkReadRequest = {
 };
 
 /**
+ * A random-access (scatter-gather) read request to a {@link ChunkSource}.
+ *
+ * Fills output rows `[0, count)` of the passed layer buffers from source rows
+ * `indices[indexOffset .. indexOffset + count)` (LOD 0). Indices are arbitrary
+ * and need not be sorted; this is the per-row analog of {@link ChunkReadRequest}
+ * and underpins the LOD writer's "positions resident, heavy data fetched per
+ * output chunk" gather — for a fixed-stride file source each row is a byte-range
+ * read, so a unit pulls only its own gaussians (≈ 1× total reads, no whole-scene
+ * residency).
+ */
+type RowReadRequest = {
+    readonly indices: Uint32Array;
+    readonly indexOffset: number;
+    readonly count: number;
+    readonly position?: ChunkData;
+    readonly geometric?: ChunkData;
+    readonly color?: ChunkData;
+    readonly other?: ChunkData;
+};
+
+/**
  * Lazy, chunked, layered view onto gaussian splat data.
  *
  * Sources are opened over a file (or derived from another source via a
@@ -80,10 +101,19 @@ interface ChunkSource {
     read(request: ChunkReadRequest): Promise<void>;
 
     /**
+     * Optional random-access gather: fill the request's layer buffers from
+     * arbitrary source rows (see {@link RowReadRequest}). Implemented by sources
+     * that support efficient per-row access — resident `InMemoryChunkSource` and
+     * fixed-stride file sources (PLY). Combinators and streaming/whole-blob
+     * sources omit it; callers needing it on such a source must `compact()` first.
+     */
+    readRows?(request: RowReadRequest): Promise<void>;
+
+    /**
      * Release any open file handles or internal decode state.
      * Idempotent; safe to call multiple times.
      */
     close(): Promise<void>;
 }
 
-export { type ChunkSource, type ChunkReadRequest, type ChunkSourceMetadata };
+export { type ChunkSource, type ChunkReadRequest, type RowReadRequest, type ChunkSourceMetadata };

@@ -16,7 +16,7 @@ import { describe, it } from 'node:test';
 import { createTestDataTable } from './helpers/test-utils.mjs';
 import { combine, Transform } from '../src/lib/index.js';
 import { dataTableToChunkSource, materializeToDataTable } from '../src/lib/compat/data-table.js';
-import { concatSource, filterSource } from '../src/lib/ops/index.js';
+import { concatSource, filterSource, permuteSource } from '../src/lib/ops/index.js';
 import { createChunkDataPool } from '../src/lib/source/index.js';
 
 // Compare two DataTables column-by-column (by name), exact.
@@ -111,5 +111,33 @@ describe('combinators: concatSource', () => {
         const sa = dataTableToChunkSource(createTestDataTable(20, { includeSH: true, shBands: 1 }), chunkSize);
         const sb = dataTableToChunkSource(createTestDataTable(20, { includeSH: true, shBands: 2 }), chunkSize);
         assert.throws(() => concatSource([sa, sb], pool), /SH band mismatch/);
+    });
+
+    it('forwards readRows (random-access gather across inputs)', async () => {
+        const chunkSize = 64;
+        const dts = [
+            createTestDataTable(100, { includeSH: true, shBands: 1 }),
+            createTestDataTable(50, { includeSH: true, shBands: 1 }),
+            createTestDataTable(70, { includeSH: true, shBands: 1 })
+        ];
+        dts.forEach((dt, s) => dt.getColumnByName('f_dc_2').data.fill(s + 1));
+
+        const pool = createChunkDataPool({ chunkSize });
+        const concat = concatSource(dts.map(dt => dataTableToChunkSource(dt, chunkSize)), pool);
+        assert.strictEqual(typeof concat.readRows, 'function', 'concat of gatherable sources should forward readRows');
+
+        // Scattered order crossing input boundaries (inputs 0/1/2), with a repeat.
+        const order = new Uint32Array([219, 0, 100, 99, 150, 149, 100, 75]);
+        const gathered = await materializeToDataTable(permuteSource(concat, order), pool);
+
+        const expected = combine(dts);
+        assert.strictEqual(gathered.numRows, order.length);
+        for (const name of expected.columnNames) {
+            const g = gathered.getColumnByName(name).data;
+            const e = expected.getColumnByName(name).data;
+            for (let i = 0; i < order.length; i++) {
+                assert.strictEqual(g[i], e[order[i]], `column '${name}' row ${i} (src ${order[i]})`);
+            }
+        }
     });
 });

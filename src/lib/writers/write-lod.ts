@@ -4,9 +4,10 @@ import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 import { logWrittenFile } from './utils';
 import { writeSogSource } from './write-sog.js';
 import { dataTableToChunkSource } from '../compat/data-table';
-import { type TypedArray, DataTable, sortMortonOrder, convertToSpace } from '../data-table';
+import { Column, DataTable, sortMortonOrder, convertToSpace } from '../data-table';
 import { type FileSystem } from '../io/write';
-import { createChunkDataPool } from '../source';
+import { permuteSource } from '../ops';
+import { type ChunkDataPool, type ChunkSource, createChunkDataPool } from '../source';
 import { BTreeNode, BTree } from '../spatial';
 import type { DeviceCreator } from '../types';
 import { logger, Transform } from '../utils';
@@ -58,35 +59,37 @@ const boundUnion = (result: Aabb, a: Aabb, b: Aabb) => {
     rM[2] = Math.max(aM[2], bM[2]);
 };
 
-const calcBound = (dataTable: DataTable, indices: number[]): Aabb => {
-    const x = dataTable.getColumnByName('x').data;
-    const y = dataTable.getColumnByName('y').data;
-    const z = dataTable.getColumnByName('z').data;
-    const rx = dataTable.getColumnByName('rot_1').data;
-    const ry = dataTable.getColumnByName('rot_2').data;
-    const rz = dataTable.getColumnByName('rot_3').data;
-    const rw = dataTable.getColumnByName('rot_0').data;
-    const sx = dataTable.getColumnByName('scale_0').data;
-    const sy = dataTable.getColumnByName('scale_1').data;
-    const sz = dataTable.getColumnByName('scale_2').data;
+/**
+ * The only per-gaussian column held resident for the partition: positions.
+ * Everything else (rotation/scale for bounds, color/SH for encoding) is gathered
+ * from the source on demand, so resident scales as ~12 B/gaussian regardless of
+ * SH degree — the point of the streaming LOD writer for very large scenes.
+ */
+type SlimColumns = {
+    x: Float32Array; y: Float32Array; z: Float32Array;
+};
 
+// Expand a batch of gathered (position, rotation, scale) records into ellipsoid
+// AABBs and fold them into `min`/`max`. Pulled out of `calcBound` so the bounds
+// pass can run over gathered batches; the math mirrors the legacy per-gaussian
+// path exactly (quaternion order (rot_1, rot_2, rot_3, rot_0); scale = exp).
+const accumulateBound = (
+    min: number[], max: number[],
+    pos: Float32Array, rot: Float32Array, scale: Float32Array, count: number
+): void => {
     const p = new Vec3();
     const r = new Quat();
     const s = new Vec3();
     const mat4 = new Mat4();
-
     const a = new BoundingBox();
     const b = new BoundingBox();
 
-    const min = [Infinity, Infinity, Infinity];
-    const max = [-Infinity, -Infinity, -Infinity];
-
     a.center.set(0, 0, 0);
 
-    for (const index of indices) {
-        p.set(x[index], y[index], z[index]);
-        r.set(rx[index], ry[index], rz[index], rw[index]).normalize();
-        s.set(Math.exp(sx[index]), Math.exp(sy[index]), Math.exp(sz[index]));
+    for (let i = 0; i < count; i++) {
+        p.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
+        r.set(rot[i * 4 + 1], rot[i * 4 + 2], rot[i * 4 + 3], rot[i * 4 + 0]).normalize();
+        s.set(Math.exp(scale[i * 3]), Math.exp(scale[i * 3 + 1]), Math.exp(scale[i * 3 + 2]));
         mat4.setTRS(p, r, Vec3.ONE);
 
         a.halfExtents.set(s.x, s.y, s.z);
@@ -96,7 +99,7 @@ const calcBound = (dataTable: DataTable, indices: number[]): Aabb => {
         const M = b.getMax();
 
         if (!isFinite(m.x) || !isFinite(m.y) || !isFinite(m.z) || !isFinite(M.x) || !isFinite(M.y) || !isFinite(M.z)) {
-            logger.warn(`skipping invalid bounding box at index ${index}: min=(${m.x}, ${m.y}, ${m.z}) max=(${M.x}, ${M.y}, ${M.z})`);
+            logger.warn(`skipping invalid bounding box: min=(${m.x}, ${m.y}, ${m.z}) max=(${M.x}, ${M.y}, ${M.z})`);
             continue;
         }
 
@@ -107,11 +110,39 @@ const calcBound = (dataTable: DataTable, indices: number[]): Aabb => {
         max[1] = Math.max(max[1], M.y);
         max[2] = Math.max(max[2], M.z);
     }
+};
+
+// Per-leaf ellipsoid AABB. Positions are resident, but rotation/scale are
+// gathered from the source by index (batched by chunk) so the geometric layer is
+// never wholly resident — the bounds-pass analog of the per-unit heavy gather.
+const calcBound = async (source: ChunkSource, pool: ChunkDataPool, indices: number[]): Promise<Aabb> => {
+    const min = [Infinity, Infinity, Infinity];
+    const max = [-Infinity, -Infinity, -Infinity];
+
+    const idx = Uint32Array.from(indices);
+    const batch = pool.chunkSize;
+    const { layouts } = source.meta;
+
+    for (let off = 0; off < idx.length; off += batch) {
+        const count = Math.min(batch, idx.length - off);
+        const pos = pool.acquire('position', layouts.position!, count);
+        const geo = pool.acquire('geometric', layouts.geometric!, count);
+        await source.readRows!({ indices: idx, indexOffset: off, count, position: pos, geometric: geo });
+        accumulateBound(
+            min, max,
+            pos.field('position') as Float32Array,
+            geo.field('rotation') as Float32Array,
+            geo.field('scale') as Float32Array,
+            count
+        );
+        pos.release();
+        geo.release();
+    }
 
     return { min, max };
 };
 
-const binIndices = (parent: BTreeNode, lod: TypedArray) => {
+const binIndices = (parent: BTreeNode, lod: Float32Array) => {
     const result = new Map<number, number[]>();
 
     // we've reached a leaf node, gather indices
@@ -143,10 +174,49 @@ const binIndices = (parent: BTreeNode, lod: TypedArray) => {
     return result;
 };
 
-type WriteLodOptions = {
+/**
+ * Read positions out of a source into flat per-gaussian arrays — one sequential
+ * pass. Nothing else is materialized here (for a fixed-stride file source the
+ * rotation/scale/color/SH bytes are read-and-discarded); rotation/scale are
+ * gathered per leaf for bounds, and the heavy layers per unit at encode time.
+ *
+ * @param source - The single-LOD, PLY-space scene source.
+ * @param pool - Pool for the temporary per-chunk read buffers.
+ * @returns The flat position columns, indexed by gaussian.
+ */
+const extractSlim = async (source: ChunkSource, pool: ChunkDataPool): Promise<SlimColumns> => {
+    const { meta } = source;
+    const N = meta.numGaussians;
+    const cols: SlimColumns = {
+        x: new Float32Array(N),
+        y: new Float32Array(N),
+        z: new Float32Array(N)
+    };
+
+    const { chunkSize } = meta;
+    const numChunks = meta.numChunks[0];
+    for (let k = 0; k < numChunks; k++) {
+        const count = Math.min(chunkSize, N - k * chunkSize);
+        const pos = pool.acquire('position', meta.layouts.position!, count);
+        await source.read({ chunkIndex: k, lod: 0, position: pos });
+
+        const p = pos.field('position') as Float32Array;  // count × 3
+        const base = k * chunkSize;
+        for (let i = 0; i < count; i++) {
+            const di = base + i;
+            cols.x[di] = p[i * 3]; cols.y[di] = p[i * 3 + 1]; cols.z[di] = p[i * 3 + 2];
+        }
+        pos.release();
+    }
+    return cols;
+};
+
+type WriteLodSourceOptions = {
     filename: string;
-    dataTable: DataTable;
-    envDataTable: DataTable | null;
+    mainSource: ChunkSource;
+    envSource: ChunkSource | null;
+    /** Per-gaussian LOD level (from `--lod` tags), indexed as `mainSource` rows. */
+    lod: Float32Array;
     iterations: number;
     createDevice?: DeviceCreator;
     chunkCount: number;
@@ -154,32 +224,27 @@ type WriteLodOptions = {
 };
 
 /**
- * Writes Gaussian splat data to multi-LOD format with spatial chunking.
+ * Writes Gaussian splat data to multi-LOD format with spatial chunking, reading
+ * from resident chunk sources already in PLY space.
  *
- * Creates a hierarchical structure with multiple LOD levels, each stored
- * in separate SOG files. Includes spatial indexing via a binary tree for
- * efficient streaming and view-dependent loading.
+ * Creates a hierarchical structure with multiple LOD levels, each stored in
+ * separate SOG files, plus a binary-tree spatial index for view-dependent
+ * loading. The partition / per-leaf bounds / lod binning run over flat analysis
+ * columns extracted from `mainSource`; each unit's gaussians are gathered lazily
+ * from `mainSource` via {@link permuteSource} and encoded chunk-native.
  *
- * @param options - Options including filename, data, and chunking parameters.
+ * @param options - Options including filename, sources, and chunking parameters.
  * @param fs - File system for writing output files.
  * @ignore
  */
-const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
-    const { filename, iterations, createDevice, chunkCount, chunkExtent } = options;
+const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) => {
+    const { filename, mainSource, envSource, lod, iterations, createDevice, chunkCount, chunkExtent } = options;
 
-    // Operate in PLY space so per-leaf bounds in tree.bound are in the same
-    // coordinate frame as the SOG chunk data emitted by writeSog (which also
-    // converts to Transform.PLY). Without this, view-dependent streaming
-    // built on tree.bound picks the wrong chunks because the bounds are
-    // 180°-Z-rotated relative to the splat positions inside them.
-    // This intentionally mutates the input tables to avoid doubling peak
-    // memory during LOD export. Callers should treat writeLod as consuming its
-    // DataTable inputs.
-    const dataTable = convertToSpace(options.dataTable, Transform.PLY, true);
-    const envDataTable = options.envDataTable ? convertToSpace(options.envDataTable, Transform.PLY, true) : null;
-
-    // Pool for the chunk-native SOG encode of each unit (and the environment).
+    // Pool for slim extraction read buffers and the chunk-native SOG encodes.
     const pool = createChunkDataPool();
+
+    const slim = await extractSlim(mainSource, pool);
+    const hasEnv = !!envSource && envSource.meta.numGaussians > 0;
 
     const outputDir = dirname(filename);
 
@@ -188,9 +253,9 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
 
     // construct a kd-tree based on centroids from all lods
     const centroidsTable = new DataTable([
-        dataTable.getColumnByName('x'),
-        dataTable.getColumnByName('y'),
-        dataTable.getColumnByName('z')
+        new Column('x', slim.x),
+        new Column('y', slim.y),
+        new Column('z', slim.z)
     ]);
 
     const bTree = new BTree(centroidsTable);
@@ -202,19 +267,15 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
     // map of lod -> fileBin[]
     // fileBin: number[][]
     const lodFiles: Map<number, number[][][]> = new Map();
-    const lodColumn = dataTable.getColumnByName('lod')?.data;
+    const lodColumn = lod;
     const filenames: string[] = [];
     let lodLevels = 0;
 
-    if (!lodColumn) {
-        throw new Error('Missing lod assignment');
-    }
-
-    const build = (node: BTreeNode): MetaNode => {
+    const build = async (node: BTreeNode): Promise<MetaNode> => {
         if (!node.indices && (node.count > binSize || (node.aabb && node.aabb.largestDim() > binDim))) {
             const children = [
-                build(node.left),
-                build(node.right)
+                await build(node.left),
+                await build(node.right)
             ];
 
             const bound = {
@@ -261,12 +322,12 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
         // combine indices from all lods so we can calcuate bound over them
         const allIndices: number[] = Array.from(bins.values()).flat();
 
-        const bound = calcBound(dataTable, allIndices);
+        const bound = await calcBound(mainSource, pool, allIndices);
 
         return { bound, lods };
     };
 
-    const tree = build(bTree.root);
+    const tree = await build(bTree.root);
 
     // count splats per lod level
     const counts = new Array(lodLevels).fill(0);
@@ -284,7 +345,7 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
         count: counts.reduce((acc, curr) => acc + curr, 0),
         counts,
         lodLevels,
-        ...(envDataTable?.numRows > 0 ? { environment: 'env/meta.json' } : {}),
+        ...(hasEnv ? { environment: 'env/meta.json' } : {}),
         filenames,
         tree
     };
@@ -303,7 +364,7 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
     // count the total number of sog units we'll write so the per-sog groups
     // can render as a numbered series
     let sogTotal = 0;
-    if (envDataTable?.numRows > 0) sogTotal += 1;
+    if (hasEnv) sogTotal += 1;
     for (const [, fileUnits] of lodFiles) {
         for (const fu of fileUnits) {
             if (fu.length > 0) sogTotal += 1;
@@ -313,7 +374,7 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
     let sogIndex = 0;
 
     // write the environment sog
-    if (envDataTable?.numRows > 0) {
+    if (hasEnv) {
         sogIndex++;
         const envGroup = logger.group('env', { index: sogIndex, total: sogTotal });
         try {
@@ -323,7 +384,7 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
             await fs.mkdir(dirname(envPathname));
 
             await writeSogSource(
-                dataTableToChunkSource(envDataTable, pool.chunkSize),
+                envSource!,
                 pool,
                 { filename: envPathname, bundle: false, iterations, createDevice, logging: 'flat' },
                 fs
@@ -364,15 +425,15 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
                 const orderedIndices = new Uint32Array(totalIndices);
                 for (let j = 0, offset = 0; j < fileUnit.length; ++j) {
                     orderedIndices.set(fileUnit[j], offset);
-                    sortMortonOrder(dataTable, orderedIndices.subarray(offset, offset + fileUnit[j].length));
+                    sortMortonOrder(centroidsTable, orderedIndices.subarray(offset, offset + fileUnit[j].length));
                     offset += fileUnit[j].length;
                 }
 
-                // Gather the ordered subset straight into a chunk source (no
-                // per-unit DataTable clone) and encode via the chunk-native SOG
-                // writer. The rows are already in write order, so pass an
-                // identity ordering to skip the writer's own Morton pass.
-                const unitSource = dataTableToChunkSource(dataTable, pool.chunkSize, orderedIndices);
+                // Gather the ordered subset lazily from the scene source (no
+                // per-unit copy) and encode via the chunk-native SOG writer. The
+                // rows are already in write order, so pass an identity ordering
+                // to skip the writer's own Morton pass.
+                const unitSource = permuteSource(mainSource, orderedIndices);
                 const identity = new Uint32Array(totalIndices);
                 for (let j = 0; j < totalIndices; ++j) identity[j] = j;
 
@@ -393,4 +454,59 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
     writingGroup.end();
 };
 
-export { writeLod };
+type WriteLodOptions = {
+    filename: string;
+    dataTable: DataTable;
+    envDataTable: DataTable | null;
+    iterations: number;
+    createDevice?: DeviceCreator;
+    chunkCount: number;
+    chunkExtent: number;
+};
+
+/**
+ * Writes Gaussian splat data to multi-LOD format with spatial chunking.
+ *
+ * DataTable-input adapter over {@link writeLodSource}: converts the input tables
+ * to PLY space and repacks each into a resident `ChunkSource`, so the partition
+ * then runs over chunks rather than named columns.
+ *
+ * @param options - Options including filename, data, and chunking parameters.
+ * @param fs - File system for writing output files.
+ * @ignore
+ */
+const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
+    const { filename, iterations, createDevice, chunkCount, chunkExtent } = options;
+
+    // Operate in PLY space so per-leaf bounds in tree.bound are in the same
+    // coordinate frame as the SOG chunk data emitted by writeSog (which also
+    // converts to Transform.PLY). Without this, view-dependent streaming
+    // built on tree.bound picks the wrong chunks because the bounds are
+    // 180°-Z-rotated relative to the splat positions inside them.
+    // This intentionally mutates the input tables to avoid doubling peak
+    // memory during LOD export. Callers should treat writeLod as consuming its
+    // DataTable inputs.
+    const dataTable = convertToSpace(options.dataTable, Transform.PLY, true);
+    const envDataTable = options.envDataTable ? convertToSpace(options.envDataTable, Transform.PLY, true) : null;
+
+    const lodColumn = dataTable.getColumnByName('lod');
+    if (!lodColumn) {
+        throw new Error('Missing lod assignment');
+    }
+
+    const mainSource = dataTableToChunkSource(dataTable);
+    const envSource = (envDataTable && envDataTable.numRows > 0) ? dataTableToChunkSource(envDataTable) : null;
+
+    await writeLodSource({
+        filename,
+        mainSource,
+        envSource,
+        lod: lodColumn.data as Float32Array,
+        iterations,
+        createDevice,
+        chunkCount,
+        chunkExtent
+    }, fs);
+};
+
+export { writeLod, writeLodSource };

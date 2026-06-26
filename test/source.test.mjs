@@ -10,9 +10,10 @@ import { describe, it } from 'node:test';
 
 import { createTestDataTable } from './helpers/test-utils.mjs';
 import { dataTableToChunkSource, materializeToDataTable } from '../src/lib/compat/data-table.js';
-import { Column, DataTable } from '../src/lib/index.js';
+import { Column, DataTable, Transform } from '../src/lib/index.js';
 import {
     createChunkDataPool,
+    createInMemoryChunkSource,
     compact,
     POSITION_STRIDE,
     GEOMETRIC_STRIDE,
@@ -173,6 +174,36 @@ describe('ChunkSource data model', () => {
             assert.deepStrictEqual(c.field('scale'), new Float32Array([5, 6, 7, 13, 14, 15]));
             assert.deepStrictEqual(c.field('opacity'), new Float32Array([8, 16]));
             c.release();
+        });
+    });
+
+    describe('materializeToDataTable: multi-LOD', () => {
+        it('flattens all LODs in order (lod 0, then 1, ...)', async () => {
+            // Two LODs: lod 0 has 2 gaussians, lod 1 has 3. Position layer only.
+            const posBuf = (xs) => {
+                const ab = new ArrayBuffer(xs.length * POSITION_STRIDE);
+                const f = new Float32Array(ab);
+                xs.forEach((x, i) => { f[i * 3] = x; f[i * 3 + 1] = x + 0.5; f[i * 3 + 2] = x + 0.25; });
+                return ab;
+            };
+            const src = createInMemoryChunkSource({
+                numGaussians: 2,            // lodCounts[0]
+                chunkSize: 16,
+                shBands: 0,
+                transform: Transform.IDENTITY,
+                lodCounts: [2, 3],
+                position: [[posBuf([10, 11])], [posBuf([20, 21, 22])]]
+            });
+
+            const pool = createChunkDataPool({ chunkSize: 16 });
+            const dt = await materializeToDataTable(src, pool);
+
+            // Flattened: lod 0's rows first (10, 11), then lod 1's (20, 21, 22).
+            assert.strictEqual(dt.numRows, 5, 'flattens the sum of all LOD counts');
+            assert.deepStrictEqual(
+                [...dt.getColumnByName('x').data],
+                [10, 11, 20, 21, 22]
+            );
         });
     });
 });

@@ -10,11 +10,40 @@
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
 
-import { createTestDataTable } from './helpers/test-utils.mjs';
+import { createTestDataTable, encodePlyBinary } from './helpers/test-utils.mjs';
 import { dataTableToChunkSource, materializeToDataTable } from '../src/lib/compat/data-table.js';
 import { sortMortonOrder } from '../src/lib/data-table/morton-order.js';
+import { readPly } from '../src/lib/readers/read-ply.js';
 import { mortonOrder, permuteSource } from '../src/lib/ops/index.js';
 import { createChunkDataPool } from '../src/lib/source/index.js';
+
+// Minimal seekable ReadSource over a buffer (range reads), for exercising the
+// PLY reader's random-access gather path.
+class BufferReadSource {
+    constructor(data) {
+        this.data = data;
+        this.size = data.length;
+        this.seekable = true;
+    }
+
+    read(start = 0, end = this.size) {
+        let offset = Math.max(0, Math.min(start, this.size));
+        const limit = Math.max(offset, Math.min(end, this.size));
+        const data = this.data;
+        return {
+            async pull(target) {
+                const remaining = limit - offset;
+                if (remaining <= 0) return 0;
+                const n = Math.min(target.length, remaining);
+                target.set(data.subarray(offset, offset + n));
+                offset += n;
+                return n;
+            }
+        };
+    }
+
+    close() {}
+}
 
 describe('ops: mortonOrder + permuteSource', () => {
     it('mortonOrder matches legacy sortMortonOrder (recursive-refined)', async () => {
@@ -56,10 +85,60 @@ describe('ops: mortonOrder + permuteSource', () => {
         }
     });
 
-    it('permuteSource rejects a non-resident or wrong-length input', () => {
+    it('permuteSource gathers an ordered subset (shorter than the parent)', async () => {
+        const dt = createTestDataTable(300, { includeSH: true, shBands: 1 });
+        const chunkSize = 64;
+        const resident = dataTableToChunkSource(dt, chunkSize);
+        const pool = createChunkDataPool({ chunkSize });
+
+        // Pick a non-ascending subset that straddles chunk boundaries.
+        const order = new Uint32Array([299, 0, 150, 64, 63, 200]);
+        const out = await materializeToDataTable(permuteSource(resident, order), pool);
+
+        assert.strictEqual(out.numRows, order.length);
+        for (const name of dt.columnNames) {
+            const inCol = dt.getColumnByName(name).data;
+            const outCol = out.getColumnByName(name).data;
+            for (let i = 0; i < order.length; i++) {
+                assert.strictEqual(outCol[i], inCol[order[i]], `column '${name}' row ${i}`);
+            }
+        }
+    });
+
+    it('permuteSource rejects a non-resident or over-length input', () => {
         const dt = createTestDataTable(40);
         const resident = dataTableToChunkSource(dt, 16);
-        assert.throws(() => permuteSource(resident, new Uint32Array(39)), /order length/);
-        assert.throws(() => permuteSource({ meta: {} }, new Uint32Array(40)), /resident InMemoryChunkSource/);
+        assert.throws(() => permuteSource(resident, new Uint32Array(41)), /exceeds numGaussians/);
+        assert.throws(() => permuteSource({ meta: { numLods: 1, numGaussians: 40 } }, new Uint32Array(40)), /readRows/);
+    });
+
+    it('gathers identically from a disk-backed PLY and a resident source', async () => {
+        // The LOD writer's "positions resident, heavy data fetched per output
+        // chunk" model: a scattered subset gathered from a fixed-stride PLY via
+        // readRows must equal the same gather from a resident InMemory source.
+        const dt = createTestDataTable(300, { includeSH: true, shBands: 1 });
+        const chunkSize = 64;
+        const pool = createChunkDataPool({ chunkSize });
+
+        const resident = dataTableToChunkSource(dt, chunkSize);
+        const diskSrc = await readPly(new BufferReadSource(encodePlyBinary(dt)), pool);
+        assert.strictEqual(typeof diskSrc.readRows, 'function', 'PLY source should expose readRows');
+
+        // Non-ascending, chunk-straddling, with a repeated index.
+        const order = new Uint32Array([299, 0, 150, 64, 63, 200, 7, 7, 256]);
+
+        const fromResident = await materializeToDataTable(permuteSource(resident, order), pool);
+        const fromDisk = await materializeToDataTable(permuteSource(diskSrc, order), pool);
+
+        assert.deepStrictEqual([...fromDisk.columnNames].sort(), [...fromResident.columnNames].sort());
+        assert.strictEqual(fromDisk.numRows, order.length);
+        for (const name of fromResident.columnNames) {
+            const d = fromDisk.getColumnByName(name).data;
+            const r = fromResident.getColumnByName(name).data;
+            for (let i = 0; i < order.length; i++) {
+                assert.strictEqual(d[i], r[i], `column '${name}' row ${i} (src ${order[i]})`);
+            }
+        }
+        await diskSrc.close();
     });
 });

@@ -36,11 +36,13 @@ import {
 // Deep imports keep these internal/`@ignore` APIs off the public lib surface
 // until the migration is complete.
 import { materializeToDataTable } from '../lib/compat/data-table';
+import { concatSource } from '../lib/ops';
 import { processSource, canProcessSource } from '../lib/process-source';
 import { readPly } from '../lib/readers/read-ply';
 import { readSplat } from '../lib/readers/read-splat';
 import { createChunkDataPool } from '../lib/source';
 import { writeCompressedPlySource } from '../lib/writers/write-compressed-ply';
+import { writeLodSource } from '../lib/writers/write-lod';
 import { writePlyStreaming } from '../lib/writers/write-ply-streaming';
 import { writeSogSource } from '../lib/writers/write-sog';
 
@@ -1148,6 +1150,89 @@ const main = async () => {
             phase.end();
             reportDone();
             exit(0);
+        }
+
+        // Streaming LOD path: local PLY inputs each tagged only with --lod,
+        // written to lod-meta.json. Positions stream resident for the spatial
+        // partition; each output unit's heavy data (incl. SH) is gathered from the
+        // PLY(s) by index at encode time, so whole-scene SH is never resident.
+        // Inputs partition by tag (env = -1, main >= 0); multiple main/env inputs
+        // are stitched with concatSource. Non-PLY/URL inputs, transforms/filters,
+        // output actions, or mixed-layout inputs (which combine() can union but
+        // concatSource can't) fall through to the DataTable pipeline.
+        const lodInputs = inputArgs.map((a) => {
+            const ply = !isHttpUrl(a.filename) &&
+                getInputFormat(resolveInput(a.filename).classifyName) === 'ply';
+            const lods = a.processActions.filter(act => act.kind === 'lod');
+            const onlyLod = a.processActions.length === lods.length && lods.length > 0;
+            const tag = lods.length > 0 ? (lods[lods.length - 1] as { value: number }).value : null;
+            return { arg: a, ply, onlyLod, tag };
+        });
+        if (
+            !isNullOutput &&
+            outputFormat === 'lod' &&
+            outputArg.processActions.length === 0 &&
+            lodInputs.length > 0 &&
+            lodInputs.every(li => li.ply && li.onlyLod && li.tag !== null)
+        ) {
+            const pool = createChunkDataPool();
+
+            // Open every input as a lazy PLY source (positions/heavy data fetched
+            // on demand; nothing materialized here).
+            const opened = await Promise.all(lodInputs.map(async (li) => {
+                const { filename: inFile, fileSystem } = resolveInput(li.arg.filename);
+                return { source: await readPly(await fileSystem.createSource(inFile), pool), tag: li.tag! };
+            }));
+
+            const mains = opened.filter(o => o.tag >= 0);
+            const envs = opened.filter(o => o.tag === -1);
+
+            // concatSource needs uniform layout (shBands/layers/extras). combine()
+            // (the DataTable path) can union mismatches, so fall back there rather
+            // than error in that case.
+            const layoutSig = (m: typeof opened[number]['source']['meta']) => `${m.shBands}|${[...m.availableLayers].sort().join(',')}|${m.extraColumns.map(e => `${e.name}:${e.type}`).join(',')}`;
+            const uniform = (list: typeof opened) => list.every(o => layoutSig(o.source.meta) === layoutSig(list[0].source.meta));
+
+            if (mains.length > 0 && uniform(mains) && uniform(envs)) {
+                const phase = logger.group(`Output ${outputArg.filename}`, { index: phaseTotal, total: phaseTotal });
+
+                const mainSource = mains.length === 1 ? mains[0].source : concatSource(mains.map(m => m.source), pool);
+                const envSource = envs.length === 0 ? null :
+                    (envs.length === 1 ? envs[0].source : concatSource(envs.map(e => e.source), pool));
+
+                if (mainSource.meta.numGaussians === 0) {
+                    throw new Error('No Gaussians to write');
+                }
+
+                // lod array in main-concat order: each input's gaussians get its tag.
+                const lod = new Float32Array(mainSource.meta.numGaussians);
+                for (let off = 0, i = 0; i < mains.length; i++) {
+                    const n = mains[i].source.meta.numGaussians;
+                    lod.fill(mains[i].tag, off, off + n);
+                    off += n;
+                }
+
+                logger.info(`${fmtCount(mainSource.meta.numGaussians)} gaussians · ${mainSource.meta.shBands} SH bands (streaming LOD)`);
+                await writeLodSource({
+                    filename: outputFilename,
+                    mainSource,
+                    envSource,
+                    lod,
+                    iterations: options.iterations,
+                    createDevice: deviceCreator,
+                    chunkCount: options.lodChunkCount,
+                    chunkExtent: options.lodChunkExtent
+                }, new NodeFileSystem());
+
+                await mainSource.close();
+                if (envSource) await envSource.close();
+                phase.end();
+                reportDone();
+                exit(0);
+            }
+
+            // Ineligible after inspecting layout — release and fall through.
+            await Promise.all(opened.map(o => o.source.close()));
         }
 
         // read, filter, process input files
