@@ -21,6 +21,7 @@ import {
     processDataTable,
     revision,
     TextRenderer,
+    Transform,
     UrlReadFileSystem,
     version,
     WorkerQueue,
@@ -36,11 +37,11 @@ import {
 // Deep imports keep these internal/`@ignore` APIs off the public lib surface
 // until the migration is complete.
 import { materializeToDataTable } from '../lib/compat/data-table';
-import { concatSource } from '../lib/ops';
+import { bakeTransform, concatSource } from '../lib/ops';
 import { processSource, canProcessSource } from '../lib/process-source';
 import { readPly } from '../lib/readers/read-ply';
 import { readSplat } from '../lib/readers/read-splat';
-import { createChunkDataPool } from '../lib/source';
+import { type ChunkSource, type ChunkSourceMetadata, createChunkDataPool } from '../lib/source';
 import { writeCompressedPlySource } from '../lib/writers/write-compressed-ply';
 import { writeLodSource } from '../lib/writers/write-lod';
 import { writePlyStreaming } from '../lib/writers/write-ply-streaming';
@@ -1096,60 +1097,86 @@ const main = async () => {
         // declare phase total: one Read phase per input + one Write phase
         const phaseTotal = inputArgs.length + (isNullOutput ? 0 : 1);
 
-        // Fast streaming chunk path: a single local-.ply input -> .ply or .sog
-        // output, with only chunk-path actions (-t/-r/-s, filters, summary)
-        // applied. Reads the input (ply/splat) lazily as a ChunkSource, applies
-        // the actions via processSource, and writes one layer/chunk at a time —
-        // the whole scene is never resident. Anything else (decimate, lod,
-        // morton-order, band drop, GPU voxel filters, multiple inputs, URLs,
-        // other input/output formats) falls through to the DataTable pipeline.
-        const onlyInput = inputArgs.length === 1 ? inputArgs[0] : null;
-        const chunkActions = onlyInput ? [...onlyInput.processActions, ...outputArg.processActions] : [];
-        const chunkInputFormat = (onlyInput && !isHttpUrl(onlyInput.filename)) ?
-            getInputFormat(resolveInput(onlyInput.filename).classifyName) :
-            null;
+        // Streaming chunk path: local PLY/splat input(s) -> ply/sog/compressed-ply,
+        // with only chunk-path actions (-t/-r/-s, filters, summary). Each input is
+        // read lazily, its per-input actions applied, the inputs stitched with
+        // concatSource (transforms unified as combine() does), the output actions
+        // applied, and the result written one layer/chunk at a time — the whole
+        // scene is never resident. Anything else (decimate, lod, morton-order,
+        // band drop, voxel/raster, URL/other-format inputs, mixed layouts, or
+        // csv/glb/html/spz output) falls through to the DataTable pipeline.
+        const chunkAllActions = [...inputArgs.flatMap(a => a.processActions), ...outputArg.processActions];
+        const chunkInputFormats = inputArgs.map(a => (isHttpUrl(a.filename) ? null : getInputFormat(resolveInput(a.filename).classifyName)));
         if (
-            onlyInput &&
             !isNullOutput &&
             (outputFormat === 'sog' || outputFormat === 'sog-bundle' || outputFormat === 'ply' || outputFormat === 'compressed-ply') &&
-            canProcessSource(chunkActions) &&
-            (chunkInputFormat === 'ply' || chunkInputFormat === 'splat')
+            canProcessSource(chunkAllActions) &&
+            chunkInputFormats.every(f => f === 'ply' || f === 'splat')
         ) {
-            const { filename: inFile, fileSystem } = resolveInput(onlyInput.filename);
-            const phase = logger.group(`Output ${outputArg.filename}`, { index: phaseTotal, total: phaseTotal });
             const pool = createChunkDataPool();
 
-            // Input actions then output actions, matching the DataTable path's
-            // apply-on-input then apply-on-combined order (single input, so the
-            // two collapse to one sequence).
-            const inSource = await fileSystem.createSource(inFile);
-            let source = chunkInputFormat === 'splat' ?
-                await readSplat(inSource, pool) :
-                await readPly(inSource, pool);
-            source = await processSource(source, chunkActions, pool);
-
-            if (source.meta.numGaussians === 0) {
-                throw new Error('No Gaussians to write');
+            // Read + apply per-input actions (lazy; nothing materialized).
+            const processed: ChunkSource[] = [];
+            for (const inputArg of inputArgs) {
+                const { filename: inFile, fileSystem, classifyName } = resolveInput(inputArg.filename);
+                const inSource = await fileSystem.createSource(inFile);
+                const src = getInputFormat(classifyName) === 'splat' ?
+                    await readSplat(inSource, pool) :
+                    await readPly(inSource, pool);
+                processed.push(await processSource(src, inputArg.processActions, pool));
             }
 
-            logger.info(`${fmtCount(source.meta.numGaussians)} gaussians · ${source.meta.shBands} SH bands (streaming)`);
-            if (outputFormat === 'ply') {
-                await writePlyStreaming(source, pool, { filename: outputFilename }, new NodeFileSystem());
-            } else if (outputFormat === 'compressed-ply') {
-                // Legacy format: materialize then delegate to the DataTable writer.
-                await writeCompressedPlySource(source, pool, { filename: outputFilename }, new NodeFileSystem());
-            } else {
-                await writeSogSource(source, pool, {
-                    filename: outputFilename,
-                    bundle: outputFormat === 'sog-bundle',
-                    iterations: options.iterations,
-                    createDevice: deviceCreator
-                }, new NodeFileSystem());
+            // concatSource needs a uniform layout; combine() (the DataTable path)
+            // can union mismatched shBands/columns, so fall back there in that case.
+            const layoutSig = (m: ChunkSourceMetadata) => `${m.shBands}|${[...m.availableLayers].sort().join(',')}|${m.extraColumns.map(e => `${e.name}:${e.type}`).join(',')}`;
+            const uniformLayout = processed.every(s => layoutSig(s.meta) === layoutSig(processed[0].meta));
+
+            if (uniformLayout) {
+                const phase = logger.group(`Output ${outputArg.filename}`, { index: phaseTotal, total: phaseTotal });
+
+                // Combine: unify transforms exactly as combine() does — keep if all
+                // match, else bake to engine (IDENTITY) space — then concat.
+                let combined: ChunkSource;
+                if (processed.length === 1) {
+                    combined = processed[0];
+                } else {
+                    const ref = processed[0].meta.transform;
+                    const unified = processed.every(s => s.meta.transform.equals(ref)) ?
+                        processed :
+                        processed.map(s => bakeTransform(s, Transform.IDENTITY));
+                    combined = concatSource(unified, pool);
+                }
+
+                // Output actions apply on the combined scene (after the per-input
+                // actions), matching the DataTable path's apply-on-combined order.
+                combined = await processSource(combined, outputArg.processActions, pool);
+
+                if (combined.meta.numGaussians === 0) {
+                    throw new Error('No Gaussians to write');
+                }
+
+                logger.info(`${fmtCount(combined.meta.numGaussians)} gaussians · ${combined.meta.shBands} SH bands (streaming)`);
+                if (outputFormat === 'ply') {
+                    await writePlyStreaming(combined, pool, { filename: outputFilename }, new NodeFileSystem());
+                } else if (outputFormat === 'compressed-ply') {
+                    // Legacy format: materialize then delegate to the DataTable writer.
+                    await writeCompressedPlySource(combined, pool, { filename: outputFilename }, new NodeFileSystem());
+                } else {
+                    await writeSogSource(combined, pool, {
+                        filename: outputFilename,
+                        bundle: outputFormat === 'sog-bundle',
+                        iterations: options.iterations,
+                        createDevice: deviceCreator
+                    }, new NodeFileSystem());
+                }
+                await combined.close();
+                phase.end();
+                reportDone();
+                exit(0);
             }
-            await source.close();
-            phase.end();
-            reportDone();
-            exit(0);
+
+            // Mixed layout — release and fall through to the DataTable pipeline.
+            await Promise.all(processed.map(s => s.close()));
         }
 
         // Streaming LOD path: local PLY inputs each tagged only with --lod,
