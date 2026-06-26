@@ -32,8 +32,11 @@ import {
     WebPCodec
 } from '../src/lib/index.js';
 
-import { materializeToDataTable } from '../src/lib/compat/data-table.js';
+import { dataTableToChunkSource, materializeToDataTable } from '../src/lib/compat/data-table.js';
 import { decodePlyToDataTable } from '../src/lib/readers/read-ply.js';
+import { decodeSplatToDataTable } from '../src/lib/readers/read-splat.js';
+import { writeCompressedPlySource } from '../src/lib/writers/write-compressed-ply.js';
+import { gaussianCloudToDataTable, getSpzModule } from '../src/lib/spz-module.js';
 import { createChunkDataPool } from '../src/lib/source/index.js';
 
 import { compareSummaries, compareDataTables } from './helpers/summary-compare.mjs';
@@ -152,6 +155,12 @@ const createSpzFixture = async ({ version = 4, shDegree = 0, extensionBytes = nu
     return extensionBytes ? addSpzV4HeaderExtensions(bytes, extensionBytes) : bytes;
 };
 
+// readSpz is a lazy ChunkSource; materialize it to a DataTable for these tests.
+const readSpzTable = async (source) => {
+    const pool = createChunkDataPool();
+    return materializeToDataTable(await readSpz(source, pool), pool);
+};
+
 describe('PLY Format', () => {
     let testData;
     let plyBytes;
@@ -259,6 +268,27 @@ describe('Compressed PLY Format', () => {
         // Compare with tolerance (lossy compression)
         const actualSummary = computeSummary(readBack);
         compareSummaries(actualSummary, expectedSummary, { tolerance: 0.1 });
+    });
+
+    it('writeCompressedPlySource (ChunkSource adapter) == writeCompressedPly byte-for-byte', async () => {
+        const dt = createTestDataTable(300, { includeSH: true, shBands: 1 });
+        dt.transform = Transform.PLY.clone();
+
+        const legacyFs = new MemoryFileSystem();
+        await writeCompressedPly({ filename: 'out.compressed.ply', dataTable: dt }, legacyFs);
+
+        const pool = createChunkDataPool();
+        const sourceFs = new MemoryFileSystem();
+        await writeCompressedPlySource(dataTableToChunkSource(dt, pool.chunkSize), pool, { filename: 'out.compressed.ply' }, sourceFs);
+
+        const a = legacyFs.results.get('out.compressed.ply');
+        const b = sourceFs.results.get('out.compressed.ply');
+        assert.ok(a && b, 'both wrote output');
+        assert.strictEqual(
+            Buffer.compare(Buffer.from(a.buffer, a.byteOffset, a.byteLength), Buffer.from(b.buffer, b.byteOffset, b.byteLength)),
+            0,
+            'compressed-ply bytes must be identical'
+        );
     });
 });
 
@@ -543,7 +573,8 @@ describe('SPLAT Format (Input Only)', () => {
     it('should read .splat file', async () => {
         const splatData = await fsReadFile(join(fixturesDir, 'minimal.splat'));
         const source = new BufferReadSource(splatData);
-        const dataTable = await readSplat(source);
+        const pool = createChunkDataPool();
+        const dataTable = await materializeToDataTable(await readSplat(source, pool), pool);
 
         assert.strictEqual(dataTable.numRows, 4);
         assert.strictEqual(dataTable.numColumns, 14);
@@ -567,6 +598,23 @@ describe('SPLAT Format (Input Only)', () => {
             // Allow opacity to have Inf (for fully transparent/opaque)
             if (name !== 'opacity') {
                 assert.strictEqual(stats.infCount, 0, `${name} has Inf values`);
+            }
+        }
+    });
+
+    it('lazy chunked read matches the eager decode byte-for-byte (multi-chunk)', async () => {
+        const splatData = await fsReadFile(join(fixturesDir, 'minimal.splat'));
+        const pool = createChunkDataPool({ chunkSize: 2 }); // 4 splats -> 2 chunks (+ short last)
+        const lazy = await materializeToDataTable(await readSplat(new BufferReadSource(splatData), pool), pool);
+        const eager = await decodeSplatToDataTable(new BufferReadSource(splatData));
+
+        assert.strictEqual(lazy.numRows, eager.numRows);
+        assert.deepStrictEqual([...lazy.columnNames].sort(), [...eager.columnNames].sort());
+        for (const name of eager.columnNames) {
+            const a = lazy.getColumnByName(name).data;
+            const b = eager.getColumnByName(name).data;
+            for (let i = 0; i < eager.numRows; i++) {
+                assert.strictEqual(a[i], b[i], `column '${name}' row ${i}`);
             }
         }
     });
@@ -604,7 +652,7 @@ describe('SPZ Format (Input Only)', () => {
     it('should read .spz v2 fixture file', async () => {
         const spzData = await fsReadFile(join(fixturesDir, 'minimal-v2.spz'));
         const source = new BufferReadSource(spzData);
-        const dataTable = await readSpz(source);
+        const dataTable = await readSpzTable(source);
 
         assert.strictEqual(dataTable.numRows, 4);
 
@@ -630,7 +678,7 @@ describe('SPZ Format (Input Only)', () => {
     it('should read .spz v4 fixture file', async () => {
         const spzData = await fsReadFile(join(fixturesDir, 'minimal-v4.spz'));
         const source = new BufferReadSource(spzData);
-        const dataTable = await readSpz(source);
+        const dataTable = await readSpzTable(source);
 
         assert.strictEqual(dataTable.numRows, 4);
 
@@ -657,7 +705,7 @@ describe('SPZ Format (Input Only)', () => {
         const wrapped = new Uint8Array(spzData.length + 17);
         wrapped.set(spzData, 17);
         const source = new BufferReadSource(wrapped.subarray(17));
-        const dataTable = await readSpz(source);
+        const dataTable = await readSpzTable(source);
 
         assert.strictEqual(dataTable.numRows, 4);
     });
@@ -665,7 +713,7 @@ describe('SPZ Format (Input Only)', () => {
     it('should read .spz v3 fixture file', async () => {
         const spzData = await fsReadFile(join(fixturesDir, 'minimal-v3.spz'));
         const source = new BufferReadSource(spzData);
-        const dataTable = await readSpz(source);
+        const dataTable = await readSpzTable(source);
 
         assert.strictEqual(dataTable.numRows, 4);
 
@@ -678,7 +726,7 @@ describe('SPZ Format (Input Only)', () => {
     it('should read .spz v3 file with correct quaternion decoding', async () => {
         const spzData = await createSpzFixture({ version: 3 });
         const source = new BufferReadSource(spzData);
-        const dataTable = await readSpz(source);
+        const dataTable = await readSpzTable(source);
 
         assert.strictEqual(dataTable.numRows, 2);
 
@@ -717,7 +765,7 @@ describe('SPZ Format (Input Only)', () => {
     it('should read .spz v4 file with shDegree=0', async () => {
         const spzData = await createSpzFixture({ version: 4, shDegree: 0 });
         const source = new BufferReadSource(spzData);
-        const dataTable = await readSpz(source);
+        const dataTable = await readSpzTable(source);
 
         assert.strictEqual(dataTable.numRows, 2);
 
@@ -742,28 +790,19 @@ describe('SPZ Format (Input Only)', () => {
         assert(Math.abs(Math.abs(rot3[1]) - Math.sin(Math.PI / 4)) < 0.01);
     });
 
-    it('should read .spz v4 file with shDegree=4', async () => {
+    it('rejects .spz v4 files with shDegree=4 (band 4 exceeds the chunk model)', async () => {
         const spzData = await createSpzFixture({ version: 4, shDegree: 4 });
-        const source = new BufferReadSource(spzData);
-        const dataTable = await readSpz(source);
-
-        assert.strictEqual(dataTable.numRows, 2);
-        for (let i = 0; i < 72; i++) {
-            assert(dataTable.hasColumn(`f_rest_${i}`));
-        }
-
-        for (let i = 0; i < 72; i++) {
-            const col = dataTable.getColumnByName(`f_rest_${i}`).data;
-            assert(Math.abs(col[0]) < 1e-6);
-            assert(Math.abs(col[1]) < 1e-6);
-        }
+        await assert.rejects(
+            readSpzTable(new BufferReadSource(spzData)),
+            /SH degree 4|band 4/
+        );
     });
 
     it('should return an empty table for v4 files with mismatched stream count', async () => {
         const spzData = await createSpzFixture({ version: 4, shDegree: 0 });
         spzData[15] = 4;
         const source = new BufferReadSource(spzData);
-        const dataTable = await readSpz(source);
+        const dataTable = await readSpzTable(source);
         assert.strictEqual(dataTable.numRows, 0);
     });
 
@@ -772,7 +811,7 @@ describe('SPZ Format (Input Only)', () => {
         const view = new DataView(spzData.buffer, spzData.byteOffset, spzData.byteLength);
         view.setUint32(16, spzData.length + 100, true);
         const source = new BufferReadSource(spzData);
-        const dataTable = await readSpz(source);
+        const dataTable = await readSpzTable(source);
         assert.strictEqual(dataTable.numRows, 0);
     });
 
@@ -787,7 +826,7 @@ describe('SPZ Format (Input Only)', () => {
             ])
         });
         const source = new BufferReadSource(spzData);
-        const dataTable = await readSpz(source);
+        const dataTable = await readSpzTable(source);
 
         assert.strictEqual(dataTable.numRows, 2);
 
@@ -822,7 +861,7 @@ describe('SPZ Format (Output)', () => {
         assert.strictEqual(header.getUint32(4, true), 4);
 
         const source = new BufferReadSource(writtenSpz);
-        const readBack = await readSpz(source);
+        const readBack = await readSpzTable(source);
 
         assert.strictEqual(readBack.numRows, testData.numRows);
         assert.strictEqual(readBack.transform.equals(Transform.PLY), true);
@@ -848,9 +887,47 @@ describe('SPZ Format (Output)', () => {
         assert.strictEqual(writtenSpz[0], 0x1f);
         assert.strictEqual(writtenSpz[1], 0x8b);
 
-        const readBack = await readSpz(new BufferReadSource(writtenSpz));
+        const readBack = await readSpzTable(new BufferReadSource(writtenSpz));
         assert.strictEqual(readBack.numRows, testData.numRows);
         assert.strictEqual(readBack.transform.equals(Transform.PLY), true);
+    });
+});
+
+describe('SPZ pure-JS decoder vs @adobe/spz (raw decode)', () => {
+    // The migration rests on this: decode each .spz with the pure-JS reader and
+    // with the WASM at `to: UNSPECIFIED` (raw — the convention both reader and
+    // writer now share) and confirm they agree column-for-column.
+    const assertTablesClose = (a, b, tol) => {
+        assert.strictEqual(a.numRows, b.numRows, 'row count');
+        assert.deepStrictEqual([...a.columnNames].sort(), [...b.columnNames].sort(), 'columns');
+        for (const name of a.columnNames) {
+            const x = a.getColumnByName(name).data;
+            const y = b.getColumnByName(name).data;
+            for (let i = 0; i < a.numRows; i++) {
+                assert.ok(Math.abs(x[i] - y[i]) <= tol + tol * Math.abs(y[i]), `column '${name}' row ${i}: ${x[i]} vs ${y[i]}`);
+            }
+        }
+    };
+
+    const wasmRawDecode = async (bytes) => {
+        const spz = await getSpzModule();
+        const buf = (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) ? bytes : bytes.slice();
+        const cloud = await spz.loadSpzFromBuffer(buf, { to: spz.CoordinateSystem.UNSPECIFIED });
+        return gaussianCloudToDataTable(cloud);
+    };
+
+    for (const name of ['minimal-v2.spz', 'minimal-v3.spz', 'minimal-v4.spz']) {
+        it(`matches the WASM raw decode: ${name}`, async () => {
+            const bytes = new Uint8Array(await fsReadFile(join(fixturesDir, name)));
+            const mine = await readSpzTable(new BufferReadSource(bytes));
+            assertTablesClose(mine, await wasmRawDecode(bytes), 1e-4);
+        });
+    }
+
+    it('matches the WASM raw decode for a v4 degree-3 SH fixture', async () => {
+        const bytes = await createSpzFixture({ version: 4, shDegree: 3 });
+        const mine = await readSpzTable(new BufferReadSource(bytes));
+        assertTablesClose(mine, await wasmRawDecode(bytes), 1e-4);
     });
 });
 

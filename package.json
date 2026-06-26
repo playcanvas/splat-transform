@@ -61,6 +61,7 @@
     "@typescript-eslint/parser": "8.61.1",
     "eslint": "9.39.4",
     "eslint-import-resolver-typescript": "4.4.5",
+    "fzstd": "^0.1.1",
     "pathe": "2.0.3",
     "playcanvas": "2.19.7",
     "publint": "0.3.21",

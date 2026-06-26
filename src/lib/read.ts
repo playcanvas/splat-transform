@@ -153,9 +153,11 @@ const readFile = async (readFileOptions: ReadFileOptions): Promise<DataTable[]> 
             } else if (inputFormat === 'ksplat') {
                 result = [await readKsplat(source)];
             } else if (inputFormat === 'splat') {
-                result = [await readSplat(source)];
+                const pool = createChunkDataPool();
+                result = [await materializeToDataTable(await readSplat(source, pool), pool)];
             } else if (inputFormat === 'spz') {
-                result = [await readSpz(source)];
+                const pool = createChunkDataPool();
+                result = [await materializeToDataTable(await readSpz(source, pool), pool)];
             }
         } finally {
             source.close();

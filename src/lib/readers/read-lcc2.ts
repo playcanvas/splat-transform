@@ -1,7 +1,9 @@
-import { Column, DataTable, TypedArray } from '../data-table';
 import { readSog } from './read-sog';
 import { readSpz } from './read-spz';
+import { materializeToDataTable } from '../compat/data-table';
+import { Column, DataTable, TypedArray } from '../data-table';
 import { basename, dirname, join, readFile, ReadFileSystem, ReadSource, ReadStream, ZipReadFileSystem } from '../io/read';
+import { createChunkDataPool } from '../source';
 import { Options } from '../types';
 import { logger, Transform } from '../utils';
 
@@ -442,7 +444,10 @@ const decodeChunk = async (
             }
         }
         if (splatType === '.spz') {
-            return await readSpz(source); // SPZ is a raw binary
+            // SPZ is a raw binary; readSpz is a lazy ChunkSource — materialize
+            // it to the DataTable this decoder returns.
+            const pool = createChunkDataPool();
+            return await materializeToDataTable(await readSpz(source, pool), pool);
         }
         throw new Error(`Unsupported LCC2 splatType: ${splatType}`);
     } finally {
