@@ -2,9 +2,11 @@ import { basename, dirname, resolve } from 'pathe';
 import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { logWrittenFile } from './utils';
-import { writeSog } from './write-sog.js';
+import { writeSogSource } from './write-sog.js';
+import { dataTableToChunkSource } from '../compat/data-table';
 import { type TypedArray, DataTable, sortMortonOrder, convertToSpace } from '../data-table';
 import { type FileSystem } from '../io/write';
+import { createChunkDataPool } from '../source';
 import { BTreeNode, BTree } from '../spatial';
 import type { DeviceCreator } from '../types';
 import { logger, Transform } from '../utils';
@@ -176,6 +178,9 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
     const dataTable = convertToSpace(options.dataTable, Transform.PLY, true);
     const envDataTable = options.envDataTable ? convertToSpace(options.envDataTable, Transform.PLY, true) : null;
 
+    // Pool for the chunk-native SOG encode of each unit (and the environment).
+    const pool = createChunkDataPool();
+
     const outputDir = dirname(filename);
 
     // ensure top-level output folder exists
@@ -317,14 +322,12 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
             // ensure output folder exists before any files are written
             await fs.mkdir(dirname(envPathname));
 
-            await writeSog({
-                filename: envPathname,
-                dataTable: envDataTable,
-                bundle: false,
-                iterations,
-                createDevice,
-                logging: 'flat'
-            }, fs);
+            await writeSogSource(
+                dataTableToChunkSource(envDataTable, pool.chunkSize),
+                pool,
+                { filename: envPathname, bundle: false, iterations, createDevice, logging: 'flat' },
+                fs
+            );
         } finally {
             envGroup.end();
         }
@@ -355,31 +358,30 @@ const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
                 const pathname = resolve(outputDir, `${lodValue}_${i}/meta.json`);
                 await fs.mkdir(dirname(pathname));
 
-                // generate an ordering for each subunit and append it to the unit's indices
+                // Morton-order each subunit and concatenate into the unit's
+                // global row order.
                 const totalIndices = fileUnit.reduce((acc, curr) => acc + curr.length, 0);
-                const indices = new Uint32Array(totalIndices);
+                const orderedIndices = new Uint32Array(totalIndices);
                 for (let j = 0, offset = 0; j < fileUnit.length; ++j) {
-                    indices.set(fileUnit[j], offset);
-                    sortMortonOrder(dataTable, indices.subarray(offset, offset + fileUnit[j].length));
+                    orderedIndices.set(fileUnit[j], offset);
+                    sortMortonOrder(dataTable, orderedIndices.subarray(offset, offset + fileUnit[j].length));
                     offset += fileUnit[j].length;
                 }
 
-                // construct a new table from the ordered data
-                const unitDataTable = dataTable.clone({ rows: indices });
+                // Gather the ordered subset straight into a chunk source (no
+                // per-unit DataTable clone) and encode via the chunk-native SOG
+                // writer. The rows are already in write order, so pass an
+                // identity ordering to skip the writer's own Morton pass.
+                const unitSource = dataTableToChunkSource(dataTable, pool.chunkSize, orderedIndices);
+                const identity = new Uint32Array(totalIndices);
+                for (let j = 0; j < totalIndices; ++j) identity[j] = j;
 
-                // reset indices since we've generated ordering on the individual subunits
-                for (let j = 0; j < indices.length; ++j) {
-                    indices[j] = j;
-                }
-
-                // write file unit to sog
-                await writeSog({
+                await writeSogSource(unitSource, pool, {
                     filename: pathname,
-                    dataTable: unitDataTable,
-                    indices,
                     bundle: false,
                     iterations,
                     createDevice,
+                    indices: identity,
                     logging: 'flat'
                 }, fs);
             } finally {

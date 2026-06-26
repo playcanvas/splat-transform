@@ -1,4 +1,5 @@
 import { isCompressedPly, decompressPly } from './decompress-ply';
+import { fileChunkSource, readExact } from './reader-utils';
 import { Column, DataTable } from '../data-table';
 import { type ReadSource, type ReadStream } from '../io/read';
 import {
@@ -108,17 +109,6 @@ const indexOfMarker = (buf: Uint8Array, marker: Uint8Array, limit: number): numb
         if (match) return i;
     }
     return -1;
-};
-
-// Read exactly `length` bytes from `stream` into `buffer` at `offset`.
-const readExact = async (stream: ReadStream, buffer: Uint8Array, offset: number, length: number): Promise<number> => {
-    let total = 0;
-    while (total < length) {
-        const n = await stream.pull(buffer.subarray(offset + total, offset + length));
-        if (n === 0) break;
-        total += n;
-    }
-    return total;
 };
 
 // Parse the PLY header from a 128 KB probe at the start of the source: returns
@@ -501,12 +491,7 @@ const readCompressedChunked = (source: ReadSource, header: PlyHeader, pool: Chun
         }
     };
 
-    const close = (): Promise<void> => {
-        source.close();
-        return Promise.resolve();
-    };
-
-    return { meta, read, close };
+    return fileChunkSource(source, meta, read);
 };
 
 // One destination field within a layer: where to read it from a source record,
@@ -750,12 +735,7 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
         }
     };
 
-    const close = (): Promise<void> => {
-        source.close();
-        return Promise.resolve();
-    };
-
-    return { meta, read, close };
+    return fileChunkSource(source, meta, read);
 };
 
 export { PlyData, decodePlyToDataTable, readPly };

@@ -129,15 +129,21 @@ const splitToChunks = (
  * Used during the 3.0 migration by readers that haven't yet been ported to
  * native chunked decoding — they call this at the end of their existing decode
  * to upgrade to the new return type.
+ *
+ * When `indices` is supplied, only those rows are repacked, in that order — a
+ * direct ordered-subset gather (e.g. the LOD writer's per-unit gather), avoiding
+ * a separate `DataTable.clone({ rows })` copy.
  * @param dataTable - The legacy table to convert.
  * @param chunkSize - Gaussians per chunk (default {@link DEFAULT_CHUNK_SIZE}).
+ * @param indices - Optional ordered row indices to gather; output row `i` is `dataTable` row `indices[i]`.
  * @returns A CPU-resident `InMemoryChunkSource` over the repacked data.
  */
 const dataTableToChunkSource = (
     dataTable: DataTable,
-    chunkSize: number = DEFAULT_CHUNK_SIZE
+    chunkSize: number = DEFAULT_CHUNK_SIZE,
+    indices?: Uint32Array
 ): InMemoryChunkSource => {
-    const N = dataTable.numRows;
+    const count = indices ? indices.length : dataTable.numRows;
     const shBands = detectShBands(dataTable);
     const numRest = SH_REST_COUNTS[shBands];
     const extras = detectExtras(dataTable);
@@ -149,78 +155,83 @@ const dataTableToChunkSource = (
     const hasOther = extras.length > 0;
 
     const col = (name: string): Float32Array => dataTable.getColumnByName(name)!.data as Float32Array;
+    const srcRow = (i: number): number => (indices ? indices[i] : i);
 
     const positionChunks: ArrayBuffer[] | undefined = hasPosition ? (() => {
-        const arr = new Float32Array(N * 3);
+        const arr = new Float32Array(count * 3);
         const x = col('x'), y = col('y'), z = col('z');
-        for (let i = 0; i < N; i++) {
-            arr[i * 3 + 0] = x[i];
-            arr[i * 3 + 1] = y[i];
-            arr[i * 3 + 2] = z[i];
+        for (let i = 0; i < count; i++) {
+            const s = srcRow(i);
+            arr[i * 3 + 0] = x[s];
+            arr[i * 3 + 1] = y[s];
+            arr[i * 3 + 2] = z[s];
         }
-        return splitToChunks(arr, N, 3, chunkSize);
+        return splitToChunks(arr, count, 3, chunkSize);
     })() : undefined;
 
     const geometricChunks: ArrayBuffer[] | undefined = hasGeometric ? (() => {
-        const arr = new Float32Array(N * 8);
+        const arr = new Float32Array(count * 8);
         const r0 = col('rot_0'), r1 = col('rot_1'), r2 = col('rot_2'), r3 = col('rot_3');
         const s0 = col('scale_0'), s1 = col('scale_1'), s2 = col('scale_2');
         const op = col('opacity');
-        for (let i = 0; i < N; i++) {
+        for (let i = 0; i < count; i++) {
+            const s = srcRow(i);
             const o = i * 8;
-            arr[o + 0] = r0[i];
-            arr[o + 1] = r1[i];
-            arr[o + 2] = r2[i];
-            arr[o + 3] = r3[i];
-            arr[o + 4] = s0[i];
-            arr[o + 5] = s1[i];
-            arr[o + 6] = s2[i];
-            arr[o + 7] = op[i];
+            arr[o + 0] = r0[s];
+            arr[o + 1] = r1[s];
+            arr[o + 2] = r2[s];
+            arr[o + 3] = r3[s];
+            arr[o + 4] = s0[s];
+            arr[o + 5] = s1[s];
+            arr[o + 6] = s2[s];
+            arr[o + 7] = op[s];
         }
-        return splitToChunks(arr, N, 8, chunkSize);
+        return splitToChunks(arr, count, 8, chunkSize);
     })() : undefined;
 
     const colorChunks: ArrayBuffer[] | undefined = hasColor ? (() => {
         const elemsPerRow = 3 + numRest;
-        const arr = new Float32Array(N * elemsPerRow);
+        const arr = new Float32Array(count * elemsPerRow);
         const dc0 = col('f_dc_0'), dc1 = col('f_dc_1'), dc2 = col('f_dc_2');
         const restCols: Float32Array[] = [];
         for (let r = 0; r < numRest; r++) restCols.push(col(`f_rest_${r}`));
-        for (let i = 0; i < N; i++) {
+        for (let i = 0; i < count; i++) {
+            const s = srcRow(i);
             const o = i * elemsPerRow;
-            arr[o + 0] = dc0[i];
-            arr[o + 1] = dc1[i];
-            arr[o + 2] = dc2[i];
-            for (let r = 0; r < numRest; r++) arr[o + 3 + r] = restCols[r][i];
+            arr[o + 0] = dc0[s];
+            arr[o + 1] = dc1[s];
+            arr[o + 2] = dc2[s];
+            for (let r = 0; r < numRest; r++) arr[o + 3 + r] = restCols[r][s];
         }
-        return splitToChunks(arr, N, elemsPerRow, chunkSize);
+        return splitToChunks(arr, count, elemsPerRow, chunkSize);
     })() : undefined;
 
     const otherChunks: ArrayBuffer[] | undefined = hasOther ? (() => {
         const elemsPerRow = extras.length;
-        const arr = new Uint32Array(N * elemsPerRow);
+        const arr = new Uint32Array(count * elemsPerRow);
         const f32View = new Float32Array(arr.buffer);
         const cols = extras.map(e => dataTable.getColumnByName(e.name)!.data);
-        for (let i = 0; i < N; i++) {
+        for (let i = 0; i < count; i++) {
+            const s = srcRow(i);
             const o = i * elemsPerRow;
             for (let e = 0; e < elemsPerRow; e++) {
                 if (extras[e].type === 'float32') {
-                    f32View[o + e] = cols[e][i] as number;
+                    f32View[o + e] = cols[e][s] as number;
                 } else {
-                    arr[o + e] = cols[e][i] as number;
+                    arr[o + e] = cols[e][s] as number;
                 }
             }
         }
-        return splitToChunks(arr, N, elemsPerRow, chunkSize);
+        return splitToChunks(arr, count, elemsPerRow, chunkSize);
     })() : undefined;
 
     return createInMemoryChunkSource({
-        numGaussians: N,
+        numGaussians: count,
         chunkSize,
         shBands,
         extraColumns: extras,
         transform,
-        lodCounts: [N],
+        lodCounts: [count],
         position: positionChunks ? [positionChunks] : undefined,
         geometric: geometricChunks ? [geometricChunks] : undefined,
         color: colorChunks ? [colorChunks] : undefined,

@@ -1,8 +1,7 @@
-import { materializeToDataTable } from './compat/data-table';
-import { DataTable } from './data-table';
+import { dataTableToChunkSource } from './compat/data-table';
 import { ReadFileSystem, ZipReadFileSystem } from './io/read';
 import { readKsplat, readLcc, readLcc2, readMjs, readPly, readSog, readSplat, readSpz } from './readers';
-import { createChunkDataPool } from './source';
+import { type ChunkSource, createChunkDataPool } from './source';
 import { Options, Param } from './types';
 
 /**
@@ -89,17 +88,21 @@ type ReadFileOptions = {
 };
 
 /**
- * Reads a Gaussian splat file and returns its data as one or more DataTables.
+ * Reads a Gaussian splat file and returns its data as one or more
+ * {@link ChunkSource}s (one per LOD/sub-table for multi-table formats like LCC).
  *
- * Supports multiple input formats including PLY, splat, ksplat, spz, SOG, and LCC.
- * Some formats (like LCC) may return multiple DataTables for different LOD levels.
+ * Readers are chunk-native: `ply`/`splat`/`spz` return **lazy** sources whose
+ * `close()` releases the underlying file; whole-blob formats (`sog`/`mjs`/`ksplat`)
+ * and the LCC families are decoded eagerly and returned as resident sources.
+ * Callers that need a `DataTable` materialize at their own boundary (and call
+ * `source.close()` when done).
  *
  * Per-format progress (decoding bars, multi-payload bars) is emitted directly
  * by each reader through the global {@link logger}; install a renderer via
  * `logger.setRenderer(...)` to consume those events.
  *
  * @param readFileOptions - Options specifying the file to read and how to read it.
- * @returns Promise resolving to an array of DataTables containing the splat data.
+ * @returns Promise resolving to an array of chunk sources containing the splat data.
  *
  * @example
  * ```ts
@@ -107,7 +110,7 @@ type ReadFileOptions = {
  *
  * const filename = 'scene.ply';
  * const fileSystem = new UrlReadFileSystem('https://example.com/');
- * const tables = await readFile({
+ * const sources = await readFile({
  *     filename,
  *     inputFormat: getInputFormat(filename),
  *     options: {},
@@ -116,14 +119,16 @@ type ReadFileOptions = {
  * });
  * ```
  */
-const readFile = async (readFileOptions: ReadFileOptions): Promise<DataTable[]> => {
+const readFile = async (readFileOptions: ReadFileOptions): Promise<ChunkSource[]> => {
     const { filename, inputFormat, options, params, fileSystem } = readFileOptions;
 
-    let result: DataTable[];
-
+    // Whole-blob / multi-source formats: the reader opens and closes its own
+    // source(s) internally and returns DataTable(s); wrap each as a resident
+    // ChunkSource so readFile uniformly yields sources.
     if (inputFormat === 'mjs') {
-        result = [await readMjs(filename, params)];
-    } else if (inputFormat === 'sog') {
+        return [dataTableToChunkSource(await readMjs(filename, params))];
+    }
+    if (inputFormat === 'sog') {
         const lowerFilename = stripQueryAndHash(filename).toLowerCase();
         if (lowerFilename.endsWith('.sog')) {
             // Outer .sog is a ZIP container - mount it and let the inner SOG
@@ -131,40 +136,41 @@ const readFile = async (readFileOptions: ReadFileOptions): Promise<DataTable[]> 
             const source = await fileSystem.createSource(filename);
             const zipFs = new ZipReadFileSystem(source);
             try {
-                result = [await readSog(zipFs, 'meta.json')];
+                return [dataTableToChunkSource(await readSog(zipFs, 'meta.json'))];
             } finally {
                 zipFs.close();
             }
-        } else {
-            result = [await readSog(fileSystem, filename)];
         }
-    } else if (inputFormat === 'lcc') {
-        result = await readLcc(fileSystem, filename, options);
-    } else if (inputFormat === 'lcc2') {
-        result = await readLcc2(fileSystem, filename, options);
-    } else {
-        const source = await fileSystem.createSource(filename);
-        try {
-            if (inputFormat === 'ply') {
-                // single public PLY reader; materialize to a DataTable for the
-                // (still DataTable-based) processing/writing pipeline.
-                const pool = createChunkDataPool();
-                result = [await materializeToDataTable(await readPly(source, pool), pool)];
-            } else if (inputFormat === 'ksplat') {
-                result = [await readKsplat(source)];
-            } else if (inputFormat === 'splat') {
-                const pool = createChunkDataPool();
-                result = [await materializeToDataTable(await readSplat(source, pool), pool)];
-            } else if (inputFormat === 'spz') {
-                const pool = createChunkDataPool();
-                result = [await materializeToDataTable(await readSpz(source, pool), pool)];
-            }
-        } finally {
-            source.close();
-        }
+        return [dataTableToChunkSource(await readSog(fileSystem, filename))];
+    }
+    if (inputFormat === 'lcc') {
+        return (await readLcc(fileSystem, filename, options)).map(dt => dataTableToChunkSource(dt));
+    }
+    if (inputFormat === 'lcc2') {
+        return (await readLcc2(fileSystem, filename, options)).map(dt => dataTableToChunkSource(dt));
     }
 
-    return result;
+    // Single-source binary formats over a seekable ReadSource. Lazy readers
+    // (ply/splat/spz) hand the source's lifetime to the returned ChunkSource —
+    // its close() releases it — so the source is NOT closed here on success;
+    // ksplat is eager and is done with the source once decoded. On error the
+    // source is released (close() is idempotent).
+    const source = await fileSystem.createSource(filename);
+    const pool = createChunkDataPool();
+    try {
+        if (inputFormat === 'ply') return [await readPly(source, pool)];
+        if (inputFormat === 'splat') return [await readSplat(source, pool)];
+        if (inputFormat === 'spz') return [await readSpz(source, pool)];
+        if (inputFormat === 'ksplat') {
+            const dataTable = await readKsplat(source);
+            source.close();
+            return [dataTableToChunkSource(dataTable)];
+        }
+        throw new Error(`Unsupported input format: ${inputFormat}`);
+    } catch (e) {
+        source.close();
+        throw e;
+    }
 };
 
 export { readFile, getInputFormat, type InputFormat, type ReadFileOptions };

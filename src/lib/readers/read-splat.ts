@@ -1,5 +1,6 @@
+import { fileChunkSource, readExact } from './reader-utils';
 import { Column, DataTable } from '../data-table';
-import { type ReadSource, type ReadStream } from '../io/read';
+import { type ReadSource } from '../io/read';
 import {
     type ChunkReadRequest,
     type ChunkSource,
@@ -21,18 +22,6 @@ const SH_C0 = 0.28209479177387814;
 // Each Antimatter15 .splat record is 32 bytes: pos(3×f32) scale(3×f32)
 // rgba(4×u8) rot(4×u8).
 const BYTES_PER_SPLAT = 32;
-
-// Read exactly `length` bytes from `stream` into `buffer` at `offset` (a stream
-// may satisfy a read in several chunks). Returns the number of bytes read.
-const readExact = async (stream: ReadStream, buffer: Uint8Array, offset: number, length: number): Promise<number> => {
-    let total = 0;
-    while (total < length) {
-        const n = await stream.pull(buffer.subarray(offset + total, offset + length));
-        if (n === 0) break;
-        total += n;
-    }
-    return total;
-};
 
 // Decode one .splat record (read from `dv`/`u8` at byte offset `o`) into the
 // canonical layer buffers at gaussian slot `i`. Shared by the lazy reader and
@@ -168,14 +157,7 @@ const readSplat = async (source: ReadSource, pool: ChunkDataPool): Promise<Chunk
         }
     };
 
-    // The lazy reader holds `source` open for its range reads; the ChunkSource
-    // owns its lifetime, so close() releases it.
-    const close = (): Promise<void> => {
-        source.close();
-        return Promise.resolve();
-    };
-
-    return { meta, read, close };
+    return fileChunkSource(source, meta, read);
 };
 
 /**

@@ -35,6 +35,7 @@ import {
 // Streaming chunk pipeline (ply load -> process -> ply/sog write, no DataTable).
 // Deep imports keep these internal/`@ignore` APIs off the public lib surface
 // until the migration is complete.
+import { materializeToDataTable } from '../lib/compat/data-table';
 import { processSource, canProcessSource } from '../lib/process-source';
 import { readPly } from '../lib/readers/read-ply';
 import { readSplat } from '../lib/readers/read-splat';
@@ -1180,13 +1181,21 @@ const main = async () => {
             // in a "Reading" group so multi-file formats like SOG render as
             // a coherent block under the Input phase.
             const readingGroup = logger.group('Reading');
-            const dataTables = await readFile({
+            const sources = await readFile({
                 filename: readFilename,
                 inputFormat,
                 options,
                 params,
                 fileSystem
             });
+            // readFile yields chunk sources; this (legacy) pipeline materializes
+            // each at its boundary and releases the source.
+            const matPool = createChunkDataPool();
+            const dataTables: DataTable[] = [];
+            for (const src of sources) {
+                dataTables.push(await materializeToDataTable(src, matPool));
+                await src.close();
+            }
             readingGroup.end();
 
             for (let i = 0; i < dataTables.length; ++i) {

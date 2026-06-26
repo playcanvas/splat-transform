@@ -1,5 +1,6 @@
 import { decompress as decompressZstd } from 'fzstd';
 
+import { fileChunkSource } from './reader-utils';
 import { ReadSource } from '../io/read';
 import {
     type ChunkReadRequest,
@@ -327,14 +328,7 @@ const readSpz = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
         return Promise.resolve();
     };
 
-    // The decompressed bytes are already resident (read at open), but the
-    // ChunkSource still owns the source's lifetime — close() releases it.
-    const close = (): Promise<void> => {
-        source.close();
-        return Promise.resolve();
-    };
-
-    return { meta, read, close };
+    return fileChunkSource(source, meta, read);
 };
 
 export { readSpz };
