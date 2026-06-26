@@ -115,11 +115,10 @@ const accumulateBound = (
 // Per-leaf ellipsoid AABB. Positions are resident, but rotation/scale are
 // gathered from the source by index (batched by chunk) so the geometric layer is
 // never wholly resident — the bounds-pass analog of the per-unit heavy gather.
-const calcBound = async (source: ChunkSource, pool: ChunkDataPool, indices: number[]): Promise<Aabb> => {
+const calcBound = async (source: ChunkSource, pool: ChunkDataPool, idx: Uint32Array): Promise<Aabb> => {
     const min = [Infinity, Infinity, Infinity];
     const max = [-Infinity, -Infinity, -Infinity];
 
-    const idx = Uint32Array.from(indices);
     const batch = pool.chunkSize;
     const { layouts } = source.meta;
 
@@ -142,34 +141,48 @@ const calcBound = async (source: ChunkSource, pool: ChunkDataPool, indices: numb
     return { min, max };
 };
 
-const binIndices = (parent: BTreeNode, lod: Float32Array) => {
-    const result = new Map<number, number[]>();
-
-    // we've reached a leaf node, gather indices
-    const recurse = (node: BTreeNode) => {
+// Group the gaussian indices under `parent` by their LOD level. Two passes
+// (count, then fill) so each LOD's indices land in a tight `Uint32Array` rather
+// than a `number[]` — the indices are the dominant retained bookkeeping for a
+// large scene, so keeping them off the V8 heap (4 B each, no GC pressure) is
+// what lets LOD export scale to hundreds of millions of splats.
+const binIndices = (parent: BTreeNode, lod: Float32Array): Map<number, Uint32Array> => {
+    const counts = new Map<number, number>();
+    const tally = (node: BTreeNode) => {
         if (node.indices) {
+            for (let i = 0; i < node.indices.length; ++i) {
+                const lodValue = lod[node.indices[i]];
+                counts.set(lodValue, (counts.get(lodValue) ?? 0) + 1);
+            }
+        } else {
+            if (node.left) tally(node.left);
+            if (node.right) tally(node.right);
+        }
+    };
+    tally(parent);
 
+    const result = new Map<number, Uint32Array>();
+    const offset = new Map<number, number>();
+    for (const [lodValue, count] of counts) {
+        result.set(lodValue, new Uint32Array(count));
+        offset.set(lodValue, 0);
+    }
+
+    const fill = (node: BTreeNode) => {
+        if (node.indices) {
             for (let i = 0; i < node.indices.length; ++i) {
                 const v = node.indices[i];
                 const lodValue = lod[v];
-
-                if (!result.has(lodValue)) {
-                    result.set(lodValue, [v]);
-                } else {
-                    result.get(lodValue).push(v);
-                }
+                const o = offset.get(lodValue)!;
+                result.get(lodValue)![o] = v;
+                offset.set(lodValue, o + 1);
             }
         } else {
-            if (node.left) {
-                recurse(node.left);
-            }
-            if (node.right) {
-                recurse(node.right);
-            }
+            if (node.left) fill(node.left);
+            if (node.right) fill(node.right);
         }
     };
-
-    recurse(parent);
+    fill(parent);
 
     return result;
 };
@@ -264,9 +277,10 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     const binSize = chunkCount * 1024;
     const binDim = chunkExtent;
 
-    // map of lod -> fileBin[]
-    // fileBin: number[][]
-    const lodFiles: Map<number, number[][][]> = new Map();
+    // map of lod -> file units -> subunits (each subunit a tight Uint32Array of
+    // gaussian indices). This is the bulk retained bookkeeping; Uint32Array keeps
+    // it off the V8 heap at 4 B/gaussian.
+    const lodFiles: Map<number, Uint32Array[][]> = new Map();
     const lodColumn = lod;
     const filenames: string[] = [];
     let lodLevels = 0;
@@ -319,8 +333,15 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
             lodLevels = Math.max(lodLevels, lodValue + 1);
         }
 
-        // combine indices from all lods so we can calcuate bound over them
-        const allIndices: number[] = Array.from(bins.values()).flat();
+        // combine indices from all lods (as one Uint32Array) to bound over them
+        let total = 0;
+        for (const arr of bins.values()) total += arr.length;
+        const allIndices = new Uint32Array(total);
+        let o = 0;
+        for (const arr of bins.values()) {
+            allIndices.set(arr, o);
+            o += arr.length;
+        }
 
         const bound = await calcBound(mainSource, pool, allIndices);
 
