@@ -39,8 +39,11 @@ import {
 import { materializeToDataTable } from '../lib/compat/data-table';
 import { bakeTransform, concatSource } from '../lib/ops';
 import { processSource, canProcessSource } from '../lib/process-source';
+import { readLccSource } from '../lib/readers/read-lcc';
+import { readLcc2Source } from '../lib/readers/read-lcc2';
 import { readPly } from '../lib/readers/read-ply';
 import { readSplat } from '../lib/readers/read-splat';
+import { readSpz } from '../lib/readers/read-spz';
 import { type ChunkSource, type ChunkSourceMetadata, createChunkDataPool } from '../lib/source';
 import { writeCompressedPlySource } from '../lib/writers/write-compressed-ply';
 import { writeLodSource } from '../lib/writers/write-lod';
@@ -858,15 +861,16 @@ const main = async () => {
     const startTime = performance.now();
 
     // Kernel-tracked peak resident set size in bytes.
-    // `process.resourceUsage().maxRSS` is reported in kilobytes on
-    // Linux/macOS and bytes on Windows; normalize to bytes for fmtBytes.
+    // `process.resourceUsage().maxRSS` (getrusage `ru_maxrss`) is in **kilobytes
+    // on Linux** but **bytes on macOS and Windows**; normalize to bytes for
+    // fmtBytes (multiplying everywhere over-reports macOS peak ~1024×).
     // Note: V8 fatal OOM (`FATAL ERROR: Reached heap limit`) and external
     // SIGKILL bypass all JS handlers (uncaughtException, beforeExit, exit),
     // so peak rss cannot be reported in those cases - use an external wrapper
     // such as `/usr/bin/time -l` (macOS) or `/usr/bin/time -v` (Linux).
     const peakMemoryBytes = (): number => {
         const raw = process.resourceUsage().maxRSS;
-        return process.platform === 'win32' ? raw : raw * 1024;
+        return process.platform === 'linux' ? raw * 1024 : raw;
     };
 
     // V8-tracked currently-live memory: heapUsed (JS objects) + external
@@ -1097,33 +1101,68 @@ const main = async () => {
         // declare phase total: one Read phase per input + one Write phase
         const phaseTotal = inputArgs.length + (isNullOutput ? 0 : 1);
 
-        // Streaming chunk path: local PLY/splat input(s) -> ply/sog/compressed-ply,
-        // with only chunk-path actions (-t/-r/-s, filters, summary). Each input is
-        // read lazily, its per-input actions applied, the inputs stitched with
-        // concatSource (transforms unified as combine() does), the output actions
-        // applied, and the result written one layer/chunk at a time — the whole
-        // scene is never resident. Anything else (decimate, lod, morton-order,
-        // band drop, voxel/raster, URL/other-format inputs, mixed layouts, or
-        // csv/glb/html/spz output) falls through to the DataTable pipeline.
+        // LODs are overlapping representations of the *same* scene at different
+        // detail — alternatives, not additive layers. So a single-scene output
+        // (anything but lod-meta.json) takes exactly ONE LOD: default the finest
+        // (LOD 0), reject an explicit multi-level --lod-select, and read only that
+        // level (LCC/LCC2 readers honor lodSelect; both the chunk and DataTable
+        // paths inherit it). Conflicting per-input --lod *tags* (multi-PLY) are
+        // caught after combine in the DataTable path. lod-meta output keeps every
+        // LOD (selection unchanged).
+        if (!isNullOutput && outputFormat !== 'lod') {
+            if (options.lodSelect.length > 1) {
+                throw new Error('Cannot write multiple LOD levels (--lod-select) to a single-scene output; select one level, or output lod-meta.json.');
+            }
+            if (options.lodSelect.length === 0) {
+                options.lodSelect = [0]; // finest
+            }
+        }
+
+        // Streaming chunk path: local PLY/splat/spz/lcc2/lcc input(s) ->
+        // ply/sog/compressed-ply, with only chunk-path actions (-t/-r/-s, filters,
+        // summary). Each input is read lazily (lcc2 reads only the one selected
+        // LOD — its sub-files decode on demand), its per-input actions applied, the
+        // inputs stitched with concatSource (transforms unified as combine()
+        // does), the output actions applied, and the result written one
+        // layer/chunk at a time — the whole scene is never resident. Anything else
+        // (decimate, lod, morton-order, band drop, voxel/raster, URL/other-format
+        // inputs, mixed layouts, csv/glb/html/spz output) falls through to the
+        // DataTable pipeline. (lcc2 -> lod and the lcc2 environment chunk stay on
+        // the eager DataTable path.)
+        const chunkFormats = new Set(['ply', 'splat', 'spz', 'lcc2', 'lcc']);
         const chunkAllActions = [...inputArgs.flatMap(a => a.processActions), ...outputArg.processActions];
         const chunkInputFormats = inputArgs.map(a => (isHttpUrl(a.filename) ? null : getInputFormat(resolveInput(a.filename).classifyName)));
         if (
             !isNullOutput &&
             (outputFormat === 'sog' || outputFormat === 'sog-bundle' || outputFormat === 'ply' || outputFormat === 'compressed-ply') &&
             canProcessSource(chunkAllActions) &&
-            chunkInputFormats.every(f => f === 'ply' || f === 'splat')
+            chunkInputFormats.every(f => f !== null && chunkFormats.has(f))
         ) {
             const pool = createChunkDataPool();
+
+            // Read a single input as a single-LOD source: lazy ply/splat/spz
+            // directly; an lcc2 container reads only the selected LOD (one scene),
+            // decoding its sub-files on demand (the environment chunk is dropped,
+            // matching the eager path for non-lod output).
+            const readChunkInput = async (inputArg: typeof inputArgs[number]): Promise<ChunkSource> => {
+                const { filename: inFile, fileSystem, classifyName } = resolveInput(inputArg.filename);
+                const fmt = getInputFormat(classifyName);
+                if (fmt === 'lcc2') {
+                    return readLcc2Source(fileSystem, inFile, options, pool);
+                }
+                if (fmt === 'lcc') {
+                    return readLccSource(fileSystem, inFile, options, pool);
+                }
+                const inSource = await fileSystem.createSource(inFile);
+                if (fmt === 'splat') return readSplat(inSource, pool);
+                if (fmt === 'spz') return readSpz(inSource, pool);
+                return readPly(inSource, pool);
+            };
 
             // Read + apply per-input actions (lazy; nothing materialized).
             const processed: ChunkSource[] = [];
             for (const inputArg of inputArgs) {
-                const { filename: inFile, fileSystem, classifyName } = resolveInput(inputArg.filename);
-                const inSource = await fileSystem.createSource(inFile);
-                const src = getInputFormat(classifyName) === 'splat' ?
-                    await readSplat(inSource, pool) :
-                    await readPly(inSource, pool);
-                processed.push(await processSource(src, inputArg.processActions, pool));
+                processed.push(await processSource(await readChunkInput(inputArg), inputArg.processActions, pool));
             }
 
             // concatSource needs a uniform layout; combine() (the DataTable path)
@@ -1346,6 +1385,19 @@ const main = async () => {
 
         if (!dataTable || dataTable.numRows === 0) {
             throw new Error('No Gaussians to write');
+        }
+
+        // Single-scene output takes one LOD (see the --lod-select guard above).
+        // A multi-LOD result here is conflicting per-input --lod *tags* (e.g.
+        // multi-PLY); reject it. Otherwise drop the now-redundant lod column so
+        // single-scene output never carries a vestigial per-gaussian LOD tag.
+        if (outputFormat !== 'lod' && dataTable.hasColumn('lod')) {
+            const levels = new Set(dataTable.getColumnByName('lod').data);
+            levels.delete(-1);
+            if (levels.size > 1) {
+                throw new Error('Cannot write multiple LOD levels (--lod tags) to a single-scene output; tag one level, or output lod-meta.json.');
+            }
+            dataTable.removeColumn('lod');
         }
 
         const envDataTable = envDataTables.length > 0 && await processDataTable(

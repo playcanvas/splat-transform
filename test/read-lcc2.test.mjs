@@ -32,8 +32,11 @@ import {
     parseSpzNumPoints,
     readChunkCount,
     readLcc2,
+    readLcc2Source,
     LOAD_CONCURRENCY
 } from '../src/lib/readers/read-lcc2.js';
+import { materializeToDataTable } from '../src/lib/compat/data-table.js';
+import { createChunkDataPool } from '../src/lib/source/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 WebPCodec.wasmUrl = join(__dirname, '..', 'lib', 'webp.wasm');
@@ -877,5 +880,54 @@ describe('readLcc2 (bounded concurrency)', () => {
             `peak concurrency ${fs.peak} exceeded bound ${LOAD_CONCURRENCY}`
         );
         assert.ok(fs.peak > 1, `expected parallel decoding, peak was ${fs.peak}`);
+    });
+});
+
+describe('readLcc2Source (chunked) vs readLcc2 (eager)', () => {
+    // 2 LODs, SH-3 chunks: LOD 0 = files 2,3 (3+4), LOD 1 = file 1 (5).
+    const buildFixture = async () => {
+        const fs = new MemoryReadFileSystem();
+        fs.set('chunk1.spz', await makeSpzBytes(5, { includeSH: true }));
+        fs.set('chunk2.spz', await makeSpzBytes(3, { includeSH: true }));
+        fs.set('chunk3.spz', await makeSpzBytes(4, { includeSH: true }));
+        const meta = {
+            totalSplats: 12,
+            lodSplats: [7, 5],
+            totalLevels: 2,
+            splatType: '.spz',
+            root: {
+                splatFiles: ['', 'chunk1.spz', 'chunk2.spz', 'chunk3.spz'],
+                child: [{
+                    data: { '3dgs': { name: 1 } },
+                    child: [{ data: { '3dgs': { name: 2 } } }, { data: { '3dgs': { name: 3 } } }]
+                }]
+            }
+        };
+        fs.set('meta.lcc2', new TextEncoder().encode(JSON.stringify(meta)));
+        return fs;
+    };
+
+    it('flatten(chunked) matches merged(eager) row-for-row, LODs structural', async () => {
+        const eager = (await readLcc2(await buildFixture(), 'meta.lcc2', opts()))[0];
+
+        const pool = createChunkDataPool();
+        const src = await readLcc2Source(await buildFixture(), 'meta.lcc2', opts(), pool);
+        assert.strictEqual(src.meta.numLods, 2);
+        assert.deepStrictEqual([...src.meta.lodCounts], [7, 5]); // LOD0 3+4, LOD1 5
+
+        const flat = await materializeToDataTable(src, pool);
+        await src.close();
+
+        assert.strictEqual(flat.numRows, eager.numRows);
+        // LOD is structural now, so no per-gaussian 'lod' column.
+        assert.ok(!flat.hasColumn('lod'), 'chunked source carries no lod column');
+        for (const name of eager.columnNames) {
+            if (name === 'lod') continue;
+            const e = eager.getColumnByName(name).data;
+            const f = flat.getColumnByName(name).data;
+            for (let i = 0; i < eager.numRows; i++) {
+                assert.strictEqual(f[i], e[i], `column '${name}' row ${i}`);
+            }
+        }
     });
 });

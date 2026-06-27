@@ -1,7 +1,10 @@
 import { Vec3 } from 'playcanvas';
 
+import { containerSource, type ContainerSegment } from './container-source';
+import { dataTableToChunkSource } from '../compat/data-table';
 import { Column, DataTable } from '../data-table';
 import { dirname, join, ReadFileSystem, ReadSource, readFile } from '../io/read';
+import { type ChunkDataPool, type ChunkSource } from '../source';
 import { Options } from '../types';
 import { logger, Transform } from '../utils';
 
@@ -534,4 +537,111 @@ const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Op
     return result;
 };
 
-export { readLcc };
+// LCC's fixed coordinate transform (Y-up → engine), applied lazily on consume.
+const LCC_TRANSFORM = (): Transform => new Transform().fromEulers(90, 0, 180);
+
+// Whether this LCC scene carries spherical harmonics (mirrors readLcc).
+const lccHasSH = (lccJson: any): boolean => {
+    if (lccJson.fileType === 'Portable') return false;
+    if (lccJson.fileType === 'Quality') return true;
+    // Pre-v4 / missing fileType: assume SH if a shcoef attribute is present.
+    return lccJson.attributes.findIndex((attr: any) => attr.name === 'shcoef') !== -1;
+};
+
+// Decode one unit's one LOD into a standalone DataTable (the per-segment unit of
+// the chunked reader). Reuses processUnit, writing into fresh arrays sized to the
+// unit (offset 0) rather than the shared scene arrays.
+const decodeUnitToDataTable = async (
+    info: LccUnitInfo,
+    inputLod: number,
+    dataSource: ReadSource,
+    shSource: ReadSource | undefined,
+    compressInfo: CompressInfo,
+    hasSH: boolean
+): Promise<DataTable> => {
+    const points = info.lods[inputLod].points;
+    const properties = initProperties(points);
+    const properties_f_rest = hasSH ? Array.from({ length: 45 }, () => new Float32Array(points)) : null;
+    await processUnit(info, inputLod, dataSource, shSource, compressInfo, 0, properties, properties_f_rest, () => {});
+    const columns = [
+        ...floatProps.map(name => new Column(name, properties[`property_${name}`])),
+        ...(properties_f_rest ? properties_f_rest.map((storage, i) => new Column(`f_rest_${i}`, storage)) : [])
+    ];
+    return new DataTable(columns, LCC_TRANSFORM());
+};
+
+/**
+ * Lazy, chunked LCC reader: presents the selected LODs as one **multi-LOD
+ * `ChunkSource`** over the quadtree's units, decoding each unit's `data.bin`
+ * (+`shcoef.bin`) byte-range on demand (LRU-cached) instead of decoding the
+ * whole scene up front. Output LOD / unit ordering matches the eager
+ * {@link readLcc} (selected LOD order, then `index.bin` unit order), so
+ * `materialize`/flatten reproduces its merged table (minus the legacy `lod`
+ * column, which is structural here).
+ *
+ * The optional environment chunk is **not** returned — it is only written for
+ * `lod` output, which still uses the eager `readLcc`; chunk-native conversion
+ * (→ ply/sog) discards it, matching the eager path.
+ *
+ * @param fileSystem - File system for reading the LCC files.
+ * @param filename - Path to the meta.lcc file.
+ * @param options - Options including LOD selection via `lodSelect`.
+ * @param pool - Pool whose `chunkSize` the source (and its units) are chunked at.
+ * @returns A lazy multi-LOD `ChunkSource` over the selected LODs.
+ * @ignore
+ */
+const readLccSource = async (
+    fileSystem: ReadFileSystem,
+    filename: string,
+    options: Options,
+    pool: ChunkDataPool
+): Promise<ChunkSource> => {
+    const lccJson = JSON.parse(new TextDecoder().decode(await readFile(fileSystem, filename)));
+    const hasSH = lccHasSH(lccJson);
+    const compressInfo = parseMeta(lccJson);
+    const splats = lccJson.splats;
+
+    const baseDir = dirname(filename);
+    const relatedFilename = (name: string) => (baseDir ? join(baseDir, name) : name);
+    const indexData = await readFile(fileSystem, relatedFilename('index.bin'));
+    const unitInfos = parseIndexBin(
+        indexData.buffer.slice(indexData.byteOffset, indexData.byteOffset + indexData.byteLength) as ArrayBuffer,
+        lccJson
+    );
+
+    // input -> output LOD mapping (mirrors readLcc).
+    const lods = options.lodSelect.length > 0 ?
+        options.lodSelect
+        .map(lod => (lod < 0 ? splats.length + lod : lod))
+        .filter(lod => lod >= 0 && lod < splats.length) :
+        new Array(splats.length).fill(0).map((_, i) => i);
+    if (lods.length === 0) {
+        throw new Error(`No valid LODs selected for LCC input file: ${filename} lods: ${JSON.stringify(lods)}`);
+    }
+
+    // Open the bulk sources; kept open for the source's lifetime (the unit
+    // decode thunks range-read them), closed on close().
+    const dataSource = await fileSystem.createSource(relatedFilename('data.bin'));
+    const shSource = hasSH ? await fileSystem.createSource(relatedFilename('shcoef.bin')) : undefined;
+
+    // One segment per non-empty unit, grouped by output LOD (index.bin order).
+    const segmentsByLod: ContainerSegment[][] = lods.map(inputLod => unitInfos
+    .filter(info => info.lods[inputLod].points > 0)
+    .map(info => ({
+        count: info.lods[inputLod].points,
+        decode: () => decodeUnitToDataTable(info, inputLod, dataSource, shSource, compressInfo, hasSH)
+        .then(dt => dataTableToChunkSource(dt, pool.chunkSize))
+    })));
+
+    const container = await containerSource(segmentsByLod, pool);
+    return {
+        ...container,
+        close: async () => {
+            await container.close();
+            dataSource.close();
+            shSource?.close();
+        }
+    };
+};
+
+export { readLcc, readLccSource };

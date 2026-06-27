@@ -5,6 +5,7 @@ import {
     type ChunkSource,
     type ChunkSourceMetadata
 } from '../source';
+import { type Transform } from '../utils';
 
 /**
  * One contiguous run of gaussians within a LOD, backed by a sub-file that is
@@ -36,12 +37,13 @@ type ContainerSegment = {
  * @param pool - Pool for the concat block-copy temporaries; `chunkSize` must match the segments'.
  * @param opts - Tuning options.
  * @param opts.cacheSize - Max resident decoded sub-files (default 3, min 2 so a chunk straddling two segments can be served).
+ * @param opts.transform - Override the reported pending transform (sub-files decode to their own space; e.g. LCC2 relabels to `LCC2_TRANSFORM`). The sub-file data is unchanged — this only sets `meta.transform`.
  * @returns A lazy multi-LOD source over the container.
  */
 const containerSource = async (
     segmentsByLod: ContainerSegment[][],
     pool: ChunkDataPool,
-    opts: { cacheSize?: number } = {}
+    opts: { cacheSize?: number; transform?: Transform } = {}
 ): Promise<ChunkSource> => {
     const cacheSize = Math.max(2, opts.cacheSize ?? 3);
     const cache = new Map<ContainerSegment, Promise<ChunkSource>>();
@@ -99,6 +101,7 @@ const containerSource = async (
 
     const meta: ChunkSourceMetadata = {
         ...layout,
+        transform: opts.transform ?? layout.transform,
         numGaussians: lodCounts[0] ?? 0,
         numLods: segmentsByLod.length,
         lodCounts,

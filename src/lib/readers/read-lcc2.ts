@@ -1,9 +1,10 @@
+import { containerSource, type ContainerSegment } from './container-source';
 import { readSog } from './read-sog';
 import { readSpz } from './read-spz';
-import { materializeToDataTable } from '../compat/data-table';
+import { dataTableToChunkSource, materializeToDataTable } from '../compat/data-table';
 import { Column, DataTable, TypedArray } from '../data-table';
 import { basename, dirname, join, readFile, ReadFileSystem, ReadSource, ReadStream, ZipReadFileSystem } from '../io/read';
-import { createChunkDataPool } from '../source';
+import { type ChunkDataPool, type ChunkSource, createChunkDataPool } from '../source';
 import { Options } from '../types';
 import { logger, Transform } from '../utils';
 
@@ -816,6 +817,115 @@ const readLcc2 = async (
     return result;
 };
 
+/**
+ * Decode one LCC2 chunk sub-file to a `ChunkSource` (the lazy analog of
+ * {@link decodeChunk}). `.spz` chunks become a lazy `readSpz` source that owns
+ * its read source; `.sog` chunks are read fully and wrapped resident via the
+ * shim (the ZIP/source is closed once read). Chunked at `pool.chunkSize`.
+ *
+ * @param fileSystem - File system for reading the chunk file.
+ * @param splatType - Chunk encoding type ('.sog' or '.spz').
+ * @param fullPath - Resolved path to the chunk file.
+ * @param pool - Pool whose `chunkSize` the returned source is chunked at.
+ * @returns A `ChunkSource` over the chunk's gaussians.
+ */
+const decodeChunkSource = async (
+    fileSystem: ReadFileSystem,
+    splatType: string,
+    fullPath: string,
+    pool: ChunkDataPool
+): Promise<ChunkSource> => {
+    const source = await openChunkSource(fileSystem, fullPath);
+    if (splatType === '.spz') {
+        return readSpz(source, pool); // owns `source`; closed on the returned source's close
+    }
+    if (splatType === '.sog') {
+        const zipFs = new ZipReadFileSystem(source);
+        try {
+            const dt = await readSog(zipFs, 'meta.json', { logging: 'silent' });
+            return dataTableToChunkSource(dt, pool.chunkSize);
+        } finally {
+            zipFs.close(); // closes the zip wrapper (and the source)
+        }
+    }
+    throw new Error(`Unsupported LCC2 splatType: ${splatType}`);
+};
+
+/**
+ * Lazy, chunked LCC2 reader: presents the selected LODs as one **multi-LOD
+ * `ChunkSource`** over the octree's SPZ/SOG sub-files, decoding each on demand
+ * (LRU-cached) instead of materializing the whole scene up front. The output LOD
+ * / sub-file ordering matches the eager {@link readLcc2} (lod ascending, then
+ * ascending file index), so `materialize`/flatten reproduces its merged table
+ * (minus the legacy `lod` column, which is structural here).
+ *
+ * The optional environment chunk is **not** returned — it is only written for
+ * `lod` output, which still uses the eager `readLcc2`; chunk-native conversion
+ * (→ ply/sog) discards the environment, matching the eager path.
+ *
+ * Sub-files must share a layout (uniform SH bands); a mismatch throws (caller
+ * falls back to eager `readLcc2`).
+ *
+ * @param fileSystem - File system for reading the LCC2 files.
+ * @param filename - Path to the meta.lcc2 file.
+ * @param options - Options including LOD selection via `lodSelect`.
+ * @param pool - Pool whose `chunkSize` the source (and its sub-files) are chunked at.
+ * @returns A lazy multi-LOD `ChunkSource` over the selected LODs.
+ * @ignore
+ */
+const readLcc2Source = async (
+    fileSystem: ReadFileSystem,
+    filename: string,
+    options: Options,
+    pool: ChunkDataPool
+): Promise<ChunkSource> => {
+    const baseDir = dirname(filename);
+    const related = (name: string) => (baseDir ? join(baseDir, name) : name);
+    const meta = parseLcc2Meta(new TextDecoder().decode(await readFile(fileSystem, filename)), filename);
+    const { totalLevels, splatFiles, splatType, envFileIndex, tree } = meta;
+
+    const inputLods = resolveLodSelection(options.lodSelect, totalLevels);
+    if (inputLods.length === 0) {
+        throw new Error(
+            `No valid LODs selected for LCC2 input file: ${filename} lods: ${JSON.stringify(options.lodSelect)}`
+        );
+    }
+
+    // Per-LOD sub-file lists in output order (ascending file index), mirroring
+    // readLcc2's task ordering. Counts come from meta where present; a missing
+    // one is resolved by a cheap header read (no decode).
+    const byLevel = collectChunksByLevel(tree, totalLevels, envFileIndex);
+    const segmentsByLod: ContainerSegment[][] = [];
+    let total = 0;
+    for (let outputLod = 0; outputLod < inputLods.length; outputLod++) {
+        const files = byLevel.get(inputLods[outputLod]);
+        const indices = files ? Array.from(files.keys()).sort((a, b) => a - b) : [];
+        const segs: ContainerSegment[] = [];
+        for (const fileIndex of indices) {
+            if (!Number.isInteger(fileIndex) || fileIndex < 0 ||
+                fileIndex >= splatFiles.length || !splatFiles[fileIndex]) {
+                throw new Error(
+                    `Invalid chunk file index ${fileIndex} (root.splatFiles has ${splatFiles.length} entries) in LCC2 input file: ${filename}`
+                );
+            }
+            const fullPath = related(splatFiles[fileIndex]);
+            const metaCount = files!.get(fileIndex);
+            const count = metaCount ?? await readChunkCount(fileSystem, splatType, fullPath);
+            segs.push({ count, decode: () => decodeChunkSource(fileSystem, splatType, fullPath, pool) });
+            total += count;
+        }
+        segmentsByLod.push(segs);
+    }
+
+    if (total === 0) {
+        throw new Error(
+            `No chunks found for selected LODs in LCC2 input file: ${filename} lods: ${JSON.stringify(inputLods)}`
+        );
+    }
+
+    return containerSource(segmentsByLod, pool, { transform: LCC2_TRANSFORM() });
+};
+
 export {
     LOAD_CONCURRENCY,
     LCC2_TRANSFORM,
@@ -827,9 +937,11 @@ export {
     isMissingError,
     openChunkSource,
     decodeChunk,
+    decodeChunkSource,
     parseSpzNumPoints,
     readChunkCount,
-    readLcc2
+    readLcc2,
+    readLcc2Source
 };
 
 export type { RawLcc2Node, RawLcc2Meta, Lcc2TreeNode, Lcc2Meta };
