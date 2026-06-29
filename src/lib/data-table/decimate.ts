@@ -16,6 +16,17 @@ const MC_SAMPLES = 1;
 const EPS_COV = 1e-8;
 const PROGRESS_TICKS = 100;
 
+// Minimum fraction of the current splats a single merge pass must remove once
+// its disjoint-pair matching is exhausted. A well-formed k-NN graph yields a
+// near-perfect matching — the loop below is built around each pass roughly
+// halving the count (see `estIterations`) — so a productive pass removes ~50%.
+// A pass that removes far less means the graph is degenerate (e.g. many
+// coincident splats collapse every query's neighbours onto a shared handful of
+// indices, starving disjoint pairing), and grinding to the target would take
+// thousands of passes. Set an order of magnitude below the healthy ~50% so
+// legitimate scenes never trip it.
+const MIN_ITERATION_PROGRESS = 0.05;
+
 // ---------- sigmoid / logit ----------
 
 const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
@@ -1010,6 +1021,28 @@ const simplifyGaussians = async (
                 throw new Error(
                     `decimation found no valid merge pairs among ${edgeCount} edges at ${n} splats (target ${targetCount}) — ` +
                     `${cause}. Refusing to return an incompletely-decimated scene.`
+                );
+            }
+
+            // No-progress guard. `pairs.length < mergesNeeded` means the matching
+            // was exhausted before reaching the target (it didn't hit the break
+            // above). If it also removed less than MIN_ITERATION_PROGRESS of the
+            // current splats, the k-NN graph is too degenerate to decimate — e.g.
+            // many coincident splats collapse every query's neighbours onto a
+            // shared handful of indices, so disjoint pairing starves and progress
+            // crawls (a fully-degenerate 9.84M scene took 130+ passes to halve).
+            // Fail loud rather than grind toward the target across thousands of
+            // passes, consistent with the edgeCount===0 / pairs===0 guards above.
+            // A well-formed scene removes ~half per exhausted pass, so legitimate
+            // multi-pass decimation never trips this.
+            const removedFraction = pairs.length / n;
+            if (pairs.length < mergesNeeded && removedFraction < MIN_ITERATION_PROGRESS) {
+                g.end();
+                throw new Error(
+                    `decimation stalled at ${n} splats (target ${targetCount}): a merge pass removed only ` +
+                    `${pairs.length} splat${pairs.length === 1 ? '' : 's'} (${(removedFraction * 100).toFixed(3)}% of ${n}) — ` +
+                    'the nearest-neighbour graph is too degenerate to merge further (e.g. many coincident splats). ' +
+                    'Refusing to grind toward the target.'
                 );
             }
 
