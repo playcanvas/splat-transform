@@ -22,24 +22,28 @@ const buildTree = (xs, ys, zs) => new KdTree(new DataTable([
 
 describe('KdTree', () => {
     it('builds in sub-quadratic time over a large all-identical point set', { timeout: 5000 }, () => {
-        // Pre-fix the 2-way Lomuto partition degenerated to O(N^2) here
-        // (~5e9 ops at N=100k → tens of seconds), which is exactly how the prod
-        // GPU pipeline pod hung on a splat with every gaussian at the origin.
+        // Pre-fix the 2-way Lomuto partition degenerated to O(N^2) in the KD-tree
+        // *build* (~5e9 ops at N=100k → tens of seconds), which is exactly how the
+        // prod GPU pipeline pod hung on a splat with every gaussian at the origin.
         // Post-fix the 3-way partition keeps the build O(N log N): milliseconds.
+        // Time the build (plus one query) so a regression in build time — the
+        // actual fault — trips this assertion explicitly, not just the 5s timeout.
         const N = 100_000;
+
+        const start = performance.now();
         const tree = new KdTree(new DataTable([
             new Column('x', new Float32Array(N)),
             new Column('y', new Float32Array(N)),
             new Column('z', new Float32Array(N))
         ]));
-
-        const start = performance.now();
         const { indices, distances } = tree.findKNearest(new Float32Array([0, 0, 0]), 8);
         const elapsed = performance.now() - start;
 
-        // A single KNN query must not pay O(N) per node either; generous ceiling
-        // so this is a hang detector, not a perf microbenchmark.
-        assert.ok(elapsed < 1000, `KNN query took ${elapsed.toFixed(0)}ms; expected < 1000ms`);
+        // Generous ceiling, far below the multi-second O(N^2) build but well above
+        // the O(N log N) build's few-ms cost — a hang detector, not a microbenchmark.
+        assert.ok(elapsed < 2000,
+            `KD-tree build + KNN over ${N} coincident points took ${elapsed.toFixed(0)}ms; ` +
+            `expected < 2000ms (O(N^2) build regression)`);
 
         // KNN still returns k valid neighbours, all co-located at distance 0.
         assert.strictEqual(indices.length, 8);
