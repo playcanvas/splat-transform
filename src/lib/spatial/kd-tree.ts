@@ -17,19 +17,31 @@ const nthElement = (arr: Uint32Array, lo: number, hi: number, k: number, values:
         else pivotIdx = hi;
 
         const pivotVal = values[arr[pivotIdx]];
-        let tmp = arr[pivotIdx]; arr[pivotIdx] = arr[hi]; arr[hi] = tmp;
-        let store = lo;
-        for (let i = lo; i < hi; i++) {
-            if (values[arr[i]] < pivotVal) {
-                tmp = arr[i]; arr[i] = arr[store]; arr[store] = tmp;
-                store++;
+
+        // 3-way (Dutch National Flag) partition around pivotVal:
+        //   [lo..lt-1] < pivot, [lt..gt] == pivot, [gt+1..hi] > pivot.
+        // The 2-way Lomuto partition this replaces moved only strictly-less
+        // elements, so an all-equal range shrank by one per pass and degenerated
+        // to O(N^2) — fatal for inputs where many points share a coordinate
+        // (e.g. a splat with every gaussian at the origin).
+        let lt = lo, gt = hi, i = lo;
+        let tmp: number;
+        while (i <= gt) {
+            const v = values[arr[i]];
+            if (v < pivotVal) {
+                tmp = arr[i]; arr[i] = arr[lt]; arr[lt] = tmp;
+                lt++; i++;
+            } else if (v > pivotVal) {
+                tmp = arr[i]; arr[i] = arr[gt]; arr[gt] = tmp;
+                gt--;
+            } else {
+                i++;
             }
         }
-        tmp = arr[store]; arr[store] = arr[hi]; arr[hi] = tmp;
 
-        if (store === k) return;
-        else if (store < k) lo = store + 1;
-        else hi = store - 1;
+        if (k < lt) hi = lt - 1;
+        else if (k > gt) lo = gt + 1;
+        else return; // k within the equal block; arr[k] is the order statistic
     }
 };
 

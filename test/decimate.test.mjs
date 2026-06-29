@@ -298,6 +298,23 @@ describe('simplifyGaussians', () => {
         );
     });
 
+    it('should fail loud (throw) when the scene is too degenerate to decimate', async () => {
+        // Every splat coincident at the origin with finite, valid columns. The
+        // k-NN graph collapses onto a shared handful of neighbours, so the
+        // disjoint-pair matching can only merge a sliver per pass and decimation
+        // can't make real progress. The no-progress guard must throw rather than
+        // grind toward the target across thousands of passes — this exact shape
+        // (millions of coincident splats) wedged the production pipeline. 600
+        // rows → 300 trips the guard on the first pass.
+        const testData = createVisibilityTestData({ count: 600 });
+
+        await assert.rejects(
+            () => simplifyGaussians(testData, 300),
+            /too degenerate to merge further/,
+            'should throw when coincident splats starve the matching'
+        );
+    });
+
     it('should fall back to visibility pruning when rotation columns are missing', async () => {
         const testData = new DataTable([
             new Column('x', new Float32Array([0, 1, 2, 3])),
