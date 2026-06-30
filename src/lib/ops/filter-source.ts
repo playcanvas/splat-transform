@@ -2,13 +2,13 @@ import {
     type ChunkData,
     type ChunkDataPool,
     type ChunkLayer,
-    type ChunkReadRequest,
+    type ReadRequest,
     type ChunkSource,
     type ChunkSourceMetadata
 } from '../source';
 
-// Mutable form of a read request, for building one layer-by-layer before passing
-// it to a parent's `read` (whose `ChunkReadRequest` fields are readonly).
+// Mutable form of a chunk read request, for building one layer-by-layer before
+// passing it to a parent's `read` (whose `ReadRequest` fields are readonly).
 type MutableReadRequest = { chunkIndex: number; lod: number } & { [L in ChunkLayer]?: ChunkData };
 
 /**
@@ -48,7 +48,27 @@ const filterSource = (parent: ChunkSource, indices: Uint32Array, pool: ChunkData
         numChunks: [numChunks]
     };
 
-    const read = async (request: ChunkReadRequest): Promise<void> => {
+    const read = async (request: ReadRequest): Promise<void> => {
+        if ('indices' in request) {
+            // Gather: output row j is kept index `indices[request.indices[..]]`.
+            // Compose the kept-list with the requested indices and gather those
+            // parent rows in one pass (every source supports gather via `read`).
+            const { indices: reqIdx, indexOffset, count } = request;
+            const mapped = new Uint32Array(count);
+            for (let j = 0; j < count; j++) mapped[j] = indices[reqIdx[indexOffset + j]];
+            await parent.read({
+                indices: mapped,
+                indexOffset: 0,
+                count,
+                lod: 0,
+                position: request.position,
+                geometric: request.geometric,
+                color: request.color,
+                other: request.other
+            });
+            return;
+        }
+
         const outStart = request.chunkIndex * S;
         const outCount = Math.min(S, numOut - outStart);
 

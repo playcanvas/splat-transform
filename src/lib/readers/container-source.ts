@@ -1,8 +1,7 @@
 import { concatSource } from '../ops';
 import {
     type ChunkDataPool,
-    type ChunkReadRequest,
-    type RowReadRequest,
+    type ReadRequest,
     type ChunkSource,
     type ChunkSourceMetadata
 } from '../source';
@@ -29,6 +28,8 @@ type ContainerSegment = {
  * compute layout up front, and the sub-file is decoded — and LRU-cached — only
  * when a `read` actually touches it. Reading chunks in order decodes each
  * sub-file once; the cache bounds resident decoded sub-files to `cacheSize`.
+ * Random-access gather works the same way (every sub-source serves gather via
+ * `read`), so the container can serve the LOD writer's per-unit gather.
  *
  * All sub-files must share a layout (SH bands / layers / extras / transform);
  * the layout is taken from the first segment and a band mismatch throws (callers
@@ -75,16 +76,11 @@ const containerSource = async (
     const layout = firstSrc.meta;
     const { chunkSize } = layout;
 
-    // Random-access gather is a homogeneous-layout property: if the first sub-file
-    // supports readRows, all do (same codec), so the container can serve the LOD
-    // writer's per-unit gather. SOG nodes (resident InMemoryChunkSource) and SPZ
-    // nodes both qualify.
-    const gatherable = !!firstSrc.readRows;
-
     const lodCounts = segmentsByLod.map(segs => segs.reduce((acc, s) => acc + s.count, 0));
 
     // Static-meta proxy: concatSource reads its `meta` to lay out the LOD up
-    // front; the actual sub-source is decoded (and cached) only on `read`.
+    // front; the actual sub-source is decoded (and cached) only on `read`, then
+    // serves the request — chunk or gather — itself.
     const proxy = (seg: ContainerSegment): ChunkSource => ({
         meta: {
             ...layout,
@@ -93,7 +89,7 @@ const containerSource = async (
             lodCounts: [seg.count],
             numChunks: [Math.max(1, Math.ceil(seg.count / chunkSize))]
         },
-        read: async (req: ChunkReadRequest): Promise<void> => {
+        read: async (req: ReadRequest): Promise<void> => {
             const src = await decode(seg);
             if (src.meta.shBands !== layout.shBands) {
                 throw new Error(
@@ -102,15 +98,6 @@ const containerSource = async (
             }
             await src.read(req);
         },
-        ...(gatherable ? {
-            readRows: async (req: RowReadRequest): Promise<void> => {
-                const src = await decode(seg);
-                if (!src.readRows) {
-                    throw new Error('containerSource: sub-file does not support readRows');
-                }
-                await src.readRows(req);
-            }
-        } : {}),
         close: () => Promise.resolve()
     });
 
@@ -125,23 +112,15 @@ const containerSource = async (
         numChunks: lodCounts.map(c => Math.ceil(c / chunkSize))
     };
 
-    const read = (req: ChunkReadRequest): Promise<void> => {
+    // Dispatch to the requested LOD's concatSource (which buckets by sub-file and
+    // decodes only the touched nodes, LRU-bounded). Indices in a gather are local
+    // to the requested LOD; the writer gathers one structural LOD at a time.
+    const read = (req: ReadRequest): Promise<void> => {
         const src = perLod[req.lod ?? 0];
         if (!src) {
             throw new Error(`containerSource: empty LOD ${req.lod ?? 0}`);
         }
         return src.read({ ...req, lod: 0 });
-    };
-
-    // Random-access gather, dispatched to the per-LOD concatSource (which buckets
-    // by sub-file and decodes only the touched nodes, LRU-bounded). Indices are
-    // local to the requested LOD; the writer gathers one structural LOD at a time.
-    const readRows = (req: RowReadRequest): Promise<void> => {
-        const src = perLod[req.lod ?? 0];
-        if (!src) {
-            throw new Error(`containerSource: empty LOD ${req.lod ?? 0}`);
-        }
-        return src.readRows!({ ...req, lod: 0 });
     };
 
     const close = async (): Promise<void> => {
@@ -150,7 +129,7 @@ const containerSource = async (
         order.length = 0;
     };
 
-    return { meta, read, ...(gatherable ? { readRows } : {}), close };
+    return { meta, read, close };
 };
 
 export { containerSource, type ContainerSegment };

@@ -1,5 +1,5 @@
 import { type ReadSource, type ReadStream } from '../io/read';
-import { type ChunkReadRequest, type ChunkSource, type ChunkSourceMetadata, type RowReadRequest } from '../source';
+import { type ChunkSource, type ChunkSourceMetadata, type ReadRequest } from '../source';
 
 /**
  * Read exactly `length` bytes from `stream` into `buffer` at `offset`. A stream
@@ -29,19 +29,16 @@ const readExact = async (stream: ReadStream, buffer: Uint8Array, offset: number,
  *
  * @param source - The read source whose lifetime this `ChunkSource` owns.
  * @param meta - The source metadata.
- * @param read - The per-chunk read implementation.
- * @param readRows - Optional random-access gather implementation (fixed-stride sources).
+ * @param read - The read implementation (serves both chunk and gather requests).
  * @returns A `ChunkSource` whose `close()` closes `source`.
  */
 const fileChunkSource = (
     source: ReadSource,
     meta: ChunkSourceMetadata,
-    read: (request: ChunkReadRequest) => Promise<void>,
-    readRows?: (request: RowReadRequest) => Promise<void>
+    read: (request: ReadRequest) => Promise<void>
 ): ChunkSource => ({
     meta,
     read,
-    ...(readRows ? { readRows } : {}),
     close: () => {
         source.close();
         return Promise.resolve();

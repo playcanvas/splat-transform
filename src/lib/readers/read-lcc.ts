@@ -8,12 +8,11 @@ import {
     type ChunkData,
     type ChunkDataPool,
     type ChunkLayer,
-    type ChunkReadRequest,
+    type ReadRequest,
     type ChunkSource,
     type ChunkSourceMetadata,
     type ExtraColumn,
     type LayerLayout,
-    type RowReadRequest,
     type SHBands,
     POSITION_STRIDE,
     GEOMETRIC_STRIDE,
@@ -786,23 +785,81 @@ const readLccSource = async (
     let gScratch: Uint8Array | null = null;     // readRows data gather
     let gShScratch: Uint8Array | null = null;   // readRows sh gather
 
-    const read = async (request: ChunkReadRequest): Promise<void> => {
+    const read = async (request: ReadRequest): Promise<void> => {
         const lod = request.lod ?? 0;
         const runs = runsByLod[lod];
         if (!runs) {
             throw new Error(`readLcc: lod ${lod} out of range`);
         }
+        if (!request.position && !request.geometric && !request.color && !request.other) {
+            return;
+        }
+        const starts = startsByLod[lod];
+        const dec = makeDecoder(request.position, request.geometric, request.color, request.other);
+
+        if ('indices' in request) {
+            // Random-access gather from a structural LOD. Resolve each index to
+            // its data.bin byte offset, sort output slots by that (forward reads),
+            // coalesce byte-adjacent records into one range read, dequant each into
+            // its scattered output row.
+            const { indices, indexOffset, count } = request;
+            if (count <= 0) return;
+
+            const boff = new Float64Array(count);
+            for (let j = 0; j < count; j++) {
+                const g = indices[indexOffset + j];
+                const run = runs[findRun(starts, g)];
+                boff[j] = run.dataByteOffset + (g - run.globalStart) * 32;
+            }
+            const slot = new Uint32Array(count);
+            for (let j = 0; j < count; j++) slot[j] = j;
+            slot.sort((a, b) => boff[a] - boff[b]);
+
+            let j = 0;
+            while (j < count) {
+                const first = boff[slot[j]];
+                let k = j + 1;
+                while (k < count && boff[slot[k]] === first + (k - j) * 32) k++;
+                const runLen = k - j;
+
+                const need = runLen * 32;
+                if (!gScratch || gScratch.length < need) gScratch = new Uint8Array(need);
+                const dataBytes = gScratch.subarray(0, need);
+                if (await readExact(dataSource.read(first, first + need), dataBytes, 0, need) !== need) {
+                    throw new Error(`readLcc: short gather read at byte ${first}`);
+                }
+                let shU32: Uint32Array | null = null;
+                if (shSource && dec.wantColor) {
+                    const shNeed = runLen * 64;
+                    const shStart = first * 2;
+                    if (!gShScratch || gShScratch.length < shNeed) gShScratch = new Uint8Array(shNeed);
+                    const shBytes = gShScratch.subarray(0, shNeed);
+                    if (await readExact(shSource.read(shStart, shStart + shNeed), shBytes, 0, shNeed) !== shNeed) {
+                        throw new Error(`readLcc: short sh gather read at byte ${shStart}`);
+                    }
+                    shU32 = new Uint32Array(shBytes.buffer, shBytes.byteOffset, runLen * 16);
+                }
+                dec.setViews(
+                    new Float32Array(dataBytes.buffer, dataBytes.byteOffset, runLen * 8),
+                    new Uint16Array(dataBytes.buffer, dataBytes.byteOffset, runLen * 16),
+                    dataBytes,
+                    shU32
+                );
+                for (let t = 0; t < runLen; t++) {
+                    dec.decode(t, slot[j + t]);
+                }
+                j = k;
+            }
+            return;
+        }
+
+        // Contiguous chunk across this LOD's unit runs.
         const start = request.chunkIndex * chunkSize;
         const count = Math.min(chunkSize, lodCounts[lod] - start);
         if (count <= 0) {
             throw new Error(`readLcc: chunkIndex ${request.chunkIndex} out of range`);
         }
-        if (!request.position && !request.geometric && !request.color && !request.other) {
-            return;
-        }
         const end = start + count;
-        const starts = startsByLod[lod];
-        const dec = makeDecoder(request.position, request.geometric, request.color, request.other);
 
         let r = findRun(starts, start);
         while (r < runs.length && runs[r].globalStart < end) {
@@ -843,76 +900,9 @@ const readLccSource = async (
         }
     };
 
-    // Random-access gather from a structural LOD (default 0). Resolve each index
-    // to its data.bin byte offset, sort output slots by that (forward reads),
-    // coalesce byte-adjacent records into one range read, dequant each into its
-    // scattered output row.
-    const readRows = async (request: RowReadRequest): Promise<void> => {
-        const { indices, indexOffset, count } = request;
-        if (count <= 0) return;
-        if (!request.position && !request.geometric && !request.color && !request.other) {
-            return;
-        }
-        const lod = request.lod ?? 0;
-        const runs = runsByLod[lod];
-        const starts = startsByLod[lod];
-        if (!runs) {
-            throw new Error(`readLcc: readRows lod ${lod} out of range`);
-        }
-
-        const boff = new Float64Array(count);
-        for (let j = 0; j < count; j++) {
-            const g = indices[indexOffset + j];
-            const run = runs[findRun(starts, g)];
-            boff[j] = run.dataByteOffset + (g - run.globalStart) * 32;
-        }
-        const slot = new Uint32Array(count);
-        for (let j = 0; j < count; j++) slot[j] = j;
-        slot.sort((a, b) => boff[a] - boff[b]);
-
-        const dec = makeDecoder(request.position, request.geometric, request.color, request.other);
-
-        let j = 0;
-        while (j < count) {
-            const first = boff[slot[j]];
-            let k = j + 1;
-            while (k < count && boff[slot[k]] === first + (k - j) * 32) k++;
-            const runLen = k - j;
-
-            const need = runLen * 32;
-            if (!gScratch || gScratch.length < need) gScratch = new Uint8Array(need);
-            const dataBytes = gScratch.subarray(0, need);
-            if (await readExact(dataSource.read(first, first + need), dataBytes, 0, need) !== need) {
-                throw new Error(`readLcc: short gather read at byte ${first}`);
-            }
-            let shU32: Uint32Array | null = null;
-            if (shSource && dec.wantColor) {
-                const shNeed = runLen * 64;
-                const shStart = first * 2;
-                if (!gShScratch || gShScratch.length < shNeed) gShScratch = new Uint8Array(shNeed);
-                const shBytes = gShScratch.subarray(0, shNeed);
-                if (await readExact(shSource.read(shStart, shStart + shNeed), shBytes, 0, shNeed) !== shNeed) {
-                    throw new Error(`readLcc: short sh gather read at byte ${shStart}`);
-                }
-                shU32 = new Uint32Array(shBytes.buffer, shBytes.byteOffset, runLen * 16);
-            }
-            dec.setViews(
-                new Float32Array(dataBytes.buffer, dataBytes.byteOffset, runLen * 8),
-                new Uint16Array(dataBytes.buffer, dataBytes.byteOffset, runLen * 16),
-                dataBytes,
-                shU32
-            );
-            for (let t = 0; t < runLen; t++) {
-                dec.decode(t, slot[j + t]);
-            }
-            j = k;
-        }
-    };
-
     return {
         meta,
         read,
-        readRows,
         close: () => {
             dataSource.close();
             shSource?.close();

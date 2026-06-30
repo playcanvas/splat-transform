@@ -3,8 +3,7 @@ import { decompress as decompressZstd } from 'fzstd';
 import { fileChunkSource } from './reader-utils';
 import { ReadSource } from '../io/read';
 import {
-    type ChunkReadRequest,
-    type RowReadRequest,
+    type ReadRequest,
     type ChunkSource,
     type ChunkSourceMetadata,
     type ChunkDataPool,
@@ -317,45 +316,37 @@ const readSpz = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
         }
     };
 
-    const read = (request: ChunkReadRequest): Promise<void> => {
+    // Fill the requested layers either from a contiguous chunk or from an
+    // explicit index list. The compact streams are resident, so a gather is pure
+    // index math — no re-decompress — which is what lets a containerSource of SPZ
+    // nodes serve the LOD writer's per-unit gather.
+    const read = (request: ReadRequest): Promise<void> => {
         if (!streams) return Promise.resolve();
         if ((request.lod ?? 0) !== 0) {
             throw new Error('readSpz: only lod 0 is supported');
         }
-        const start = request.chunkIndex * chunkSize;
-        const count = Math.min(chunkSize, numGaussians - start);
-        if (count <= 0) {
-            throw new Error(`readSpz: chunkIndex ${request.chunkIndex} out of range`);
-        }
         const posOut = request.position ? new Float32Array(request.position.data) : null;
         const geoOut = request.geometric ? new Float32Array(request.geometric.data) : null;
         const colOut = request.color ? new Float32Array(request.color.data) : null;
-        for (let i = 0; i < count; i++) {
-            decodeInto(posOut, geoOut, colOut, start + i, i);
+        if ('indices' in request) {
+            const { indices, indexOffset, count } = request;
+            for (let j = 0; j < count; j++) {
+                decodeInto(posOut, geoOut, colOut, indices[indexOffset + j], j);
+            }
+        } else {
+            const start = request.chunkIndex * chunkSize;
+            const count = Math.min(chunkSize, numGaussians - start);
+            if (count <= 0) {
+                throw new Error(`readSpz: chunkIndex ${request.chunkIndex} out of range`);
+            }
+            for (let i = 0; i < count; i++) {
+                decodeInto(posOut, geoOut, colOut, start + i, i);
+            }
         }
         return Promise.resolve();
     };
 
-    // Random-access gather (LOD 0): unpack arbitrary source rows into packed
-    // output rows. The compact streams are resident, so this is pure index math —
-    // no re-decompress — which is what lets a containerSource of SPZ nodes serve
-    // the LOD writer's per-unit gather.
-    const readRows = (request: RowReadRequest): Promise<void> => {
-        if (!streams) return Promise.resolve();
-        if ((request.lod ?? 0) !== 0) {
-            throw new Error('readSpz: readRows only supports lod 0');
-        }
-        const { indices, indexOffset, count } = request;
-        const posOut = request.position ? new Float32Array(request.position.data) : null;
-        const geoOut = request.geometric ? new Float32Array(request.geometric.data) : null;
-        const colOut = request.color ? new Float32Array(request.color.data) : null;
-        for (let j = 0; j < count; j++) {
-            decodeInto(posOut, geoOut, colOut, indices[indexOffset + j], j);
-        }
-        return Promise.resolve();
-    };
-
-    return fileChunkSource(source, meta, read, readRows);
+    return fileChunkSource(source, meta, read);
 };
 
 export { readSpz };

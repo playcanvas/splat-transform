@@ -1,7 +1,7 @@
 import { type Transform } from '../utils';
 import { type ChunkData } from './chunk-data';
 import { type ChunkDataPool, type LayerLayout } from './chunk-data-pool';
-import { type ChunkSource, type ChunkReadRequest, type RowReadRequest, type ChunkSourceMetadata } from './chunk-source';
+import { type ChunkSource, type ReadRequest, type ChunkSourceMetadata } from './chunk-source';
 import {
     colorFields,
     colorStride,
@@ -48,11 +48,26 @@ class InMemoryChunkSource implements ChunkSource {
         this.buffers = buffers;
     }
 
-    read(request: ChunkReadRequest): Promise<void> {
+    read(request: ReadRequest): Promise<void> {
         if (this.buffers === null) {
             throw new Error('InMemoryChunkSource.read: source has been closed');
         }
         const lod = request.lod ?? 0;
+
+        if ('indices' in request) {
+            // Gather: output row j receives resident row indices[indexOffset + j],
+            // a per-layer dispatch onto gatherRows.
+            const { indices, indexOffset, count } = request;
+            const gather = (cd: ChunkData | undefined, layer: ChunkLayer): void => {
+                if (cd) this.gatherRows(layer, lod, indices, indexOffset, count, cd.data);
+            };
+            gather(request.position, 'position');
+            gather(request.geometric, 'geometric');
+            gather(request.color, 'color');
+            gather(request.other, 'other');
+            return Promise.resolve();
+        }
+
         const { chunkIndex } = request;
         const buffers = this.buffers;
 
@@ -140,27 +155,6 @@ class InMemoryChunkSource implements ChunkSource {
                 out[dof + w] = src[so + w];
             }
         }
-    }
-
-    /**
-     * Random-access gather (the {@link ChunkSource.readRows} capability): fill the
-     * requested layer buffers from arbitrary resident rows of `request.lod`
-     * (default 0). A thin per-layer dispatch onto {@link gatherRows}.
-     *
-     * @param request - The scatter-gather read request.
-     * @returns A resolved promise once the buffers are filled.
-     */
-    readRows(request: RowReadRequest): Promise<void> {
-        const { indices, indexOffset, count } = request;
-        const lod = request.lod ?? 0;
-        const fill = (cd: ChunkData | undefined, layer: ChunkLayer): void => {
-            if (cd) this.gatherRows(layer, lod, indices, indexOffset, count, cd.data);
-        };
-        fill(request.position, 'position');
-        fill(request.geometric, 'geometric');
-        fill(request.color, 'color');
-        fill(request.other, 'other');
-        return Promise.resolve();
     }
 
     close(): Promise<void> {

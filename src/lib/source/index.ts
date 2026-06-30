@@ -21,7 +21,7 @@ export { type ChunkData } from './chunk-data';
 export { type ChunkDataPool, type LayerLayout, createChunkDataPool } from './chunk-data-pool';
 
 // Source contract
-export { type ChunkSource, type ChunkReadRequest, type RowReadRequest, type ChunkSourceMetadata } from './chunk-source';
+export { type ChunkSource, type ReadRequest, type ReadTarget, type ChunkSourceMetadata } from './chunk-source';
 
 // In-memory backing + compact
 export { InMemoryChunkSource, createInMemoryChunkSource, compact } from './in-memory-chunk-source';

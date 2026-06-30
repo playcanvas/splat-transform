@@ -2,7 +2,7 @@ import { fileChunkSource, readExact } from './reader-utils';
 import { Column, DataTable } from '../data-table';
 import { type ReadSource } from '../io/read';
 import {
-    type ChunkReadRequest,
+    type ReadRequest,
     type ChunkSource,
     type ChunkSourceMetadata,
     type ChunkDataPool,
@@ -122,39 +122,90 @@ const readSplat = async (source: ReadSource, pool: ChunkDataPool): Promise<Chunk
         layouts
     };
 
-    // Reusable scratch for one chunk's raw records (reads are sequential).
+    // Reusable scratch for the contiguous-chunk and gather range reads (reads are
+    // sequential per the ChunkSource contract, so single shared buffers suffice).
     let scratch: Uint8Array | null = null;
+    let gatherScratch: Uint8Array | null = null;
 
-    const read = async (request: ChunkReadRequest): Promise<void> => {
+    const read = async (request: ReadRequest): Promise<void> => {
         if ((request.lod ?? 0) !== 0) {
             throw new Error('readSplat: only lod 0 is supported');
         }
+        const pos = request.position ? new Float32Array(request.position.data) : null;
+        const geo = request.geometric ? new Float32Array(request.geometric.data) : null;
+        const col = request.color ? new Float32Array(request.color.data) : null;
+        if (!pos && !geo && !col) return;
+
+        // Decode `n` records held contiguously in `buf` (record `t` at byte
+        // `t*32`) into the output slots given by `dstRow`. Shared by both the
+        // contiguous-chunk and the scatter-gather paths so they stay identical.
+        const decode = (buf: Uint8Array, n: number, dstRow: (t: number) => number): void => {
+            const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+            for (let t = 0; t < n; t++) {
+                const o = t * BYTES_PER_SPLAT;
+                const d = dstRow(t);
+                if (pos) decodePosition(dv, o, pos, d);
+                if (geo) decodeGeometric(dv, buf, o, geo, d);
+                if (col) decodeColor(buf, o, col, d);
+            }
+        };
+
+        if ('indices' in request) {
+            // Gather: order output slots by source row so reads run forward and
+            // consecutive records coalesce into one range read.
+            const { indices, indexOffset, count } = request;
+            if (count <= 0) return;
+            const slot = new Uint32Array(count);
+            for (let j = 0; j < count; j++) slot[j] = j;
+            slot.sort((a, b) => indices[indexOffset + a] - indices[indexOffset + b]);
+
+            let j = 0;
+            while (j < count) {
+                const first = indices[indexOffset + slot[j]];
+                let k = j + 1;
+                while (k < count && indices[indexOffset + slot[k]] === first + (k - j)) k++;
+                const runLen = k - j;
+                const byteStart = first * BYTES_PER_SPLAT;
+                const byteLen = runLen * BYTES_PER_SPLAT;
+
+                let buf: Uint8Array;
+                if (resident) {
+                    buf = resident.subarray(byteStart, byteStart + byteLen);
+                } else {
+                    if (!gatherScratch || gatherScratch.length < byteLen) {
+                        gatherScratch = new Uint8Array(byteLen);
+                    }
+                    buf = gatherScratch.subarray(0, byteLen);
+                    if (await readExact(source.read(byteStart, byteStart + byteLen), buf, 0, byteLen) !== byteLen) {
+                        throw new Error(`readSplat: short gather read at row ${first}`);
+                    }
+                }
+                const base = j;
+                decode(buf, runLen, t => slot[base + t]);
+                j = k;
+            }
+            return;
+        }
+
+        // Contiguous chunk: rows [start, start + count).
         const start = request.chunkIndex * chunkSize;
         const count = Math.min(chunkSize, numGaussians - start);
         if (count <= 0) {
             throw new Error(`readSplat: chunkIndex ${request.chunkIndex} out of range`);
         }
-
         const byteStart = start * BYTES_PER_SPLAT;
         const byteLen = count * BYTES_PER_SPLAT;
-        scratch ??= new Uint8Array(chunkSize * BYTES_PER_SPLAT);
-        const bytes = scratch.subarray(0, byteLen);
+        let buf: Uint8Array;
         if (resident) {
-            bytes.set(resident.subarray(byteStart, byteStart + byteLen));
-        } else if (await readExact(source.read(byteStart, byteStart + byteLen), bytes, 0, byteLen) !== byteLen) {
-            throw new Error(`readSplat: short read for chunk ${request.chunkIndex}`);
+            buf = resident.subarray(byteStart, byteStart + byteLen);
+        } else {
+            scratch ??= new Uint8Array(chunkSize * BYTES_PER_SPLAT);
+            buf = scratch.subarray(0, byteLen);
+            if (await readExact(source.read(byteStart, byteStart + byteLen), buf, 0, byteLen) !== byteLen) {
+                throw new Error(`readSplat: short read for chunk ${request.chunkIndex}`);
+            }
         }
-        const dv = new DataView(scratch.buffer, scratch.byteOffset, byteLen);
-
-        const pos = request.position ? new Float32Array(request.position.data) : null;
-        const geo = request.geometric ? new Float32Array(request.geometric.data) : null;
-        const col = request.color ? new Float32Array(request.color.data) : null;
-        for (let i = 0; i < count; i++) {
-            const o = i * BYTES_PER_SPLAT;
-            if (pos) decodePosition(dv, o, pos, i);
-            if (geo) decodeGeometric(dv, scratch, o, geo, i);
-            if (col) decodeColor(scratch, o, col, i);
-        }
+        decode(buf, count, t => t);
     };
 
     return fileChunkSource(source, meta, read);

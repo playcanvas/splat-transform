@@ -1,15 +1,14 @@
 import {
-    type ChunkReadRequest,
     type ChunkSource,
     type ChunkSourceMetadata,
-    type RowReadRequest
+    type ReadRequest
 } from '../source';
 
 /**
  * Stack N single-LOD sources into one structural multi-LOD source: output LOD
- * `i` is `sources[i]`. `read`/`readRows` dispatch by `request.lod` to the
- * matching source (each read at its own LOD 0). `numGaussians` is LOD 0's count;
- * `lodCounts[i]` is `sources[i]`'s gaussian count.
+ * `i` is `sources[i]`. `read` dispatches by `request.lod` to the matching source
+ * (read at its own LOD 0). `numGaussians` is LOD 0's count; `lodCounts[i]` is
+ * `sources[i]`'s gaussian count.
  *
  * This is how per-detail-level inputs become one structural scene for the LOD
  * writer — multi-PLY `--lod` tags (one source per tagged level) or a DataTable
@@ -18,7 +17,6 @@ import {
  *
  * All inputs must share layout (chunk size, SH bands, layers, extras, transform)
  * and be single-LOD; the stacked metadata is inherited from `sources[0]`.
- * `readRows` is exposed only when every input supports it.
  *
  * @param sources - The per-LOD single-LOD sources, in output-LOD order.
  * @returns A multi-LOD source dispatching by LOD to the inputs.
@@ -54,19 +52,15 @@ const stackLods = (sources: ChunkSource[]): ChunkSource => {
         return s;
     };
 
-    const read = (request: ChunkReadRequest): Promise<void> => {
+    // Dispatch by LOD; the chosen source serves the request (chunk or gather) at
+    // its own LOD 0.
+    const read = (request: ReadRequest): Promise<void> => {
         return pick(request.lod ?? 0).read({ ...request, lod: 0 });
-    };
-
-    const allGatherable = sources.every(s => !!s.readRows);
-    const readRows = (request: RowReadRequest): Promise<void> => {
-        return pick(request.lod ?? 0).readRows!({ ...request, lod: 0 });
     };
 
     return {
         meta,
         read,
-        ...(allGatherable ? { readRows } : {}),
         close: async () => {
             await Promise.all(sources.map(s => s.close()));
         }

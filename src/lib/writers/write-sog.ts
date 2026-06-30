@@ -10,7 +10,7 @@ import {
     createChunkDataPool,
     type ChunkDataPool,
     type ChunkLayer,
-    type ChunkReadRequest,
+    type ReadRequest,
     type ChunkSource
 } from '../source';
 import { kmeansInterleaved } from '../spatial';
@@ -38,7 +38,7 @@ const gatherInterleaved = async (source: ChunkSource, pool: ChunkDataPool, layer
     for (let k = 0; k < numChunks; k++) {
         const count = Math.min(meta.chunkSize, n - base);
         const cd = pool.acquire(layer, layout, count);
-        await source.read({ chunkIndex: k, [layer]: cd } as ChunkReadRequest);
+        await source.read({ chunkIndex: k, [layer]: cd } as ReadRequest);
         out.set(new Float32Array(cd.data, 0, count * sw), base * sw);
         cd.release();
         base += count;
@@ -60,7 +60,7 @@ const gatherColumns = async (source: ChunkSource, pool: ChunkDataPool, layer: Ch
     for (let k = 0; k < numChunks; k++) {
         const count = Math.min(meta.chunkSize, n - base);
         const cd = pool.acquire(layer, layout, count);
-        await source.read({ chunkIndex: k, [layer]: cd } as ChunkReadRequest);
+        await source.read({ chunkIndex: k, [layer]: cd } as ReadRequest);
         const f = new Float32Array(cd.data, 0, count * sw);
         for (let c = 0; c < names.length; c++) {
             const col = cols[c];
@@ -288,7 +288,7 @@ const writeSogSource = async (
                 for (let c = 0; c < numChunks; c++) {
                     const count = Math.min(meta.chunkSize, numRows - base);
                     const cdBuf = pool.acquire('color', layout, count);
-                    await baked.read({ chunkIndex: c, color: cdBuf } as ChunkReadRequest);
+                    await baked.read({ chunkIndex: c, color: cdBuf } as ReadRequest);
                     const f = new Float32Array(cdBuf.data, 0, count * sw);
                     for (let i = 0; i < count; i++) {
                         const o = i * sw;

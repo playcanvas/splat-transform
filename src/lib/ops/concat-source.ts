@@ -2,19 +2,17 @@ import {
     type ChunkData,
     type ChunkDataPool,
     type ChunkLayer,
-    type ChunkReadRequest,
+    type ReadRequest,
     type ChunkSource,
-    type ChunkSourceMetadata,
-    type RowReadRequest
+    type ChunkSourceMetadata
 } from '../source';
 
 const LAYERS: ChunkLayer[] = ['position', 'geometric', 'color', 'other'];
 
-// Mutable form of a read request, built layer-by-layer before passing to a
-// source's `read` (whose `ChunkReadRequest` fields are readonly).
+// Mutable forms of a read request, built layer-by-layer before passing to a
+// source's `read` (whose `ReadRequest` fields are readonly): one for a
+// contiguous chunk read, one for a scatter-gather read.
 type MutableReadRequest = { chunkIndex: number; lod: number } & { [L in ChunkLayer]?: ChunkData };
-
-// Mutable form of a row (scatter-gather) read request.
 type MutableRowReadRequest = { indices: Uint32Array; indexOffset: number; count: number } & { [L in ChunkLayer]?: ChunkData };
 
 /**
@@ -87,7 +85,57 @@ const concatSource = (sources: ChunkSource[], pool: ChunkDataPool): ChunkSource 
         numChunks: [Math.ceil(total / S)]
     };
 
-    const read = async (request: ChunkReadRequest): Promise<void> => {
+    const read = async (request: ReadRequest): Promise<void> => {
+        if ('indices' in request) {
+            // Scatter-gather across inputs: bucket the requested output rows by
+            // the input they fall in, gather each input's subset (in output order)
+            // into a temp, then scatter each temp row to its output row. One read
+            // per touched input, so a per-output-chunk gather pulls only its own
+            // rows from disk.
+            const { indices, indexOffset, count } = request;
+            if (count <= 0) return;
+            const wanted: ChunkLayer[] = LAYERS.filter(l => request[l]);
+            if (wanted.length === 0) return;
+
+            const buckets = new Map<number, { outRows: number[]; local: number[] }>();
+            for (let j = 0; j < count; j++) {
+                const g = indices[indexOffset + j];
+                let si = 0;
+                while (si < sources.length && starts[si] + counts[si] <= g) si++;
+                let b = buckets.get(si);
+                if (!b) {
+                    b = { outRows: [], local: [] };
+                    buckets.set(si, b);
+                }
+                b.outRows.push(j);
+                b.local.push(g - starts[si]);
+            }
+
+            for (const [si, b] of buckets) {
+                const m = b.outRows.length;
+                const localIdx = Uint32Array.from(b.local);
+                const temps = wanted.map(layer => ({ layer, tmp: pool.acquire(layer, ref.layouts[layer]!, m) }));
+                const req: MutableRowReadRequest = { indices: localIdx, indexOffset: 0, count: m };
+                for (const { layer, tmp } of temps) req[layer] = tmp;
+                await sources[si].read(req);
+
+                for (const { layer, tmp } of temps) {
+                    const out = request[layer]!;
+                    const stride = tmp.stride;
+                    const src = new Uint8Array(tmp.data);
+                    const dst = new Uint8Array(out.data);
+                    for (let t = 0; t < m; t++) {
+                        dst.set(src.subarray(t * stride, (t + 1) * stride), b.outRows[t] * stride);
+                    }
+                }
+                for (const { tmp } of temps) tmp.release();
+            }
+            return;
+        }
+
+        // Contiguous chunk: block-copy the overlapping span out of each
+        // contributing source chunk (order preserved, so each overlap is a
+        // contiguous byte range — one set() per layer, not a per-row gather).
         const outBase = request.chunkIndex * S;
         const outCount = Math.min(S, total - outBase);
 
@@ -137,60 +185,11 @@ const concatSource = (sources: ChunkSource[], pool: ChunkDataPool): ChunkSource 
         }
     };
 
-    // Random-access gather is forwardable only if every input supports it: a
-    // gathered window's rows can land in any input, so each must answer readRows.
-    const allGatherable = sources.every(s => !!s.readRows);
-
-    // Scatter-gather across inputs: bucket the requested output rows by the input
-    // they fall in, gather each input's subset (in output order) into a temp,
-    // then scatter each temp row to its output row. One readRows per touched
-    // input, so a per-output-chunk gather pulls only its own rows from disk.
-    const readRows = async (request: RowReadRequest): Promise<void> => {
-        const { indices, indexOffset, count } = request;
-        if (count <= 0) return;
-        const wanted: ChunkLayer[] = LAYERS.filter(l => request[l]);
-        if (wanted.length === 0) return;
-
-        const buckets = new Map<number, { outRows: number[]; local: number[] }>();
-        for (let j = 0; j < count; j++) {
-            const g = indices[indexOffset + j];
-            let si = 0;
-            while (si < sources.length && starts[si] + counts[si] <= g) si++;
-            let b = buckets.get(si);
-            if (!b) {
-                b = { outRows: [], local: [] };
-                buckets.set(si, b);
-            }
-            b.outRows.push(j);
-            b.local.push(g - starts[si]);
-        }
-
-        for (const [si, b] of buckets) {
-            const m = b.outRows.length;
-            const localIdx = Uint32Array.from(b.local);
-            const temps = wanted.map(layer => ({ layer, tmp: pool.acquire(layer, ref.layouts[layer]!, m) }));
-            const req: MutableRowReadRequest = { indices: localIdx, indexOffset: 0, count: m };
-            for (const { layer, tmp } of temps) req[layer] = tmp;
-            await sources[si].readRows!(req);
-
-            for (const { layer, tmp } of temps) {
-                const out = request[layer]!;
-                const stride = tmp.stride;
-                const src = new Uint8Array(tmp.data);
-                const dst = new Uint8Array(out.data);
-                for (let t = 0; t < m; t++) {
-                    dst.set(src.subarray(t * stride, (t + 1) * stride), b.outRows[t] * stride);
-                }
-            }
-            for (const { tmp } of temps) tmp.release();
-        }
-    };
-
     const close = async (): Promise<void> => {
         await Promise.all(sources.map(s => s.close()));
     };
 
-    return { meta, read, ...(allGatherable ? { readRows } : {}), close };
+    return { meta, read, close };
 };
 
 export { concatSource };

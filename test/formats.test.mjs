@@ -290,6 +290,45 @@ describe('Compressed PLY Format', () => {
             'compressed-ply bytes must be identical'
         );
     });
+
+    it('gathers a shuffled subset identically to the sequential decode', async () => {
+        const dt = createTestDataTable(300, { includeSH: true, shBands: 1 });
+        dt.transform = Transform.PLY.clone();
+        const writeFs = new MemoryFileSystem();
+        await writeCompressedPly({ filename: 'g.compressed.ply', dataTable: dt }, writeFs);
+        const bytes = writeFs.results.get('g.compressed.ply');
+
+        const pool = createChunkDataPool({ chunkSize: 64 });
+        // Sequential decode (chunk arm) is the oracle.
+        const full = await materializeToDataTable(await readPly(new BufferReadSource(bytes), pool), pool);
+
+        // Gather the same rows (indices arm). Both paths share decodeRecord, so a
+        // gathered row must bit-equal the sequential row at the same source index
+        // (independent of compression loss). Non-ascending, chunk-straddling, repeat.
+        const src = await readPly(new BufferReadSource(bytes), pool);
+        const order = Uint32Array.from([299, 0, 150, 64, 63, 7, 7, 256]);
+        const count = order.length;
+        const acq = {};
+        for (const layer of ['position', 'geometric', 'color']) {
+            acq[layer] = pool.acquire(layer, src.meta.layouts[layer], count);
+        }
+        await src.read({ indices: order, indexOffset: 0, count, position: acq.position, geometric: acq.geometric, color: acq.color });
+
+        const px = acq.position.field('position');
+        const op = acq.geometric.field('opacity');
+        const dc = acq.color.field('dc');
+        const x = full.getColumnByName('x').data;
+        const opF = full.getColumnByName('opacity').data;
+        const dc0 = full.getColumnByName('f_dc_0').data;
+        for (let j = 0; j < count; j++) {
+            const e = order[j];
+            assert.strictEqual(px[j * 3], x[e], `x out-row ${j}`);
+            assert.strictEqual(op[j], opF[e], `opacity out-row ${j}`);
+            assert.strictEqual(dc[j * 3], dc0[e], `f_dc_0 out-row ${j}`);
+        }
+        for (const layer of ['position', 'geometric', 'color']) acq[layer].release();
+        await src.close();
+    });
 });
 
 describe('SOG Format (Bundled)', () => {
@@ -602,6 +641,37 @@ describe('SPLAT Format (Input Only)', () => {
         }
     });
 
+    it('gathers a shuffled subset identically to the eager decode', async () => {
+        const splatData = await fsReadFile(join(fixturesDir, 'minimal.splat'));
+        const eager = await decodeSplatToDataTable(new BufferReadSource(splatData));
+
+        const pool = createChunkDataPool();
+        const src = await readSplat(new BufferReadSource(splatData), pool);
+        // shuffled, with a repeat — sorted source order coalesces a multi-record run.
+        const order = Uint32Array.from([3, 0, 2, 1, 0]);
+        const count = order.length;
+        const acq = {};
+        for (const layer of ['position', 'geometric', 'color']) {
+            acq[layer] = pool.acquire(layer, src.meta.layouts[layer], count);
+        }
+        await src.read({ indices: order, indexOffset: 0, count, position: acq.position, geometric: acq.geometric, color: acq.color });
+
+        const px = acq.position.field('position');
+        const op = acq.geometric.field('opacity');
+        const dc = acq.color.field('dc');
+        const x = eager.getColumnByName('x').data;
+        const opF = eager.getColumnByName('opacity').data;
+        const dc0 = eager.getColumnByName('f_dc_0').data;
+        for (let j = 0; j < count; j++) {
+            const e = order[j];
+            assert.strictEqual(px[j * 3], x[e], `x out-row ${j}`);
+            assert.strictEqual(op[j], opF[e], `opacity out-row ${j}`);
+            assert.strictEqual(dc[j * 3], dc0[e], `f_dc_0 out-row ${j}`);
+        }
+        for (const layer of ['position', 'geometric', 'color']) acq[layer].release();
+        await src.close();
+    });
+
     it('lazy chunked read matches the eager decode byte-for-byte (multi-chunk)', async () => {
         const splatData = await fsReadFile(join(fixturesDir, 'minimal.splat'));
         const pool = createChunkDataPool({ chunkSize: 2 }); // 4 splats -> 2 chunks (+ short last)
@@ -657,7 +727,6 @@ describe('SPZ Format (Input Only)', () => {
 
         const pool = createChunkDataPool();
         const src = await readSpz(new BufferReadSource(spzData), pool);
-        assert.strictEqual(typeof src.readRows, 'function', 'spz source exposes readRows');
 
         // shuffled subset spanning the scene
         const order = Uint32Array.from(n > 2 ? [n - 1, 0, (n / 2) | 0] : [n - 1, 0]);
@@ -666,7 +735,7 @@ describe('SPZ Format (Input Only)', () => {
         for (const layer of ['position', 'geometric', 'color']) {
             acq[layer] = pool.acquire(layer, src.meta.layouts[layer], count);
         }
-        await src.readRows({ indices: order, indexOffset: 0, count, position: acq.position, geometric: acq.geometric, color: acq.color });
+        await src.read({ indices: order, indexOffset: 0, count, position: acq.position, geometric: acq.geometric, color: acq.color });
 
         // readRows shares the per-gaussian decode with read(), so gathered row j
         // must exactly equal the full-decode row order[j].

@@ -39,15 +39,12 @@ type ChunkSourceMetadata = {
 };
 
 /**
- * A single read request to a {@link ChunkSource}.
- *
- * The caller passes destination buffers for whichever layers it wants filled
- * for the given `(chunkIndex, lod)`. Layers omitted from the request are
- * skipped. All passed buffers must have the same `count`, which must equal
- * `meta.chunkSize` for non-final chunks or the trailing count for the last.
+ * Fields common to every {@link ReadRequest}: which LOD to read and the
+ * destination buffers for whichever layers the caller wants filled. Layers
+ * omitted from the request are skipped.
  */
-type ChunkReadRequest = {
-    readonly chunkIndex: number;
+type ReadTarget = {
+    /** Which LOD to read (default 0). */
     readonly lod?: number;
     readonly position?: ChunkData;
     readonly geometric?: ChunkData;
@@ -56,28 +53,29 @@ type ChunkReadRequest = {
 };
 
 /**
- * A random-access (scatter-gather) read request to a {@link ChunkSource}.
+ * A read request to a {@link ChunkSource}, selecting source rows in one of two
+ * ways:
  *
- * Fills output rows `[0, count)` of the passed layer buffers from source rows
- * `indices[indexOffset .. indexOffset + count)` of LOD `lod` (default 0). Indices
- * are arbitrary and need not be sorted; this is the per-row analog of
- * {@link ChunkReadRequest} and underpins the LOD writer's "positions resident,
- * heavy data fetched per output chunk" gather — for a fixed-stride file source
- * each row is a byte-range read, so a unit pulls only its own gaussians (≈ 1×
- * total reads, no whole-scene residency). LOD is structural: a gather targets one
- * LOD's gaussians (sources never carry a per-gaussian LOD tag).
+ * - **Chunk** (`chunkIndex`): the contiguous run
+ *   `[chunkIndex·chunkSize, +chunkSize)` of the chosen LOD, filled into output
+ *   rows `[0, count)`. All passed buffers must have `count` equal to
+ *   `meta.chunkSize` for non-final chunks or the trailing count for the last.
+ * - **Gather** (`indices`/`indexOffset`/`count`): arbitrary source rows
+ *   `indices[indexOffset .. indexOffset + count)` of the chosen LOD, filled into
+ *   output rows `[0, count)`. Indices need not be sorted and may repeat.
+ *
+ * Gather underpins the LOD writer's "positions resident, heavy data fetched per
+ * output chunk" pass — for a fixed-stride file source each row is a byte-range
+ * read, so a unit pulls only its own gaussians (≈ 1× total reads, no whole-scene
+ * residency). The two are the same operation with a different row selection; the
+ * decode is identical, which is why a source serves both from one `read`.
+ *
+ * The arms are disjoint on the `indices` key, so an implementation discriminates
+ * with `'indices' in request` (gather) vs the chunk path otherwise.
  */
-type RowReadRequest = {
-    readonly indices: Uint32Array;
-    readonly indexOffset: number;
-    readonly count: number;
-    /** Which LOD to gather from (default 0). */
-    readonly lod?: number;
-    readonly position?: ChunkData;
-    readonly geometric?: ChunkData;
-    readonly color?: ChunkData;
-    readonly other?: ChunkData;
-};
+type ReadRequest =
+    | (ReadTarget & { readonly chunkIndex: number })
+    | (ReadTarget & { readonly indices: Uint32Array; readonly indexOffset: number; readonly count: number });
 
 /**
  * Lazy, chunked, layered view onto gaussian splat data.
@@ -96,21 +94,16 @@ interface ChunkSource {
     readonly meta: ChunkSourceMetadata;
 
     /**
-     * Fill the caller's destination buffers with data for the given chunk
-     * index. ChunkLayer fields present in the request are filled; absent layers
-     * are skipped. All passed buffers must share the same `count` matching
-     * the source's reported chunk size for the requested index.
+     * Fill the caller's destination buffers from the source, selecting rows
+     * either by chunk index or by an explicit index list (see
+     * {@link ReadRequest}). Layers present in the request are filled; absent
+     * layers are skipped. All passed buffers must share the same `count` —
+     * the chunk size for a chunk request, or `count` for a gather.
+     *
+     * Every source supports both selections: a chunk is a contiguous range and
+     * a gather is an arbitrary one, but the per-row decode is the same.
      */
-    read(request: ChunkReadRequest): Promise<void>;
-
-    /**
-     * Optional random-access gather: fill the request's layer buffers from
-     * arbitrary source rows (see {@link RowReadRequest}). Implemented by sources
-     * that support efficient per-row access — resident `InMemoryChunkSource` and
-     * fixed-stride file sources (PLY). Combinators and streaming/whole-blob
-     * sources omit it; callers needing it on such a source must `compact()` first.
-     */
-    readRows?(request: RowReadRequest): Promise<void>;
+    read(request: ReadRequest): Promise<void>;
 
     /**
      * Release any open file handles or internal decode state.
@@ -119,4 +112,4 @@ interface ChunkSource {
     close(): Promise<void>;
 }
 
-export { type ChunkSource, type ChunkReadRequest, type RowReadRequest, type ChunkSourceMetadata };
+export { type ChunkSource, type ReadRequest, type ReadTarget, type ChunkSourceMetadata };

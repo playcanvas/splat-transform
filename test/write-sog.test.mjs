@@ -111,7 +111,6 @@ describe('readSogSource: native chunked SOG read', () => {
         const zip = new ZipReadFileSystem(await rfs.createSource('out.sog'));
 
         const src = await readSogSource(zip, 'meta.json', pool);
-        assert.strictEqual(typeof src.readRows, 'function', 'native SOG source exposes readRows');
         assert.strictEqual(src.meta.shBands, 3);
 
         const full = await materializeToDataTable(src, pool);           // via read()

@@ -5,8 +5,7 @@ import { type ReadSource, type ReadStream } from '../io/read';
 import {
     type ChunkData,
     type ChunkLayer,
-    type ChunkReadRequest,
-    type RowReadRequest,
+    type ReadRequest,
     type ChunkSource,
     type ChunkSourceMetadata,
     type ChunkDataPool,
@@ -377,25 +376,145 @@ const readCompressedChunked = (source: ReadSource, header: PlyHeader, pool: Chun
         return bounds;
     };
 
-    // Reusable scratch for one chunk's packed records (reads are sequential).
+    // Reusable scratch (reads are sequential): `vScratch`/`sScratch` for the
+    // contiguous chunk read, `gatherV`/`gatherS` for one coalesced gather run.
     let vScratch: Uint8Array | null = null;
     let sScratch: Uint8Array | null = null;
+    let gatherV: Uint8Array | null = null;
+    let gatherS: Uint8Array | null = null;
 
-    const read = async (request: ChunkReadRequest): Promise<void> => {
+    const read = async (request: ReadRequest): Promise<void> => {
         if ((request.lod ?? 0) !== 0) {
             throw new Error('readPly: only lod 0 is supported');
         }
+
+        const pos = request.position ? new Float32Array(request.position.data) : null;
+        const geo = request.geometric ? new Float32Array(request.geometric.data) : null;
+        const col = request.color ? new Float32Array(request.color.data) : null;
+        if (!pos && !geo && !col) return;
+
+        const bnd = await ensureBounds();
+        const bcol = (name: string): Float32Array => bnd.getColumnByName(name)!.data as Float32Array;
+
+        // Bound columns, fetched once per read; indexed by 256-block `gi >> 8`.
+        const minX = pos ? bcol('min_x') : null, minY = pos ? bcol('min_y') : null, minZ = pos ? bcol('min_z') : null;
+        const maxX = pos ? bcol('max_x') : null, maxY = pos ? bcol('max_y') : null, maxZ = pos ? bcol('max_z') : null;
+        const minSX = geo ? bcol('min_scale_x') : null, minSY = geo ? bcol('min_scale_y') : null, minSZ = geo ? bcol('min_scale_z') : null;
+        const maxSX = geo ? bcol('max_scale_x') : null, maxSY = geo ? bcol('max_scale_y') : null, maxSZ = geo ? bcol('max_scale_z') : null;
+        const sw = 3 + restCount;
+        const hasColors = col ? bnd.hasColumn('min_r') : false;
+        const minR = hasColors ? bcol('min_r') : null, minG = hasColors ? bcol('min_g') : null, minB = hasColors ? bcol('min_b') : null;
+        const maxR = hasColors ? bcol('max_r') : null, maxG = hasColors ? bcol('max_g') : null, maxB = hasColors ? bcol('max_b') : null;
+
+        // Decode one packed record: vertex words at local index `vi` in `v`, sh
+        // bytes at local index `si` in `sBytes`, bounds from global index `gi`,
+        // written to output row `dstRow`. Shared by the chunk and gather paths.
+        const decodeRecord = (v: Uint32Array, vi: number, sBytes: Uint8Array | null, si: number, gi: number, dstRow: number): void => {
+            const ci = gi >> 8;
+            const base = vi * vWords;
+            if (pos) {
+                const pp = v[base + ppIdx];
+                const o = dstRow * 3;
+                pos[o]     = lerp(minX![ci], maxX![ci], unpackUnorm(pp >>> 21, 11));
+                pos[o + 1] = lerp(minY![ci], maxY![ci], unpackUnorm(pp >>> 11, 10));
+                pos[o + 2] = lerp(minZ![ci], maxZ![ci], unpackUnorm(pp, 11));
+            }
+            if (geo) {
+                const o = dstRow * 8;
+                // rotation (largest-3 quaternion)
+                const pr = v[base + prIdx];
+                const ra = (unpackUnorm(pr >>> 20, 10) - 0.5) * ROT_NORM;
+                const rb = (unpackUnorm(pr >>> 10, 10) - 0.5) * ROT_NORM;
+                const rc = (unpackUnorm(pr, 10) - 0.5) * ROT_NORM;
+                const rm = Math.sqrt(Math.max(0, 1 - (ra * ra + rb * rb + rc * rc)));
+                switch (pr >>> 30) {
+                    case 0: geo[o] = rm; geo[o + 1] = ra; geo[o + 2] = rb; geo[o + 3] = rc; break;
+                    case 1: geo[o] = ra; geo[o + 1] = rm; geo[o + 2] = rb; geo[o + 3] = rc; break;
+                    case 2: geo[o] = ra; geo[o + 1] = rb; geo[o + 2] = rm; geo[o + 3] = rc; break;
+                    default: geo[o] = ra; geo[o + 1] = rb; geo[o + 2] = rc; geo[o + 3] = rm;
+                }
+                // scale
+                const ps = v[base + psIdx];
+                geo[o + 4] = lerp(minSX![ci], maxSX![ci], unpackUnorm(ps >>> 21, 11));
+                geo[o + 5] = lerp(minSY![ci], maxSY![ci], unpackUnorm(ps >>> 11, 10));
+                geo[o + 6] = lerp(minSZ![ci], maxSZ![ci], unpackUnorm(ps, 11));
+                // opacity (alpha of packed_color)
+                const cw = unpackUnorm(v[base + pcIdx], 8);
+                geo[o + 7] = -Math.log(1 / cw - 1);
+            }
+            if (col) {
+                const o = dstRow * sw;
+                const pc = v[base + pcIdx];
+                const cx = unpackUnorm(pc >>> 24, 8);
+                const cy = unpackUnorm(pc >>> 16, 8);
+                const cz = unpackUnorm(pc >>> 8, 8);
+                const cr = hasColors ? lerp(minR![ci], maxR![ci], cx) : cx;
+                const cg = hasColors ? lerp(minG![ci], maxG![ci], cy) : cy;
+                const cb = hasColors ? lerp(minB![ci], maxB![ci], cz) : cz;
+                col[o] = (cr - 0.5) / SH_C0;
+                col[o + 1] = (cg - 0.5) / SH_C0;
+                col[o + 2] = (cb - 0.5) / SH_C0;
+                if (sBytes) {
+                    const sb = si * shRowSize;
+                    for (let r = 0; r < restCount; r++) {
+                        const byte = sBytes[sb + shOff[r]];
+                        const nrm = (byte === 0) ? 0 : (byte === 255) ? 1 : (byte + 0.5) / 256;
+                        col[o + 3 + r] = (nrm - 0.5) * 8;
+                    }
+                }
+            }
+        };
+
+        if ('indices' in request) {
+            // Gather: sort output slots into source-file order, coalesce
+            // consecutive records into one range read (vertex + parallel sh).
+            const { indices, indexOffset, count } = request;
+            if (count <= 0) return;
+            const slot = new Uint32Array(count);
+            for (let j = 0; j < count; j++) slot[j] = j;
+            slot.sort((a, b) => indices[indexOffset + a] - indices[indexOffset + b]);
+
+            let j = 0;
+            while (j < count) {
+                const first = indices[indexOffset + slot[j]];
+                let k = j + 1;
+                while (k < count && indices[indexOffset + slot[k]] === first + (k - j)) k++;
+                const runLen = k - j;
+
+                const vNeed = runLen * vertexRowSize;
+                if (!gatherV || gatherV.length < vNeed) gatherV = new Uint8Array(vNeed);
+                const vBytes = gatherV.subarray(0, vNeed);
+                if (await readExact(source.read(vertexOffset + first * vertexRowSize, vertexOffset + (first + runLen) * vertexRowSize), vBytes, 0, vNeed) !== vNeed) {
+                    throw new Error(`readPly: short gather vertex read at row ${first}`);
+                }
+                const vU32 = new Uint32Array(gatherV.buffer, gatherV.byteOffset, runLen * vWords);
+
+                let sBytes: Uint8Array | null = null;
+                if (col && shEl) {
+                    const sNeed = runLen * shRowSize;
+                    if (!gatherS || gatherS.length < sNeed) gatherS = new Uint8Array(sNeed);
+                    sBytes = gatherS.subarray(0, sNeed);
+                    if (await readExact(source.read(shOffset + first * shRowSize, shOffset + (first + runLen) * shRowSize), sBytes, 0, sNeed) !== sNeed) {
+                        throw new Error(`readPly: short gather sh read at row ${first}`);
+                    }
+                }
+
+                for (let t = 0; t < runLen; t++) {
+                    decodeRecord(vU32, t, sBytes, t, first + t, slot[j + t]);
+                }
+                j = k;
+            }
+            return;
+        }
+
+        // Contiguous chunk: rows [start, start + count). The bounds for gaussian
+        // g live at absolute 256-block `g >> 8`.
         const start = request.chunkIndex * chunkSize;
         const count = Math.min(chunkSize, numGaussians - start);
         if (count <= 0) {
             throw new Error(`readPly: chunkIndex ${request.chunkIndex} out of range`);
         }
 
-        const bnd = await ensureBounds();
-        const bcol = (name: string): Float32Array => bnd.getColumnByName(name)!.data as Float32Array;
-
-        // range-read this chunk's packed vertex records (uint32 words); the
-        // bounds for gaussian g live at absolute 256-block `g >> 8`.
         vScratch ??= new Uint8Array(chunkSize * vertexRowSize);
         const vBytes = vScratch.subarray(0, count * vertexRowSize);
         if (await readExact(source.read(vertexOffset + start * vertexRowSize, vertexOffset + (start + count) * vertexRowSize), vBytes, 0, vBytes.length) !== vBytes.length) {
@@ -403,92 +522,17 @@ const readCompressedChunked = (source: ReadSource, header: PlyHeader, pool: Chun
         }
         const vU32 = new Uint32Array(vScratch.buffer, 0, count * vWords);
 
-        if (request.position) {
-            const out = new Float32Array(request.position.data);
-            const minX = bcol('min_x'), minY = bcol('min_y'), minZ = bcol('min_z');
-            const maxX = bcol('max_x'), maxY = bcol('max_y'), maxZ = bcol('max_z');
-            for (let i = 0; i < count; i++) {
-                const ci = (start + i) >> 8;
-                const pp = vU32[i * vWords + ppIdx];
-                const o = i * 3;
-                out[o]     = lerp(minX[ci], maxX[ci], unpackUnorm(pp >>> 21, 11));
-                out[o + 1] = lerp(minY[ci], maxY[ci], unpackUnorm(pp >>> 11, 10));
-                out[o + 2] = lerp(minZ[ci], maxZ[ci], unpackUnorm(pp, 11));
+        let sBytes: Uint8Array | null = null;
+        if (col && shEl) {
+            sScratch ??= new Uint8Array(chunkSize * shRowSize);
+            sBytes = sScratch.subarray(0, count * shRowSize);
+            if (await readExact(source.read(shOffset + start * shRowSize, shOffset + (start + count) * shRowSize), sBytes, 0, sBytes.length) !== sBytes.length) {
+                throw new Error(`readPly: short sh read for chunk ${request.chunkIndex}`);
             }
         }
 
-        if (request.geometric) {
-            const out = new Float32Array(request.geometric.data);
-            const minSX = bcol('min_scale_x'), minSY = bcol('min_scale_y'), minSZ = bcol('min_scale_z');
-            const maxSX = bcol('max_scale_x'), maxSY = bcol('max_scale_y'), maxSZ = bcol('max_scale_z');
-            for (let i = 0; i < count; i++) {
-                const ci = (start + i) >> 8;
-                const o = i * 8;
-                // rotation (largest-3 quaternion)
-                const pr = vU32[i * vWords + prIdx];
-                const ra = (unpackUnorm(pr >>> 20, 10) - 0.5) * ROT_NORM;
-                const rb = (unpackUnorm(pr >>> 10, 10) - 0.5) * ROT_NORM;
-                const rc = (unpackUnorm(pr, 10) - 0.5) * ROT_NORM;
-                const rm = Math.sqrt(Math.max(0, 1 - (ra * ra + rb * rb + rc * rc)));
-                switch (pr >>> 30) {
-                    case 0: out[o] = rm; out[o + 1] = ra; out[o + 2] = rb; out[o + 3] = rc; break;
-                    case 1: out[o] = ra; out[o + 1] = rm; out[o + 2] = rb; out[o + 3] = rc; break;
-                    case 2: out[o] = ra; out[o + 1] = rb; out[o + 2] = rm; out[o + 3] = rc; break;
-                    default: out[o] = ra; out[o + 1] = rb; out[o + 2] = rc; out[o + 3] = rm;
-                }
-                // scale
-                const ps = vU32[i * vWords + psIdx];
-                out[o + 4] = lerp(minSX[ci], maxSX[ci], unpackUnorm(ps >>> 21, 11));
-                out[o + 5] = lerp(minSY[ci], maxSY[ci], unpackUnorm(ps >>> 11, 10));
-                out[o + 6] = lerp(minSZ[ci], maxSZ[ci], unpackUnorm(ps, 11));
-                // opacity (alpha of packed_color)
-                const cw = unpackUnorm(vU32[i * vWords + pcIdx], 8);
-                out[o + 7] = -Math.log(1 / cw - 1);
-            }
-        }
-
-        if (request.color) {
-            const out = new Float32Array(request.color.data);
-            const sw = 3 + restCount;
-            const hasColors = bnd.hasColumn('min_r');
-            const minR = hasColors ? bcol('min_r') : null;
-            const minG = hasColors ? bcol('min_g') : null;
-            const minB = hasColors ? bcol('min_b') : null;
-            const maxR = hasColors ? bcol('max_r') : null;
-            const maxG = hasColors ? bcol('max_g') : null;
-            const maxB = hasColors ? bcol('max_b') : null;
-
-            let sBytes: Uint8Array | null = null;
-            if (shEl) {
-                sScratch ??= new Uint8Array(chunkSize * shRowSize);
-                sBytes = sScratch.subarray(0, count * shRowSize);
-                if (await readExact(source.read(shOffset + start * shRowSize, shOffset + (start + count) * shRowSize), sBytes, 0, sBytes.length) !== sBytes.length) {
-                    throw new Error(`readPly: short sh read for chunk ${request.chunkIndex}`);
-                }
-            }
-
-            for (let i = 0; i < count; i++) {
-                const ci = (start + i) >> 8;
-                const o = i * sw;
-                const pc = vU32[i * vWords + pcIdx];
-                const cx = unpackUnorm(pc >>> 24, 8);
-                const cy = unpackUnorm(pc >>> 16, 8);
-                const cz = unpackUnorm(pc >>> 8, 8);
-                const cr = hasColors ? lerp(minR![ci], maxR![ci], cx) : cx;
-                const cg = hasColors ? lerp(minG![ci], maxG![ci], cy) : cy;
-                const cb = hasColors ? lerp(minB![ci], maxB![ci], cz) : cz;
-                out[o] = (cr - 0.5) / SH_C0;
-                out[o + 1] = (cg - 0.5) / SH_C0;
-                out[o + 2] = (cb - 0.5) / SH_C0;
-                if (sBytes) {
-                    const sb = i * shRowSize;
-                    for (let r = 0; r < restCount; r++) {
-                        const byte = sBytes[sb + shOff[r]];
-                        const nrm = (byte === 0) ? 0 : (byte === 255) ? 1 : (byte + 0.5) / 256;
-                        out[o + 3 + r] = (nrm - 0.5) * 8;
-                    }
-                }
-            }
+        for (let i = 0; i < count; i++) {
+            decodeRecord(vU32, i, sBytes, i, start + i, i);
         }
     };
 
@@ -690,19 +734,15 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
     // interleaved chunk in memory at once.
     const SUB_BLOCK = 1 << 16;
 
-    // Reused scratch for one sub-block of raw interleaved records. Reads are
-    // sequential per the ChunkSource contract, so a single shared buffer avoids
-    // re-allocating on every read / sub-block.
+    // Reused scratch buffers. Reads are sequential per the ChunkSource contract,
+    // so single shared buffers avoid re-allocating on every read: `recordBuffer`
+    // for the contiguous sub-block sweep, `gatherScratch` for one coalesced run.
     let recordBuffer: Uint8Array | null = null;
+    let gatherScratch: Uint8Array | null = null;
 
-    const read = async (request: ChunkReadRequest): Promise<void> => {
+    const read = async (request: ReadRequest): Promise<void> => {
         if ((request.lod ?? 0) !== 0) {
             throw new Error('readPly: only lod 0 is supported');
-        }
-        const start = request.chunkIndex * chunkSize;
-        const count = Math.min(chunkSize, vertexCount - start);
-        if (count <= 0) {
-            throw new Error(`readPly: chunkIndex ${request.chunkIndex} out of range`);
         }
 
         const requested: ChunkLayer[] = (['position', 'geometric', 'color', 'other'] as ChunkLayer[])
@@ -711,6 +751,58 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
             if (!plans[layer]) {
                 throw new Error(`readPly: layer '${layer}' not available`);
             }
+        }
+
+        if ('indices' in request) {
+            // Gather: fetch arbitrary rows by byte-range reads. Output slots are
+            // sorted into source-file order so reads run forward and consecutive
+            // source rows coalesce into one range read; each record is then
+            // de-interleaved into its (scattered) output row. Only the requested
+            // rows' bytes (including SH) are read — the basis of the LOD writer's
+            // "positions resident, heavy data fetched per output chunk" gather.
+            const { indices, indexOffset, count } = request;
+            if (count <= 0) return;
+
+            const slot = new Uint32Array(count);
+            for (let j = 0; j < count; j++) slot[j] = j;
+            slot.sort((a, b) => indices[indexOffset + a] - indices[indexOffset + b]);
+
+            let j = 0;
+            while (j < count) {
+                const first = indices[indexOffset + slot[j]];
+                let k = j + 1;
+                while (k < count && indices[indexOffset + slot[k]] === first + (k - j)) k++;
+                const runLen = k - j;
+
+                const need = runLen * recordStride;
+                if (!gatherScratch || gatherScratch.length < need) {
+                    gatherScratch = new Uint8Array(need);
+                }
+                const recordBytes = gatherScratch.subarray(0, need);
+                const got = await readExact(
+                    source.read(headerBytes + first * recordStride, headerBytes + (first + runLen) * recordStride),
+                    recordBytes, 0, need
+                );
+                if (got !== need) {
+                    throw new Error(`readPly: short gather read (${got}/${need}) at row ${first}`);
+                }
+
+                for (let t = 0; t < runLen; t++) {
+                    const rec = recordBytes.subarray(t * recordStride, (t + 1) * recordStride);
+                    for (const layer of requested) {
+                        fill(rec, 1, request[layer]!, plans[layer]!, slot[j + t]);
+                    }
+                }
+                j = k;
+            }
+            return;
+        }
+
+        // Contiguous chunk: rows [start, start + count).
+        const start = request.chunkIndex * chunkSize;
+        const count = Math.min(chunkSize, vertexCount - start);
+        if (count <= 0) {
+            throw new Error(`readPly: chunkIndex ${request.chunkIndex} out of range`);
         }
 
         const byteStart = headerBytes + start * recordStride;
@@ -736,65 +828,7 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
         }
     };
 
-    // Random-access gather (the ChunkSource.readRows capability): fetch arbitrary
-    // rows by byte-range reads. Output rows are sorted into source-file order so
-    // reads run forward and consecutive source rows coalesce into one range read;
-    // each record is then de-interleaved into its (scattered) output row. Only the
-    // requested rows' bytes (including SH) are read — the basis of the LOD writer's
-    // "positions resident, heavy data fetched per output chunk" gather.
-    let gatherScratch: Uint8Array | null = null;
-    const readRows = async (request: RowReadRequest): Promise<void> => {
-        const { indices, indexOffset, count } = request;
-        if ((request.lod ?? 0) !== 0) {
-            throw new Error('readPly: readRows supports only lod 0 (single-LOD source)');
-        }
-        if (count <= 0) return;
-
-        const requested: ChunkLayer[] = (['position', 'geometric', 'color', 'other'] as ChunkLayer[])
-        .filter(layer => request[layer]);
-        for (const layer of requested) {
-            if (!plans[layer]) {
-                throw new Error(`readPly: layer '${layer}' not available`);
-            }
-        }
-
-        // Output slots ordered by their source row: forward file reads, and
-        // consecutive source rows merge into a single range read.
-        const slot = new Uint32Array(count);
-        for (let j = 0; j < count; j++) slot[j] = j;
-        slot.sort((a, b) => indices[indexOffset + a] - indices[indexOffset + b]);
-
-        let j = 0;
-        while (j < count) {
-            const first = indices[indexOffset + slot[j]];
-            let k = j + 1;
-            while (k < count && indices[indexOffset + slot[k]] === first + (k - j)) k++;
-            const runLen = k - j;
-
-            const need = runLen * recordStride;
-            if (!gatherScratch || gatherScratch.length < need) {
-                gatherScratch = new Uint8Array(need);
-            }
-            const recordBytes = gatherScratch.subarray(0, need);
-            const got = await readExact(
-                source.read(headerBytes + first * recordStride, headerBytes + (first + runLen) * recordStride),
-                recordBytes, 0, need
-            );
-            if (got !== need) {
-                throw new Error(`readPly: short gather read (${got}/${need}) at row ${first}`);
-            }
-
-            for (let t = 0; t < runLen; t++) {
-                const rec = recordBytes.subarray(t * recordStride, (t + 1) * recordStride);
-                for (const layer of requested) {
-                    fill(rec, 1, request[layer]!, plans[layer]!, slot[j + t]);
-                }
-            }
-            j = k;
-        }
-    };
-
-    return fileChunkSource(source, meta, read, readRows);
+    return fileChunkSource(source, meta, read);
 };
 
 export { PlyData, decodePlyToDataTable, readPly };

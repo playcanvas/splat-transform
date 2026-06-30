@@ -71,6 +71,35 @@ describe('combinators: filterSource', () => {
         const empty = await materializeToDataTable(filterSource(parent, new Uint32Array(0), pool), pool);
         assert.strictEqual(empty.numRows, 0);
     });
+
+    it('serves a gather request by composing the kept-list', async () => {
+        const dt = createTestDataTable(200, { includeSH: true, shBands: 1 });
+        const chunkSize = 64;
+        const parent = dataTableToChunkSource(dt, chunkSize);
+        const pool = createChunkDataPool({ chunkSize });
+
+        // keep every 2nd row; output row r is parent row kept[r].
+        const kept = [];
+        for (let i = 0; i < dt.numRows; i += 2) kept.push(i);
+        const keptArr = new Uint32Array(kept);
+        const filtered = filterSource(parent, keptArr, pool);
+
+        // Gather output rows `sel` of the filtered view -> parent rows kept[sel[j]].
+        const sel = new Uint32Array([0, 50, 3, 99, 3]);
+        const count = sel.length;
+        const acq = {};
+        for (const layer of ['position', 'geometric', 'color']) {
+            acq[layer] = pool.acquire(layer, filtered.meta.layouts[layer], count);
+        }
+        await filtered.read({ indices: sel, indexOffset: 0, count, position: acq.position, geometric: acq.geometric, color: acq.color });
+
+        const px = acq.position.field('position');
+        const x = dt.getColumnByName('x').data;
+        for (let j = 0; j < count; j++) {
+            assert.strictEqual(px[j * 3], x[keptArr[sel[j]]], `x out-row ${j}`);
+        }
+        for (const layer of ['position', 'geometric', 'color']) acq[layer].release();
+    });
 });
 
 describe('combinators: concatSource', () => {
@@ -124,7 +153,6 @@ describe('combinators: concatSource', () => {
 
         const pool = createChunkDataPool({ chunkSize });
         const concat = concatSource(dts.map(dt => dataTableToChunkSource(dt, chunkSize)), pool);
-        assert.strictEqual(typeof concat.readRows, 'function', 'concat of gatherable sources should forward readRows');
 
         // Scattered order crossing input boundaries (inputs 0/1/2), with a repeat.
         const order = new Uint32Array([219, 0, 100, 99, 150, 149, 100, 75]);

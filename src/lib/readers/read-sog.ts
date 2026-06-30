@@ -2,8 +2,7 @@ import { dataTableToChunkSource, materializeToDataTable } from '../compat/data-t
 import { type DataTable } from '../data-table';
 import { basename, dirname, join, type ReadFileSystem, readFile } from '../io/read';
 import {
-    type ChunkReadRequest,
-    type RowReadRequest,
+    type ReadRequest,
     type ChunkSource,
     type ChunkSourceMetadata,
     type ChunkDataPool,
@@ -254,38 +253,32 @@ const readSogSourceV2 = async (
         }
     };
 
-    const read = (request: ChunkReadRequest): Promise<void> => {
+    // Fill the requested layers either from a contiguous chunk or from an
+    // explicit index list. The textures are resident, so a gather is index math
+    // only (no re-decode) — which is what lets a containerSource of SOG nodes
+    // serve the LOD writer's per-unit gather.
+    const read = (request: ReadRequest): Promise<void> => {
         if ((request.lod ?? 0) !== 0) {
             throw new Error('readSog: only lod 0 is supported');
         }
-        const start = request.chunkIndex * chunkSize;
-        const cnt = Math.min(chunkSize, count - start);
-        if (cnt <= 0) {
-            throw new Error(`readSog: chunkIndex ${request.chunkIndex} out of range`);
-        }
         const posOut = request.position ? new Float32Array(request.position.data) : null;
         const geoOut = request.geometric ? new Float32Array(request.geometric.data) : null;
         const colOut = request.color ? new Float32Array(request.color.data) : null;
-        for (let i = 0; i < cnt; i++) decodeInto(posOut, geoOut, colOut, start + i, i);
-        return Promise.resolve();
-    };
-
-    // Random-access gather (LOD 0): expand arbitrary texels into packed output
-    // rows. The textures are resident, so this is index math only (no re-decode) —
-    // which is what lets a containerSource of SOG nodes serve the LOD writer.
-    const readRows = (request: RowReadRequest): Promise<void> => {
-        if ((request.lod ?? 0) !== 0) {
-            throw new Error('readSog: readRows only supports lod 0');
+        if ('indices' in request) {
+            const { indices, indexOffset, count: cnt } = request;
+            for (let j = 0; j < cnt; j++) decodeInto(posOut, geoOut, colOut, indices[indexOffset + j], j);
+        } else {
+            const start = request.chunkIndex * chunkSize;
+            const cnt = Math.min(chunkSize, count - start);
+            if (cnt <= 0) {
+                throw new Error(`readSog: chunkIndex ${request.chunkIndex} out of range`);
+            }
+            for (let i = 0; i < cnt; i++) decodeInto(posOut, geoOut, colOut, start + i, i);
         }
-        const { indices, indexOffset, count: cnt } = request;
-        const posOut = request.position ? new Float32Array(request.position.data) : null;
-        const geoOut = request.geometric ? new Float32Array(request.geometric.data) : null;
-        const colOut = request.color ? new Float32Array(request.color.data) : null;
-        for (let j = 0; j < cnt; j++) decodeInto(posOut, geoOut, colOut, indices[indexOffset + j], j);
         return Promise.resolve();
     };
 
-    return { meta: meta_, read, readRows, close: () => Promise.resolve() };
+    return { meta: meta_, read, close: () => Promise.resolve() };
 };
 
 // Fetch + parse the SOG meta.json. The basename is used verbatim for the fetch

@@ -135,7 +135,7 @@ const calcBound = async (
             const count = Math.min(batch, local.length - off);
             const pos = pool.acquire('position', layouts.position!, count);
             const geo = pool.acquire('geometric', layouts.geometric!, count);
-            await source.readRows!({ indices: local, indexOffset: off, count, lod: lodValue, position: pos, geometric: geo });
+            await source.read({ indices: local, indexOffset: off, count, lod: lodValue, position: pos, geometric: geo });
             accumulateBound(
                 min, max,
                 pos.field('position') as Float32Array,

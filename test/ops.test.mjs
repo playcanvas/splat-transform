@@ -105,11 +105,10 @@ describe('ops: mortonOrder + permuteSource', () => {
         }
     });
 
-    it('permuteSource rejects a non-resident or over-length input', () => {
+    it('permuteSource rejects an over-length order', () => {
         const dt = createTestDataTable(40);
         const resident = dataTableToChunkSource(dt, 16);
         assert.throws(() => permuteSource(resident, new Uint32Array(41)), /exceeds lod 0 count/);
-        assert.throws(() => permuteSource({ meta: { numLods: 1, numGaussians: 40 } }, new Uint32Array(40)), /readRows/);
     });
 
     it('gathers identically from a disk-backed PLY and a resident source', async () => {
@@ -122,7 +121,6 @@ describe('ops: mortonOrder + permuteSource', () => {
 
         const resident = dataTableToChunkSource(dt, chunkSize);
         const diskSrc = await readPly(new BufferReadSource(encodePlyBinary(dt)), pool);
-        assert.strictEqual(typeof diskSrc.readRows, 'function', 'PLY source should expose readRows');
 
         // Non-ascending, chunk-straddling, with a repeated index.
         const order = new Uint32Array([299, 0, 150, 64, 63, 200, 7, 7, 256]);
@@ -140,5 +138,35 @@ describe('ops: mortonOrder + permuteSource', () => {
             }
         }
         await diskSrc.close();
+    });
+
+    it('permuteSource serves a gather request (gather-of-gather)', async () => {
+        const dt = createTestDataTable(120, { includeSH: true, shBands: 1 });
+        const chunkSize = 32;
+        const pool = createChunkDataPool({ chunkSize });
+        const resident = dataTableToChunkSource(dt, chunkSize);
+        const order = new Uint32Array([100, 5, 60, 7, 119, 0, 33]); // the permutation
+        const perm = permuteSource(resident, order);
+
+        // Read the permuted view by explicit indices (not chunkIndex): output row
+        // j is parent row order[sel[j]] (the gather composes through `order`).
+        const sel = new Uint32Array([4, 1, 6, 0]);
+        const count = sel.length;
+        const acq = {};
+        for (const layer of ['position', 'geometric', 'color']) {
+            acq[layer] = pool.acquire(layer, perm.meta.layouts[layer], count);
+        }
+        await perm.read({ indices: sel, indexOffset: 0, count, position: acq.position, geometric: acq.geometric, color: acq.color });
+
+        const px = acq.position.field('position');
+        const op = acq.geometric.field('opacity');
+        const x = dt.getColumnByName('x').data;
+        const opF = dt.getColumnByName('opacity').data;
+        for (let j = 0; j < count; j++) {
+            const e = order[sel[j]];
+            assert.strictEqual(px[j * 3], x[e], `x out-row ${j}`);
+            assert.strictEqual(op[j], opF[e], `opacity out-row ${j}`);
+        }
+        for (const layer of ['position', 'geometric', 'color']) acq[layer].release();
     });
 });

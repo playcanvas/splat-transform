@@ -1,6 +1,6 @@
 import { type ChunkData } from './chunk-data';
 import { createChunkDataPool, type ChunkDataPool } from './chunk-data-pool';
-import { type ChunkReadRequest, type ChunkSource } from './chunk-source';
+import { type ReadRequest, type ChunkSource } from './chunk-source';
 import { InMemoryChunkSource } from './in-memory-chunk-source';
 import { type ChunkLayer } from './layout';
 
@@ -63,7 +63,13 @@ const cached = (parent: ChunkSource, options: { maxBytes: number }): ChunkSource
         }
     };
 
-    const read = async (request: ChunkReadRequest): Promise<void> => {
+    const read = async (request: ReadRequest): Promise<void> => {
+        // Gather requests bypass the chunk cache — it keys by chunkIndex and can't
+        // serve arbitrary rows — and pass straight through to the parent (whose
+        // own residency, e.g. resident SOG textures, amortizes the gather).
+        if ('indices' in request) {
+            return parent.read(request);
+        }
         const lod = request.lod ?? 0;
         const { chunkIndex } = request;
         const count = Math.min(meta.chunkSize, meta.lodCounts[lod] - chunkIndex * meta.chunkSize);

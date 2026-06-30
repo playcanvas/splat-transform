@@ -131,7 +131,7 @@ describe('readLccSource (chunked) vs readLcc (eager)', () => {
         for (const layer of ['position', 'geometric', 'color', 'other']) {
             acq[layer] = pool.acquire(layer, src.meta.layouts[layer], count);
         }
-        await src.readRows({ indices: idx, indexOffset: 0, count, lod: 1, ...acq });
+        await src.read({ indices: idx, indexOffset: 0, count, lod: 1, ...acq });
 
         const pos = acq.position.field('position'); // count × 3
         const op = acq.geometric.field('opacity');  // count
@@ -246,7 +246,6 @@ describe('readLccSource: multi-unit, non-contiguous offsets', () => {
 
         const pool = createChunkDataPool({ chunkSize: 4 });
         const src = await readLccSource(makeMultiUnitFixture(), 'meta.lcc', opts(), pool);
-        assert.strictEqual(typeof src.readRows, 'function');
 
         const order = new Uint32Array([5, 0, 3, 6, 1, 2, 4]); // shuffled, spans both units
         const gathered = await materializeToDataTable(permuteSource(src, order), pool);

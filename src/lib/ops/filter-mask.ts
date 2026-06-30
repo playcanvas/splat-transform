@@ -22,8 +22,8 @@ import { bakeTransform } from './bake-transform';
 
 const LAYERS: ChunkLayer[] = ['position', 'geometric', 'color', 'other'];
 
-// Mutable form of a read request, built layer-by-layer before passing to a
-// source's `read` (whose `ChunkReadRequest` fields are readonly).
+// Mutable form of a chunk read request, built layer-by-layer before passing to
+// a source's `read` (whose `ReadRequest` fields are readonly).
 type MutableReadRequest = { chunkIndex: number; lod: number } & { [L in ChunkLayer]?: ChunkData };
 
 type Comparator = 'lt' | 'lte' | 'gt' | 'gte' | 'eq' | 'neq';

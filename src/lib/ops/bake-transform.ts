@@ -2,7 +2,7 @@ import { Mat3 } from 'playcanvas';
 
 import {
     type ChunkData,
-    type ChunkReadRequest,
+    type ReadRequest,
     type ChunkSource,
     type ChunkSourceMetadata,
     SH_REST_COUNTS
@@ -106,7 +106,7 @@ const bakeTransform = (src: ChunkSource, targetSpace: Transform): ChunkSource =>
         }
     };
 
-    const read = async (req: ChunkReadRequest): Promise<void> => {
+    const read = async (req: ReadRequest): Promise<void> => {
         await src.read(req);
         if (req.position) bakePosition(req.position);
         if (req.geometric) bakeGeometric(req.geometric);

@@ -1,18 +1,15 @@
 import {
-    type ChunkReadRequest,
     type ChunkSource,
-    type ChunkSourceMetadata
+    type ChunkSourceMetadata,
+    type ReadRequest
 } from '../source';
 
 /**
  * Gather a source's gaussians by an ordered index list, as a lazy view.
  *
  * Output gaussian `i` is parent gaussian `order[i]` of LOD `opts.lod` (default
- * 0). The parent must support random-access gather ({@link ChunkSource.readRows})
- * — a resident `InMemoryChunkSource` (direct buffer copy, e.g. from `compact()`)
- * or a fixed-stride file source like PLY (byte-range reads per row). Layout,
- * layers and transform are inherited. A lazy combinator without `readRows` must
- * be `compact()`-ed first.
+ * 0), gathered from the parent via {@link ChunkSource.read} with an index list.
+ * Layout, layers and transform are inherited.
  *
  * `order` is a full-length permutation (output count == the LOD's count) or a
  * shorter ordered subset (output count == `order.length`) — the source-native
@@ -24,16 +21,13 @@ import {
  * LOD of a multi-LOD source, pass `opts.lod` — the LOD writer gathers each output
  * unit from its level this way (replacing the old per-gaussian lod tag).
  *
- * @param parent - `readRows`-capable source to gather from.
+ * @param parent - Source to gather from.
  * @param order - Ordered row indices within the chosen LOD; `order[i]` is placed at output row `i`.
  * @param opts - Gather options.
  * @param opts.lod - The parent LOD to gather from (default 0).
  * @returns A derived source serving the gathered gaussians chunk-by-chunk.
  */
 const permuteSource = (parent: ChunkSource, order: Uint32Array, opts?: { lod?: number }): ChunkSource => {
-    if (!parent.readRows) {
-        throw new Error('permuteSource: parent must support random-access gather (readRows) — compact() a lazy source first');
-    }
     const lod = opts?.lod ?? 0;
     if (lod < 0 || lod >= parent.meta.numLods) {
         throw new Error(`permuteSource: lod ${lod} out of range (numLods ${parent.meta.numLods})`);
@@ -43,7 +37,7 @@ const permuteSource = (parent: ChunkSource, order: Uint32Array, opts?: { lod?: n
         throw new Error(`permuteSource: order length ${order.length} exceeds lod ${lod} count ${parentCount}`);
     }
 
-    const readRows = parent.readRows.bind(parent);
+    const parentRead = parent.read.bind(parent);
     const chunkSize = parent.meta.chunkSize;
     const outCount = order.length;
     // Gather inherits layout / layers / transform; only the counts shrink to the
@@ -56,9 +50,26 @@ const permuteSource = (parent: ChunkSource, order: Uint32Array, opts?: { lod?: n
         numChunks: [Math.ceil(outCount / chunkSize)]
     };
 
-    const read = (request: ChunkReadRequest): Promise<void> => {
+    const read = (request: ReadRequest): Promise<void> => {
+        if ('indices' in request) {
+            // Gather of a gather: compose the permutation — output row j is parent
+            // row order[request.indices[indexOffset + j]].
+            const { indices, indexOffset, count } = request;
+            const mapped = new Uint32Array(count);
+            for (let j = 0; j < count; j++) mapped[j] = order[indices[indexOffset + j]];
+            return parentRead({
+                indices: mapped,
+                indexOffset: 0,
+                count,
+                lod,
+                position: request.position,
+                geometric: request.geometric,
+                color: request.color,
+                other: request.other
+            });
+        }
         const base = request.chunkIndex * chunkSize;
-        return readRows({
+        return parentRead({
             indices: order,
             indexOffset: base,
             count: Math.min(chunkSize, outCount - base),
