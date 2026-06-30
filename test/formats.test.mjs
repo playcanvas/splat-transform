@@ -649,6 +649,43 @@ describe('KSPLAT Format (Input Only)', () => {
 });
 
 describe('SPZ Format (Input Only)', () => {
+    it('readRows gathers arbitrary rows identically to a full read (v4 + SH)', async () => {
+        const spzData = await createSpzFixture({ version: 4, shDegree: 2 });
+        const full = await readSpzTable(new BufferReadSource(spzData));
+        const n = full.numRows;
+        assert.ok(n >= 2, 'fixture needs at least 2 rows');
+
+        const pool = createChunkDataPool();
+        const src = await readSpz(new BufferReadSource(spzData), pool);
+        assert.strictEqual(typeof src.readRows, 'function', 'spz source exposes readRows');
+
+        // shuffled subset spanning the scene
+        const order = Uint32Array.from(n > 2 ? [n - 1, 0, (n / 2) | 0] : [n - 1, 0]);
+        const count = order.length;
+        const acq = {};
+        for (const layer of ['position', 'geometric', 'color']) {
+            acq[layer] = pool.acquire(layer, src.meta.layouts[layer], count);
+        }
+        await src.readRows({ indices: order, indexOffset: 0, count, position: acq.position, geometric: acq.geometric, color: acq.color });
+
+        // readRows shares the per-gaussian decode with read(), so gathered row j
+        // must exactly equal the full-decode row order[j].
+        const px = acq.position.field('position'); // count×3
+        const op = acq.geometric.field('opacity'); // count
+        const dc = acq.color.field('dc');           // count×3
+        const x = full.getColumnByName('x').data;
+        const opF = full.getColumnByName('opacity').data;
+        const dc0 = full.getColumnByName('f_dc_0').data;
+        for (let j = 0; j < count; j++) {
+            const e = order[j];
+            assert.strictEqual(px[j * 3], x[e], `x out-row ${j}`);
+            assert.strictEqual(op[j], opF[e], `opacity out-row ${j}`);
+            assert.strictEqual(dc[j * 3], dc0[e], `f_dc_0 out-row ${j}`);
+        }
+        for (const layer of ['position', 'geometric', 'color']) acq[layer].release();
+        await src.close();
+    });
+
     it('should read .spz v2 fixture file', async () => {
         const spzData = await fsReadFile(join(fixturesDir, 'minimal-v2.spz'));
         const source = new BufferReadSource(spzData);

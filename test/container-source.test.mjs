@@ -70,6 +70,35 @@ describe('containerSource', () => {
         await src.close();
     });
 
+    it('exposes readRows and gathers across segments and LODs', async () => {
+        const chunkSize = 4;
+        const segXs = [[10, 11, 12], [20, 21, 22, 23, 24], [30, 31, 32, 33]];
+        const seg = i => ({ count: segXs[i].length, decode: () => Promise.resolve(makePosSource(segXs[i], chunkSize)) });
+        const segmentsByLod = [[seg(0), seg(1)], [seg(2)]];
+
+        const pool = createChunkDataPool({ chunkSize });
+        const src = await containerSource(segmentsByLod, pool);
+        assert.strictEqual(typeof src.readRows, 'function', 'gatherable segments -> readRows exposed');
+
+        const layout = src.meta.layouts.position;
+        const px = (cd, n) => { const f = new Float32Array(cd.data, 0, n * 3); return Array.from({ length: n }, (_, i) => f[i * 3]); };
+
+        // LOD 0 is [10,11,12, 20,21,22,23,24]; gather a shuffled cross-segment subset.
+        const order = new Uint32Array([7, 0, 4, 2]); // -> 24, 10, 21, 12
+        const cd0 = pool.acquire('position', layout, order.length);
+        await src.readRows({ indices: order, indexOffset: 0, count: order.length, lod: 0, position: cd0 });
+        assert.deepStrictEqual(px(cd0, order.length), [24, 10, 21, 12]);
+        cd0.release();
+
+        // LOD 1 is [30,31,32,33]; gather from that structural LOD.
+        const cd1 = pool.acquire('position', layout, 2);
+        await src.readRows({ indices: new Uint32Array([3, 1]), indexOffset: 0, count: 2, lod: 1, position: cd1 });
+        assert.deepStrictEqual(px(cd1, 2), [33, 31]);
+        cd1.release();
+
+        await src.close();
+    });
+
     it('reads a single LOD directly by index', async () => {
         const chunkSize = 4;
         const seg = xs => ({ count: xs.length, decode: () => Promise.resolve(makePosSource(xs, chunkSize)) });

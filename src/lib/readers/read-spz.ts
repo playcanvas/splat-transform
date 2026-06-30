@@ -4,6 +4,7 @@ import { fileChunkSource } from './reader-utils';
 import { ReadSource } from '../io/read';
 import {
     type ChunkReadRequest,
+    type RowReadRequest,
     type ChunkSource,
     type ChunkSourceMetadata,
     type ChunkDataPool,
@@ -230,6 +231,92 @@ const readSpz = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
         layouts
     };
 
+    // Per-source-index decode constants (fixed for the whole scene).
+    const positionScale = streams ? 1.0 / (1 << streams.fractionalBits) : 1;
+    const perChannel = restCount / 3;
+
+    // Unpack one source gaussian `s` into output row `r` of whichever layer
+    // buffers are present. Shared by sequential `read` (s = start + i, r = i) and
+    // random-access `readRows` (s = indices[..], r = j), so both decode identically.
+    const decodeInto = (
+        posOut: Float32Array | null,
+        geoOut: Float32Array | null,
+        colOut: Float32Array | null,
+        s: number,
+        r: number
+    ): void => {
+        const { version, positions, alphas, colors, scales, rotations, sh } = streams!;
+
+        if (posOut) {
+            const o = r * 3;
+            posOut[o]     = getFixed24(positions, s, 0) * positionScale;
+            posOut[o + 1] = getFixed24(positions, s, 1) * positionScale;
+            posOut[o + 2] = getFixed24(positions, s, 2) * positionScale;
+        }
+
+        if (geoOut) {
+            const o = r * 8; // [rot0..3, scale0..2, opacity]
+
+            if (version === MIN_SPZ_VERSION) {
+                // v2: 3 × int8 (xyz), w derived
+                const x = rotations.getUint8(s * 3 + 0) / 127.5 - 1.0;
+                const y = rotations.getUint8(s * 3 + 1) / 127.5 - 1.0;
+                const z = rotations.getUint8(s * 3 + 2) / 127.5 - 1.0;
+                geoOut[o]     = Math.sqrt(Math.max(0.0, 1.0 - (x * x + y * y + z * z)));
+                geoOut[o + 1] = x;
+                geoOut[o + 2] = y;
+                geoOut[o + 3] = z;
+            } else {
+                // v3/v4: smallest-three — 2-bit largest index + three 10-bit signed (9-bit mag + sign)
+                tmpQuat[0] = tmpQuat[1] = tmpQuat[2] = tmpQuat[3] = 0.0;
+                let packed = rotations.getUint32(s * 4, true);
+                const cMask = (1 << 9) - 1;
+                const largest = packed >>> 30;
+                let sumSq = 0;
+                for (let j = 3; j >= 0; --j) {
+                    if (j !== largest) {
+                        const mag = packed & cMask;
+                        const neg = (packed >>> 9) & 1;
+                        packed >>>= 10;
+                        let v = Math.SQRT1_2 * mag / cMask;
+                        if (neg === 1) v = -v;
+                        tmpQuat[j] = v;
+                        sumSq += v * v;
+                    }
+                }
+                tmpQuat[largest] = Math.sqrt(Math.max(0.0, 1.0 - sumSq));
+                geoOut[o]     = tmpQuat[3]; // w
+                geoOut[o + 1] = tmpQuat[0]; // x
+                geoOut[o + 2] = tmpQuat[1]; // y
+                geoOut[o + 3] = tmpQuat[2]; // z
+            }
+
+            // scales: 8-bit log-encoded
+            geoOut[o + 4] = scales.getUint8(s * 3 + 0) / 16.0 - 10.0;
+            geoOut[o + 5] = scales.getUint8(s * 3 + 1) / 16.0 - 10.0;
+            geoOut[o + 6] = scales.getUint8(s * 3 + 2) / 16.0 - 10.0;
+
+            // opacity: u8 -> inverse sigmoid (logit), clamped off the asymptotes
+            const eps = 1e-6;
+            const a = Math.max(eps, Math.min(1 - eps, alphas.getUint8(s) / 255.0));
+            geoOut[o + 7] = Math.log(a / (1 - a));
+        }
+
+        if (colOut) {
+            const o = r * colStride32; // [dc0..2, f_rest_0..N]
+            colOut[o]     = inverseColorFromSpz(colors.getUint8(s * 3 + 0));
+            colOut[o + 1] = inverseColorFromSpz(colors.getUint8(s * 3 + 1));
+            colOut[o + 2] = inverseColorFromSpz(colors.getUint8(s * 3 + 2));
+            // spherical harmonics: 8-bit signed, channel-inner -> de-interleave to f_rest
+            for (let c = 0; c < restCount; c++) {
+                const channel = c % 3;
+                const coeff = (c / 3) | 0;
+                const col = channel * perChannel + coeff;
+                colOut[o + 3 + col] = (sh.getUint8(s * restCount + c) - 128) / 128;
+            }
+        }
+    };
+
     const read = (request: ChunkReadRequest): Promise<void> => {
         if (!streams) return Promise.resolve();
         if ((request.lod ?? 0) !== 0) {
@@ -240,95 +327,35 @@ const readSpz = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
         if (count <= 0) {
             throw new Error(`readSpz: chunkIndex ${request.chunkIndex} out of range`);
         }
-        const { version, fractionalBits, positions, alphas, colors, scales, rotations, sh } = streams;
-
-        if (request.position) {
-            const out = new Float32Array(request.position.data);
-            const positionScale = 1.0 / (1 << fractionalBits);
-            for (let i = 0; i < count; i++) {
-                const s = start + i;
-                const o = i * 3;
-                out[o]     = getFixed24(positions, s, 0) * positionScale;
-                out[o + 1] = getFixed24(positions, s, 1) * positionScale;
-                out[o + 2] = getFixed24(positions, s, 2) * positionScale;
-            }
+        const posOut = request.position ? new Float32Array(request.position.data) : null;
+        const geoOut = request.geometric ? new Float32Array(request.geometric.data) : null;
+        const colOut = request.color ? new Float32Array(request.color.data) : null;
+        for (let i = 0; i < count; i++) {
+            decodeInto(posOut, geoOut, colOut, start + i, i);
         }
-
-        if (request.geometric) {
-            const out = new Float32Array(request.geometric.data); // [rot0..3, scale0..2, opacity]
-            for (let i = 0; i < count; i++) {
-                const s = start + i;
-                const o = i * 8;
-
-                if (version === MIN_SPZ_VERSION) {
-                    // v2: 3 × int8 (xyz), w derived
-                    const x = rotations.getUint8(s * 3 + 0) / 127.5 - 1.0;
-                    const y = rotations.getUint8(s * 3 + 1) / 127.5 - 1.0;
-                    const z = rotations.getUint8(s * 3 + 2) / 127.5 - 1.0;
-                    out[o]     = Math.sqrt(Math.max(0.0, 1.0 - (x * x + y * y + z * z)));
-                    out[o + 1] = x;
-                    out[o + 2] = y;
-                    out[o + 3] = z;
-                } else {
-                    // v3/v4: smallest-three — 2-bit largest index + three 10-bit signed (9-bit mag + sign)
-                    tmpQuat[0] = tmpQuat[1] = tmpQuat[2] = tmpQuat[3] = 0.0;
-                    let packed = rotations.getUint32(s * 4, true);
-                    const cMask = (1 << 9) - 1;
-                    const largest = packed >>> 30;
-                    let sumSq = 0;
-                    for (let j = 3; j >= 0; --j) {
-                        if (j !== largest) {
-                            const mag = packed & cMask;
-                            const neg = (packed >>> 9) & 1;
-                            packed >>>= 10;
-                            let v = Math.SQRT1_2 * mag / cMask;
-                            if (neg === 1) v = -v;
-                            tmpQuat[j] = v;
-                            sumSq += v * v;
-                        }
-                    }
-                    tmpQuat[largest] = Math.sqrt(Math.max(0.0, 1.0 - sumSq));
-                    out[o]     = tmpQuat[3]; // w
-                    out[o + 1] = tmpQuat[0]; // x
-                    out[o + 2] = tmpQuat[1]; // y
-                    out[o + 3] = tmpQuat[2]; // z
-                }
-
-                // scales: 8-bit log-encoded
-                out[o + 4] = scales.getUint8(s * 3 + 0) / 16.0 - 10.0;
-                out[o + 5] = scales.getUint8(s * 3 + 1) / 16.0 - 10.0;
-                out[o + 6] = scales.getUint8(s * 3 + 2) / 16.0 - 10.0;
-
-                // opacity: u8 -> inverse sigmoid (logit), clamped off the asymptotes
-                const eps = 1e-6;
-                const a = Math.max(eps, Math.min(1 - eps, alphas.getUint8(s) / 255.0));
-                out[o + 7] = Math.log(a / (1 - a));
-            }
-        }
-
-        if (request.color) {
-            const out = new Float32Array(request.color.data); // [dc0..2, f_rest_0..N]
-            const perChannel = restCount / 3;
-            for (let i = 0; i < count; i++) {
-                const s = start + i;
-                const o = i * colStride32;
-                out[o]     = inverseColorFromSpz(colors.getUint8(s * 3 + 0));
-                out[o + 1] = inverseColorFromSpz(colors.getUint8(s * 3 + 1));
-                out[o + 2] = inverseColorFromSpz(colors.getUint8(s * 3 + 2));
-                // spherical harmonics: 8-bit signed, channel-inner -> de-interleave to f_rest
-                for (let c = 0; c < restCount; c++) {
-                    const channel = c % 3;
-                    const coeff = (c / 3) | 0;
-                    const col = channel * perChannel + coeff;
-                    out[o + 3 + col] = (sh.getUint8(s * restCount + c) - 128) / 128;
-                }
-            }
-        }
-
         return Promise.resolve();
     };
 
-    return fileChunkSource(source, meta, read);
+    // Random-access gather (LOD 0): unpack arbitrary source rows into packed
+    // output rows. The compact streams are resident, so this is pure index math —
+    // no re-decompress — which is what lets a containerSource of SPZ nodes serve
+    // the LOD writer's per-unit gather.
+    const readRows = (request: RowReadRequest): Promise<void> => {
+        if (!streams) return Promise.resolve();
+        if ((request.lod ?? 0) !== 0) {
+            throw new Error('readSpz: readRows only supports lod 0');
+        }
+        const { indices, indexOffset, count } = request;
+        const posOut = request.position ? new Float32Array(request.position.data) : null;
+        const geoOut = request.geometric ? new Float32Array(request.geometric.data) : null;
+        const colOut = request.color ? new Float32Array(request.color.data) : null;
+        for (let j = 0; j < count; j++) {
+            decodeInto(posOut, geoOut, colOut, indices[indexOffset + j], j);
+        }
+        return Promise.resolve();
+    };
+
+    return fileChunkSource(source, meta, read, readRows);
 };
 
 export { readSpz };

@@ -33,6 +33,8 @@ import {
     readChunkCount,
     readLcc2,
     readLcc2Source,
+    readLcc2EnvironmentSource,
+    LCC2_TRANSFORM,
     LOAD_CONCURRENCY
 } from '../src/lib/readers/read-lcc2.js';
 import { materializeToDataTable } from '../src/lib/compat/data-table.js';
@@ -929,5 +931,41 @@ describe('readLcc2Source (chunked) vs readLcc2 (eager)', () => {
                 assert.strictEqual(f[i], e[i], `column '${name}' row ${i}`);
             }
         }
+    });
+
+    // A SOG env decodes to a class-instance source; the env reader must return it
+    // with callable methods (a `{ ...src }` spread would silently drop them).
+    it('readLcc2EnvironmentSource returns a callable SOG env source (null when absent)', async () => {
+        const buildEnvFixture = async (withEnv) => {
+            const fs = new MemoryReadFileSystem();
+            fs.set('main.sog', await makeSogBytes(5));
+            if (withEnv) fs.set('env.sog', await makeSogBytes(2));
+            const meta = {
+                totalSplats: 5,
+                lodSplats: [5],
+                totalLevels: 1,
+                splatType: '.sog',
+                root: {
+                    splatFiles: withEnv ? ['', 'main.sog', 'env.sog'] : ['', 'main.sog'],
+                    ...(withEnv ? { data: { env: { name: 2 } } } : {}),
+                    child: [{ data: { '3dgs': { name: 1 } } }]
+                }
+            };
+            fs.set('meta.lcc2', new TextEncoder().encode(JSON.stringify(meta)));
+            return fs;
+        };
+
+        const pool = createChunkDataPool();
+        const env = await readLcc2EnvironmentSource(await buildEnvFixture(true), 'meta.lcc2', pool);
+        assert.ok(env, 'SOG env source should be present');
+        assert.strictEqual(typeof env.read, 'function', 'env source carries callable methods');
+        assert.strictEqual(env.meta.numGaussians, 2);
+        assert.ok(env.meta.transform.equals(LCC2_TRANSFORM()), 'env labelled LCC2_TRANSFORM');
+        const dt = await materializeToDataTable(env, pool);
+        assert.strictEqual(dt.numRows, 2);
+        await env.close();
+
+        const none = await readLcc2EnvironmentSource(await buildEnvFixture(false), 'meta.lcc2', pool);
+        assert.strictEqual(none, null, 'no env declared -> null');
     });
 });

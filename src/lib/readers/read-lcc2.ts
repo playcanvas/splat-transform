@@ -926,6 +926,51 @@ const readLcc2Source = async (
     return containerSource(segmentsByLod, pool, { transform: LCC2_TRANSFORM() });
 };
 
+/**
+ * Decode an LCC2 scene's environment chunk (skybox) as a `ChunkSource`, or `null`
+ * if the scene has none. The env is a single SOG/SPZ sub-file, decoded via
+ * {@link decodeChunkSource} (SOG eager, SPZ lazy) — only the main scene needs the
+ * streaming {@link readLcc2Source}. Its pending transform is set to
+ * `LCC2_TRANSFORM` to match the eager {@link readLcc2} env table.
+ *
+ * @param fileSystem - File system for reading the LCC2 files.
+ * @param filename - Path to the meta.lcc2 file.
+ * @param pool - Pool whose `chunkSize` the env source is chunked at.
+ * @returns The environment chunk as a `ChunkSource`, or `null` if absent.
+ * @ignore
+ */
+const readLcc2EnvironmentSource = async (
+    fileSystem: ReadFileSystem,
+    filename: string,
+    pool: ChunkDataPool
+): Promise<ChunkSource | null> => {
+    const baseDir = dirname(filename);
+    const related = (name: string) => (baseDir ? join(baseDir, name) : name);
+    const meta = parseLcc2Meta(new TextDecoder().decode(await readFile(fileSystem, filename)), filename);
+    const { splatFiles, splatType, envFileIndex } = meta;
+    if (envFileIndex === undefined || envFileIndex < 0 ||
+        envFileIndex >= splatFiles.length || !splatFiles[envFileIndex]) {
+        return null;
+    }
+    try {
+        // Decode the single env chunk eagerly to a DataTable, label it
+        // LCC2_TRANSFORM (matching the eager readLcc2 env table), and bridge to a
+        // resident source — mirroring readLccEnvironmentSource. (Bridging a fresh
+        // DataTable avoids spreading a class-instance source, which would drop its
+        // prototype read/readRows/close methods.)
+        const envTable = await decodeChunk(fileSystem, splatType, related(splatFiles[envFileIndex]));
+        envTable.transform = LCC2_TRANSFORM();
+        return dataTableToChunkSource(envTable, pool.chunkSize);
+    } catch (err) {
+        // a missing env chunk file is the normal "no skybox" case.
+        if (!isMissingError(err)) {
+            const message = (err as Error)?.message ?? '';
+            logger.warn(`failed to load LCC2 environment chunk: ${message || err}`);
+        }
+        return null;
+    }
+};
+
 export {
     LOAD_CONCURRENCY,
     LCC2_TRANSFORM,
@@ -941,7 +986,8 @@ export {
     parseSpzNumPoints,
     readChunkCount,
     readLcc2,
-    readLcc2Source
+    readLcc2Source,
+    readLcc2EnvironmentSource
 };
 
 export type { RawLcc2Node, RawLcc2Meta, Lcc2TreeNode, Lcc2Meta };

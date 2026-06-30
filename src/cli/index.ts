@@ -40,7 +40,7 @@ import { materializeToDataTable } from '../lib/compat/data-table';
 import { bakeTransform, concatSource, stackLods } from '../lib/ops';
 import { processSource, canProcessSource } from '../lib/process-source';
 import { readLccSource, readLccEnvironmentSource } from '../lib/readers/read-lcc';
-import { readLcc2Source } from '../lib/readers/read-lcc2';
+import { readLcc2Source, readLcc2EnvironmentSource } from '../lib/readers/read-lcc2';
 import { readPly } from '../lib/readers/read-ply';
 import { readSplat } from '../lib/readers/read-splat';
 import { readSpz } from '../lib/readers/read-spz';
@@ -1218,31 +1218,34 @@ const main = async () => {
             await Promise.all(processed.map(s => s.close()));
         }
 
-        // Intrinsic multi-LOD -> lod-meta: a single lcc input (no actions) maps its
-        // own internal LOD levels onto the output levels — the main scene streams,
-        // and its (small) environment is decoded eagerly. lcc2 joins here once it
-        // supports readRows. Otherwise fall through to the tagged-PLY path / the
-        // DataTable pipeline.
-        if (
+        // Intrinsic multi-LOD -> lod-meta: a single lcc/lcc2 input (no actions) maps
+        // its own internal LOD levels onto the output levels — the main scene
+        // streams, and its (small) environment is decoded eagerly. Otherwise fall
+        // through to the tagged-PLY path / the DataTable pipeline.
+        const intrinsicLodFmt = (
             !isNullOutput &&
             outputFormat === 'lod' &&
             outputArg.processActions.length === 0 &&
             inputArgs.length === 1 &&
             inputArgs[0].processActions.length === 0 &&
-            !isHttpUrl(inputArgs[0].filename) &&
-            getInputFormat(resolveInput(inputArgs[0].filename).classifyName) === 'lcc'
-        ) {
+            !isHttpUrl(inputArgs[0].filename)
+        ) ? getInputFormat(resolveInput(inputArgs[0].filename).classifyName) : null;
+        if (intrinsicLodFmt === 'lcc' || intrinsicLodFmt === 'lcc2') {
             const pool = createChunkDataPool();
             const { filename: inFile, fileSystem } = resolveInput(inputArgs[0].filename);
 
-            // The lcc's own LODs become the output levels (lod-meta keeps every
-            // level — selection unchanged); the env is decoded eagerly (it's small).
-            const mainSource = await readLccSource(fileSystem, inFile, options, pool);
+            // The container's own LODs become the output levels (lod-meta keeps
+            // every level — selection unchanged); the env is decoded eagerly (small).
+            const mainSource = intrinsicLodFmt === 'lcc2' ?
+                await readLcc2Source(fileSystem, inFile, options, pool) :
+                await readLccSource(fileSystem, inFile, options, pool);
             const total = mainSource.meta.lodCounts.reduce((a, c) => a + c, 0);
             if (total === 0) {
                 throw new Error('No Gaussians to write');
             }
-            const envSource = await readLccEnvironmentSource(fileSystem, inFile, pool);
+            const envSource = intrinsicLodFmt === 'lcc2' ?
+                await readLcc2EnvironmentSource(fileSystem, inFile, pool) :
+                await readLccEnvironmentSource(fileSystem, inFile, pool);
 
             const phase = logger.group(`Output ${outputArg.filename}`, { index: phaseTotal, total: phaseTotal });
             logger.info(`${fmtCount(total)} gaussians · ${mainSource.meta.shBands} SH bands · ${mainSource.meta.numLods} LODs (streaming LOD)`);
