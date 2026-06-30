@@ -1,4 +1,3 @@
-import { Column, DataTable } from '../data-table';
 import {
     createInMemoryChunkSource,
     InMemoryChunkSource,
@@ -10,7 +9,8 @@ import {
     type ChunkSource,
     type ChunkLayer,
     type SHBands
-} from '../source';
+} from '../chunk';
+import { Column, DataTable } from '../data-table';
 import { type Transform } from '../utils';
 
 /**

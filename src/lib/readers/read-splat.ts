@@ -1,6 +1,4 @@
 import { fileChunkSource, readExact } from './reader-utils';
-import { Column, DataTable } from '../data-table';
-import { type ReadSource } from '../io/read';
 import {
     type ReadRequest,
     type ChunkSource,
@@ -14,7 +12,9 @@ import {
     positionFields,
     geometricFields,
     colorFields
-} from '../source';
+} from '../chunk';
+import { Column, DataTable } from '../data-table';
+import { type ReadSource } from '../io/read';
 import { Transform } from '../utils';
 
 const SH_C0 = 0.28209479177387814;

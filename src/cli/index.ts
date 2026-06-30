@@ -36,6 +36,7 @@ import {
 // Streaming chunk pipeline (ply load -> process -> ply/sog write, no DataTable).
 // Deep imports keep these internal/`@ignore` APIs off the public lib surface
 // until the migration is complete.
+import { type ChunkSource, type ChunkSourceMetadata, createChunkDataPool } from '../lib/chunk';
 import { materializeToDataTable } from '../lib/compat/data-table';
 import { bakeTransform, concatSource, stackLods } from '../lib/ops';
 import { processSource, canProcessSource } from '../lib/process-source';
@@ -44,7 +45,6 @@ import { readLcc2Source, readLcc2EnvironmentSource } from '../lib/readers/read-l
 import { readPly } from '../lib/readers/read-ply';
 import { readSplat } from '../lib/readers/read-splat';
 import { readSpz } from '../lib/readers/read-spz';
-import { type ChunkSource, type ChunkSourceMetadata, createChunkDataPool } from '../lib/source';
 import { writeCompressedPlySource } from '../lib/writers/write-compressed-ply';
 import { writeLodSource } from '../lib/writers/write-lod';
 import { writePlyStreaming } from '../lib/writers/write-ply-streaming';

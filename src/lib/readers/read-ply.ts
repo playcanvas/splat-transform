@@ -1,7 +1,5 @@
 import { isCompressedPly, decompressPly } from './decompress-ply';
 import { fileChunkSource, readExact } from './reader-utils';
-import { Column, DataTable } from '../data-table';
-import { type ReadSource, type ReadStream } from '../io/read';
 import {
     type ChunkData,
     type ChunkLayer,
@@ -20,7 +18,9 @@ import {
     geometricFields,
     colorFields,
     otherLayout
-} from '../source';
+} from '../chunk';
+import { Column, DataTable } from '../data-table';
+import { type ReadSource, type ReadStream } from '../io/read';
 import { logger, Transform } from '../utils';
 
 type PlyProperty = {

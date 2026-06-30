@@ -1,8 +1,8 @@
-import { type ChunkData } from './chunk-data';
-import { createChunkDataPool, type ChunkDataPool } from './chunk-data-pool';
-import { type ReadRequest, type ChunkSource } from './chunk-source';
-import { InMemoryChunkSource } from './in-memory-chunk-source';
+import { type ChunkData } from './data';
+import { InMemoryChunkSource } from './in-memory';
 import { type ChunkLayer } from './layout';
+import { createChunkDataPool, type ChunkDataPool } from './pool';
+import { type ReadRequest, type ChunkSource } from './source';
 
 const LAYERS: readonly ChunkLayer[] = ['position', 'geometric', 'color', 'other'];
 

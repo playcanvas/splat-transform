@@ -15,7 +15,7 @@ import { dataTableToChunkSource, materializeToDataTable } from '../src/lib/compa
 import { sortMortonOrder } from '../src/lib/data-table/morton-order.js';
 import { readPly } from '../src/lib/readers/read-ply.js';
 import { mortonOrder, permuteSource } from '../src/lib/ops/index.js';
-import { createChunkDataPool } from '../src/lib/source/index.js';
+import { createChunkDataPool } from '../src/lib/chunk/index.js';
 
 // Minimal seekable ReadSource over a buffer (range reads), for exercising the
 // PLY reader's random-access gather path.

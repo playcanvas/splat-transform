@@ -9,7 +9,7 @@ import { describe, it } from 'node:test';
 import { Transform } from '../src/lib/index.js';
 import { materializeToDataTable } from '../src/lib/compat/data-table.js';
 import { containerSource } from '../src/lib/readers/container-source.js';
-import { createChunkDataPool, createInMemoryChunkSource, POSITION_STRIDE } from '../src/lib/source/index.js';
+import { createChunkDataPool, createInMemoryChunkSource, POSITION_STRIDE } from '../src/lib/chunk/index.js';
 
 // A position-only resident source whose x values are `xs` (y=z=0), chunked at
 // `chunkSize` — stands in for a decoded sub-file.

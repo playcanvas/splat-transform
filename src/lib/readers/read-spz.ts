@@ -1,7 +1,6 @@
 import { decompress as decompressZstd } from 'fzstd';
 
 import { fileChunkSource } from './reader-utils';
-import { ReadSource } from '../io/read';
 import {
     type ReadRequest,
     type ChunkSource,
@@ -17,7 +16,8 @@ import {
     positionFields,
     geometricFields,
     colorFields
-} from '../source';
+} from '../chunk';
+import { ReadSource } from '../io/read';
 import { Transform } from '../utils';
 
 // Niantic Spatial .spz format. Pure-JS, lazy/layered decode (no WASM): v2/v3 are

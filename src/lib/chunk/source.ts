@@ -1,7 +1,6 @@
 import { type Transform } from '../utils';
-import { type ChunkData } from './chunk-data';
-import { type LayerLayout } from './chunk-data-pool';
-import { type ExtraColumn, type ChunkLayer, type SHBands } from './layout';
+import { type ChunkData } from './data';
+import { type ExtraColumn, type ChunkLayer, type SHBands, type LayerLayout } from './layout';
 
 /**
  * Static description of a {@link ChunkSource}'s contents — what's in it and

@@ -26,7 +26,7 @@ import {
 } from '../src/lib/index.js';
 
 import { materializeToDataTable } from '../src/lib/compat/data-table.js';
-import { createChunkDataPool } from '../src/lib/source/index.js';
+import { createChunkDataPool } from '../src/lib/chunk/index.js';
 
 import { createMinimalTestData } from './helpers/test-utils.mjs';
 

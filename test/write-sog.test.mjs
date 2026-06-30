@@ -26,7 +26,7 @@ import { materializeToDataTable } from '../src/lib/compat/data-table.js';
 import { permuteSource } from '../src/lib/ops/index.js';
 import { decodePlyToDataTable, readPly } from '../src/lib/readers/read-ply.js';
 import { readSogSource } from '../src/lib/readers/read-sog.js';
-import { createChunkDataPool } from '../src/lib/source/index.js';
+import { createChunkDataPool } from '../src/lib/chunk/index.js';
 import { writeSog, writeSogSource } from '../src/lib/writers/write-sog.js';
 
 const sourceFromBytes = (bytes) => {

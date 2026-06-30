@@ -1,6 +1,3 @@
-import { dataTableToChunkSource, materializeToDataTable } from '../compat/data-table';
-import { type DataTable } from '../data-table';
-import { basename, dirname, join, type ReadFileSystem, readFile } from '../io/read';
 import {
     type ReadRequest,
     type ChunkSource,
@@ -16,7 +13,10 @@ import {
     geometricFields,
     colorFields,
     createChunkDataPool
-} from '../source';
+} from '../chunk';
+import { dataTableToChunkSource, materializeToDataTable } from '../compat/data-table';
+import { type DataTable } from '../data-table';
+import { basename, dirname, join, type ReadFileSystem, readFile } from '../io/read';
 import { Transform, WebPCodec } from '../utils';
 import { readSogV1, type MetaV1 } from './read-sog-v1';
 

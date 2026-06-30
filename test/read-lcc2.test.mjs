@@ -38,7 +38,7 @@ import {
     LOAD_CONCURRENCY
 } from '../src/lib/readers/read-lcc2.js';
 import { materializeToDataTable } from '../src/lib/compat/data-table.js';
-import { createChunkDataPool } from '../src/lib/source/index.js';
+import { createChunkDataPool } from '../src/lib/chunk/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 WebPCodec.wasmUrl = join(__dirname, '..', 'lib', 'webp.wasm');

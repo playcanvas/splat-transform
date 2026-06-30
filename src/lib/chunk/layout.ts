@@ -58,6 +58,18 @@ type ChunkField = {
 /** Map from field name to its layout within a chunk's stride. */
 type ChunkFieldMap = Readonly<Record<string, ChunkField>>;
 
+/**
+ * The byte stride and per-field map for a single layer of a source.
+ *
+ * Sources publish a `LayerLayout` per available layer in their metadata.
+ * Callers pass a layout (along with a gaussian count) to a `ChunkDataPool`'s
+ * `acquire` to receive a properly-sized `ChunkData`.
+ */
+type LayerLayout = {
+    readonly stride: number;
+    readonly fields: ChunkFieldMap;
+};
+
 const positionFields = (): ChunkFieldMap => ({
     position: { byteOffset: 0, components: 3, type: 'float32' }
 });
@@ -111,6 +123,7 @@ export {
     type SHBands,
     type ChunkField,
     type ChunkFieldMap,
+    type LayerLayout,
     type ExtraColumn,
     SH_REST_COUNTS,
     POSITION_STRIDE,

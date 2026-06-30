@@ -27,7 +27,7 @@ import {
 } from '../src/lib/index.js';
 import { mapSource } from '../src/lib/ops/index.js';
 import { decodePlyToDataTable, readPly } from '../src/lib/readers/read-ply.js';
-import { createChunkDataPool } from '../src/lib/source/index.js';
+import { createChunkDataPool } from '../src/lib/chunk/index.js';
 import { writePlyStreaming } from '../src/lib/writers/write-ply-streaming.js';
 
 const SH_COEFFS = [0, 3, 8, 15];

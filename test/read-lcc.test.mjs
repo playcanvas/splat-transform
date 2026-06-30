@@ -15,7 +15,7 @@ import { MemoryReadFileSystem } from '../src/lib/index.js';
 import { readLcc, readLccSource, readLccEnvironmentSource } from '../src/lib/readers/read-lcc.js';
 import { materializeToDataTable } from '../src/lib/compat/data-table.js';
 import { permuteSource } from '../src/lib/ops/index.js';
-import { createChunkDataPool } from '../src/lib/source/index.js';
+import { createChunkDataPool } from '../src/lib/chunk/index.js';
 
 // One quadtree unit, two LODs: LOD 0 = 3 splats, LOD 1 = 2 splats. data.bin
 // lays the 5 splats out contiguously (LOD 0 at offset 0, LOD 1 at offset 96);

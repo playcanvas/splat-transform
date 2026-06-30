@@ -10,7 +10,7 @@ import { describe, it } from 'node:test';
 
 import { createTestDataTable } from './helpers/test-utils.mjs';
 import { dataTableToChunkSource } from '../src/lib/compat/data-table.js';
-import { cached, createChunkDataPool } from '../src/lib/source/index.js';
+import { cached, createChunkDataPool } from '../src/lib/chunk/index.js';
 
 // Wrap a source to count read() calls (and defeat the resident passthrough,
 // since the wrapper is not an InMemoryChunkSource).

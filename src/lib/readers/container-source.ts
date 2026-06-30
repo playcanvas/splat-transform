@@ -1,10 +1,10 @@
-import { concatSource } from '../ops';
 import {
     type ChunkDataPool,
     type ReadRequest,
     type ChunkSource,
     type ChunkSourceMetadata
-} from '../source';
+} from '../chunk';
+import { concatSource } from '../ops';
 import { type Transform } from '../utils';
 
 /**

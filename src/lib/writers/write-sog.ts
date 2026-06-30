@@ -1,18 +1,18 @@
 import { basename, dirname, resolve } from 'pathe';
 
 import { logWrittenFile } from './utils';
-import { dataTableToChunkSource } from '../compat/data-table';
-import { type DataTable, shRestNames } from '../data-table';
-import { type FileSystem, writeFile, ZipFileSystem } from '../io/write';
-import { bakeTransform } from '../ops';
-import { sortMortonInterleaved } from '../ops/morton-order';
 import {
     createChunkDataPool,
     type ChunkDataPool,
     type ChunkLayer,
     type ReadRequest,
     type ChunkSource
-} from '../source';
+} from '../chunk';
+import { dataTableToChunkSource } from '../compat/data-table';
+import { type DataTable, shRestNames } from '../data-table';
+import { type FileSystem, writeFile, ZipFileSystem } from '../io/write';
+import { bakeTransform } from '../ops';
+import { sortMortonInterleaved } from '../ops/morton-order';
 import { kmeansInterleaved } from '../spatial';
 import type { DeviceCreator } from '../types';
 import { logger, sigmoid, Transform } from '../utils';

@@ -7,7 +7,7 @@ import {
     type ChunkSource,
     type ChunkSourceMetadata,
     SH_REST_COUNTS
-} from '../source';
+} from '../chunk';
 import { Transform } from '../utils';
 import { inverseTransforms, isTransformColumn, rawColumnMap } from '../value-transforms';
 import { bakeTransform } from './bake-transform';

@@ -1,10 +1,10 @@
 import { containerSource, type ContainerSegment } from './container-source';
 import { readSog, readSogSource } from './read-sog';
 import { readSpz } from './read-spz';
+import { type ChunkDataPool, type ChunkSource, createChunkDataPool } from '../chunk';
 import { dataTableToChunkSource, materializeToDataTable } from '../compat/data-table';
 import { Column, DataTable, TypedArray } from '../data-table';
 import { basename, dirname, join, readFile, ReadFileSystem, ReadSource, ReadStream, ZipReadFileSystem } from '../io/read';
-import { type ChunkDataPool, type ChunkSource, createChunkDataPool } from '../source';
 import { Options } from '../types';
 import { logger, Transform } from '../utils';
 

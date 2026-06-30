@@ -1,7 +1,7 @@
+import { type ChunkSource, createChunkDataPool } from './chunk';
 import { dataTableToChunkSource } from './compat/data-table';
 import { ReadFileSystem, ZipReadFileSystem } from './io/read';
 import { readKsplat, readLcc, readLcc2, readMjs, readPly, readSogSource, readSplat, readSpz } from './readers';
-import { type ChunkSource, createChunkDataPool } from './source';
 import { Options, Param } from './types';
 
 /**

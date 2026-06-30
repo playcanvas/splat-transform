@@ -2,7 +2,7 @@ import {
     type ChunkSource,
     type ChunkSourceMetadata,
     type ReadRequest
-} from '../source';
+} from '../chunk';
 
 /**
  * Gather a source's gaussians by an ordered index list, as a lazy view.

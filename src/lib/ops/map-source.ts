@@ -1,4 +1,4 @@
-import { type ChunkSource, type ChunkSourceMetadata } from '../source';
+import { type ChunkSource, type ChunkSourceMetadata } from '../chunk';
 import { type Transform } from '../utils';
 
 /**

@@ -1,3 +1,4 @@
+import { type ChunkDataPool, type ChunkSource } from './chunk';
 import { materializeToDataTable } from './compat/data-table';
 import {
     filterByValueRows,
@@ -8,7 +9,6 @@ import {
     mapSource
 } from './ops';
 import { processDataTable, type ProcessAction } from './process';
-import { type ChunkDataPool, type ChunkSource } from './source';
 import { Transform } from './utils';
 
 /**

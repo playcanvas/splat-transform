@@ -1,5 +1,5 @@
+import { type ChunkSource, type ChunkSourceMetadata, type ReadRequest } from '../chunk';
 import { type ReadSource, type ReadStream } from '../io/read';
-import { type ChunkSource, type ChunkSourceMetadata, type ReadRequest } from '../source';
 
 /**
  * Read exactly `length` bytes from `stream` into `buffer` at `offset`. A stream

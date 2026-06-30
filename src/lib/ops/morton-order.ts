@@ -1,4 +1,4 @@
-import { type ChunkDataPool, type ChunkSource } from '../source';
+import { type ChunkDataPool, type ChunkSource } from '../chunk';
 import { logger } from '../utils';
 
 /**

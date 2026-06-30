@@ -3,11 +3,11 @@ import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { logWrittenFile } from './utils';
 import { writeSogSource } from './write-sog.js';
+import { type ChunkDataPool, type ChunkSource, createChunkDataPool, DEFAULT_CHUNK_SIZE } from '../chunk';
 import { dataTableToChunkSource } from '../compat/data-table';
 import { Column, DataTable, sortMortonOrder, convertToSpace } from '../data-table';
 import { type FileSystem } from '../io/write';
 import { permuteSource, stackLods } from '../ops';
-import { type ChunkDataPool, type ChunkSource, createChunkDataPool, DEFAULT_CHUNK_SIZE } from '../source';
 import { BTreeNode, BTree } from '../spatial';
 import type { DeviceCreator } from '../types';
 import { logger, Transform } from '../utils';

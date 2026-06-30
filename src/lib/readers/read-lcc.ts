@@ -1,9 +1,6 @@
 import { Vec3 } from 'playcanvas';
 
 import { readExact } from './reader-utils';
-import { dataTableToChunkSource } from '../compat/data-table';
-import { Column, DataTable } from '../data-table';
-import { dirname, join, ReadFileSystem, ReadSource, readFile } from '../io/read';
 import {
     type ChunkData,
     type ChunkDataPool,
@@ -21,7 +18,10 @@ import {
     geometricFields,
     colorFields,
     otherLayout
-} from '../source';
+} from '../chunk';
+import { dataTableToChunkSource } from '../compat/data-table';
+import { Column, DataTable } from '../data-table';
+import { dirname, join, ReadFileSystem, ReadSource, readFile } from '../io/read';
 import { Options } from '../types';
 import { logger, Transform } from '../utils';
 

@@ -1,7 +1,5 @@
 import { type Transform } from '../utils';
-import { type ChunkData } from './chunk-data';
-import { type ChunkDataPool, type LayerLayout } from './chunk-data-pool';
-import { type ChunkSource, type ReadRequest, type ChunkSourceMetadata } from './chunk-source';
+import { type ChunkData } from './data';
 import {
     colorFields,
     colorStride,
@@ -9,11 +7,14 @@ import {
     geometricFields,
     type ExtraColumn,
     type ChunkLayer,
+    type LayerLayout,
     otherLayout,
     positionFields,
     POSITION_STRIDE,
     type SHBands
 } from './layout';
+import { type ChunkDataPool } from './pool';
+import { type ChunkSource, type ReadRequest, type ChunkSourceMetadata } from './source';
 
 /**
  * Per-layer, per-LOD, per-chunk CPU-resident byte storage.

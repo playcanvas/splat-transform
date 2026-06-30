@@ -1,12 +1,12 @@
-import { type FileSystem } from '../io/write';
-import { bakeTransform } from '../ops';
 import {
     type ChunkData,
     type ChunkLayer,
     type ChunkSource,
     type ChunkDataPool,
     SH_REST_COUNTS
-} from '../source';
+} from '../chunk';
+import { type FileSystem } from '../io/write';
+import { bakeTransform } from '../ops';
 import { Transform } from '../utils';
 
 const GEOMETRIC_COLS = ['rot_0', 'rot_1', 'rot_2', 'rot_3', 'scale_0', 'scale_1', 'scale_2', 'opacity'];

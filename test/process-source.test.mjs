@@ -17,7 +17,7 @@ import { createTestDataTable } from './helpers/test-utils.mjs';
 import { convertToSpace, processDataTable, Transform } from '../src/lib/index.js';
 import { dataTableToChunkSource, materializeToDataTable } from '../src/lib/compat/data-table.js';
 import { processSource } from '../src/lib/process-source.js';
-import { createChunkDataPool } from '../src/lib/source/index.js';
+import { createChunkDataPool } from '../src/lib/chunk/index.js';
 
 const approxEqual = (a, b) => {
     if (!Number.isFinite(a) || !Number.isFinite(b)) return Object.is(a, b);

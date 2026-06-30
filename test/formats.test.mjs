@@ -37,7 +37,7 @@ import { decodePlyToDataTable } from '../src/lib/readers/read-ply.js';
 import { decodeSplatToDataTable } from '../src/lib/readers/read-splat.js';
 import { writeCompressedPlySource } from '../src/lib/writers/write-compressed-ply.js';
 import { gaussianCloudToDataTable, getSpzModule } from '../src/lib/spz-module.js';
-import { createChunkDataPool } from '../src/lib/source/index.js';
+import { createChunkDataPool } from '../src/lib/chunk/index.js';
 
 import { compareSummaries, compareDataTables } from './helpers/summary-compare.mjs';
 import { createMinimalTestData, createTestDataTable, encodePlyBinary } from './helpers/test-utils.mjs';

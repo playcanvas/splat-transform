@@ -17,7 +17,7 @@ import { createTestDataTable } from './helpers/test-utils.mjs';
 import { combine, Transform } from '../src/lib/index.js';
 import { dataTableToChunkSource, materializeToDataTable } from '../src/lib/compat/data-table.js';
 import { concatSource, filterSource, permuteSource } from '../src/lib/ops/index.js';
-import { createChunkDataPool } from '../src/lib/source/index.js';
+import { createChunkDataPool } from '../src/lib/chunk/index.js';
 
 // Compare two DataTables column-by-column (by name), exact.
 const assertSameRows = (out, expected) => {

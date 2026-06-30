@@ -1,17 +1,5 @@
-import { type ChunkData, ChunkDataImpl } from './chunk-data';
-import { type ChunkFieldMap, type ChunkLayer, DEFAULT_CHUNK_SIZE } from './layout';
-
-/**
- * The byte stride and per-field map for a single layer of a source.
- *
- * Sources publish a `LayerLayout` per available layer in their metadata.
- * Callers pass a layout (along with a gaussian count) to
- * {@link ChunkDataPool.acquire} to receive a properly-sized {@link ChunkData}.
- */
-type LayerLayout = {
-    readonly stride: number;
-    readonly fields: ChunkFieldMap;
-};
+import { type ChunkData, ChunkDataImpl } from './data';
+import { type ChunkLayer, type LayerLayout, DEFAULT_CHUNK_SIZE } from './layout';
 
 /**
  * A pool-backed allocator for {@link ChunkData} buffers.
@@ -159,4 +147,4 @@ const createChunkDataPool = (
     };
 };
 
-export { type ChunkDataPool, type LayerLayout, createChunkDataPool };
+export { type ChunkDataPool, createChunkDataPool };

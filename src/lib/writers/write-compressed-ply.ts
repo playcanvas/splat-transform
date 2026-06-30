@@ -2,10 +2,10 @@ import { basename } from 'pathe';
 
 import { CompressedChunk } from './compressed-chunk';
 import { logWrittenFile } from './utils';
+import { type ChunkSource, type ChunkDataPool } from '../chunk';
 import { materializeToDataTable } from '../compat/data-table';
 import { DataTable, sortMortonOrder, convertToSpace, getSHBands, shRestNames } from '../data-table';
 import { type FileSystem } from '../io/write';
-import { type ChunkSource, type ChunkDataPool } from '../source';
 import { logger, Transform } from '../utils';
 import { version } from '../version';
 

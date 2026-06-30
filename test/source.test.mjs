@@ -19,7 +19,7 @@ import {
     GEOMETRIC_STRIDE,
     positionFields,
     geometricFields
-} from '../src/lib/source/index.js';
+} from '../src/lib/chunk/index.js';
 
 function assertTablesEqual(actual, expected, msg) {
     const aNames = [...actual.columnNames].sort();

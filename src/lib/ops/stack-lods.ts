@@ -2,7 +2,7 @@ import {
     type ChunkSource,
     type ChunkSourceMetadata,
     type ReadRequest
-} from '../source';
+} from '../chunk';
 
 /**
  * Stack N single-LOD sources into one structural multi-LOD source: output LOD

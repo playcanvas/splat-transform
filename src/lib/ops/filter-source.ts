@@ -5,7 +5,7 @@ import {
     type ReadRequest,
     type ChunkSource,
     type ChunkSourceMetadata
-} from '../source';
+} from '../chunk';
 
 // Mutable form of a chunk read request, for building one layer-by-layer before
 // passing it to a parent's `read` (whose `ReadRequest` fields are readonly).

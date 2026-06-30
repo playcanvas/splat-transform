@@ -6,7 +6,7 @@ import {
     type ChunkSource,
     type ChunkSourceMetadata,
     SH_REST_COUNTS
-} from '../source';
+} from '../chunk';
 import { RotateSH, Transform } from '../utils';
 
 const SH_PER_CHANNEL = [0, 3, 8, 15];

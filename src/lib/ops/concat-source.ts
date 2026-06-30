@@ -5,7 +5,7 @@ import {
     type ReadRequest,
     type ChunkSource,
     type ChunkSourceMetadata
-} from '../source';
+} from '../chunk';
 
 const LAYERS: ChunkLayer[] = ['position', 'geometric', 'color', 'other'];
 

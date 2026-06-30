@@ -12,7 +12,7 @@ import { dataTableToChunkSource, materializeToDataTable } from '../src/lib/compa
 import { MemoryFileSystem } from '../src/lib/io/write/index.js';
 import { stackLods } from '../src/lib/ops/index.js';
 import { readPly } from '../src/lib/readers/read-ply.js';
-import { createChunkDataPool } from '../src/lib/source/index.js';
+import { createChunkDataPool } from '../src/lib/chunk/index.js';
 import { writeLod, writeLodSource } from '../src/lib/writers/write-lod.js';
 import { version } from '../src/lib/version.js';
 
