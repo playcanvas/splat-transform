@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { Column, DataTable, Transform, WebPCodec } from '../src/lib/index.js';
 import { dataTableToChunkSource, materializeToDataTable } from '../src/lib/compat/data-table.js';
 import { MemoryFileSystem } from '../src/lib/io/write/index.js';
-import { concatSource } from '../src/lib/ops/index.js';
+import { stackLods } from '../src/lib/ops/index.js';
 import { readPly } from '../src/lib/readers/read-ply.js';
 import { createChunkDataPool } from '../src/lib/source/index.js';
 import { writeLod, writeLodSource } from '../src/lib/writers/write-lod.js';
@@ -125,14 +125,14 @@ describe('writeLod', function () {
         assert.ok(fs.results.has('/scene/env/meta.json'));
     });
 
-    // The disk path: writeLodSource fed a fixed-stride PLY source (positions
-    // streamed resident, heavy data gathered per output chunk via readRows) must
-    // produce byte-identical output to the DataTable wrapper. No SH → encoding is
-    // deterministic, so a byte-for-byte A/B is the right gate.
-    it('writeLodSource over a disk-backed PLY matches the DataTable path byte-for-byte', async function () {
-        const lods = [0, 0, 0, 1, 1, 1, 1];
+    // The disk path: writeLodSource fed a single-LOD fixed-stride PLY source
+    // (positions streamed resident, heavy data gathered per output chunk via
+    // readRows) must produce byte-identical output to the DataTable wrapper. No SH
+    // → encoding is deterministic, so a byte-for-byte A/B is the right gate.
+    it('writeLodSource over a single-LOD disk PLY matches the DataTable path byte-for-byte', async function () {
+        const lods = [0, 0, 0, 0, 0]; // one structural LOD
 
-        // A: DataTable wrapper.
+        // A: DataTable wrapper (splits by the lod column into a single level).
         const fsA = new MemoryFileSystem();
         await writeLod({
             filename: '/a/lod-meta.json',
@@ -143,7 +143,7 @@ describe('writeLod', function () {
             chunkExtent: 16
         }, fsA);
 
-        // B: disk-backed PLY source + the lod array supplied separately.
+        // B: disk-backed PLY as a single-LOD structural source (no lod tag array).
         const plyBytes = encodePlyBinary(makeTable(lods));
         const diskSrc = await readPly(new BufferReadSource(plyBytes), createChunkDataPool());
         const fsB = new MemoryFileSystem();
@@ -151,7 +151,6 @@ describe('writeLod', function () {
             filename: '/b/lod-meta.json',
             mainSource: diskSrc,
             envSource: null,
-            lod: new Float32Array(lods),
             iterations: 1,
             chunkCount: 1,
             chunkExtent: 16
@@ -173,13 +172,13 @@ describe('writeLod', function () {
         }
     });
 
-    // Multi-input --lod: the CLI stitches per-LOD PLYs with concatSource and
-    // supplies the tagged-lod array. That path (writeLodSource over a concat of
-    // disk PLYs) must match the combined-DataTable wrapper byte-for-byte.
-    it('writeLodSource over a multi-input concatSource matches the combined DataTable path', async function () {
+    // Multi-input --lod: the CLI stacks per-LOD PLYs into a structural multi-LOD
+    // source via stackLods. That path (writeLodSource over stackLods of disk PLYs)
+    // must match the combined-DataTable wrapper byte-for-byte.
+    it('writeLodSource over a stackLods multi-LOD source matches the combined DataTable path', async function () {
         const lods = [0, 0, 0, 1, 1, 1, 1]; // rows 0-2 → LOD 0, rows 3-6 → LOD 1
 
-        // A: one combined DataTable through the wrapper.
+        // A: one combined DataTable through the wrapper (splits by the lod column).
         const fsA = new MemoryFileSystem();
         await writeLod({
             filename: '/a/lod-meta.json',
@@ -190,7 +189,7 @@ describe('writeLod', function () {
             chunkExtent: 16
         }, fsA);
 
-        // B: split the same scene into two PLYs by LOD, concat, supply the lod array.
+        // B: split the scene into one PLY per LOD, stack into a multi-LOD source.
         const full = makeTable(lods);
         const subset = async (indices) => materializeToDataTable(
             dataTableToChunkSource(full, 1 << 20, Uint32Array.from(indices)),
@@ -200,14 +199,13 @@ describe('writeLod', function () {
         const dt1 = await subset([3, 4, 5, 6]);
         const src0 = await readPly(new BufferReadSource(encodePlyBinary(dt0)), createChunkDataPool());
         const src1 = await readPly(new BufferReadSource(encodePlyBinary(dt1)), createChunkDataPool());
-        const mainSource = concatSource([src0, src1], createChunkDataPool());
+        const mainSource = stackLods([src0, src1]);
 
         const fsB = new MemoryFileSystem();
         await writeLodSource({
             filename: '/b/lod-meta.json',
             mainSource,
             envSource: null,
-            lod: new Float32Array(lods),
             iterations: 1,
             chunkCount: 1,
             chunkExtent: 16
@@ -216,7 +214,7 @@ describe('writeLod', function () {
 
         const relA = [...fsA.results.keys()].map(k => k.replace('/a/', '')).sort();
         const relB = [...fsB.results.keys()].map(k => k.replace('/b/', '')).sort();
-        assert.deepStrictEqual(relB, relA, 'multi-input concat path should write the same files');
+        assert.deepStrictEqual(relB, relA, 'multi-input stack path should write the same files');
         for (const rel of relA) {
             assert.deepStrictEqual(
                 fsB.results.get(`/b/${rel}`),

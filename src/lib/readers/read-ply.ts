@@ -745,6 +745,9 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
     let gatherScratch: Uint8Array | null = null;
     const readRows = async (request: RowReadRequest): Promise<void> => {
         const { indices, indexOffset, count } = request;
+        if ((request.lod ?? 0) !== 0) {
+            throw new Error('readPly: readRows supports only lod 0 (single-LOD source)');
+        }
         if (count <= 0) return;
 
         const requested: ChunkLayer[] = (['position', 'geometric', 'color', 'other'] as ChunkLayer[])

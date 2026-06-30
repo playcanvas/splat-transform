@@ -108,7 +108,7 @@ describe('ops: mortonOrder + permuteSource', () => {
     it('permuteSource rejects a non-resident or over-length input', () => {
         const dt = createTestDataTable(40);
         const resident = dataTableToChunkSource(dt, 16);
-        assert.throws(() => permuteSource(resident, new Uint32Array(41)), /exceeds numGaussians/);
+        assert.throws(() => permuteSource(resident, new Uint32Array(41)), /exceeds lod 0 count/);
         assert.throws(() => permuteSource({ meta: { numLods: 1, numGaussians: 40 } }, new Uint32Array(40)), /readRows/);
     });
 

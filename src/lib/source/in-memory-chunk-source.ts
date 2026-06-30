@@ -144,17 +144,17 @@ class InMemoryChunkSource implements ChunkSource {
 
     /**
      * Random-access gather (the {@link ChunkSource.readRows} capability): fill the
-     * requested layer buffers from arbitrary resident rows. A thin per-layer
-     * dispatch onto {@link gatherRows}; LOD 0 only (ordering/gather is a LOD-0
-     * concept).
+     * requested layer buffers from arbitrary resident rows of `request.lod`
+     * (default 0). A thin per-layer dispatch onto {@link gatherRows}.
      *
      * @param request - The scatter-gather read request.
      * @returns A resolved promise once the buffers are filled.
      */
     readRows(request: RowReadRequest): Promise<void> {
         const { indices, indexOffset, count } = request;
+        const lod = request.lod ?? 0;
         const fill = (cd: ChunkData | undefined, layer: ChunkLayer): void => {
-            if (cd) this.gatherRows(layer, 0, indices, indexOffset, count, cd.data);
+            if (cd) this.gatherRows(layer, lod, indices, indexOffset, count, cd.data);
         };
         fill(request.position, 'position');
         fill(request.geometric, 'geometric');

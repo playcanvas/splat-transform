@@ -59,17 +59,20 @@ type ChunkReadRequest = {
  * A random-access (scatter-gather) read request to a {@link ChunkSource}.
  *
  * Fills output rows `[0, count)` of the passed layer buffers from source rows
- * `indices[indexOffset .. indexOffset + count)` (LOD 0). Indices are arbitrary
- * and need not be sorted; this is the per-row analog of {@link ChunkReadRequest}
- * and underpins the LOD writer's "positions resident, heavy data fetched per
- * output chunk" gather — for a fixed-stride file source each row is a byte-range
- * read, so a unit pulls only its own gaussians (≈ 1× total reads, no whole-scene
- * residency).
+ * `indices[indexOffset .. indexOffset + count)` of LOD `lod` (default 0). Indices
+ * are arbitrary and need not be sorted; this is the per-row analog of
+ * {@link ChunkReadRequest} and underpins the LOD writer's "positions resident,
+ * heavy data fetched per output chunk" gather — for a fixed-stride file source
+ * each row is a byte-range read, so a unit pulls only its own gaussians (≈ 1×
+ * total reads, no whole-scene residency). LOD is structural: a gather targets one
+ * LOD's gaussians (sources never carry a per-gaussian LOD tag).
  */
 type RowReadRequest = {
     readonly indices: Uint32Array;
     readonly indexOffset: number;
     readonly count: number;
+    /** Which LOD to gather from (default 0). */
+    readonly lod?: number;
     readonly position?: ChunkData;
     readonly geometric?: ChunkData;
     readonly color?: ChunkData;

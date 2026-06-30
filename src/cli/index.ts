@@ -37,9 +37,9 @@ import {
 // Deep imports keep these internal/`@ignore` APIs off the public lib surface
 // until the migration is complete.
 import { materializeToDataTable } from '../lib/compat/data-table';
-import { bakeTransform, concatSource } from '../lib/ops';
+import { bakeTransform, concatSource, stackLods } from '../lib/ops';
 import { processSource, canProcessSource } from '../lib/process-source';
-import { readLccSource } from '../lib/readers/read-lcc';
+import { readLccSource, readLccEnvironmentSource } from '../lib/readers/read-lcc';
 import { readLcc2Source } from '../lib/readers/read-lcc2';
 import { readPly } from '../lib/readers/read-ply';
 import { readSplat } from '../lib/readers/read-splat';
@@ -1218,6 +1218,51 @@ const main = async () => {
             await Promise.all(processed.map(s => s.close()));
         }
 
+        // Intrinsic multi-LOD -> lod-meta: a single lcc input (no actions) maps its
+        // own internal LOD levels onto the output levels — the main scene streams,
+        // and its (small) environment is decoded eagerly. lcc2 joins here once it
+        // supports readRows. Otherwise fall through to the tagged-PLY path / the
+        // DataTable pipeline.
+        if (
+            !isNullOutput &&
+            outputFormat === 'lod' &&
+            outputArg.processActions.length === 0 &&
+            inputArgs.length === 1 &&
+            inputArgs[0].processActions.length === 0 &&
+            !isHttpUrl(inputArgs[0].filename) &&
+            getInputFormat(resolveInput(inputArgs[0].filename).classifyName) === 'lcc'
+        ) {
+            const pool = createChunkDataPool();
+            const { filename: inFile, fileSystem } = resolveInput(inputArgs[0].filename);
+
+            // The lcc's own LODs become the output levels (lod-meta keeps every
+            // level — selection unchanged); the env is decoded eagerly (it's small).
+            const mainSource = await readLccSource(fileSystem, inFile, options, pool);
+            const total = mainSource.meta.lodCounts.reduce((a, c) => a + c, 0);
+            if (total === 0) {
+                throw new Error('No Gaussians to write');
+            }
+            const envSource = await readLccEnvironmentSource(fileSystem, inFile, pool);
+
+            const phase = logger.group(`Output ${outputArg.filename}`, { index: phaseTotal, total: phaseTotal });
+            logger.info(`${fmtCount(total)} gaussians · ${mainSource.meta.shBands} SH bands · ${mainSource.meta.numLods} LODs (streaming LOD)`);
+            await writeLodSource({
+                filename: outputFilename,
+                mainSource,
+                envSource,
+                iterations: options.iterations,
+                createDevice: deviceCreator,
+                chunkCount: options.lodChunkCount,
+                chunkExtent: options.lodChunkExtent
+            }, new NodeFileSystem());
+
+            await mainSource.close();
+            if (envSource) await envSource.close();
+            phase.end();
+            reportDone();
+            exit(0);
+        }
+
         // Streaming LOD path: local PLY inputs each tagged only with --lod,
         // written to lod-meta.json. Positions stream resident for the spatial
         // partition; each output unit's heavy data (incl. SH) is gathered from the
@@ -1262,28 +1307,29 @@ const main = async () => {
             if (mains.length > 0 && uniform(mains) && uniform(envs)) {
                 const phase = logger.group(`Output ${outputArg.filename}`, { index: phaseTotal, total: phaseTotal });
 
-                const mainSource = mains.length === 1 ? mains[0].source : concatSource(mains.map(m => m.source), pool);
+                // Build a structural multi-LOD main source: group the tagged
+                // inputs by --lod level (ascending), concat within a level, then
+                // stack the levels. Output detail level i = the i-th distinct tag
+                // (LOD is structural now — no per-gaussian lod tag array).
+                const mainTags = [...new Set(mains.map(m => m.tag))].sort((a, b) => a - b);
+                const perLevel = mainTags.map((tag) => {
+                    const group = mains.filter(m => m.tag === tag).map(m => m.source);
+                    return group.length === 1 ? group[0] : concatSource(group, pool);
+                });
+                const mainSource = perLevel.length === 1 ? perLevel[0] : stackLods(perLevel);
                 const envSource = envs.length === 0 ? null :
                     (envs.length === 1 ? envs[0].source : concatSource(envs.map(e => e.source), pool));
 
-                if (mainSource.meta.numGaussians === 0) {
+                const totalGaussians = mainSource.meta.lodCounts.reduce((a, c) => a + c, 0);
+                if (totalGaussians === 0) {
                     throw new Error('No Gaussians to write');
                 }
 
-                // lod array in main-concat order: each input's gaussians get its tag.
-                const lod = new Float32Array(mainSource.meta.numGaussians);
-                for (let off = 0, i = 0; i < mains.length; i++) {
-                    const n = mains[i].source.meta.numGaussians;
-                    lod.fill(mains[i].tag, off, off + n);
-                    off += n;
-                }
-
-                logger.info(`${fmtCount(mainSource.meta.numGaussians)} gaussians · ${mainSource.meta.shBands} SH bands (streaming LOD)`);
+                logger.info(`${fmtCount(totalGaussians)} gaussians · ${mainSource.meta.shBands} SH bands (streaming LOD)`);
                 await writeLodSource({
                     filename: outputFilename,
                     mainSource,
                     envSource,
-                    lod,
                     iterations: options.iterations,
                     createDevice: deviceCreator,
                     chunkCount: options.lodChunkCount,
