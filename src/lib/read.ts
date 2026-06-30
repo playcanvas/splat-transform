@@ -1,6 +1,6 @@
 import { dataTableToChunkSource } from './compat/data-table';
 import { ReadFileSystem, ZipReadFileSystem } from './io/read';
-import { readKsplat, readLcc, readLcc2, readMjs, readPly, readSog, readSplat, readSpz } from './readers';
+import { readKsplat, readLcc, readLcc2, readMjs, readPly, readSogSource, readSplat, readSpz } from './readers';
 import { type ChunkSource, createChunkDataPool } from './source';
 import { Options, Param } from './types';
 
@@ -130,18 +130,20 @@ const readFile = async (readFileOptions: ReadFileOptions): Promise<ChunkSource[]
     }
     if (inputFormat === 'sog') {
         const lowerFilename = stripQueryAndHash(filename).toLowerCase();
+        const pool = createChunkDataPool();
         if (lowerFilename.endsWith('.sog')) {
-            // Outer .sog is a ZIP container - mount it and let the inner SOG
-            // reader drive its own decode bar against the zipped payloads.
+            // Outer .sog is a ZIP container - mount it and decode chunk-native
+            // (textures resident, rows expanded on demand). readSogSource loads and
+            // decodes every texture up front, so the zip can close once it returns.
             const source = await fileSystem.createSource(filename);
             const zipFs = new ZipReadFileSystem(source);
             try {
-                return [dataTableToChunkSource(await readSog(zipFs, 'meta.json'))];
+                return [await readSogSource(zipFs, 'meta.json', pool)];
             } finally {
                 zipFs.close();
             }
         }
-        return [dataTableToChunkSource(await readSog(fileSystem, filename))];
+        return [await readSogSource(fileSystem, filename, pool)];
     }
     if (inputFormat === 'lcc') {
         return (await readLcc(fileSystem, filename, options)).map(dt => dataTableToChunkSource(dt));

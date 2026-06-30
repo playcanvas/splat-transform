@@ -1,5 +1,5 @@
 import { containerSource, type ContainerSegment } from './container-source';
-import { readSog } from './read-sog';
+import { readSog, readSogSource } from './read-sog';
 import { readSpz } from './read-spz';
 import { dataTableToChunkSource, materializeToDataTable } from '../compat/data-table';
 import { Column, DataTable, TypedArray } from '../data-table';
@@ -842,8 +842,10 @@ const decodeChunkSource = async (
     if (splatType === '.sog') {
         const zipFs = new ZipReadFileSystem(source);
         try {
-            const dt = await readSog(zipFs, 'meta.json', { logging: 'silent' });
-            return dataTableToChunkSource(dt, pool.chunkSize);
+            // Native chunk source: textures resident, rows expand on demand (no
+            // whole-scene DataTable / bridge). All zip reads happen during this
+            // await, so the zip can close once the source is built.
+            return await readSogSource(zipFs, 'meta.json', pool, { logging: 'silent' });
         } finally {
             zipFs.close(); // closes the zip wrapper (and the source)
         }

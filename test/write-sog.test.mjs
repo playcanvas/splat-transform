@@ -22,7 +22,10 @@ import {
     Transform, computeSummary, readSog,
     MemoryFileSystem, MemoryReadFileSystem, ZipReadFileSystem, WebPCodec
 } from '../src/lib/index.js';
+import { materializeToDataTable } from '../src/lib/compat/data-table.js';
+import { permuteSource } from '../src/lib/ops/index.js';
 import { decodePlyToDataTable, readPly } from '../src/lib/readers/read-ply.js';
+import { readSogSource } from '../src/lib/readers/read-sog.js';
 import { createChunkDataPool } from '../src/lib/source/index.js';
 import { writeSog, writeSogSource } from '../src/lib/writers/write-sog.js';
 
@@ -86,6 +89,46 @@ describe('writeSogSource: native SOG from a ChunkSource', () => {
 
         assert.strictEqual(decoded.numRows, dt.numRows);
         compareSummaries(computeSummary(decoded), expected, { tolerance: 0.5, allowExtraColumns: true });
+    });
+});
+
+describe('readSogSource: native chunked SOG read', () => {
+    // Write a SOG, then read it two ways from the SAME bytes: a full sequential
+    // read() (via materialize) and a random-access readRows() (via permuteSource).
+    // Both share the per-gaussian decode, so gathered row j must EXACTLY equal
+    // full row order[j] — k-means non-determinism is at write time, not read.
+    it('readRows gathers rows identically to a full read (SH3)', async () => {
+        const dt = createTestDataTable(300, { includeSH: true, shBands: 3 });
+        dt.transform = Transform.PLY.clone();
+
+        const pool = createChunkDataPool();
+        const fs = new MemoryFileSystem();
+        await writeSogSource(dataTableToChunkSource(dt, pool.chunkSize), pool,
+            { filename: 'out.sog', bundle: true, iterations: 5, logging: 'silent' }, fs);
+
+        const rfs = new MemoryReadFileSystem();
+        rfs.set('out.sog', fs.results.get('out.sog'));
+        const zip = new ZipReadFileSystem(await rfs.createSource('out.sog'));
+
+        const src = await readSogSource(zip, 'meta.json', pool);
+        assert.strictEqual(typeof src.readRows, 'function', 'native SOG source exposes readRows');
+        assert.strictEqual(src.meta.shBands, 3);
+
+        const full = await materializeToDataTable(src, pool);           // via read()
+        assert.strictEqual(full.numRows, dt.numRows);
+
+        const order = Uint32Array.from([299, 0, 150, 5, 1, 42]);        // shuffled subset
+        const gathered = await materializeToDataTable(permuteSource(src, order), pool); // via readRows()
+        assert.strictEqual(gathered.numRows, order.length);
+
+        for (const name of full.columnNames) {
+            const e = full.getColumnByName(name).data;
+            const g = gathered.getColumnByName(name).data;
+            for (let j = 0; j < order.length; j++) {
+                assert.strictEqual(g[j], e[order[j]], `column '${name}' out-row ${j}`);
+            }
+        }
+        await src.close();
     });
 });
 
