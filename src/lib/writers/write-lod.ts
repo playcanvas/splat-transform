@@ -6,7 +6,7 @@ import { writeSogSource } from './write-sog.js';
 import { type ChunkDataPool, type ChunkSource, createChunkDataPool } from '../chunk';
 import { Column, DataTable, sortMortonOrder } from '../data-table';
 import { type FileSystem } from '../io/write';
-import { permuteSource } from '../ops';
+import { bakeTransform, permuteSource } from '../ops';
 import { BTreeNode, BTree } from '../spatial';
 import type { DeviceCreator } from '../types';
 import { logger, Transform } from '../utils';
@@ -256,8 +256,9 @@ type WriteLodSourceOptions = {
 };
 
 /**
- * Writes Gaussian splat data to multi-LOD format with spatial chunking, reading
- * from resident chunk sources already in PLY space.
+ * Writes Gaussian splat data to multi-LOD format with spatial chunking. The main
+ * source's pending coordinate-space transform is baked to PLY space up front, so
+ * the spatial tree/bounds and the SOG payloads share one coordinate space.
  *
  * Creates a hierarchical structure with multiple LOD levels, each stored in
  * separate SOG files, plus a binary-tree spatial index for view-dependent
@@ -270,7 +271,16 @@ type WriteLodSourceOptions = {
  * @ignore
  */
 const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) => {
-    const { filename, mainSource, envSource, iterations, createDevice, chunkCount, chunkExtent } = options;
+    const { filename, envSource, iterations, createDevice, chunkCount, chunkExtent } = options;
+
+    // Bake the pending coordinate-space transform to PLY once, up front, so the
+    // partition/bounds passes (extractSlim, calcBound, morton) and the per-unit
+    // SOG payloads all read the same space (writeSogSource's internal bake then
+    // sees identity). Mirrors the legacy writer's convert-to-PLY-before-tree
+    // step; a PLY-space input hits bakeTransform's identity fast-path. The env
+    // needs no bake here: no bounds are computed from it and writeSogSource
+    // bakes it itself.
+    const mainSource = bakeTransform(options.mainSource, Transform.PLY);
 
     // Pool for slim extraction read buffers and the chunk-native SOG encodes.
     const pool = createChunkDataPool();

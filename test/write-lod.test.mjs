@@ -12,9 +12,9 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { Column, DataTable, Transform, WebPCodec } from '../src/lib/index.js';
-import { dataTableToChunkSource } from '../src/lib/compat/data-table.js';
+import { dataTableToChunkSource, materializeToDataTable } from '../src/lib/compat/data-table.js';
 import { MemoryFileSystem } from '../src/lib/io/write/index.js';
-import { stackLods } from '../src/lib/ops/index.js';
+import { bakeTransform, mapSource, stackLods } from '../src/lib/ops/index.js';
 import { readPly } from '../src/lib/readers/read-ply.js';
 import { createChunkDataPool } from '../src/lib/chunk/index.js';
 import { writeLodSource } from '../src/lib/writers/write-lod.js';
@@ -184,5 +184,59 @@ describe('writeLodSource: lod-meta.json contract', function () {
         await s1.close();
 
         assertSameFiles(fsA, fsB);
+    });
+
+    it('bakes a pending transform before tree construction (deferred == pre-baked, byte-for-byte)', async function () {
+        // A carries the transform *deferred* (mapSource only composes
+        // meta.transform; the data stays raw); B is the same scene with the
+        // transform already baked into the data. The writer must bake before the
+        // partition/bounds passes, so both must produce identical output —
+        // including lod-meta.json's tree bounds (the payload space).
+        const T = new Transform().fromEulers(90, 0, 180);
+        const pendingLevel = (n) => mapSource(dataTableToChunkSource(makeTable(n), 1 << 20), T);
+        const bakedLevel = async (n) => {
+            const dt = await materializeToDataTable(bakeTransform(pendingLevel(n), Transform.PLY), createChunkDataPool());
+            return dataTableToChunkSource(dt, 1 << 20);
+        };
+
+        const fsA = new MemoryFileSystem();
+        await writeLodSource({
+            filename: '/a/lod-meta.json',
+            mainSource: stackLods([pendingLevel(5), pendingLevel(3)]),
+            envSource: null, iterations: 1, chunkCount: 1, chunkExtent: 16
+        }, fsA);
+
+        const fsB = new MemoryFileSystem();
+        await writeLodSource({
+            filename: '/b/lod-meta.json',
+            mainSource: stackLods([await bakedLevel(5), await bakedLevel(3)]),
+            envSource: null, iterations: 1, chunkCount: 1, chunkExtent: 16
+        }, fsB);
+
+        assertSameFiles(fsA, fsB);
+
+        // Bounds are in payload (baked / PLY) space: the single-leaf root bound
+        // contains every baked position (across both levels) and hugs their union
+        // range to within the splat extents (isotropic exp(-3) half-extents,
+        // ≤ ~0.09 after rotation).
+        const meta = JSON.parse(new TextDecoder().decode(fsA.results.get('/a/lod-meta.json')));
+        const axes = ['x', 'y', 'z'];
+        const lo = [Infinity, Infinity, Infinity];
+        const hi = [-Infinity, -Infinity, -Infinity];
+        for (const n of [5, 3]) {
+            const dt = await materializeToDataTable(bakeTransform(pendingLevel(n), Transform.PLY), createChunkDataPool());
+            axes.forEach((name, axis) => {
+                for (const v of dt.getColumnByName(name).data) {
+                    lo[axis] = Math.min(lo[axis], v);
+                    hi[axis] = Math.max(hi[axis], v);
+                }
+            });
+        }
+        axes.forEach((name, axis) => {
+            assert.ok(meta.tree.bound.min[axis] <= lo[axis] + 1e-5, `root bound min[${name}] contains baked positions`);
+            assert.ok(meta.tree.bound.max[axis] >= hi[axis] - 1e-5, `root bound max[${name}] contains baked positions`);
+            assert.ok(meta.tree.bound.min[axis] >= lo[axis] - 0.2, `root bound min[${name}] within splat extents of baked positions`);
+            assert.ok(meta.tree.bound.max[axis] <= hi[axis] + 0.2, `root bound max[${name}] within splat extents of baked positions`);
+        });
     });
 });
