@@ -293,6 +293,37 @@ const fetchSogMeta = async (fileSystem: ReadFileSystem, filename: string) => {
 };
 
 /**
+ * Header-only SOG peek: parse `meta.json` and report the metadata a file-info
+ * summary needs — gaussian count, SH bands and available layers — **without**
+ * decoding any WebP texture. SOG always carries position/geometric/color and no
+ * extra columns. V2 only; legacy V1 (no `version`) returns `null` so the caller
+ * can fall back to a full read.
+ *
+ * @param fileSystem - The file system to read meta.json from.
+ * @param filename - Path to meta.json.
+ * @returns The meta summary, or `null` for non-V2 files.
+ */
+const statSogSource = async (
+    fileSystem: ReadFileSystem,
+    filename: string
+): Promise<Pick<ChunkSourceMetadata, 'numGaussians' | 'numLods' | 'lodCounts' | 'shBands' | 'availableLayers' | 'extraColumns'> | null> => {
+    const { rawMeta } = await fetchSogMeta(fileSystem, filename);
+    if (rawMeta.version !== 2) return null;
+    const meta = rawMeta as MetaV2;
+    const count = meta.count;
+    const rawBands = meta.shN?.bands ?? 0;
+    const shBands = ((rawBands === 1 || rawBands === 2 || rawBands === 3) ? rawBands : 0) as SHBands;
+    return {
+        numGaussians: count,
+        numLods: 1,
+        lodCounts: [count],
+        shBands,
+        availableLayers: new Set<ChunkLayer>(['position', 'geometric', 'color']),
+        extraColumns: []
+    };
+};
+
+/**
  * Open a SOG scene as a lazy, layered {@link ChunkSource}.
  *
  * Current (V2) files decode chunk-native: the WebP textures + codebooks stay
@@ -353,5 +384,5 @@ const readSog = async (fileSystem: ReadFileSystem, filename: string, options: Re
     return materializeToDataTable(src, pool);
 };
 
-export { readSog, readSogSource };
+export { readSog, readSogSource, statSogSource };
 export type { ReadSogOptions };

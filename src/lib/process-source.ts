@@ -1,5 +1,5 @@
-import { type ChunkDataPool, type ChunkSource } from './chunk';
-import { dataTableToChunkSource, materializeToDataTable } from './compat/data-table';
+import { type ChunkDataPool, type ChunkSource, type ChunkSourceMetadata } from './chunk';
+import { columnNamesFromMeta, dataTableToChunkSource, materializeToDataTable } from './compat/data-table';
 import {
     filterByValueRows,
     filterBoxRows,
@@ -10,7 +10,7 @@ import {
     reduceBandsSource
 } from './ops';
 import { processDataTable, type ProcessAction, type ProcessOptions } from './process';
-import { Transform } from './utils';
+import { fmtCount, logger, Transform } from './utils';
 
 /**
  * The `ProcessAction` kinds `processSource` can apply natively on the streaming
@@ -20,7 +20,7 @@ import { Transform } from './utils';
 const SOURCE_ACTION_KINDS: ReadonlySet<ProcessAction['kind']> = new Set([
     'translate', 'rotate', 'scale',
     'filterNaN', 'filterByValue', 'filterBox', 'filterSphere', 'filterBands',
-    'summary', 'param'
+    'summary', 'info', 'param'
 ]);
 
 /**
@@ -29,6 +29,25 @@ const SOURCE_ACTION_KINDS: ReadonlySet<ProcessAction['kind']> = new Set([
  * @returns `true` if all are {@link SOURCE_ACTION_KINDS}.
  */
 const canProcessSource = (actions: ProcessAction[]): boolean => actions.every(a => SOURCE_ACTION_KINDS.has(a.kind));
+
+/**
+ * Render a source's structural metadata as text for the `info` action — per-LOD
+ * counts, SH bands, and the canonical column list, all from `meta` (no data read).
+ * @param meta - The source metadata.
+ * @returns A text block for `logger.output`.
+ */
+const formatSourceInfo = (meta: ChunkSourceMetadata): string => {
+    const lods = meta.numLods > 1 ?
+        `${meta.numLods} (${meta.lodCounts.map(c => fmtCount(c)).join(', ')})` :
+        '1';
+    return [
+        '# File info',
+        `gaussians: ${fmtCount(meta.numGaussians)}`,
+        `lods: ${lods}`,
+        `sh bands: ${meta.shBands}`,
+        `columns: ${columnNamesFromMeta(meta).join(', ')}`
+    ].join('\n');
+};
 
 /**
  * Apply a sequence of processing actions to a {@link ChunkSource}, the streaming
@@ -89,6 +108,11 @@ const processSource = async (
                 await processDataTable(dt, [{ kind: 'summary' }]);
                 break;
             }
+            case 'info':
+                // Structural metadata only (meta-level) — no materialization; the
+                // source passes through unchanged.
+                logger.output(formatSourceInfo(src.meta));
+                break;
             case 'param':
                 break; // generator params: no-op here, as in processDataTable
             default:

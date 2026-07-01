@@ -7,6 +7,7 @@ import {
     type ChunkData,
     type ChunkDataPool,
     type ChunkSource,
+    type ChunkSourceMetadata,
     type ChunkLayer,
     type SHBands
 } from '../chunk';
@@ -43,6 +44,30 @@ const standardColumnSet = new Set<string>([
     ...GEOMETRIC_COLS,
     ...COLOR_DC_COLS
 ]);
+
+/**
+ * Enumerate the canonical column names a source exposes, in the same order
+ * {@link materializeToDataTable} produces its columns — derived purely from
+ * `meta` (available layers + SH band count + extra columns), with no data read.
+ * @param meta - The source metadata to enumerate.
+ * @returns The ordered list of column names.
+ */
+const columnNamesFromMeta = (
+    meta: Pick<ChunkSourceMetadata, 'availableLayers' | 'shBands' | 'extraColumns'>
+): string[] => {
+    const names: string[] = [];
+    if (meta.availableLayers.has('position')) names.push(...POSITION_COLS);
+    if (meta.availableLayers.has('geometric')) names.push(...GEOMETRIC_COLS);
+    if (meta.availableLayers.has('color')) {
+        names.push(...COLOR_DC_COLS);
+        const numRest = SH_REST_COUNTS[meta.shBands];
+        for (let r = 0; r < numRest; r++) names.push(`f_rest_${r}`);
+    }
+    if (meta.availableLayers.has('other')) {
+        for (const e of meta.extraColumns) names.push(e.name);
+    }
+    return names;
+};
 
 /**
  * Determine the SH band count from the highest `f_rest_*` index present.
@@ -438,4 +463,4 @@ const materializeToDataTable = async (
     return new DataTable(columns, meta.transform);
 };
 
-export { dataTableToChunkSource, materializeToDataTable };
+export { dataTableToChunkSource, materializeToDataTable, columnNamesFromMeta };

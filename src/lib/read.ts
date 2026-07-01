@@ -1,7 +1,7 @@
-import { type ChunkSource, createChunkDataPool } from './chunk';
-import { dataTableToChunkSource } from './compat/data-table';
+import { type ChunkSource, type ChunkSourceMetadata, type SHBands, createChunkDataPool } from './chunk';
+import { columnNamesFromMeta, dataTableToChunkSource } from './compat/data-table';
 import { ReadFileSystem, ZipReadFileSystem } from './io/read';
-import { readKsplat, readMjs, readPly, readSogSource, readSplat, readSpz } from './readers';
+import { readKsplat, readMjs, readPly, readSogSource, readSplat, readSpz, statSogSource } from './readers';
 import { readLccSource } from './readers/read-lcc';
 import { readLcc2Source } from './readers/read-lcc2';
 import { Options, Param } from './types';
@@ -93,7 +93,7 @@ type ReadFileOptions = {
  * Reads a Gaussian splat file and returns its data as {@link ChunkSource}s
  * (usually one; an LCC/LCC2 container yields a single structural multi-LOD source).
  *
- * Readers are chunk-native: `ply`/`splat`/`spz`/`lcc`/`lcc2` return **lazy**/
+ * Readers are chunk-native: `ply`/`splat`/`spz`/`lcc`/`lcc2` return lazy /
  * streaming sources whose `close()` releases the underlying file(s); whole-blob
  * formats (`sog`/`mjs`/`ksplat`) are decoded up front and returned resident.
  * Callers that need a `DataTable` materialize at their own boundary (and call
@@ -179,4 +179,91 @@ const readFile = async (readFileOptions: ReadFileOptions): Promise<ChunkSource[]
     }
 };
 
-export { readFile, getInputFormat, type InputFormat, type ReadFileOptions };
+/**
+ * Header-only structural metadata for a splat file — the lightweight counterpart
+ * to a full read, for validating/inspecting a file (e.g. before upload) without
+ * decoding its gaussian data. Reports every LOD level.
+ *
+ * Integrity (truncation/corruption) is enforced by the readers themselves, which
+ * throw on a size mismatch — so a returned `FileInfo` implies a sound file.
+ */
+type FileInfo = {
+    /** Detected input format. */
+    format: InputFormat;
+    /** Gaussian count of the finest LOD (LOD 0). */
+    numGaussians: number;
+    /** Number of LOD levels (1 for non-LOD formats). */
+    numLods: number;
+    /** Per-LOD gaussian counts; `lodCounts[0]` equals `numGaussians`. */
+    lodCounts: number[];
+    /** SH band count present in the file. */
+    shBands: SHBands;
+    /** Canonical column names the file exposes. */
+    columns: string[];
+};
+
+// The subset of ChunkSourceMetadata a FileInfo is built from — satisfied by a
+// full ChunkSource.meta as well as the header-only SOG/PLY peeks.
+type MetaSummary = Pick<ChunkSourceMetadata,
+    'numGaussians' | 'numLods' | 'lodCounts' | 'shBands' | 'availableLayers' | 'extraColumns'>;
+
+const buildFileInfo = (format: InputFormat, meta: MetaSummary): FileInfo => ({
+    format,
+    numGaussians: meta.numGaussians,
+    numLods: meta.numLods,
+    lodCounts: [...meta.lodCounts],
+    shBands: meta.shBands,
+    columns: columnNamesFromMeta(meta)
+});
+
+/**
+ * Read a splat file's structural metadata as efficiently as the format allows —
+ * from the header alone wherever possible, without decoding gaussian data, and
+ * across every LOD level.
+ *
+ * `sog` is peeked from `meta.json` (no WebP decode); every other format opens via
+ * {@link readFile} (header-only for the lazy readers; eager for `ksplat`/`mjs`)
+ * and reads its `meta`. Integrity is enforced by the readers, which throw on a
+ * size mismatch, so a returned `FileInfo` implies a structurally sound file.
+ *
+ * @param readFileOptions - Same inputs as {@link readFile}.
+ * @returns The file's {@link FileInfo}.
+ */
+const readFileInfo = async (readFileOptions: ReadFileOptions): Promise<FileInfo> => {
+    const { filename, inputFormat, fileSystem } = readFileOptions;
+
+    // SOG: header-only meta.json peek (no texture decode). Legacy V1 (no
+    // `version`) returns null from the peek and falls through to the full read.
+    if (inputFormat === 'sog') {
+        const lowerFilename = stripQueryAndHash(filename).toLowerCase();
+        if (lowerFilename.endsWith('.sog')) {
+            const source = await fileSystem.createSource(filename);
+            try {
+                const zipFs = new ZipReadFileSystem(source);
+                try {
+                    const stat = await statSogSource(zipFs, 'meta.json');
+                    if (stat) return buildFileInfo('sog', stat);
+                } finally {
+                    zipFs.close();
+                }
+            } finally {
+                source.close();
+            }
+        } else {
+            const stat = await statSogSource(fileSystem, filename);
+            if (stat) return buildFileInfo('sog', stat);
+        }
+    }
+
+    // Every other format (and SOG V1): open via readFile and read its meta,
+    // forcing all LOD levels (ignore any caller lodSelect). Lazy readers parse
+    // only the header; a truncated/corrupt file throws in the reader's guard.
+    const [src] = await readFile({ ...readFileOptions, options: { ...readFileOptions.options, lodSelect: [] } });
+    try {
+        return buildFileInfo(inputFormat, src.meta);
+    } finally {
+        await src.close();
+    }
+};
+
+export { readFile, readFileInfo, getInputFormat, type InputFormat, type ReadFileOptions, type FileInfo };

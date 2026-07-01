@@ -35,7 +35,7 @@ import {
 // until the migration is complete.
 import { type ChunkSource, type ChunkSourceMetadata, createChunkDataPool } from '../lib/chunk';
 import { dataTableToChunkSource, materializeToDataTable } from '../lib/compat/data-table';
-import { bakeTransform, concatSource, selectLod, stackLods } from '../lib/ops';
+import { bakeTransform, concatSource, resolveLodLevels, selectLod, stackLods } from '../lib/ops';
 import { processSourceBridged } from '../lib/process-source';
 import { readLccSource, readLccEnvironmentSource } from '../lib/readers/read-lcc';
 import { readLcc2Source, readLcc2EnvironmentSource } from '../lib/readers/read-lcc2';
@@ -170,6 +170,7 @@ const cliOptionsConfig = {
     params: { type: 'string', short: 'p', multiple: true },
     lod: { type: 'string', short: 'l', multiple: true },
     summary: { type: 'boolean', short: 'm', multiple: true },
+    info: { type: 'boolean', short: 'I', multiple: true },
     'morton-order': { type: 'boolean', short: 'M', multiple: true }
 } as const;
 
@@ -643,6 +644,11 @@ const parseArguments = async () => {
                         kind: 'summary'
                     });
                     break;
+                case 'info':
+                    current.processActions.push({
+                        kind: 'info'
+                    });
+                    break;
                 case 'morton-order':
                     current.processActions.push({
                         kind: 'mortonOrder'
@@ -754,6 +760,7 @@ ACTIONS (executed in order; can be repeated)
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
     -l, --lod              <n>              Tag the Gaussians with LOD level n (n >= 0, or -1 for environment)
     -m, --summary                           Print per-column statistics to stdout
+    -I, --info                              Print structural metadata (per-LOD counts, columns) to stdout
     -M, --morton-order                      Reorder Gaussians by Morton code (Z-order curve)
 
 GENERAL
@@ -1078,20 +1085,15 @@ const main = async () => {
         // declare phase total: one Read phase per input + one Write phase
         const phaseTotal = inputArgs.length + (isNullOutput ? 0 : 1);
 
-        // LODs are overlapping representations of the *same* scene at different
-        // detail — alternatives, not additive layers. So a single-scene output
-        // (anything but lod-meta.json) takes exactly ONE LOD: default the finest
-        // (LOD 0), reject an explicit multi-level --lod-select, and read only that
-        // level (the LCC/LCC2 readers honor lodSelect). --lod *tags* apply only to
-        // lod-meta output; using them with single-scene output is rejected below.
-        // lod-meta output keeps every LOD (selection unchanged).
-        if (outputFormat !== 'lod') {
-            if (options.lodSelect.length > 1) {
-                throw new Error('Cannot write multiple LOD levels (--lod-select) to a single-scene output; select one level, or output lod-meta.json.');
-            }
-            if (options.lodSelect.length === 0) {
-                options.lodSelect = [0]; // finest
-            }
+        // LODs are overlapping representations of the *same* scene — alternatives,
+        // not additive layers. A single-scene WRITER takes exactly one LOD: the
+        // finest (LOD 0) by default, or the one --lod-select picks (reject multiple).
+        // Selection is applied as a selectLod node right after the reader (below),
+        // so the pipeline operates on that single level. `null` output has no
+        // writer, so it keeps the full multi-LOD source — `--info`/`--summary`
+        // there report every level. lod-meta output keeps every level (path below).
+        if (outputFormat !== null && outputFormat !== 'lod' && options.lodSelect.length > 1) {
+            throw new Error('Cannot write multiple LOD levels (--lod-select) to a single-scene output; select one level, or output lod-meta.json.');
         }
 
         // Single-scene pipeline (one chunk-native path for every non-lod output).
@@ -1112,10 +1114,11 @@ const main = async () => {
         ) {
             const pool = createChunkDataPool();
 
-            // Open one input as a ChunkSource via readFile — native for
-            // ply/splat/spz/sog/lcc/lcc2, eager-bridged for ksplat/mjs, plus URL
-            // inputs. Single-scene reads one LOD (readFile honors options.lodSelect,
-            // forced to [0] above). mjs generators need their params + a file:// URL.
+            // Open one input as a full (all-LOD) ChunkSource via readFile — native
+            // for ply/splat/spz/sog/lcc/lcc2, eager-bridged for ksplat/mjs, plus URL
+            // inputs. LOD selection is a selectLod node below (real single-LOD
+            // writers only), so readFile always reads every level. mjs generators
+            // need their params + a file:// URL.
             const openInput = async (inputArg: typeof inputArgs[number]): Promise<ChunkSource> => {
                 const { filename: inFile, fileSystem, classifyName } = resolveInput(inputArg.filename);
                 const fmt = getInputFormat(classifyName);
@@ -1126,7 +1129,7 @@ const main = async () => {
                     return { name: p.name, value: p.value };
                 });
                 const readFilename = fmt === 'mjs' ? `file://${inFile}` : inFile;
-                const srcs = await readFile({ filename: readFilename, inputFormat: fmt, options, params, fileSystem });
+                const srcs = await readFile({ filename: readFilename, inputFormat: fmt, options: { ...options, lodSelect: [] }, params, fileSystem });
                 return srcs.length === 1 ? srcs[0] : concatSource(srcs, pool);
             };
 
@@ -1153,12 +1156,21 @@ const main = async () => {
 
             const phase = logger.group(`Output ${outputArg.filename}`, { index: phaseTotal, total: phaseTotal });
 
-            // `--lod` actions are lod-meta grouping metadata; they never apply as
-            // data ops (and null output may carry them), so strip them here.
+            // A real single-LOD writer collapses each multi-LOD input to the
+            // selected level (finest by default) via a selectLod node, so
+            // transforms operate on one LOD; null output keeps every level (so an
+            // --info/--summary action there reports the whole source). `--lod`
+            // actions are lod-meta grouping metadata (never data ops), so strip them.
+            const selectSingleLod = outputFormat !== null;
             const processed: ChunkSource[] = [];
             for (const inputArg of inputArgs) {
+                let src = await openInput(inputArg);
+                if (selectSingleLod && src.meta.numLods > 1) {
+                    const level = resolveLodLevels(options.lodSelect, src.meta.numLods)[0] ?? 0;
+                    src = selectLod(src, level);
+                }
                 const actions = inputArg.processActions.filter(a => a.kind !== 'lod');
-                processed.push(await processSourceBridged(await openInput(inputArg), actions, pool, processOptions));
+                processed.push(await processSourceBridged(src, actions, pool, processOptions));
             }
 
             let combined = await combineSources(processed);
@@ -1208,13 +1220,14 @@ const main = async () => {
                 // env fetched separately. The input's own actions apply per level.
                 const { filename: inFile, fileSystem } = resolveInput(inputArgs[0].filename);
                 const multi = single === 'lcc2' ?
-                    await readLcc2Source(fileSystem, inFile, options, pool) :
-                    await readLccSource(fileSystem, inFile, options, pool);
+                    await readLcc2Source(fileSystem, inFile, { ...options, lodSelect: [] }, pool) :
+                    await readLccSource(fileSystem, inFile, { ...options, lodSelect: [] }, pool);
                 container = multi;
                 envSource = single === 'lcc2' ?
                     await readLcc2EnvironmentSource(fileSystem, inFile, pool) :
                     await readLccEnvironmentSource(fileSystem, inFile, pool);
-                perLevel = Array.from({ length: multi.meta.numLods }, (_, i) => selectLod(multi, i));
+                // --lod-select picks which levels go into the lod-meta (default all).
+                perLevel = resolveLodLevels(options.lodSelect, multi.meta.numLods).map(lvl => selectLod(multi, lvl));
                 inputActions = inputArgs[0].processActions;
             } else {
                 // PLY inputs grouped by --lod tag (env = -1, untagged = level 0);

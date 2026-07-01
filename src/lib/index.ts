@@ -10,8 +10,8 @@ export {
 export type { Bar, Group, LogEvent, Logger, MessageKind, Renderer, TextRendererOptions, Verbosity } from './utils';
 
 // High-level read/write
-export { readFile, getInputFormat } from './read';
-export type { InputFormat, ReadFileOptions } from './read';
+export { readFile, readFileInfo, getInputFormat } from './read';
+export type { InputFormat, ReadFileOptions, FileInfo } from './read';
 export { writeFile, getOutputFormat } from './write';
 export type { OutputFormat, WriteOptions } from './write';
 

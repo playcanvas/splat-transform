@@ -135,6 +135,15 @@ type Summary = {
 };
 
 /**
+ * Print structural metadata (per-LOD counts, columns, SH bands) to the logger —
+ * the cheap, header-level counterpart to {@link Summary} (no data specifics).
+ */
+type Info = {
+    /** Action type identifier. */
+    kind: 'info';
+};
+
+/**
  * Reorder splats by Morton code (Z-order curve) for improved spatial locality.
  */
 type MortonOrder = {
@@ -223,7 +232,7 @@ type ProcessOptions = {
  * - `mortonOrder` - Reorder splats by Morton code for spatial locality
  * - `decimate` - Simplify to target count via progressive pairwise merging
  */
-type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | FilterFloaters | FilterCluster | Param | Lod | Summary | MortonOrder | Decimate;
+type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | FilterFloaters | FilterCluster | Param | Lod | Summary | Info | MortonOrder | Decimate;
 
 // Describe a delta as "removed N" / "added N" relative to the previous count.
 const describeDelta = (delta: number, noun: string): string => {
@@ -599,6 +608,7 @@ export {
     type Param,
     type Lod,
     type Summary,
+    type Info,
     type MortonOrder,
     type Decimate
 };

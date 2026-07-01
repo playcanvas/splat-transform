@@ -38,6 +38,7 @@ type PlyHeader = {
     comments: string[];
     elements: PlyElement[];
     headerBytes: number;        // byte offset at which binary data begins
+    format: string;             // 'binary_little_endian' | 'binary_big_endian' | 'ascii'
 };
 
 // A whole-PLY decode result: one DataTable per element (consumed by decompressPly).
@@ -133,11 +134,15 @@ const readHeader = async (source: ReadSource): Promise<PlyHeader> => {
 
     const elements: PlyElement[] = [];
     const comments: string[] = [];
+    let format = '';
     let current: PlyElement | null = null;
     for (let i = 1; i < lines.length; i++) {
         const words = lines[i].split(' ').filter(Boolean);
         switch (words[0]) {
-            case 'ply': case 'format': case 'end_header':
+            case 'ply': case 'end_header':
+                break;
+            case 'format':
+                format = words[1] ?? '';
                 break;
             case 'comment':
                 comments.push(lines[i].substring(8)); // skip 'comment '
@@ -156,7 +161,7 @@ const readHeader = async (source: ReadSource): Promise<PlyHeader> => {
         }
     }
 
-    return { comments, elements, headerBytes };
+    return { comments, elements, headerBytes, format };
 };
 
 // Decode `count` rows of an element (the given properties) from a stream into a
@@ -583,6 +588,17 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
     // `packed_position` is the marker.
     if (properties.some(p => p.name === 'packed_position')) {
         return readCompressedChunked(source, header, pool);
+    }
+
+    // Integrity guard: an uncompressed binary-little-endian PLY is exactly
+    // `headerBytes + Σ element.count * rowStride` bytes. A mismatch means the file
+    // is truncated or corrupt — fail fast rather than decode garbage. (ascii /
+    // big-endian / compressed layouts have no such simple relation, so skip them.)
+    if (header.format === 'binary_little_endian' && source.size !== undefined) {
+        const expected = headerBytes + header.elements.reduce((sum, e) => sum + e.count * rowSizeOf(e.properties), 0);
+        if (source.size !== expected) {
+            throw new Error(`readPly: file size ${source.size} does not match header-implied size ${expected} (truncated or corrupt PLY)`);
+        }
     }
 
     // Record layout: byte offset + reader per property.

@@ -37,4 +37,24 @@ const selectLod = (src: ChunkSource, level: number): ChunkSource => {
     };
 };
 
-export { selectLod };
+/**
+ * Resolve a user `lodSelect` (from `--lod-select`) into concrete level indices
+ * against a source's actual level count: negative indices count from the end,
+ * out-of-range entries are dropped, and an empty selection means all levels.
+ * Used by the CLI to drive {@link selectLod} nodes — LOD selection is a pipeline
+ * step, not a reader parameter.
+ *
+ * @param lodSelect - Requested levels (may be empty or include negatives).
+ * @param numLods - The source's level count.
+ * @returns Ordered concrete level indices.
+ */
+const resolveLodLevels = (lodSelect: number[], numLods: number): number[] => {
+    if (lodSelect.length > 0) {
+        return lodSelect
+        .map(lod => (lod < 0 ? numLods + lod : lod))
+        .filter(lod => lod >= 0 && lod < numLods);
+    }
+    return Array.from({ length: numLods }, (_, i) => i);
+};
+
+export { selectLod, resolveLodLevels };
