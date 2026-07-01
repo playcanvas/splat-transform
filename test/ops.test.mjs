@@ -14,7 +14,7 @@ import { createTestDataTable, encodePlyBinary } from './helpers/test-utils.mjs';
 import { dataTableToChunkSource, materializeToDataTable } from '../src/lib/compat/data-table.js';
 import { sortMortonOrder } from '../src/lib/data-table/morton-order.js';
 import { readPly } from '../src/lib/readers/read-ply.js';
-import { mortonOrder, permuteSource } from '../src/lib/ops/index.js';
+import { mortonOrder, permuteSource, selectLod, stackLods } from '../src/lib/ops/index.js';
 import { createChunkDataPool } from '../src/lib/chunk/index.js';
 
 // Minimal seekable ReadSource over a buffer (range reads), for exercising the
@@ -168,5 +168,40 @@ describe('ops: mortonOrder + permuteSource', () => {
             assert.strictEqual(op[j], opF[e], `opacity out-row ${j}`);
         }
         for (const layer of ['position', 'geometric', 'color']) acq[layer].release();
+    });
+});
+
+describe('ops: selectLod', () => {
+    it('views each level of a stacked multi-LOD source', async () => {
+        const chunkSize = 64;
+        const pool = createChunkDataPool({ chunkSize });
+        const dt0 = createTestDataTable(100, { includeSH: true, shBands: 1 });
+        const dt1 = createTestDataTable(60, { includeSH: true, shBands: 1 });
+        dt0.getColumnByName('f_dc_2').data.fill(7); // tag the levels so a wrong pick shows
+        dt1.getColumnByName('f_dc_2').data.fill(9);
+
+        const multi = stackLods([dataTableToChunkSource(dt0, chunkSize), dataTableToChunkSource(dt1, chunkSize)]);
+        assert.strictEqual(multi.meta.numLods, 2);
+
+        const lvl0 = selectLod(multi, 0);
+        const lvl1 = selectLod(multi, 1);
+        assert.strictEqual(lvl0.meta.numLods, 1);
+        assert.strictEqual(lvl0.meta.numGaussians, 100);
+        assert.strictEqual(lvl1.meta.numGaussians, 60);
+
+        const out0 = await materializeToDataTable(lvl0, pool);
+        const out1 = await materializeToDataTable(lvl1, pool);
+        assert.strictEqual(out0.numRows, 100);
+        assert.strictEqual(out1.numRows, 60);
+        for (const name of dt0.columnNames) {
+            const a = out0.getColumnByName(name).data, e = dt0.getColumnByName(name).data;
+            for (let i = 0; i < 100; i++) assert.strictEqual(a[i], e[i], `lvl0 '${name}' row ${i}`);
+        }
+        for (const name of dt1.columnNames) {
+            const a = out1.getColumnByName(name).data, e = dt1.getColumnByName(name).data;
+            for (let i = 0; i < 60; i++) assert.strictEqual(a[i], e[i], `lvl1 '${name}' row ${i}`);
+        }
+        assert.throws(() => selectLod(multi, 2), /out of range/);
+        await multi.close();
     });
 });

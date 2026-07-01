@@ -1,5 +1,9 @@
 /**
- * Tests for the lod-meta.json file contract emitted by writeLod.
+ * Tests for the lod-meta.json contract emitted by writeLodSource, and that it is
+ * source-type-agnostic: a lazy disk-backed PLY (positions streamed, heavy data
+ * gathered per output chunk) and a resident bridged DataTable produce
+ * byte-identical output. LOD is structural — a multi-LOD source is built by
+ * stacking single-LOD sources (stackLods); there is no per-gaussian lod column.
  */
 
 import assert from 'node:assert';
@@ -8,12 +12,12 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { Column, DataTable, Transform, WebPCodec } from '../src/lib/index.js';
-import { dataTableToChunkSource, materializeToDataTable } from '../src/lib/compat/data-table.js';
+import { dataTableToChunkSource } from '../src/lib/compat/data-table.js';
 import { MemoryFileSystem } from '../src/lib/io/write/index.js';
 import { stackLods } from '../src/lib/ops/index.js';
 import { readPly } from '../src/lib/readers/read-ply.js';
 import { createChunkDataPool } from '../src/lib/chunk/index.js';
-import { writeLod, writeLodSource } from '../src/lib/writers/write-lod.js';
+import { writeLodSource } from '../src/lib/writers/write-lod.js';
 import { version } from '../src/lib/version.js';
 
 import { encodePlyBinary } from './helpers/test-utils.mjs';
@@ -48,14 +52,11 @@ class BufferReadSource {
     close() {}
 }
 
-// Build a minimal splat table (no SH, so no GPU device is needed) with one
-// row per entry of `lods`. Constructed directly in PLY space so writeLod's
-// convertToSpace is a no-op.
-const makeTable = (lods) => {
-    const n = lods.length;
+// A minimal n-row splat table (no SH, so no GPU device is needed), in PLY space
+// (so writeSogSource's convert-to-PLY is a no-op and the encode is deterministic).
+const makeTable = (n) => {
     const fill = (value) => new Float32Array(n).fill(value);
     const ramp = (scale) => new Float32Array(Array.from({ length: n }, (_, i) => i * scale));
-
     return new DataTable([
         new Column('x', ramp(1)),
         new Column('y', ramp(0.5)),
@@ -70,17 +71,33 @@ const makeTable = (lods) => {
         new Column('f_dc_0', fill(0)),
         new Column('f_dc_1', fill(0)),
         new Column('f_dc_2', fill(0)),
-        new Column('opacity', fill(0)),
-        new Column('lod', new Float32Array(lods))
+        new Column('opacity', fill(0))
     ], Transform.PLY);
 };
 
-const writeScene = async (lods, envRows) => {
+// Build a structural multi-LOD source from per-level row counts (each level a
+// single-LOD resident source; stacked when there is more than one level).
+const makeSource = (levelCounts) => {
+    const perLevel = levelCounts.map(c => dataTableToChunkSource(makeTable(c), 1 << 20));
+    return perLevel.length === 1 ? perLevel[0] : stackLods(perLevel);
+};
+
+// Compare two MemoryFileSystems (modulo the /a vs /b root): same file set + bytes.
+const assertSameFiles = (fsA, fsB) => {
+    const relA = [...fsA.results.keys()].map(k => k.replace('/a/', '')).sort();
+    const relB = [...fsB.results.keys()].map(k => k.replace('/b/', '')).sort();
+    assert.deepStrictEqual(relB, relA, 'same output files');
+    for (const rel of relA) {
+        assert.deepStrictEqual(fsB.results.get(`/b/${rel}`), fsA.results.get(`/a/${rel}`), `bytes differ for ${rel}`);
+    }
+};
+
+const writeScene = async (levelCounts, envRows) => {
     const fs = new MemoryFileSystem();
-    await writeLod({
+    await writeLodSource({
         filename: '/scene/lod-meta.json',
-        dataTable: makeTable(lods),
-        envDataTable: envRows > 0 ? makeTable(new Array(envRows).fill(0)) : null,
+        mainSource: makeSource(levelCounts),
+        envSource: envRows > 0 ? dataTableToChunkSource(makeTable(envRows), 1 << 20) : null,
         iterations: 1,
         chunkCount: 1,
         chunkExtent: 16
@@ -89,16 +106,16 @@ const writeScene = async (lods, envRows) => {
     return { fs, meta };
 };
 
-describe('writeLod', function () {
-    it('writes lod-meta.json header fields and chunk references', async function () {
-        const { fs, meta } = await writeScene([0, 0, 0, 1, 1], 0);
+describe('writeLodSource: lod-meta.json contract', function () {
+    it('writes header fields and chunk references', async function () {
+        const { fs, meta } = await writeScene([3, 2], 0);
 
         assert.strictEqual(meta.version, 1);
         assert.strictEqual(meta.asset.generator, `splat-transform v${version}`);
         assert.strictEqual(meta.count, 5);
         assert.deepStrictEqual(meta.counts, [3, 2]);
         assert.strictEqual(meta.lodLevels, 2);
-        assert.ok(!('environment' in meta), 'environment should be omitted when there are no environment splats');
+        assert.ok(!('environment' in meta), 'environment omitted when there are no environment splats');
         assert.deepStrictEqual([...meta.filenames].sort(), ['0_0/meta.json', '1_0/meta.json']);
 
         // single small chunk: the tree is one leaf referencing both lod levels
@@ -113,114 +130,59 @@ describe('writeLod', function () {
             { offset: 0, count: 2 }
         );
 
-        // referenced chunk SOGs are written
         assert.ok(fs.results.has('/scene/0_0/meta.json'));
         assert.ok(fs.results.has('/scene/1_0/meta.json'));
     });
 
     it('references the environment SOG when environment splats are present', async function () {
-        const { fs, meta } = await writeScene([0, 0, 0], 2);
-
+        const { fs, meta } = await writeScene([3], 2);
         assert.strictEqual(meta.environment, 'env/meta.json');
         assert.ok(fs.results.has('/scene/env/meta.json'));
     });
 
-    // The disk path: writeLodSource fed a single-LOD fixed-stride PLY source
-    // (positions streamed resident, heavy data gathered per output chunk via
-    // readRows) must produce byte-identical output to the DataTable wrapper. No SH
-    // → encoding is deterministic, so a byte-for-byte A/B is the right gate.
-    it('writeLodSource over a single-LOD disk PLY matches the DataTable path byte-for-byte', async function () {
-        const lods = [0, 0, 0, 0, 0]; // one structural LOD
+    it('disk PLY source == resident source, single LOD, byte-for-byte', async function () {
+        const table = makeTable(5);
 
-        // A: DataTable wrapper (splits by the lod column into a single level).
         const fsA = new MemoryFileSystem();
-        await writeLod({
+        await writeLodSource({
             filename: '/a/lod-meta.json',
-            dataTable: makeTable(lods),
-            envDataTable: null,
-            iterations: 1,
-            chunkCount: 1,
-            chunkExtent: 16
+            mainSource: dataTableToChunkSource(table, 1 << 20),
+            envSource: null, iterations: 1, chunkCount: 1, chunkExtent: 16
         }, fsA);
 
-        // B: disk-backed PLY as a single-LOD structural source (no lod tag array).
-        const plyBytes = encodePlyBinary(makeTable(lods));
-        const diskSrc = await readPly(new BufferReadSource(plyBytes), createChunkDataPool());
+        const diskSrc = await readPly(new BufferReadSource(encodePlyBinary(table)), createChunkDataPool());
         const fsB = new MemoryFileSystem();
         await writeLodSource({
             filename: '/b/lod-meta.json',
             mainSource: diskSrc,
-            envSource: null,
-            iterations: 1,
-            chunkCount: 1,
-            chunkExtent: 16
+            envSource: null, iterations: 1, chunkCount: 1, chunkExtent: 16
         }, fsB);
         await diskSrc.close();
 
-        // Same set of output files (modulo the /a vs /b root).
-        const relA = [...fsA.results.keys()].map(k => k.replace('/a/', '')).sort();
-        const relB = [...fsB.results.keys()].map(k => k.replace('/b/', '')).sort();
-        assert.deepStrictEqual(relB, relA, 'disk path should write the same files');
-
-        // Byte-identical contents for every file (lod-meta.json + each unit SOG).
-        for (const rel of relA) {
-            assert.deepStrictEqual(
-                fsB.results.get(`/b/${rel}`),
-                fsA.results.get(`/a/${rel}`),
-                `bytes differ for ${rel}`
-            );
-        }
+        assertSameFiles(fsA, fsB);
     });
 
-    // Multi-input --lod: the CLI stacks per-LOD PLYs into a structural multi-LOD
-    // source via stackLods. That path (writeLodSource over stackLods of disk PLYs)
-    // must match the combined-DataTable wrapper byte-for-byte.
-    it('writeLodSource over a stackLods multi-LOD source matches the combined DataTable path', async function () {
-        const lods = [0, 0, 0, 1, 1, 1, 1]; // rows 0-2 → LOD 0, rows 3-6 → LOD 1
+    it('disk PLY source == resident source, multi-LOD (stackLods), byte-for-byte', async function () {
+        const t0 = makeTable(3), t1 = makeTable(4);
 
-        // A: one combined DataTable through the wrapper (splits by the lod column).
         const fsA = new MemoryFileSystem();
-        await writeLod({
+        await writeLodSource({
             filename: '/a/lod-meta.json',
-            dataTable: makeTable(lods),
-            envDataTable: null,
-            iterations: 1,
-            chunkCount: 1,
-            chunkExtent: 16
+            mainSource: stackLods([dataTableToChunkSource(t0, 1 << 20), dataTableToChunkSource(t1, 1 << 20)]),
+            envSource: null, iterations: 1, chunkCount: 1, chunkExtent: 16
         }, fsA);
 
-        // B: split the scene into one PLY per LOD, stack into a multi-LOD source.
-        const full = makeTable(lods);
-        const subset = async (indices) => materializeToDataTable(
-            dataTableToChunkSource(full, 1 << 20, Uint32Array.from(indices)),
-            createChunkDataPool()
-        );
-        const dt0 = await subset([0, 1, 2]);
-        const dt1 = await subset([3, 4, 5, 6]);
-        const src0 = await readPly(new BufferReadSource(encodePlyBinary(dt0)), createChunkDataPool());
-        const src1 = await readPly(new BufferReadSource(encodePlyBinary(dt1)), createChunkDataPool());
-        const mainSource = stackLods([src0, src1]);
-
+        const s0 = await readPly(new BufferReadSource(encodePlyBinary(t0)), createChunkDataPool());
+        const s1 = await readPly(new BufferReadSource(encodePlyBinary(t1)), createChunkDataPool());
         const fsB = new MemoryFileSystem();
         await writeLodSource({
             filename: '/b/lod-meta.json',
-            mainSource,
-            envSource: null,
-            iterations: 1,
-            chunkCount: 1,
-            chunkExtent: 16
+            mainSource: stackLods([s0, s1]),
+            envSource: null, iterations: 1, chunkCount: 1, chunkExtent: 16
         }, fsB);
-        await mainSource.close();
+        await s0.close();
+        await s1.close();
 
-        const relA = [...fsA.results.keys()].map(k => k.replace('/a/', '')).sort();
-        const relB = [...fsB.results.keys()].map(k => k.replace('/b/', '')).sort();
-        assert.deepStrictEqual(relB, relA, 'multi-input stack path should write the same files');
-        for (const rel of relA) {
-            assert.deepStrictEqual(
-                fsB.results.get(`/b/${rel}`),
-                fsA.results.get(`/a/${rel}`),
-                `bytes differ for ${rel}`
-            );
-        }
+        assertSameFiles(fsA, fsB);
     });
 });

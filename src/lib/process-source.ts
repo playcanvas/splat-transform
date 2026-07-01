@@ -1,24 +1,25 @@
 import { type ChunkDataPool, type ChunkSource } from './chunk';
-import { materializeToDataTable } from './compat/data-table';
+import { dataTableToChunkSource, materializeToDataTable } from './compat/data-table';
 import {
     filterByValueRows,
     filterBoxRows,
     filterNaNRows,
     filterSphereRows,
     filterSource,
-    mapSource
+    mapSource,
+    reduceBandsSource
 } from './ops';
-import { processDataTable, type ProcessAction } from './process';
+import { processDataTable, type ProcessAction, type ProcessOptions } from './process';
 import { Transform } from './utils';
 
 /**
- * The `ProcessAction` kinds `processSource` can apply on the streaming chunk
- * path. Anything else (decimate, lod, mortonOrder, filterBands, the GPU voxel
- * filters) still routes through the `DataTable` `processDataTable` pipeline.
+ * The `ProcessAction` kinds `processSource` can apply natively on the streaming
+ * chunk path. Anything else (decimate, lod, mortonOrder, the GPU voxel filters)
+ * is applied by {@link processSourceBridged} as a `processDataTable` island.
  */
 const SOURCE_ACTION_KINDS: ReadonlySet<ProcessAction['kind']> = new Set([
     'translate', 'rotate', 'scale',
-    'filterNaN', 'filterByValue', 'filterBox', 'filterSphere',
+    'filterNaN', 'filterByValue', 'filterBox', 'filterSphere', 'filterBands',
     'summary', 'param'
 ]);
 
@@ -76,6 +77,9 @@ const processSource = async (
             case 'filterSphere':
                 src = filterSource(src, await filterSphereRows(src, pool, action), pool);
                 break;
+            case 'filterBands':
+                src = reduceBandsSource(src, action.value, pool);
+                break;
             case 'summary': {
                 // Reuse the DataTable summary verbatim (same formatting / logging).
                 // Reflects the source's current, unbaked values — matching
@@ -95,4 +99,49 @@ const processSource = async (
     return src;
 };
 
-export { processSource, canProcessSource, SOURCE_ACTION_KINDS };
+/**
+ * Apply an ordered action list to a {@link ChunkSource}, streaming the
+ * chunk-native runs and bridging only the DataTable-only runs. Consecutive
+ * actions are grouped into maximal same-mode runs (order preserved): a
+ * chunk-native run ({@link SOURCE_ACTION_KINDS}) goes through {@link processSource};
+ * a DataTable-only run (decimate, mortonOrder, the GPU voxel filters, …)
+ * materializes once, runs `processDataTable`, and re-bridges to a source via
+ * `dataTableToChunkSource`. So the not-yet-chunked ops do their work inline as
+ * islands and everything around them keeps streaming.
+ *
+ * @param source - The input source (consumed; the returned source owns it).
+ * @param actions - Actions to apply in order.
+ * @param pool - Pool for the chunk-native passes and the bridge's chunk size.
+ * @param options - Process options (e.g. `createDevice` for the GPU islands).
+ * @returns The processed source.
+ */
+const processSourceBridged = async (
+    source: ChunkSource,
+    actions: ProcessAction[],
+    pool: ChunkDataPool,
+    options?: ProcessOptions
+): Promise<ChunkSource> => {
+    let src = source;
+    let i = 0;
+    while (i < actions.length) {
+        const chunkNative = SOURCE_ACTION_KINDS.has(actions[i].kind);
+        let j = i + 1;
+        while (j < actions.length && SOURCE_ACTION_KINDS.has(actions[j].kind) === chunkNative) {
+            j++;
+        }
+        const run = actions.slice(i, j);
+        if (chunkNative) {
+            src = await processSource(src, run, pool);
+        } else {
+            // DataTable island: materialize the current (streaming) source, apply
+            // the run on the table, and re-bridge back to a source to keep going.
+            const dt = await materializeToDataTable(src, pool);
+            await src.close();
+            src = dataTableToChunkSource(await processDataTable(dt, run, options), pool.chunkSize);
+        }
+        i = j;
+    }
+    return src;
+};
+
+export { processSource, processSourceBridged, canProcessSource, SOURCE_ACTION_KINDS };

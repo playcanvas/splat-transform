@@ -50,7 +50,7 @@ export type { FileSystem, Writer } from './io/write';
 export { readKsplat, readLcc, readLcc2, readMjs, readPly, readSog, readSplat, readSpz } from './readers';
 
 // Individual writers (for advanced use)
-export { writeSog, writeSpz, writePly, writeCompressedPly, writeCsv, writeHtml, writeImage, writeLod, writeGlb, writeVoxel } from './writers';
+export { writeSog, writeSpz, writePly, writeCompressedPly, writeCsv, writeHtml, writeImage, writeGlb, writeVoxel } from './writers';
 export type { WriteImageOptions, WriteVoxelOptions, VoxelMetadata } from './writers';
 
 // Renderer (for advanced use)

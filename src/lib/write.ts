@@ -1,7 +1,11 @@
+import { type ChunkDataPool, type ChunkSource } from './chunk';
+import { materializeToDataTable } from './compat/data-table';
 import { DataTable } from './data-table';
 import { type FileSystem } from './io/write';
 import { type DeviceCreator, type Options } from './types';
-import { writeCompressedPly, writeCsv, writeGlb, writeHtml, writeImage, writeLod, writePly, writeSog, writeSpz, writeVoxel } from './writers';
+import { writeCompressedPly, writeCsv, writeGlb, writeHtml, writeImage, writePly, writeSog, writeSogSource, writeSpz, writeVoxel } from './writers';
+import { writeCompressedPlySource } from './writers/write-compressed-ply';
+import { writePlyStreaming } from './writers/write-ply-streaming';
 
 /**
  * Supported output file formats for Gaussian splat data.
@@ -31,8 +35,6 @@ type WriteOptions = {
     outputFormat: OutputFormat;
     /** The splat data to write. */
     dataTable: DataTable;
-    /** Optional environment/skybox splat data (for LOD format). */
-    envDataTable?: DataTable;
     /** Processing options. */
     options: Options;
     /** Optional function to create a GPU device for compression. */
@@ -105,7 +107,7 @@ const getOutputFormat = (filename: string, options: Options): OutputFormat => {
  * ```
  */
 const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
-    const { filename, outputFormat, dataTable, envDataTable, options, createDevice } = writeOptions;
+    const { filename, outputFormat, dataTable, options, createDevice } = writeOptions;
 
     // Each writer is responsible for opening its own `Writing` log group and
     // emitting `filename (size)` info entries per output file.
@@ -124,16 +126,7 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
             }, fs);
             break;
         case 'lod':
-            await writeLod({
-                filename,
-                dataTable,
-                envDataTable,
-                iterations: options.iterations,
-                createDevice,
-                chunkCount: options.lodChunkCount,
-                chunkExtent: options.lodChunkExtent
-            }, fs);
-            break;
+            throw new Error('lod-meta.json output is written from a multi-LOD ChunkSource via writeLodSource, not from a DataTable.');
         case 'compressed-ply':
             await writeCompressedPly({ filename, dataTable }, fs);
             break;
@@ -212,4 +205,64 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
     }
 };
 
-export { getOutputFormat, writeFile, type OutputFormat, type WriteOptions };
+/**
+ * Options for {@link writeSource} — the chunk-native write entry.
+ */
+type WriteSourceOptions = {
+    /** Path to the output file. */
+    filename: string;
+    /** The format to write (single-scene formats; `lod` goes via `writeLodSource`). */
+    outputFormat: OutputFormat;
+    /** The source to write (the caller owns its lifetime / `close()`). */
+    source: ChunkSource;
+    /** Pool for the streaming writers and the materialize bridge. */
+    pool: ChunkDataPool;
+    /** Processing options. */
+    options: Options;
+    /** Optional function to create a GPU device. */
+    createDevice?: DeviceCreator;
+};
+
+/**
+ * Write a {@link ChunkSource} to a file — the chunk-native sibling of
+ * {@link writeFile}. Formats with a streaming writer (`ply`/`sog`/`compressed-ply`)
+ * consume the source directly; formats without one yet materialize to a
+ * `DataTable` right at the writer and delegate to {@link writeFile} — the inline
+ * bridge around the not-yet-chunked writer.
+ *
+ * `lod` output is written via `writeLodSource` (multi-LOD + env), not here.
+ *
+ * @param writeSourceOptions - The source, format and options to write.
+ * @param fs - File system abstraction for writing files.
+ */
+const writeSource = async (writeSourceOptions: WriteSourceOptions, fs: FileSystem): Promise<void> => {
+    const { filename, outputFormat, source, pool, options, createDevice } = writeSourceOptions;
+
+    switch (outputFormat) {
+        case 'ply':
+            await writePlyStreaming(source, pool, { filename }, fs);
+            break;
+        case 'sog':
+        case 'sog-bundle':
+            await writeSogSource(source, pool, {
+                filename,
+                bundle: outputFormat === 'sog-bundle',
+                iterations: options.iterations,
+                createDevice
+            }, fs);
+            break;
+        case 'compressed-ply':
+            await writeCompressedPlySource(source, pool, { filename }, fs);
+            break;
+        case 'lod':
+            throw new Error('writeSource: lod output must be written via writeLodSource');
+        default: {
+            // No streaming writer yet — materialize and delegate to the DataTable
+            // writer (the inline bridge around the unconverted writer).
+            const dataTable = await materializeToDataTable(source, pool);
+            await writeFile({ filename, outputFormat, dataTable, options, createDevice }, fs);
+        }
+    }
+};
+
+export { getOutputFormat, writeFile, writeSource, type OutputFormat, type WriteOptions, type WriteSourceOptions };

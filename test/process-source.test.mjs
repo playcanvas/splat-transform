@@ -16,7 +16,8 @@ import { Vec3 } from 'playcanvas';
 import { createTestDataTable } from './helpers/test-utils.mjs';
 import { convertToSpace, processDataTable, Transform } from '../src/lib/index.js';
 import { dataTableToChunkSource, materializeToDataTable } from '../src/lib/compat/data-table.js';
-import { processSource } from '../src/lib/process-source.js';
+import { permuteSource, reduceBandsSource } from '../src/lib/ops/index.js';
+import { processSource, processSourceBridged } from '../src/lib/process-source.js';
 import { createChunkDataPool } from '../src/lib/chunk/index.js';
 
 const approxEqual = (a, b) => {
@@ -134,5 +135,67 @@ describe('processSource A/B vs processDataTable', () => {
         const { tableA, tableB } = await runAB(120, {}, [{ kind: 'summary' }]);
         assert.strictEqual(tableA.numRows, 120);
         assertEquivalent(tableA, tableB);
+    });
+});
+
+// processSourceBridged applies chunk-native runs via processSource and DataTable-
+// only runs (mortonOrder here) via a materialize -> processDataTable -> re-bridge
+// island. It must equal the pure DataTable path, including ordering and the
+// pending transform carried across the island.
+const runBridged = async (count, opts, actions) => {
+    const chunkSize = 64;
+    const make = () => createTestDataTable(count, opts);
+    const pool = createChunkDataPool({ chunkSize });
+    const source = dataTableToChunkSource(make(), chunkSize);
+    const tableA = await processDataTable(make(), actions);
+    const tableB = await materializeToDataTable(await processSourceBridged(source, actions, pool), pool);
+    return { tableA, tableB };
+};
+
+describe('processSourceBridged (chunk-native runs + DataTable islands)', () => {
+    it('bridges a DataTable-only op between chunk-native transforms ([translate, mortonOrder, scale])', async () => {
+        const { tableA, tableB } = await runBridged(300, { includeSH: true, shBands: 1 }, [
+            { kind: 'translate', value: new Vec3(1, 2, 3) },
+            { kind: 'mortonOrder' },
+            { kind: 'scale', value: 0.5 }
+        ]);
+        assertEquivalent(tableA, tableB);
+    });
+});
+
+describe('reduceBandsSource A/B vs processDataTable filterBands', () => {
+    it('band 3 -> 1 sequential read matches the DataTable band drop', async () => {
+        const { tableA, tableB } = await runAB(300, { includeSH: true, shBands: 3 }, [
+            { kind: 'filterBands', value: 1 }
+        ]);
+        assert.ok(tableA.hasColumn('f_rest_8') && !tableA.hasColumn('f_rest_9'), 'dropped to band 1 (9 rest coeffs)');
+        assertEquivalent(tableA, tableB);
+    });
+
+    it('gather (permuteSource) over a band-reduced source matches the DataTable drop', async () => {
+        const chunkSize = 64;
+        const pool = createChunkDataPool({ chunkSize });
+        const order = new Uint32Array([250, 0, 128, 63, 299, 17]); // shuffled, chunk-straddling
+
+        const oracle = await processDataTable(
+            createTestDataTable(300, { includeSH: true, shBands: 3 }),
+            [{ kind: 'filterBands', value: 1 }]
+        );
+        const reduced = reduceBandsSource(
+            dataTableToChunkSource(createTestDataTable(300, { includeSH: true, shBands: 3 }), chunkSize),
+            1,
+            pool
+        );
+        const gathered = await materializeToDataTable(permuteSource(reduced, order), pool);
+
+        assert.strictEqual(gathered.numRows, order.length);
+        assert.deepStrictEqual([...gathered.columnNames].sort(), [...oracle.columnNames].sort());
+        for (const name of oracle.columnNames) {
+            const e = oracle.getColumnByName(name).data;
+            const g = gathered.getColumnByName(name).data;
+            for (let j = 0; j < order.length; j++) {
+                assert.ok(approxEqual(g[j], e[order[j]]), `column '${name}' out-row ${j}`);
+            }
+        }
     });
 });

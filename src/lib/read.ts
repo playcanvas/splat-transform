@@ -1,7 +1,9 @@
 import { type ChunkSource, createChunkDataPool } from './chunk';
 import { dataTableToChunkSource } from './compat/data-table';
 import { ReadFileSystem, ZipReadFileSystem } from './io/read';
-import { readKsplat, readLcc, readLcc2, readMjs, readPly, readSogSource, readSplat, readSpz } from './readers';
+import { readKsplat, readMjs, readPly, readSogSource, readSplat, readSpz } from './readers';
+import { readLccSource } from './readers/read-lcc';
+import { readLcc2Source } from './readers/read-lcc2';
 import { Options, Param } from './types';
 
 /**
@@ -88,12 +90,12 @@ type ReadFileOptions = {
 };
 
 /**
- * Reads a Gaussian splat file and returns its data as one or more
- * {@link ChunkSource}s (one per LOD/sub-table for multi-table formats like LCC).
+ * Reads a Gaussian splat file and returns its data as {@link ChunkSource}s
+ * (usually one; an LCC/LCC2 container yields a single structural multi-LOD source).
  *
- * Readers are chunk-native: `ply`/`splat`/`spz` return **lazy** sources whose
- * `close()` releases the underlying file; whole-blob formats (`sog`/`mjs`/`ksplat`)
- * and the LCC families are decoded eagerly and returned as resident sources.
+ * Readers are chunk-native: `ply`/`splat`/`spz`/`lcc`/`lcc2` return **lazy**/
+ * streaming sources whose `close()` releases the underlying file(s); whole-blob
+ * formats (`sog`/`mjs`/`ksplat`) are decoded up front and returned resident.
  * Callers that need a `DataTable` materialize at their own boundary (and call
  * `source.close()` when done).
  *
@@ -146,10 +148,12 @@ const readFile = async (readFileOptions: ReadFileOptions): Promise<ChunkSource[]
         return [await readSogSource(fileSystem, filename, pool)];
     }
     if (inputFormat === 'lcc') {
-        return (await readLcc(fileSystem, filename, options)).map(dt => dataTableToChunkSource(dt));
+        // Native, streaming: one structural multi-LOD source (honors options.lodSelect —
+        // single-scene callers pass [0]). Env is fetched separately by the LOD path.
+        return [await readLccSource(fileSystem, filename, options, createChunkDataPool())];
     }
     if (inputFormat === 'lcc2') {
-        return (await readLcc2(fileSystem, filename, options)).map(dt => dataTableToChunkSource(dt));
+        return [await readLcc2Source(fileSystem, filename, options, createChunkDataPool())];
     }
 
     // Single-source binary formats over a seekable ReadSource. Lazy readers

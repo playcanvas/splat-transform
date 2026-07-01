@@ -5,7 +5,7 @@ export { writeGlb } from './write-glb';
 export { writeHtml } from './write-html';
 export { writeImage } from './write-image';
 export type { WriteImageOptions } from './write-image';
-export { writeLod } from './write-lod';
+export { writeLodSource } from './write-lod';
 export { writePly } from './write-ply';
 export { writeSog, writeSogSource } from './write-sog';
 export { writeSpz } from './write-spz';

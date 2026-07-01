@@ -563,25 +563,6 @@ describe('Summary Action', () => {
     });
 });
 
-describe('LOD Action', () => {
-    it('should add LOD column with specified value', async () => {
-        const testData = createMinimalTestData();
-        assert(!testData.hasColumn('lod'), 'Should not have lod column initially');
-
-        const result = await processDataTable(testData, [{
-            kind: 'lod',
-            value: 2
-        }]);
-
-        assert(result.hasColumn('lod'), 'Should have lod column after action');
-
-        const lodCol = result.getColumnByName('lod').data;
-        for (let i = 0; i < result.numRows; i++) {
-            assert.strictEqual(lodCol[i], 2, `lod[${i}] should be 2`);
-        }
-    });
-});
-
 describe('Morton Order', () => {
     let testData;
 

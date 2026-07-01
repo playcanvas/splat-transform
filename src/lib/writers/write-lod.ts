@@ -3,11 +3,10 @@ import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { logWrittenFile } from './utils';
 import { writeSogSource } from './write-sog.js';
-import { type ChunkDataPool, type ChunkSource, createChunkDataPool, DEFAULT_CHUNK_SIZE } from '../chunk';
-import { dataTableToChunkSource } from '../compat/data-table';
-import { Column, DataTable, sortMortonOrder, convertToSpace } from '../data-table';
+import { type ChunkDataPool, type ChunkSource, createChunkDataPool } from '../chunk';
+import { Column, DataTable, sortMortonOrder } from '../data-table';
 import { type FileSystem } from '../io/write';
-import { permuteSource, stackLods } from '../ops';
+import { permuteSource } from '../ops';
 import { BTreeNode, BTree } from '../spatial';
 import type { DeviceCreator } from '../types';
 import { logger, Transform } from '../utils';
@@ -504,71 +503,4 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     writingGroup.end();
 };
 
-type WriteLodOptions = {
-    filename: string;
-    dataTable: DataTable;
-    envDataTable: DataTable | null;
-    iterations: number;
-    createDevice?: DeviceCreator;
-    chunkCount: number;
-    chunkExtent: number;
-};
-
-/**
- * Writes Gaussian splat data to multi-LOD format with spatial chunking.
- *
- * DataTable-input adapter over {@link writeLodSource}: converts to PLY space, then
- * splits the table by its `lod` column into per-level subsets stacked into a
- * structural multi-LOD `ChunkSource` (the lod column is consumed here, not threaded
- * into the writer), so the partition runs over chunks rather than named columns.
- *
- * @param options - Options including filename, data, and chunking parameters.
- * @param fs - File system for writing output files.
- * @ignore
- */
-const writeLod = async (options: WriteLodOptions, fs: FileSystem) => {
-    const { filename, iterations, createDevice, chunkCount, chunkExtent } = options;
-
-    // Operate in PLY space so per-leaf bounds in tree.bound are in the same
-    // coordinate frame as the SOG chunk data emitted by writeSog (which also
-    // converts to Transform.PLY). Without this, view-dependent streaming
-    // built on tree.bound picks the wrong chunks because the bounds are
-    // 180°-Z-rotated relative to the splat positions inside them.
-    // This intentionally mutates the input tables to avoid doubling peak
-    // memory during LOD export. Callers should treat writeLod as consuming its
-    // DataTable inputs.
-    const dataTable = convertToSpace(options.dataTable, Transform.PLY, true);
-    const envDataTable = options.envDataTable ? convertToSpace(options.envDataTable, Transform.PLY, true) : null;
-
-    const lodColumn = dataTable.getColumnByName('lod');
-    if (!lodColumn) {
-        throw new Error('Missing lod assignment');
-    }
-
-    // Split the table into per-LOD subsets by the lod column and stack them into a
-    // structural multi-LOD source. The lod column is consumed here (at the legacy
-    // DataTable boundary) to build LOD structure — it is not threaded into the writer.
-    const lodData = lodColumn.data;
-    const levels = [...new Set(Array.from(lodData))].sort((a, b) => a - b);
-    const perLod = levels.map((level) => {
-        const idx: number[] = [];
-        for (let i = 0; i < dataTable.numRows; i++) {
-            if (lodData[i] === level) idx.push(i);
-        }
-        return dataTableToChunkSource(dataTable, DEFAULT_CHUNK_SIZE, Uint32Array.from(idx));
-    });
-    const mainSource = stackLods(perLod);
-    const envSource = (envDataTable && envDataTable.numRows > 0) ? dataTableToChunkSource(envDataTable) : null;
-
-    await writeLodSource({
-        filename,
-        mainSource,
-        envSource,
-        iterations,
-        createDevice,
-        chunkCount,
-        chunkExtent
-    }, fs);
-};
-
-export { writeLod, writeLodSource };
+export { writeLodSource };

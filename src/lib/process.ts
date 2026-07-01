@@ -515,13 +515,6 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 // skip params
                 break;
             }
-            case 'lod': {
-                if (!result.getColumnByName('lod')) {
-                    result.addColumn(new Column('lod', new Float32Array(result.numRows)));
-                }
-                result.getColumnByName('lod').data.fill(processAction.value);
-                break;
-            }
             case 'summary': {
                 const summary = computeSummary(result);
                 const markdown = formatMarkdown(summary);

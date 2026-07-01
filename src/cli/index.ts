@@ -14,11 +14,8 @@ import {
     fmtCount,
     fmtTime,
     getInputFormat,
-    getSHBands,
     readFile,
     getOutputFormat,
-    writeFile,
-    processDataTable,
     revision,
     TextRenderer,
     Transform,
@@ -37,18 +34,14 @@ import {
 // Deep imports keep these internal/`@ignore` APIs off the public lib surface
 // until the migration is complete.
 import { type ChunkSource, type ChunkSourceMetadata, createChunkDataPool } from '../lib/chunk';
-import { materializeToDataTable } from '../lib/compat/data-table';
-import { bakeTransform, concatSource, stackLods } from '../lib/ops';
-import { processSource, canProcessSource } from '../lib/process-source';
+import { dataTableToChunkSource, materializeToDataTable } from '../lib/compat/data-table';
+import { bakeTransform, concatSource, selectLod, stackLods } from '../lib/ops';
+import { processSourceBridged } from '../lib/process-source';
 import { readLccSource, readLccEnvironmentSource } from '../lib/readers/read-lcc';
 import { readLcc2Source, readLcc2EnvironmentSource } from '../lib/readers/read-lcc2';
 import { readPly } from '../lib/readers/read-ply';
-import { readSplat } from '../lib/readers/read-splat';
-import { readSpz } from '../lib/readers/read-spz';
-import { writeCompressedPlySource } from '../lib/writers/write-compressed-ply';
+import { writeSource } from '../lib/write';
 import { writeLodSource } from '../lib/writers/write-lod';
-import { writePlyStreaming } from '../lib/writers/write-ply-streaming';
-import { writeSogSource } from '../lib/writers/write-sog';
 
 /**
  * CLI-specific options extending library options.
@@ -113,19 +106,6 @@ const resolveInput = (arg: string): ResolvedInput => {
         fileSystem: new NodeReadFileSystem(),
         classifyName: resolved
     };
-};
-
-const isGSDataTable = (dataTable: DataTable) => {
-    if (![
-        'x', 'y', 'z',
-        'rot_0', 'rot_1', 'rot_2', 'rot_3',
-        'scale_0', 'scale_1', 'scale_2',
-        'f_dc_0', 'f_dc_1', 'f_dc_2',
-        'opacity'
-    ].every(c => dataTable.hasColumn(c))) {
-        return false;
-    }
-    return true;
 };
 
 type File = {
@@ -896,10 +876,6 @@ const main = async () => {
         }
     };
 
-    const logDataTableInfo = (dataTable: DataTable) => {
-        logger.info(`${fmtCount(dataTable.numRows)} gaussians \u00b7 ${getSHBands(dataTable)} SH bands \u00b7 ${fmtBytes(dataTable.byteLength)}`);
-    };
-
     // Centralised failure exit: emits the error, the final timing/peak-mem
     // line, and terminates with status 1. Used by every non-success exit
     // path (early arg/overwrite checks, the main try/catch, and the
@@ -1073,7 +1049,8 @@ const main = async () => {
     }
 
     try {
-        // Create device creator function with caching (needed for processDataTable + writeFile)
+        // GPU device creator (cached): used by processSourceBridged's DataTable-island
+        // ops (decimate / voxel filters) and the GPU writers (image / voxel).
         // deviceIdx: -1 = auto, -2 = CPU, 0+ = specific GPU index
         let cachedDevice: GraphicsDevice | undefined;
         const deviceCreator = options.deviceIdx === -2 ? undefined : async () => {
@@ -1105,11 +1082,10 @@ const main = async () => {
         // detail — alternatives, not additive layers. So a single-scene output
         // (anything but lod-meta.json) takes exactly ONE LOD: default the finest
         // (LOD 0), reject an explicit multi-level --lod-select, and read only that
-        // level (LCC/LCC2 readers honor lodSelect; both the chunk and DataTable
-        // paths inherit it). Conflicting per-input --lod *tags* (multi-PLY) are
-        // caught after combine in the DataTable path. lod-meta output keeps every
-        // LOD (selection unchanged).
-        if (!isNullOutput && outputFormat !== 'lod') {
+        // level (the LCC/LCC2 readers honor lodSelect). --lod *tags* apply only to
+        // lod-meta output; using them with single-scene output is rejected below.
+        // lod-meta output keeps every LOD (selection unchanged).
+        if (outputFormat !== 'lod') {
             if (options.lodSelect.length > 1) {
                 throw new Error('Cannot write multiple LOD levels (--lod-select) to a single-scene output; select one level, or output lod-meta.json.');
             }
@@ -1118,134 +1094,175 @@ const main = async () => {
             }
         }
 
-        // Streaming chunk path: local PLY/splat/spz/lcc2/lcc input(s) ->
-        // ply/sog/compressed-ply, with only chunk-path actions (-t/-r/-s, filters,
-        // summary). Each input is read lazily (lcc2 reads only the one selected
-        // LOD — its sub-files decode on demand), its per-input actions applied, the
-        // inputs stitched with concatSource (transforms unified as combine()
-        // does), the output actions applied, and the result written one
-        // layer/chunk at a time — the whole scene is never resident. Anything else
-        // (decimate, lod, morton-order, band drop, voxel/raster, URL/other-format
-        // inputs, mixed layouts, csv/glb/html/spz output) falls through to the
-        // DataTable pipeline. (lcc2 -> lod and the lcc2 environment chunk stay on
-        // the eager DataTable path.)
-        const chunkFormats = new Set(['ply', 'splat', 'spz', 'lcc2', 'lcc']);
-        const chunkAllActions = [...inputArgs.flatMap(a => a.processActions), ...outputArg.processActions];
-        const chunkInputFormats = inputArgs.map(a => (isHttpUrl(a.filename) ? null : getInputFormat(resolveInput(a.filename).classifyName)));
+        // Single-scene pipeline (one chunk-native path for every non-lod output).
+        // Each input is read as a ChunkSource; its actions are applied by
+        // processSourceBridged (chunk-native runs stream; DataTable-only ops —
+        // decimate, morton-order, band drop, the GPU voxel filters — bridge inline
+        // as islands); the inputs are stitched (concatSource when uniform, else a
+        // DataTable combine() bridge for mismatched layouts), the output actions
+        // applied, and the result written by writeSource (streaming for
+        // ply/sog/compressed-ply; materialize-at-the-writer for csv/glb/html/image/
+        // voxel/spz). LOD output has its own structural path below; this pipeline
+        // also handles null output (processing for side-effects, skipping the
+        // write). A --lod tag on single-scene output is rejected after the LOD path.
+        const singleSceneActions = [...inputArgs.flatMap(a => a.processActions), ...outputArg.processActions];
         if (
-            !isNullOutput &&
-            (outputFormat === 'sog' || outputFormat === 'sog-bundle' || outputFormat === 'ply' || outputFormat === 'compressed-ply') &&
-            canProcessSource(chunkAllActions) &&
-            chunkInputFormats.every(f => f !== null && chunkFormats.has(f))
+            isNullOutput ||
+            (outputFormat !== 'lod' && singleSceneActions.every(a => a.kind !== 'lod'))
         ) {
             const pool = createChunkDataPool();
 
-            // Read a single input as a single-LOD source: lazy ply/splat/spz
-            // directly; an lcc2 container reads only the selected LOD (one scene),
-            // decoding its sub-files on demand (the environment chunk is dropped,
-            // matching the eager path for non-lod output).
-            const readChunkInput = async (inputArg: typeof inputArgs[number]): Promise<ChunkSource> => {
+            // Open one input as a ChunkSource via readFile — native for
+            // ply/splat/spz/sog/lcc/lcc2, eager-bridged for ksplat/mjs, plus URL
+            // inputs. Single-scene reads one LOD (readFile honors options.lodSelect,
+            // forced to [0] above). mjs generators need their params + a file:// URL.
+            const openInput = async (inputArg: typeof inputArgs[number]): Promise<ChunkSource> => {
                 const { filename: inFile, fileSystem, classifyName } = resolveInput(inputArg.filename);
                 const fmt = getInputFormat(classifyName);
-                if (fmt === 'lcc2') {
-                    return readLcc2Source(fileSystem, inFile, options, pool);
+                if (fmt === 'mjs' && isHttpUrl(inputArg.filename)) {
+                    throw new Error(`.mjs generator inputs cannot be loaded from a URL: ${inputArg.filename}`);
                 }
-                if (fmt === 'lcc') {
-                    return readLccSource(fileSystem, inFile, options, pool);
-                }
-                const inSource = await fileSystem.createSource(inFile);
-                if (fmt === 'splat') return readSplat(inSource, pool);
-                if (fmt === 'spz') return readSpz(inSource, pool);
-                return readPly(inSource, pool);
+                const params = inputArg.processActions.filter(a => a.kind === 'param').map((p) => {
+                    return { name: p.name, value: p.value };
+                });
+                const readFilename = fmt === 'mjs' ? `file://${inFile}` : inFile;
+                const srcs = await readFile({ filename: readFilename, inputFormat: fmt, options, params, fileSystem });
+                return srcs.length === 1 ? srcs[0] : concatSource(srcs, pool);
             };
 
-            // Read + apply per-input actions (lazy; nothing materialized).
+            // Stitch inputs: uniform layout -> concatSource (transforms unified as
+            // combine() does); mixed layout -> bridge through the DataTable combine().
+            const combineSources = async (sources: ChunkSource[]): Promise<ChunkSource> => {
+                if (sources.length === 1) return sources[0];
+                const sig = (m: ChunkSourceMetadata) => `${m.shBands}|${[...m.availableLayers].sort().join(',')}|${m.extraColumns.map(e => `${e.name}:${e.type}`).join(',')}`;
+                if (sources.every(s => sig(s.meta) === sig(sources[0].meta))) {
+                    const ref = sources[0].meta.transform;
+                    const unified = sources.every(s => s.meta.transform.equals(ref)) ?
+                        sources :
+                        sources.map(s => bakeTransform(s, Transform.IDENTITY));
+                    return concatSource(unified, pool);
+                }
+                // Mismatched layouts: combine() can union them, concatSource can't.
+                const dts: DataTable[] = [];
+                for (const s of sources) {
+                    dts.push(await materializeToDataTable(s, pool));
+                    await s.close();
+                }
+                return dataTableToChunkSource(combine(dts), pool.chunkSize);
+            };
+
+            const phase = logger.group(`Output ${outputArg.filename}`, { index: phaseTotal, total: phaseTotal });
+
+            // `--lod` actions are lod-meta grouping metadata; they never apply as
+            // data ops (and null output may carry them), so strip them here.
             const processed: ChunkSource[] = [];
             for (const inputArg of inputArgs) {
-                processed.push(await processSource(await readChunkInput(inputArg), inputArg.processActions, pool));
+                const actions = inputArg.processActions.filter(a => a.kind !== 'lod');
+                processed.push(await processSourceBridged(await openInput(inputArg), actions, pool, processOptions));
             }
 
-            // concatSource needs a uniform layout; combine() (the DataTable path)
-            // can union mismatched shBands/columns, so fall back there in that case.
-            const layoutSig = (m: ChunkSourceMetadata) => `${m.shBands}|${[...m.availableLayers].sort().join(',')}|${m.extraColumns.map(e => `${e.name}:${e.type}`).join(',')}`;
-            const uniformLayout = processed.every(s => layoutSig(s.meta) === layoutSig(processed[0].meta));
+            let combined = await combineSources(processed);
+            combined = await processSourceBridged(combined, outputArg.processActions.filter(a => a.kind !== 'lod'), pool, processOptions);
 
-            if (uniformLayout) {
-                const phase = logger.group(`Output ${outputArg.filename}`, { index: phaseTotal, total: phaseTotal });
-
-                // Combine: unify transforms exactly as combine() does — keep if all
-                // match, else bake to engine (IDENTITY) space — then concat.
-                let combined: ChunkSource;
-                if (processed.length === 1) {
-                    combined = processed[0];
-                } else {
-                    const ref = processed[0].meta.transform;
-                    const unified = processed.every(s => s.meta.transform.equals(ref)) ?
-                        processed :
-                        processed.map(s => bakeTransform(s, Transform.IDENTITY));
-                    combined = concatSource(unified, pool);
-                }
-
-                // Output actions apply on the combined scene (after the per-input
-                // actions), matching the DataTable path's apply-on-combined order.
-                combined = await processSource(combined, outputArg.processActions, pool);
-
-                if (combined.meta.numGaussians === 0) {
-                    throw new Error('No Gaussians to write');
-                }
-
-                logger.info(`${fmtCount(combined.meta.numGaussians)} gaussians · ${combined.meta.shBands} SH bands (streaming)`);
-                if (outputFormat === 'ply') {
-                    await writePlyStreaming(combined, pool, { filename: outputFilename }, new NodeFileSystem());
-                } else if (outputFormat === 'compressed-ply') {
-                    // Legacy format: materialize then delegate to the DataTable writer.
-                    await writeCompressedPlySource(combined, pool, { filename: outputFilename }, new NodeFileSystem());
-                } else {
-                    await writeSogSource(combined, pool, {
-                        filename: outputFilename,
-                        bundle: outputFormat === 'sog-bundle',
-                        iterations: options.iterations,
-                        createDevice: deviceCreator
-                    }, new NodeFileSystem());
-                }
-                await combined.close();
-                phase.end();
-                reportDone();
-                exit(0);
+            if (combined.meta.numGaussians === 0) {
+                throw new Error('No Gaussians to write');
             }
 
-            // Mixed layout — release and fall through to the DataTable pipeline.
-            await Promise.all(processed.map(s => s.close()));
+            logger.info(`${fmtCount(combined.meta.numGaussians)} gaussians · ${combined.meta.shBands} SH bands`);
+            if (outputFormat !== null) { // null output: process for side-effects (e.g. --summary), skip the write
+                await writeSource({
+                    filename: outputFilename,
+                    outputFormat,
+                    source: combined,
+                    pool,
+                    options,
+                    createDevice: deviceCreator
+                }, new NodeFileSystem());
+            }
+
+            await combined.close();
+            phase.end();
+            reportDone();
+            exit(0);
         }
 
-        // Intrinsic multi-LOD -> lod-meta: a single lcc/lcc2 input (no actions) maps
-        // its own internal LOD levels onto the output levels — the main scene
-        // streams, and its (small) environment is decoded eagerly. Otherwise fall
-        // through to the tagged-PLY path / the DataTable pipeline.
-        const intrinsicLodFmt = (
-            !isNullOutput &&
-            outputFormat === 'lod' &&
-            outputArg.processActions.length === 0 &&
-            inputArgs.length === 1 &&
-            inputArgs[0].processActions.length === 0 &&
-            !isHttpUrl(inputArgs[0].filename)
-        ) ? getInputFormat(resolveInput(inputArgs[0].filename).classifyName) : null;
-        if (intrinsicLodFmt === 'lcc' || intrinsicLodFmt === 'lcc2') {
+        // LOD-meta output: keep every level, structurally separate — LODs are
+        // overlapping surfaces and are NEVER combined. Levels come from a single
+        // lcc/lcc2's intrinsic LODs, or from --lod-tagged PLY inputs (env = -1,
+        // untagged = level 0). Each level (and the env) is processed independently
+        // via processSourceBridged, the levels are stacked, and writeLodSource
+        // streams them. With no actions this matches the previous streaming-LOD
+        // output byte-for-byte.
+        if (!isNullOutput && outputFormat === 'lod') {
             const pool = createChunkDataPool();
-            const { filename: inFile, fileSystem } = resolveInput(inputArgs[0].filename);
+            const single = inputArgs.length === 1 && !isHttpUrl(inputArgs[0].filename) ?
+                getInputFormat(resolveInput(inputArgs[0].filename).classifyName) : null;
 
-            // The container's own LODs become the output levels (lod-meta keeps
-            // every level — selection unchanged); the env is decoded eagerly (small).
-            const mainSource = intrinsicLodFmt === 'lcc2' ?
-                await readLcc2Source(fileSystem, inFile, options, pool) :
-                await readLccSource(fileSystem, inFile, options, pool);
+            let perLevel: ChunkSource[] = [];
+            let envSource: ChunkSource | null = null;
+            let container: ChunkSource | null = null; // shared multi-LOD parent (lcc/lcc2)
+            let inputActions: ProcessAction[] = [];
+
+            if (single === 'lcc' || single === 'lcc2') {
+                // Intrinsic multi-LOD: view each level with selectLod (shared parent);
+                // env fetched separately. The input's own actions apply per level.
+                const { filename: inFile, fileSystem } = resolveInput(inputArgs[0].filename);
+                const multi = single === 'lcc2' ?
+                    await readLcc2Source(fileSystem, inFile, options, pool) :
+                    await readLccSource(fileSystem, inFile, options, pool);
+                container = multi;
+                envSource = single === 'lcc2' ?
+                    await readLcc2EnvironmentSource(fileSystem, inFile, pool) :
+                    await readLccEnvironmentSource(fileSystem, inFile, pool);
+                perLevel = Array.from({ length: multi.meta.numLods }, (_, i) => selectLod(multi, i));
+                inputActions = inputArgs[0].processActions;
+            } else {
+                // PLY inputs grouped by --lod tag (env = -1, untagged = level 0);
+                // each input's own actions applied before grouping.
+                const tagged = inputArgs.map((a) => {
+                    const ply = !isHttpUrl(a.filename) && getInputFormat(resolveInput(a.filename).classifyName) === 'ply';
+                    const lods = a.processActions.filter(act => act.kind === 'lod');
+                    const tag = lods.length > 0 ? (lods[lods.length - 1] as { value: number }).value : 0;
+                    const rest = a.processActions.filter(act => act.kind !== 'lod');
+                    return { arg: a, ply, tag, rest };
+                });
+                if (!tagged.every(t => t.ply)) {
+                    throw new Error('lod-meta.json output requires a single LCC/LCC2 input, or local PLY input(s) (optionally --lod tagged).');
+                }
+                const opened = await Promise.all(tagged.map(async (t) => {
+                    const { filename: inFile, fileSystem } = resolveInput(t.arg.filename);
+                    const src = await processSourceBridged(
+                        await readPly(await fileSystem.createSource(inFile), pool),
+                        t.rest, pool, processOptions
+                    );
+                    return { src, tag: t.tag };
+                }));
+                const mains = opened.filter(o => o.tag >= 0);
+                if (mains.length === 0) {
+                    throw new Error('No Gaussians to write');
+                }
+                const mainTags = [...new Set(mains.map(m => m.tag))].sort((a, b) => a - b);
+                perLevel = mainTags.map((tag) => {
+                    const group = mains.filter(m => m.tag === tag).map(m => m.src);
+                    return group.length === 1 ? group[0] : concatSource(group, pool);
+                });
+                const envs = opened.filter(o => o.tag === -1).map(o => o.src);
+                envSource = envs.length === 0 ? null : (envs.length === 1 ? envs[0] : concatSource(envs, pool));
+            }
+
+            // Output (and single-input) actions apply PER LEVEL and to the env —
+            // never across levels.
+            const perLevelActions = [...inputActions, ...outputArg.processActions].filter(a => a.kind !== 'lod');
+            if (perLevelActions.length > 0) {
+                perLevel = await Promise.all(perLevel.map(s => processSourceBridged(s, perLevelActions, pool, processOptions)));
+                if (envSource) envSource = await processSourceBridged(envSource, perLevelActions, pool, processOptions);
+            }
+
+            const mainSource = perLevel.length === 1 ? perLevel[0] : stackLods(perLevel);
             const total = mainSource.meta.lodCounts.reduce((a, c) => a + c, 0);
             if (total === 0) {
                 throw new Error('No Gaussians to write');
             }
-            const envSource = intrinsicLodFmt === 'lcc2' ?
-                await readLcc2EnvironmentSource(fileSystem, inFile, pool) :
-                await readLccEnvironmentSource(fileSystem, inFile, pool);
 
             const phase = logger.group(`Output ${outputArg.filename}`, { index: phaseTotal, total: phaseTotal });
             logger.info(`${fmtCount(total)} gaussians · ${mainSource.meta.shBands} SH bands · ${mainSource.meta.numLods} LODs (streaming LOD)`);
@@ -1260,218 +1277,18 @@ const main = async () => {
             }, new NodeFileSystem());
 
             await mainSource.close();
+            if (container) await container.close();
             if (envSource) await envSource.close();
             phase.end();
             reportDone();
             exit(0);
         }
 
-        // Streaming LOD path: local PLY inputs each tagged only with --lod,
-        // written to lod-meta.json. Positions stream resident for the spatial
-        // partition; each output unit's heavy data (incl. SH) is gathered from the
-        // PLY(s) by index at encode time, so whole-scene SH is never resident.
-        // Inputs partition by tag (env = -1, main >= 0); multiple main/env inputs
-        // are stitched with concatSource. Non-PLY/URL inputs, transforms/filters,
-        // output actions, or mixed-layout inputs (which combine() can union but
-        // concatSource can't) fall through to the DataTable pipeline.
-        const lodInputs = inputArgs.map((a) => {
-            const ply = !isHttpUrl(a.filename) &&
-                getInputFormat(resolveInput(a.filename).classifyName) === 'ply';
-            const lods = a.processActions.filter(act => act.kind === 'lod');
-            const onlyLod = a.processActions.length === lods.length && lods.length > 0;
-            const tag = lods.length > 0 ? (lods[lods.length - 1] as { value: number }).value : null;
-            return { arg: a, ply, onlyLod, tag };
-        });
-        if (
-            !isNullOutput &&
-            outputFormat === 'lod' &&
-            outputArg.processActions.length === 0 &&
-            lodInputs.length > 0 &&
-            lodInputs.every(li => li.ply && li.onlyLod && li.tag !== null)
-        ) {
-            const pool = createChunkDataPool();
-
-            // Open every input as a lazy PLY source (positions/heavy data fetched
-            // on demand; nothing materialized here).
-            const opened = await Promise.all(lodInputs.map(async (li) => {
-                const { filename: inFile, fileSystem } = resolveInput(li.arg.filename);
-                return { source: await readPly(await fileSystem.createSource(inFile), pool), tag: li.tag! };
-            }));
-
-            const mains = opened.filter(o => o.tag >= 0);
-            const envs = opened.filter(o => o.tag === -1);
-
-            // concatSource needs uniform layout (shBands/layers/extras). combine()
-            // (the DataTable path) can union mismatches, so fall back there rather
-            // than error in that case.
-            const layoutSig = (m: typeof opened[number]['source']['meta']) => `${m.shBands}|${[...m.availableLayers].sort().join(',')}|${m.extraColumns.map(e => `${e.name}:${e.type}`).join(',')}`;
-            const uniform = (list: typeof opened) => list.every(o => layoutSig(o.source.meta) === layoutSig(list[0].source.meta));
-
-            if (mains.length > 0 && uniform(mains) && uniform(envs)) {
-                const phase = logger.group(`Output ${outputArg.filename}`, { index: phaseTotal, total: phaseTotal });
-
-                // Build a structural multi-LOD main source: group the tagged
-                // inputs by --lod level (ascending), concat within a level, then
-                // stack the levels. Output detail level i = the i-th distinct tag
-                // (LOD is structural now — no per-gaussian lod tag array).
-                const mainTags = [...new Set(mains.map(m => m.tag))].sort((a, b) => a - b);
-                const perLevel = mainTags.map((tag) => {
-                    const group = mains.filter(m => m.tag === tag).map(m => m.source);
-                    return group.length === 1 ? group[0] : concatSource(group, pool);
-                });
-                const mainSource = perLevel.length === 1 ? perLevel[0] : stackLods(perLevel);
-                const envSource = envs.length === 0 ? null :
-                    (envs.length === 1 ? envs[0].source : concatSource(envs.map(e => e.source), pool));
-
-                const totalGaussians = mainSource.meta.lodCounts.reduce((a, c) => a + c, 0);
-                if (totalGaussians === 0) {
-                    throw new Error('No Gaussians to write');
-                }
-
-                logger.info(`${fmtCount(totalGaussians)} gaussians · ${mainSource.meta.shBands} SH bands (streaming LOD)`);
-                await writeLodSource({
-                    filename: outputFilename,
-                    mainSource,
-                    envSource,
-                    iterations: options.iterations,
-                    createDevice: deviceCreator,
-                    chunkCount: options.lodChunkCount,
-                    chunkExtent: options.lodChunkExtent
-                }, new NodeFileSystem());
-
-                await mainSource.close();
-                if (envSource) await envSource.close();
-                phase.end();
-                reportDone();
-                exit(0);
-            }
-
-            // Ineligible after inspecting layout — release and fall through.
-            await Promise.all(opened.map(o => o.source.close()));
-        }
-
-        // read, filter, process input files
-        const inputDataTables: DataTable[] = [];
-        for (let inputIdx = 0; inputIdx < inputArgs.length; inputIdx++) {
-            const inputArg = inputArgs[inputIdx];
-            const phase = logger.group(`Input ${inputArg.filename}`, {
-                index: inputIdx + 1,
-                total: phaseTotal
-            });
-
-            // extract params
-            const params = inputArg.processActions.filter(a => a.kind === 'param').map((p) => {
-                return { name: p.name, value: p.value };
-            });
-
-            // read input - supports both local paths and http(s):// URLs
-            const { filename, fileSystem, classifyName } = resolveInput(inputArg.filename);
-            const inputFormat = getInputFormat(classifyName);
-
-            // mjs generators require local filesystem access (dynamic import)
-            if (inputFormat === 'mjs' && isHttpUrl(inputArg.filename)) {
-                throw new Error(`.mjs generator inputs cannot be loaded from a URL: ${inputArg.filename}`);
-            }
-
-            // For mjs format, convert to file:// URL (Node.js-specific)
-            const readFilename = inputFormat === 'mjs' ? `file://${filename}` : filename;
-
-            // Per-file progress bars are drawn by the readers themselves
-            // (see lib/read.ts and the SOG/LCC readers). The CLI wraps them
-            // in a "Reading" group so multi-file formats like SOG render as
-            // a coherent block under the Input phase.
-            const readingGroup = logger.group('Reading');
-            const sources = await readFile({
-                filename: readFilename,
-                inputFormat,
-                options,
-                params,
-                fileSystem
-            });
-            // readFile yields chunk sources; this (legacy) pipeline materializes
-            // each at its boundary and releases the source.
-            const matPool = createChunkDataPool();
-            const dataTables: DataTable[] = [];
-            for (const src of sources) {
-                dataTables.push(await materializeToDataTable(src, matPool));
-                await src.close();
-            }
-            readingGroup.end();
-
-            for (let i = 0; i < dataTables.length; ++i) {
-                const dataTable = dataTables[i];
-
-                if (dataTable.numRows === 0 || !isGSDataTable(dataTable)) {
-                    throw new Error(`Unsupported data in file '${inputArg.filename}'`);
-                }
-
-                logDataTableInfo(dataTable);
-
-                const isEnv = dataTable.hasColumn('lod') && dataTable.getColumnByName('lod').data.every(v => v === -1);
-                if (!isEnv) {
-                    dataTables[i] = await processDataTable(dataTable, inputArg.processActions, processOptions);
-                }
-            }
-
-            inputDataTables.push(...dataTables.filter(dt => dt !== null));
-            phase.end();
-        }
-
-        // special-case the environment dataTable
-        const envDataTables = inputDataTables.filter(dt => dt.hasColumn('lod') && dt.getColumnByName('lod').data.every(v => v === -1));
-        const nonEnvDataTables = inputDataTables.filter(dt => !dt.hasColumn('lod') || dt.getColumnByName('lod').data.some(v => v !== -1));
-
-        if (envDataTables.length > 0 && outputFormat !== null && outputFormat !== 'lod') {
-            logger.warn(`Environment splats (--lod -1) are only written for lod-meta.json output; they will be discarded for '${outputFormat}' output.`);
-        }
-
-        // combine inputs into a single output dataTable
-        const dataTable = nonEnvDataTables.length > 0 && await processDataTable(
-            combine(nonEnvDataTables),
-            outputArg.processActions,
-            processOptions
-        );
-
-        if (!dataTable || dataTable.numRows === 0) {
-            throw new Error('No Gaussians to write');
-        }
-
-        // Single-scene output takes one LOD (see the --lod-select guard above).
-        // A multi-LOD result here is conflicting per-input --lod *tags* (e.g.
-        // multi-PLY); reject it. Otherwise drop the now-redundant lod column so
-        // single-scene output never carries a vestigial per-gaussian LOD tag.
-        if (outputFormat !== 'lod' && dataTable.hasColumn('lod')) {
-            const levels = new Set(dataTable.getColumnByName('lod').data);
-            levels.delete(-1);
-            if (levels.size > 1) {
-                throw new Error('Cannot write multiple LOD levels (--lod tags) to a single-scene output; tag one level, or output lod-meta.json.');
-            }
-            dataTable.removeColumn('lod');
-        }
-
-        const envDataTable = envDataTables.length > 0 && await processDataTable(
-            combine(envDataTables),
-            outputArg.processActions,
-            processOptions
-        );
-
-        // Skip file writing for null output
-        if (!isNullOutput) {
-            const phase = logger.group(`Output ${outputArg.filename}`, {
-                index: phaseTotal,
-                total: phaseTotal
-            });
-            logDataTableInfo(dataTable);
-            await writeFile({
-                filename: outputFilename,
-                outputFormat: outputFormat!,
-                dataTable,
-                envDataTable,
-                options,
-                createDevice: deviceCreator
-            }, new NodeFileSystem());
-            phase.end();
-        }
+        // Anything reaching here is a single-scene (non-lod) output carrying --lod
+        // *tags*: tags build lod-meta.json levels and don't apply to single-scene
+        // output. (Tag-free non-lod conversions and null output ran the single-scene
+        // pipeline above; lod-meta output ran the LOD path.)
+        throw new Error('--lod tags apply to lod-meta.json output; for single-scene output choose a level with --lod-select (-O).');
     } catch (err) {
         failExit(err);
     }
