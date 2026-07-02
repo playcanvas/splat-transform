@@ -1,8 +1,36 @@
 /**
- * Utility functions for comparing DataTable summaries in tests.
+ * Utility functions for computing and comparing per-column statistics in tests.
  */
 
 import assert from 'node:assert';
+
+import { computeStats } from '../../src/lib/index.js';
+
+/**
+ * Compute single-LOD statistics for a DataTable (or ChunkSource) via the
+ * streaming `computeStats`, adapted from the columnar `LodStats` into the
+ * keyed per-column view the test assertions use.
+ * @param {object} input - DataTable or ChunkSource to analyze
+ * @returns {Promise<object>} `{ rowCount, columns: { name: { min, max, median, mean, stdDev, nanCount, infCount, histogram } } }`
+ */
+async function computeStatsView(input) {
+    const { lods } = await computeStats(input);
+    const lod = lods[0];
+    const columns = {};
+    lod.columns.forEach((name, i) => {
+        columns[name] = {
+            min: lod.min[i],
+            max: lod.max[i],
+            median: lod.median[i],
+            mean: lod.mean[i],
+            stdDev: lod.stdDev[i],
+            nanCount: lod.nanCount[i],
+            infCount: lod.infCount[i],
+            histogram: lod.histogram[i]
+        };
+    });
+    return { rowCount: lod.numGaussians, columns };
+}
 
 /**
  * Asserts that two numbers are approximately equal within a tolerance.
@@ -45,9 +73,9 @@ function compareColumnStats(actual, expected, tolerance, columnName) {
 }
 
 /**
- * Compares two SummaryData objects.
- * @param {object} actual - Actual summary data
- * @param {object} expected - Expected summary data
+ * Compares two stats views (as returned by {@link computeStatsView}).
+ * @param {object} actual - Actual stats view
+ * @param {object} expected - Expected stats view
  * @param {object} [options] - Comparison options
  * @param {number} [options.tolerance=0] - Tolerance for numeric comparisons
  * @param {boolean} [options.allowExtraColumns=false] - Allow actual to have extra columns
@@ -129,4 +157,4 @@ function compareDataTables(actual, expected, tolerance = 0) {
     }
 }
 
-export { assertClose, compareColumnStats, compareSummaries, compareDataTables };
+export { assertClose, compareColumnStats, compareSummaries, compareDataTables, computeStatsView };

@@ -1,9 +1,13 @@
 import { Vec3 } from 'playcanvas';
 
-import { Column, DataTable, simplifyGaussians, sortMortonOrder, computeSummary, type SummaryData, convertToSpace, getSHBands } from './data-table';
+import { createChunkDataPool } from './chunk';
+import { dataTableToChunkSource } from './compat/data-table';
+import { Column, DataTable, simplifyGaussians, sortMortonOrder, convertToSpace, getSHBands } from './data-table';
+import { computeSourceStats } from './ops';
+import { formatSourceInfo, formatSourceStats } from './source-info';
 import type { DeviceCreator } from './types';
 import { fmtCount, type Group, logger, Transform } from './utils';
-import { inverseTransforms, forwardTransforms, rawColumnMap, isTransformColumn } from './value-transforms';
+import { inverseTransforms, rawColumnMap, isTransformColumn } from './value-transforms';
 import { filterCluster as filterClusterFn } from './voxel/filter-cluster';
 import { filterFloaters as filterFloatersFn } from './voxel/filter-floaters';
 
@@ -127,20 +131,25 @@ type Lod = {
 };
 
 /**
- * Print a statistical summary to the logger.
+ * Print per-LOD, per-column statistics (with the structural info block) to the
+ * logger — the data-level counterpart to {@link Info}.
  */
-type Summary = {
+type Stats = {
     /** Action type identifier. */
-    kind: 'summary';
+    kind: 'stats';
+    /** Output format. Default: 'text' */
+    format?: 'text' | 'json';
 };
 
 /**
  * Print structural metadata (per-LOD counts, columns, SH bands) to the logger —
- * the cheap, header-level counterpart to {@link Summary} (no data specifics).
+ * the cheap, header-level counterpart to {@link Stats} (no data specifics).
  */
 type Info = {
     /** Action type identifier. */
     kind: 'info';
+    /** Output format. Default: 'text' */
+    format?: 'text' | 'json';
 };
 
 /**
@@ -228,11 +237,12 @@ type ProcessOptions = {
  * - `filterFloaters` - Remove splats not contributing to any occupied voxel (GPU)
  * - `filterCluster` - Keep splats in the connected cluster at a seed position (GPU)
  * - `lod` - Assign LOD level to all splats
- * - `summary` - Print statistical summary to logger
+ * - `stats` - Print per-LOD, per-column statistics to logger
+ * - `info` - Print structural metadata to logger
  * - `mortonOrder` - Reorder splats by Morton code for spatial locality
  * - `decimate` - Simplify to target count via progressive pairwise merging
  */
-type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | FilterFloaters | FilterCluster | Param | Lod | Summary | Info | MortonOrder | Decimate;
+type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | FilterFloaters | FilterCluster | Param | Lod | Stats | Info | MortonOrder | Decimate;
 
 // Describe a delta as "removed N" / "added N" relative to the previous count.
 const describeDelta = (delta: number, noun: string): string => {
@@ -250,54 +260,6 @@ const endFilterGroup = (g: Group, prev: DataTable, next: DataTable) => {
     if (removedCols !== 0) parts.push(describeDelta(removedCols, 'columns'));
     logger.info(parts.length > 0 ? parts.join(', ') : 'no change');
     g.end();
-};
-
-const formatMarkdown = (summary: SummaryData): string => {
-    const lines: string[] = [];
-
-    lines.push('# Summary');
-    lines.push('');
-    lines.push(`**Row Count:** ${summary.rowCount}`);
-    lines.push('');
-
-    // Build header and data rows as string arrays
-    const headers = ['Column', 'min', 'max', 'median', 'mean', 'stdDev', 'nans', 'infs', 'histogram'];
-    const rows: string[][] = [];
-
-    for (const [name, stats] of Object.entries(summary.columns)) {
-        const fn = forwardTransforms[name];
-        const fmt = (v: number) => String(fn ? +(fn(v).toPrecision(6)) : v);
-        rows.push([
-            name,
-            fmt(stats.min),
-            fmt(stats.max),
-            fmt(stats.median),
-            fmt(stats.mean),
-            fmt(stats.stdDev),
-            String(stats.nanCount),
-            String(stats.infCount),
-            stats.histogram
-        ]);
-    }
-
-    // Calculate max width for each column
-    const colWidths = headers.map((header, colIndex) => {
-        const dataWidths = rows.map(row => row[colIndex].length);
-        return Math.max(header.length, ...dataWidths);
-    });
-
-    // Build aligned table
-    const padRow = (cells: string[]) => `| ${cells.map((cell, i) => cell.padEnd(colWidths[i])).join(' | ')} |`;
-
-    const separator = `|${colWidths.map(w => '-'.repeat(w + 2)).join('|')}|`;
-
-    lines.push(padRow(headers));
-    lines.push(separator);
-    for (const row of rows) {
-        lines.push(padRow(row));
-    }
-
-    return lines.join('\n');
 };
 
 const filter = (dataTable: DataTable, predicate: (row: any, rowIndex: number) => boolean): DataTable => {
@@ -320,7 +282,7 @@ const filter = (dataTable: DataTable, predicate: (row: any, rowIndex: number) =>
  * Applies a sequence of processing actions to splat data.
  *
  * Actions are applied in order and can include transformations (translate, rotate, scale),
- * filters (NaN, value, box, sphere, bands), and analysis (summary).
+ * filters (NaN, value, box, sphere, bands), and analysis (stats).
  *
  * @param dataTable - The input splat data.
  * @param processActions - Array of actions to apply in sequence.
@@ -524,10 +486,19 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 // skip params
                 break;
             }
-            case 'summary': {
-                const summary = computeSummary(result);
-                const markdown = formatMarkdown(summary);
-                logger.output(markdown);
+            case 'stats': {
+                // Bridge to a transient ChunkSource and reuse the streaming
+                // stats pass; raw/unbaked values, exactly as the table holds them.
+                const src = dataTableToChunkSource(result);
+                const stats = await computeSourceStats(src, createChunkDataPool());
+                logger.output(formatSourceStats(src.meta, stats, processAction.format));
+                await src.close();
+                break;
+            }
+            case 'info': {
+                const src = dataTableToChunkSource(result);
+                logger.output(formatSourceInfo(src.meta, processAction.format));
+                await src.close();
                 break;
             }
             case 'mortonOrder': {
@@ -607,7 +578,7 @@ export {
     type FilterCluster,
     type Param,
     type Lod,
-    type Summary,
+    type Stats,
     type Info,
     type MortonOrder,
     type Decimate

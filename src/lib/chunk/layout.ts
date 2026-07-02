@@ -94,6 +94,29 @@ const colorFields = (shBands: SHBands): ChunkFieldMap => {
     return map;
 };
 
+/** Canonical layer order for reporting. */
+const LAYER_ORDER: ReadonlyArray<ChunkLayer> = ['position', 'geometric', 'color', 'other'];
+
+/**
+ * List a source's available layers in canonical ({@link LAYER_ORDER}) order.
+ * @param layers - The source's available layers.
+ * @returns The layers as an ordered array.
+ */
+const orderedLayers = (layers: ReadonlySet<ChunkLayer>): ChunkLayer[] => LAYER_ORDER.filter(l => layers.has(l));
+
+/**
+ * Whether a source's available layers constitute gaussian splat data:
+ * `position`, `geometric` (rotation/scale/opacity), and `color` (DC) all
+ * present; SH is optional. Permissive containers (notably PLY) can parse with
+ * fewer layers — e.g. a plain point cloud — so this predicate is the single
+ * definition of the "is this a splat" verdict reported by file info.
+ * @param layers - The source's available layers.
+ * @returns `true` if the layers form gaussian splat data.
+ */
+const hasGaussianLayers = (layers: ReadonlySet<ChunkLayer>): boolean => {
+    return layers.has('position') && layers.has('geometric') && layers.has('color');
+};
+
 /** Descriptor for a single column in the `other` layer. */
 type ExtraColumn = {
     readonly name: string;
@@ -133,5 +156,7 @@ export {
     positionFields,
     geometricFields,
     colorFields,
-    otherLayout
+    otherLayout,
+    orderedLayers,
+    hasGaussianLayers
 };

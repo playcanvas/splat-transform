@@ -117,7 +117,7 @@ describe('processSource A/B vs processDataTable', () => {
         assertEquivalent(tableA, tableB);
     });
 
-    it('transform + chained filters + summary', async () => {
+    it('transform + chained filters + stats', async () => {
         const inject = (dt) => {
             dt.getColumnByName('x')[7] = NaN;
             dt.getColumnByName('y')[42] = NaN;
@@ -126,13 +126,13 @@ describe('processSource A/B vs processDataTable', () => {
             { kind: 'scale', value: 0.5 },
             { kind: 'filterNaN' },
             { kind: 'filterByValue', columnName: 'f_dc_0', comparator: 'gt', value: 0.5 },
-            { kind: 'summary' }
+            { kind: 'stats' }
         ], inject);
         assertEquivalent(tableA, tableB);
     });
 
-    it('summary alone leaves the scene unchanged', async () => {
-        const { tableA, tableB } = await runAB(120, {}, [{ kind: 'summary' }]);
+    it('stats alone leaves the scene unchanged', async () => {
+        const { tableA, tableB } = await runAB(120, {}, [{ kind: 'stats' }]);
         assert.strictEqual(tableA.numRows, 120);
         assertEquivalent(tableA, tableB);
     });

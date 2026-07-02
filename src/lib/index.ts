@@ -1,6 +1,10 @@
 // Data table
-export { Column, DataTable, combine, convertToSpace, computeSummary, sortMortonOrder, sortByVisibility, simplifyGaussians, getSHBands } from './data-table';
-export type { TypedArray, ColumnType, Row, ColumnStats, SummaryData } from './data-table';
+export { Column, DataTable, combine, convertToSpace, sortMortonOrder, sortByVisibility, simplifyGaussians, getSHBands } from './data-table';
+export type { TypedArray, ColumnType, Row } from './data-table';
+
+// Statistics
+export { computeStats } from './stats';
+export type { LodStats, SourceStats } from './stats';
 
 // Utils
 export {
@@ -32,7 +36,7 @@ export type {
     FilterCluster,
     Param as ProcessParam,
     Lod,
-    Summary,
+    Stats,
     MortonOrder,
     Decimate
 } from './process';

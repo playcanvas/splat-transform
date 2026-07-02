@@ -7,7 +7,6 @@ import { describe, it, before } from 'node:test';
 import assert from 'node:assert';
 
 import {
-    computeSummary,
     processDataTable,
     Column,
     DataTable,
@@ -20,7 +19,7 @@ import {
 } from '../src/lib/data-table/transform.js';
 
 import { createMinimalTestData } from './helpers/test-utils.mjs';
-import { assertClose } from './helpers/summary-compare.mjs';
+import { assertClose, computeStatsView } from './helpers/summary-compare.mjs';
 
 import { Mat4, Quat, Vec3 } from 'playcanvas';
 
@@ -32,7 +31,7 @@ describe('Translate Transform', () => {
     });
 
     it('should compose translation into transform without modifying raw data', async () => {
-        const originalSummary = computeSummary(testData);
+        const originalSummary = await computeStatsView(testData);
         const clonedData = testData.clone();
 
         const result = await processDataTable(clonedData, [{
@@ -40,7 +39,7 @@ describe('Translate Transform', () => {
             value: new Vec3(10, 20, 30)
         }]);
 
-        const newSummary = computeSummary(result);
+        const newSummary = await computeStatsView(result);
 
         // Raw data should be unchanged
         assertClose(newSummary.columns.x.mean, originalSummary.columns.x.mean, 1e-5, 'raw x mean');
@@ -68,7 +67,7 @@ describe('Translate Transform', () => {
     });
 
     it('should handle zero translation', async () => {
-        const originalSummary = computeSummary(testData);
+        const originalSummary = await computeStatsView(testData);
         const clonedData = testData.clone();
 
         const result = await processDataTable(clonedData, [{
@@ -76,7 +75,7 @@ describe('Translate Transform', () => {
             value: new Vec3(0, 0, 0)
         }]);
 
-        const newSummary = computeSummary(result);
+        const newSummary = await computeStatsView(result);
 
         // Positions should be unchanged
         assertClose(newSummary.columns.x.mean, originalSummary.columns.x.mean, 1e-5, 'x mean');
@@ -93,7 +92,7 @@ describe('Scale Transform', () => {
     });
 
     it('should compose scale into transform without modifying raw data', async () => {
-        const originalSummary = computeSummary(testData);
+        const originalSummary = await computeStatsView(testData);
         const clonedData = testData.clone();
 
         const scaleFactor = 2.0;
@@ -102,7 +101,7 @@ describe('Scale Transform', () => {
             value: scaleFactor
         }]);
 
-        const newSummary = computeSummary(result);
+        const newSummary = await computeStatsView(result);
 
         // Raw data should be unchanged
         assertClose(newSummary.columns.x.min, originalSummary.columns.x.min, 1e-5, 'raw x.min');
@@ -128,7 +127,7 @@ describe('Scale Transform', () => {
     });
 
     it('should handle scale factor of 1 (no change)', async () => {
-        const originalSummary = computeSummary(testData);
+        const originalSummary = await computeStatsView(testData);
         const clonedData = testData.clone();
 
         const result = await processDataTable(clonedData, [{
@@ -136,7 +135,7 @@ describe('Scale Transform', () => {
             value: 1.0
         }]);
 
-        const newSummary = computeSummary(result);
+        const newSummary = await computeStatsView(result);
 
         assertClose(newSummary.columns.x.mean, originalSummary.columns.x.mean, 1e-5, 'x mean');
         assertClose(newSummary.columns.scale_0.mean, originalSummary.columns.scale_0.mean, 1e-5, 'scale_0');
@@ -163,7 +162,7 @@ describe('Rotate Transform', () => {
     });
 
     it('should compose rotation into transform without modifying raw data', async () => {
-        const originalSummary = computeSummary(testData);
+        const originalSummary = await computeStatsView(testData);
         const clonedData = testData.clone();
 
         // 90 degree rotation around Y
@@ -172,7 +171,7 @@ describe('Rotate Transform', () => {
             value: new Vec3(0, 90, 0)
         }]);
 
-        const newSummary = computeSummary(result);
+        const newSummary = await computeStatsView(result);
 
         // Raw data should be unchanged
         assertClose(newSummary.columns.x.min, originalSummary.columns.x.min, 1e-5, 'raw x.min');
@@ -194,7 +193,7 @@ describe('Rotate Transform', () => {
     });
 
     it('should handle zero rotation', async () => {
-        const originalSummary = computeSummary(testData);
+        const originalSummary = await computeStatsView(testData);
         const clonedData = testData.clone();
 
         const result = await processDataTable(clonedData, [{
@@ -202,7 +201,7 @@ describe('Rotate Transform', () => {
             value: new Vec3(0, 0, 0)
         }]);
 
-        const newSummary = computeSummary(result);
+        const newSummary = await computeStatsView(result);
 
         // Positions should be unchanged
         assertClose(newSummary.columns.x.mean, originalSummary.columns.x.mean, 1e-5, 'x mean');
@@ -233,7 +232,7 @@ describe('Filter Box', () => {
         assert(result.numRows > 0, 'Should have at least some rows');
 
         // All remaining x values should be >= 0
-        const summary = computeSummary(result);
+        const summary = await computeStatsView(result);
         assert(summary.columns.x.min >= 0, 'All x values should be >= 0');
     });
 
@@ -336,7 +335,7 @@ describe('Filter By Value', () => {
 
     it('should filter by greater than comparison', async () => {
         const clonedData = testData.clone();
-        const originalSummary = computeSummary(testData);
+        const originalSummary = await computeStatsView(testData);
         const threshold = originalSummary.columns.x.median;
 
         const result = await processDataTable(clonedData, [{
@@ -358,7 +357,7 @@ describe('Filter By Value', () => {
 
     it('should filter by less than or equal comparison', async () => {
         const clonedData = testData.clone();
-        const originalSummary = computeSummary(testData);
+        const originalSummary = await computeStatsView(testData);
         const threshold = originalSummary.columns.x.median;
 
         const result = await processDataTable(clonedData, [{
@@ -457,7 +456,7 @@ describe('Filter NaN', () => {
         assert(result.numRows < 16, 'Should have fewer rows after filtering NaN');
 
         // No NaN values should remain
-        const summary = computeSummary(result);
+        const summary = await computeStatsView(result);
         for (const [name, stats] of Object.entries(summary.columns)) {
             assert.strictEqual(stats.nanCount, 0, `${name} should have no NaN values`);
         }
@@ -544,19 +543,19 @@ describe('Chained Transforms', () => {
         assert(result.numRows < testData.numRows, 'Should have fewer rows');
 
         // All x values should be positive and scaled
-        const summary = computeSummary(result);
+        const summary = await computeStatsView(result);
         assert(summary.columns.x.min >= 0, 'All x should be >= 0');
     });
 });
 
-describe('Summary Action', () => {
-    it('should not modify data when computing summary', async () => {
+describe('Stats Action', () => {
+    it('should not modify data when computing stats', async () => {
         const testData = createMinimalTestData();
         const originalRows = testData.numRows;
 
-        // Summary action should just log, not modify data
+        // Stats action should just log, not modify data
         const result = await processDataTable(testData, [{
-            kind: 'summary'
+            kind: 'stats'
         }]);
 
         assert.strictEqual(result.numRows, originalRows, 'Row count should be unchanged');
@@ -571,12 +570,12 @@ describe('Morton Order', () => {
     });
 
     it('should preserve row count and summary statistics', async () => {
-        const originalSummary = computeSummary(testData);
+        const originalSummary = await computeStatsView(testData);
         const clonedData = testData.clone();
 
         const result = await processDataTable(clonedData, [{ kind: 'mortonOrder' }]);
 
-        const newSummary = computeSummary(result);
+        const newSummary = await computeStatsView(result);
 
         // Row count must be unchanged (it's a permutation)
         assert.strictEqual(result.numRows, testData.numRows, 'Row count should be unchanged');

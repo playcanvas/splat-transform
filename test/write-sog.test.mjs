@@ -15,11 +15,11 @@ import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { compareSummaries } from './helpers/summary-compare.mjs';
+import { compareSummaries, computeStatsView } from './helpers/summary-compare.mjs';
 import { createTestDataTable, encodePlyBinary } from './helpers/test-utils.mjs';
 import { dataTableToChunkSource } from '../src/lib/compat/data-table.js';
 import {
-    Transform, computeSummary, readSog,
+    Transform, readSog,
     MemoryFileSystem, MemoryReadFileSystem, ZipReadFileSystem, WebPCodec
 } from '../src/lib/index.js';
 import { materializeToDataTable } from '../src/lib/compat/data-table.js';
@@ -75,7 +75,7 @@ describe('writeSogSource: native SOG from a ChunkSource', () => {
     it('SH3 round-trips within tolerance (k-means is non-deterministic)', async () => {
         const dt = createTestDataTable(5000, { includeSH: true, shBands: 3 });
         dt.transform = Transform.PLY.clone();
-        const expected = computeSummary(dt);
+        const expected = await computeStatsView(dt);
 
         const pool = createChunkDataPool();
         const fs = new MemoryFileSystem();
@@ -88,7 +88,7 @@ describe('writeSogSource: native SOG from a ChunkSource', () => {
         const decoded = await readSog(zip, 'meta.json');
 
         assert.strictEqual(decoded.numRows, dt.numRows);
-        compareSummaries(computeSummary(decoded), expected, { tolerance: 0.5, allowExtraColumns: true });
+        compareSummaries(await computeStatsView(decoded), expected, { tolerance: 0.5, allowExtraColumns: true });
     });
 });
 

@@ -14,7 +14,9 @@ export {
     positionFields,
     geometricFields,
     colorFields,
-    otherLayout
+    otherLayout,
+    orderedLayers,
+    hasGaussianLayers
 } from './layout';
 
 // ChunkData + pool

@@ -88,7 +88,7 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 | `.voxel.json` | ❌ | ✅ | Sparse voxel octree for collision detection |
 | `lod-meta.json` | ❌ | ✅ | Streamed LOD data stored in SOG chunks |
 | `.webp` | ❌ | ✅ | Lossless WebP image rendered from a camera view via GPU rasterizer |
-| `null` | ❌ | ✅ | Discard output (useful with `--summary` for analysis-only runs) |
+| `null` | ❌ | ✅ | Discard output (useful with `--stats` for analysis-only runs) |
 
 ## Actions
 
@@ -120,7 +120,8 @@ Actions execute in the order specified and can be repeated. Any action may appea
                                           Bare flag (no value) uses all defaults.
 -p, --params           <key=val,...>    Pass parameters to .mjs generator script
 -l, --lod              <n>              Tag the Gaussians with LOD level n (n >= 0, or -1 for environment)
--m, --summary                           Print per-column statistics to stdout
+-m, --stats            [text|json]      Print file info and per-column statistics to stdout. Default: text
+-I, --info             [text|json]      Print structural metadata (per-LOD counts, columns) to stdout. Default: text
 -M, --morton-order                      Reorder Gaussians by Morton code (Z-order curve)
 ```
 
@@ -336,22 +337,25 @@ splat-transform -w cloudA.ply -r 0,90,0 cloudB.ply -s 2 merged.compressed.ply
 splat-transform input1.ply input2.ply output.ply -t 0,0,10 -s 0.5
 ```
 
-### Statistical Summary
+### Statistics
 
 Generate per-column statistics for data analysis or test validation:
 
 ```bash
-# Print summary, then write output
-splat-transform input.ply --summary output.ply
+# Print stats, then write output
+splat-transform input.ply --stats output.ply
 
-# Print summary without writing a file (discard output)
+# Print stats without writing a file (discard output)
 splat-transform input.ply -m null
 
-# Print summary before and after a transform
-splat-transform input.ply --summary -s 0.5 --summary output.ply
+# Print stats as JSON for scripting
+splat-transform input.ply --stats json null
+
+# Print stats before and after a transform
+splat-transform input.ply --stats -s 0.5 --stats output.ply
 ```
 
-The summary includes min, max, median, mean, stdDev, nanCount and infCount for each column in the data.
+The output starts with the file info block (including the `gaussian` verdict — `false` for a readable container that isn't splat data, such as a plain point-cloud PLY), followed by min, max, median, mean, stdDev, nanCount, infCount and a histogram for each column, one table per LOD. The JSON form is the same info fields plus a columnar per-LOD `stats` array. The stats are computed in a single streaming pass; the median is approximated from a 1024-bin histogram (error within ~1/1000 of the column's range), all other fields are exact.
 
 ### Generators (Beta)
 
@@ -513,7 +517,7 @@ import {
 | `combine` | Merge multiple DataTables into one |
 | `convertToSpace` | Convert a DataTable between coordinate spaces |
 | `processDataTable` | Apply a sequence of processing actions |
-| `computeSummary` | Generate statistical summary of data |
+| `computeStats` | Streaming per-LOD, per-column statistics for a source or table |
 | `sortMortonOrder` | Sort indices by Morton code for spatial locality |
 | `sortByVisibility` | Sort indices by visibility score for filtering |
 | `writeVoxel` | Write sparse voxel octree files |
@@ -600,7 +604,8 @@ type ProcessAction =
     | { kind: 'decimate'; count: number | null; percent: number | null }
     | { kind: 'param'; name: string; value: string }
     | { kind: 'lod'; value: number }
-    | { kind: 'summary' }
+    | { kind: 'stats'; format?: 'text' | 'json' }
+    | { kind: 'info'; format?: 'text' | 'json' }
     | { kind: 'mortonOrder' };
 ```
 

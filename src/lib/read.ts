@@ -1,4 +1,4 @@
-import { type ChunkSource, type ChunkSourceMetadata, type SHBands, createChunkDataPool } from './chunk';
+import { type ChunkLayer, type ChunkSource, type ChunkSourceMetadata, type SHBands, createChunkDataPool, hasGaussianLayers, orderedLayers } from './chunk';
 import { columnNamesFromMeta, dataTableToChunkSource } from './compat/data-table';
 import { ReadFileSystem, ZipReadFileSystem } from './io/read';
 import { readKsplat, readMjs, readPly, readSogSource, readSplat, readSpz, statSogSource } from './readers';
@@ -190,6 +190,13 @@ const readFile = async (readFileOptions: ReadFileOptions): Promise<ChunkSource[]
 type FileInfo = {
     /** Detected input format. */
     format: InputFormat;
+    /**
+     * Whether the file contains gaussian splat data: the `position`,
+     * `geometric` (rotation/scale/opacity), and `color` (DC) layers are all
+     * present. `false` for a readable container that isn't a splat — notably
+     * a PLY holding a plain point cloud.
+     */
+    gaussian: boolean;
     /** Gaussian count of the finest LOD (LOD 0). */
     numGaussians: number;
     /** Number of LOD levels (1 for non-LOD formats). */
@@ -198,6 +205,8 @@ type FileInfo = {
     lodCounts: number[];
     /** SH band count present in the file. */
     shBands: SHBands;
+    /** Layers the file exposes, in canonical order. */
+    layers: ChunkLayer[];
     /** Canonical column names the file exposes. */
     columns: string[];
 };
@@ -209,10 +218,12 @@ type MetaSummary = Pick<ChunkSourceMetadata,
 
 const buildFileInfo = (format: InputFormat, meta: MetaSummary): FileInfo => ({
     format,
+    gaussian: hasGaussianLayers(meta.availableLayers),
     numGaussians: meta.numGaussians,
     numLods: meta.numLods,
     lodCounts: [...meta.lodCounts],
     shBands: meta.shBands,
+    layers: orderedLayers(meta.availableLayers),
     columns: columnNamesFromMeta(meta)
 });
 
@@ -224,7 +235,10 @@ const buildFileInfo = (format: InputFormat, meta: MetaSummary): FileInfo => ({
  * `sog` is peeked from `meta.json` (no WebP decode); every other format opens via
  * {@link readFile} (header-only for the lazy readers; eager for `ksplat`/`mjs`)
  * and reads its `meta`. Integrity is enforced by the readers, which throw on a
- * size mismatch, so a returned `FileInfo` implies a structurally sound file.
+ * size mismatch, so a returned `FileInfo` implies a structurally sound file —
+ * but not necessarily splat data: a permissive container (e.g. a point-cloud
+ * PLY) reads fine with `gaussian: false`. To test "is this a valid splat",
+ * check both: a throw means unreadable, `gaussian` is the data verdict.
  *
  * @param readFileOptions - Same inputs as {@link readFile}.
  * @returns The file's {@link FileInfo}.

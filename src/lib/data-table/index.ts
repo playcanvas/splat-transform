@@ -8,6 +8,4 @@ export { evaluateGaussianAt, computeGaussianInverse } from './gaussian-eval';
 export type { GaussianColumns, GaussianInverseTransform } from './gaussian-eval';
 export { sortMortonOrder } from './morton-order';
 export { getSHBands, shRestNames } from './sh-bands';
-export { computeSummary } from './summary';
-export type { ColumnStats, SummaryData } from './summary';
 export { transformColumns, computeWriteTransform, convertToSpace } from './transform';

@@ -13,7 +13,6 @@ import {
     Column,
     DataTable,
     Transform,
-    computeSummary,
     getInputFormat,
     readFile,
     readPly,
@@ -39,7 +38,7 @@ import { writeCompressedPlySource } from '../src/lib/writers/write-compressed-pl
 import { gaussianCloudToDataTable, getSpzModule } from '../src/lib/spz-module.js';
 import { createChunkDataPool } from '../src/lib/chunk/index.js';
 
-import { compareSummaries, compareDataTables } from './helpers/summary-compare.mjs';
+import { compareSummaries, compareDataTables, computeStatsView } from './helpers/summary-compare.mjs';
 import { createMinimalTestData, createTestDataTable, encodePlyBinary } from './helpers/test-utils.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -166,11 +165,11 @@ describe('PLY Format', () => {
     let plyBytes;
     let expectedSummary;
 
-    before(() => {
+    before(async () => {
         testData = createMinimalTestData();
         testData.transform = Transform.PLY.clone();
         plyBytes = encodePlyBinary(testData);
-        expectedSummary = computeSummary(testData);
+        expectedSummary = await computeStatsView(testData);
     });
 
     it('should read PLY binary data', async () => {
@@ -180,7 +179,7 @@ describe('PLY Format', () => {
         assert.strictEqual(dataTable.numRows, 16);
         assert.strictEqual(dataTable.numColumns, 14);
 
-        const actualSummary = computeSummary(dataTable);
+        const actualSummary = await computeStatsView(dataTable);
         compareSummaries(actualSummary, expectedSummary, { tolerance: 1e-5 });
     });
 
@@ -240,10 +239,10 @@ describe('Compressed PLY Format', () => {
     let testData;
     let expectedSummary;
 
-    before(() => {
+    before(async () => {
         testData = createMinimalTestData();
         testData.transform = Transform.PLY.clone();
-        expectedSummary = computeSummary(testData);
+        expectedSummary = await computeStatsView(testData);
     });
 
     it('should round-trip Compressed PLY with acceptable loss', async () => {
@@ -266,7 +265,7 @@ describe('Compressed PLY Format', () => {
         assert.strictEqual(readBack.numRows, testData.numRows);
 
         // Compare with tolerance (lossy compression)
-        const actualSummary = computeSummary(readBack);
+        const actualSummary = await computeStatsView(readBack);
         compareSummaries(actualSummary, expectedSummary, { tolerance: 0.1 });
     });
 
@@ -335,10 +334,10 @@ describe('SOG Format (Bundled)', () => {
     let testData;
     let expectedSummary;
 
-    before(() => {
+    before(async () => {
         testData = createMinimalTestData();
         testData.transform = Transform.PLY.clone();
-        expectedSummary = computeSummary(testData);
+        expectedSummary = await computeStatsView(testData);
     });
 
     it('should round-trip SOG bundled format with acceptable loss', async () => {
@@ -368,7 +367,7 @@ describe('SOG Format (Bundled)', () => {
             assert.strictEqual(readBack.numRows, testData.numRows);
 
             // Compare with higher tolerance (lossy compression)
-            const actualSummary = computeSummary(readBack);
+            const actualSummary = await computeStatsView(readBack);
             compareSummaries(actualSummary, expectedSummary, {
                 tolerance: 0.5,
                 allowExtraColumns: true
@@ -383,10 +382,10 @@ describe('SOG Format (Unbundled)', () => {
     let testData;
     let expectedSummary;
 
-    before(() => {
+    before(async () => {
         testData = createMinimalTestData();
         testData.transform = Transform.PLY.clone();
-        expectedSummary = computeSummary(testData);
+        expectedSummary = await computeStatsView(testData);
     });
 
     it('should round-trip SOG unbundled format with acceptable loss', async () => {
@@ -418,7 +417,7 @@ describe('SOG Format (Unbundled)', () => {
         assert.strictEqual(readBack.numRows, testData.numRows);
 
         // Compare with higher tolerance (lossy compression)
-        const actualSummary = computeSummary(readBack);
+        const actualSummary = await computeStatsView(readBack);
         compareSummaries(actualSummary, expectedSummary, {
             tolerance: 0.5,
             allowExtraColumns: true
@@ -631,7 +630,7 @@ describe('SPLAT Format (Input Only)', () => {
         }
 
         // Verify no NaN or Inf values
-        const summary = computeSummary(dataTable);
+        const summary = await computeStatsView(dataTable);
         for (const [name, stats] of Object.entries(summary.columns)) {
             assert.strictEqual(stats.nanCount, 0, `${name} has NaN values`);
             // Allow opacity to have Inf (for fully transparent/opaque)
@@ -711,7 +710,7 @@ describe('KSPLAT Format (Input Only)', () => {
         }
 
         // Verify no NaN values
-        const summary = computeSummary(dataTable);
+        const summary = await computeStatsView(dataTable);
         for (const [name, stats] of Object.entries(summary.columns)) {
             assert.strictEqual(stats.nanCount, 0, `${name} has NaN values`);
         }
@@ -775,7 +774,7 @@ describe('SPZ Format (Input Only)', () => {
         }
 
         // Verify no NaN values
-        const summary = computeSummary(dataTable);
+        const summary = await computeStatsView(dataTable);
         for (const [name, stats] of Object.entries(summary.columns)) {
             assert.strictEqual(stats.nanCount, 0, `${name} has NaN values`);
         }
@@ -788,7 +787,7 @@ describe('SPZ Format (Input Only)', () => {
 
         assert.strictEqual(dataTable.numRows, 4);
 
-        const summary = computeSummary(dataTable);
+        const summary = await computeStatsView(dataTable);
         for (const [name, stats] of Object.entries(summary.columns)) {
             assert.strictEqual(stats.nanCount, 0, `${name} has NaN values`);
         }
@@ -823,7 +822,7 @@ describe('SPZ Format (Input Only)', () => {
 
         assert.strictEqual(dataTable.numRows, 4);
 
-        const summary = computeSummary(dataTable);
+        const summary = await computeStatsView(dataTable);
         for (const [name, stats] of Object.entries(summary.columns)) {
             assert.strictEqual(stats.nanCount, 0, `${name} has NaN values`);
         }
@@ -847,7 +846,7 @@ describe('SPZ Format (Input Only)', () => {
             assert(dataTable.hasColumn(col), `Missing column: ${col}`);
         }
 
-        const summary = computeSummary(dataTable);
+        const summary = await computeStatsView(dataTable);
         for (const [name, stats] of Object.entries(summary.columns)) {
             assert.strictEqual(stats.nanCount, 0, `${name} has NaN values`);
         }
@@ -875,7 +874,7 @@ describe('SPZ Format (Input Only)', () => {
 
         assert.strictEqual(dataTable.numRows, 2);
 
-        const summary = computeSummary(dataTable);
+        const summary = await computeStatsView(dataTable);
         for (const [name, stats] of Object.entries(summary.columns)) {
             assert.strictEqual(stats.nanCount, 0, `${name} has NaN values`);
         }
@@ -936,7 +935,7 @@ describe('SPZ Format (Input Only)', () => {
 
         assert.strictEqual(dataTable.numRows, 2);
 
-        const summary = computeSummary(dataTable);
+        const summary = await computeStatsView(dataTable);
         for (const [name, stats] of Object.entries(summary.columns)) {
             assert.strictEqual(stats.nanCount, 0, `${name} has NaN values`);
         }
@@ -972,8 +971,8 @@ describe('SPZ Format (Output)', () => {
         assert.strictEqual(readBack.numRows, testData.numRows);
         assert.strictEqual(readBack.transform.equals(Transform.PLY), true);
 
-        const actualSummary = computeSummary(readBack);
-        const expectedSummary = computeSummary(testData);
+        const actualSummary = await computeStatsView(readBack);
+        const expectedSummary = await computeStatsView(testData);
         compareSummaries(actualSummary, expectedSummary, {
             tolerance: 0.25,
             allowExtraColumns: true
@@ -1103,7 +1102,7 @@ describe('MJS Generator Format (Input Only)', () => {
         assert.strictEqual(dataTable.numRows, 16);
 
         // Verify summary is reasonable
-        const summary = computeSummary(dataTable);
+        const summary = await computeStatsView(dataTable);
         assert.strictEqual(summary.rowCount, 16);
 
         // Positions should span expected range

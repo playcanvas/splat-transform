@@ -16,7 +16,7 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { createTestDataTable, encodePlyBinary } from './helpers/test-utils.mjs';
-import { Column, DataTable, MemoryReadFileSystem, readFile, readFileInfo } from '../src/lib/index.js';
+import { Column, DataTable, MemoryReadFileSystem, logger, readFile, readFileInfo } from '../src/lib/index.js';
 import { columnNamesFromMeta, dataTableToChunkSource } from '../src/lib/compat/data-table.js';
 import { processSource } from '../src/lib/process-source.js';
 import { createChunkDataPool } from '../src/lib/chunk/index.js';
@@ -86,12 +86,32 @@ describe('readFileInfo', () => {
             filename: 'scene.ply', inputFormat: 'ply', options, params: [], fileSystem: memFs('scene.ply', bytes)
         });
         assert.strictEqual(info.format, 'ply');
+        assert.strictEqual(info.gaussian, true);
         assert.strictEqual(info.numGaussians, 50);
         assert.strictEqual(info.numLods, 1);
         assert.deepStrictEqual(info.lodCounts, [50]);
         assert.strictEqual(info.shBands, 1);
+        assert.deepStrictEqual(info.layers, ['position', 'geometric', 'color']);
         assert.deepStrictEqual(info.columns.slice(0, STANDARD.length), STANDARD);
         assert.strictEqual(info.columns.length, STANDARD.length + 9); // + 9 f_rest for 1 band
+    });
+
+    it('reports gaussian: false for a non-splat (point cloud) PLY', async () => {
+        const n = 5;
+        const dt = new DataTable([
+            new Column('x', new Float32Array(n)),
+            new Column('y', new Float32Array(n)),
+            new Column('z', new Float32Array(n)),
+            new Column('red', new Uint8Array(n)),
+            new Column('green', new Uint8Array(n)),
+            new Column('blue', new Uint8Array(n))
+        ]);
+        const info = await readFileInfo({
+            filename: 'cloud.ply', inputFormat: 'ply', options, params: [], fileSystem: memFs('cloud.ply', encodePlyBinary(dt))
+        });
+        assert.strictEqual(info.gaussian, false);
+        assert.deepStrictEqual(info.layers, ['position', 'other']);
+        assert.deepStrictEqual(info.columns, ['x', 'y', 'z', 'red', 'green', 'blue']);
     });
 
     it('rejects a truncated PLY via the reader size guard', async () => {
@@ -110,6 +130,7 @@ describe('readFileInfo', () => {
         const fileSystem = memFs('minimal.splat', bytes);
         const info = await readFileInfo({ filename: 'minimal.splat', inputFormat: 'splat', options, params: [], fileSystem });
         assert.strictEqual(info.format, 'splat');
+        assert.strictEqual(info.gaussian, true);
         assert.strictEqual(info.numGaussians, 4);
         assert.strictEqual(info.shBands, 0);
         assert.deepStrictEqual(info.columns, STANDARD);
@@ -131,6 +152,18 @@ describe('readFileInfo', () => {
 });
 
 describe('info process action', () => {
+    // Capture logger `output` events for the duration of `fn`.
+    const captureOutput = async (fn) => {
+        const outputs = [];
+        logger.setRenderer({ handle: (e) => e.kind === 'output' && outputs.push(e.text) });
+        try {
+            await fn();
+        } finally {
+            logger.setRenderer({ handle: () => {} });
+        }
+        return outputs;
+    };
+
     it('passes the source through unchanged (meta-only)', async () => {
         const pool = createChunkDataPool();
         const src = dataTableToChunkSource(createTestDataTable(20, { includeSH: true, shBands: 1 }));
@@ -138,5 +171,46 @@ describe('info process action', () => {
         assert.strictEqual(out, src); // no-op pass-through
         assert.strictEqual(out.meta.numGaussians, 20);
         assert.strictEqual(out.meta.shBands, 1);
+    });
+
+    it('emits a text block by default', async () => {
+        const pool = createChunkDataPool();
+        const src = dataTableToChunkSource(createTestDataTable(20, { includeSH: true, shBands: 1 }));
+        const outputs = await captureOutput(() => processSource(src, [{ kind: 'info' }], pool));
+        assert.strictEqual(outputs.length, 1);
+        assert.match(outputs[0], /^gaussian: yes\n/); // no header line
+        assert.match(outputs[0], /gaussians: 20/);
+        assert.match(outputs[0], /sh bands: 1/);
+        assert.match(outputs[0], /layers: position, geometric, color/);
+    });
+
+    it('emits JSON when format is json', async () => {
+        const pool = createChunkDataPool();
+        const src = dataTableToChunkSource(createTestDataTable(20, { includeSH: true, shBands: 1 }));
+        const outputs = await captureOutput(() => processSource(src, [{ kind: 'info', format: 'json' }], pool));
+        assert.strictEqual(outputs.length, 1);
+        const info = JSON.parse(outputs[0]);
+        assert.strictEqual(info.gaussian, true);
+        assert.strictEqual(info.numGaussians, 20);
+        assert.strictEqual(info.numLods, 1);
+        assert.deepStrictEqual(info.lodCounts, [20]);
+        assert.strictEqual(info.shBands, 1);
+        assert.deepStrictEqual(info.layers, ['position', 'geometric', 'color']);
+        assert.deepStrictEqual(info.columns, columnNamesFromMeta(src.meta));
+    });
+
+    it('reports gaussian: false for a non-splat source', async () => {
+        const pool = createChunkDataPool();
+        const n = 6;
+        const dt = new DataTable([
+            new Column('x', new Float32Array(n)),
+            new Column('y', new Float32Array(n)),
+            new Column('z', new Float32Array(n))
+        ]);
+        const src = dataTableToChunkSource(dt);
+        const outputs = await captureOutput(() => processSource(src, [{ kind: 'info', format: 'json' }], pool));
+        const info = JSON.parse(outputs[0]);
+        assert.strictEqual(info.gaussian, false);
+        assert.deepStrictEqual(info.layers, ['position']);
     });
 });

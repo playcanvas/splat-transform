@@ -169,8 +169,8 @@ const cliOptionsConfig = {
     'filter-floaters': { type: 'string', short: 'G', multiple: true },
     params: { type: 'string', short: 'p', multiple: true },
     lod: { type: 'string', short: 'l', multiple: true },
-    summary: { type: 'boolean', short: 'm', multiple: true },
-    info: { type: 'boolean', short: 'I', multiple: true },
+    stats: { type: 'string', short: 'm', multiple: true },
+    info: { type: 'string', short: 'I', multiple: true },
     'morton-order': { type: 'boolean', short: 'M', multiple: true }
 } as const;
 
@@ -181,6 +181,7 @@ const stringOptionNames = new Set(Object.entries(cliOptionsConfig)
 
 const isNumericValue = (s: string) => /^-?\d[\d.,e+-]*$/.test(s);
 const isCollisionMeshShape = (s: string) => /^(?:smooth|faces)$/i.test(s);
+const isTextJsonFormat = (s: string) => /^(?:text|json)$/i.test(s);
 
 // Options that may appear without a value. The predicate gates whether the
 // next argv token is consumed as the value; when omitted (or rejected) the
@@ -196,7 +197,11 @@ const optionalValueOptions: Map<string, OptionalValueValidator> = new Map([
     ['--voxel-carve', isNumericValue],
     ['--voxel-params', isNumericValue],
     ['--collision-mesh', isCollisionMeshShape],
-    ['-K', isCollisionMeshShape]
+    ['-K', isCollisionMeshShape],
+    ['--info', isTextJsonFormat],
+    ['-I', isTextJsonFormat],
+    ['--stats', isTextJsonFormat],
+    ['-m', isTextJsonFormat]
 ]);
 
 const shortToLong = new Map<string, string>(
@@ -275,6 +280,14 @@ const parseArguments = async () => {
             throw new Error(`Expected ${count} comma-separated values, got ${parts.length}: ${value}`);
         }
         return parts;
+    };
+
+    const parseOutputFormat = (value: string, option: string): 'text' | 'json' => {
+        const format = value ? value.trim().toLowerCase() : 'text';
+        if (format !== 'text' && format !== 'json') {
+            throw new Error(`Invalid ${option} format: ${value}. Must be 'text' or 'json'.`);
+        }
+        return format;
     };
 
     const parseCollisionMesh = (value: string | undefined): false | CollisionMeshShape => {
@@ -639,14 +652,16 @@ const parseArguments = async () => {
                     });
                     break;
                 }
-                case 'summary':
+                case 'stats':
                     current.processActions.push({
-                        kind: 'summary'
+                        kind: 'stats',
+                        format: parseOutputFormat(t.value, 'stats')
                     });
                     break;
                 case 'info':
                     current.processActions.push({
-                        kind: 'info'
+                        kind: 'info',
+                        format: parseOutputFormat(t.value, 'info')
                     });
                     break;
                 case 'morton-order':
@@ -759,8 +774,8 @@ ACTIONS (executed in order; can be repeated)
     -D, --filter-cluster   [res,op,min]     Keep only the connected cluster at --seed-pos. Default: 1.0,0.999,0.1
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
     -l, --lod              <n>              Tag the Gaussians with LOD level n (n >= 0, or -1 for environment)
-    -m, --summary                           Print per-column statistics to stdout
-    -I, --info                              Print structural metadata (per-LOD counts, columns) to stdout
+    -m, --stats            [text|json]      Print file info and per-column statistics to stdout. Default: text
+    -I, --info             [text|json]      Print structural metadata (per-LOD counts, columns) to stdout. Default: text
     -M, --morton-order                      Reorder Gaussians by Morton code (Z-order curve)
 
 GENERAL
@@ -1090,7 +1105,7 @@ const main = async () => {
         // finest (LOD 0) by default, or the one --lod-select picks (reject multiple).
         // Selection is applied as a selectLod node right after the reader (below),
         // so the pipeline operates on that single level. `null` output has no
-        // writer, so it keeps the full multi-LOD source — `--info`/`--summary`
+        // writer, so it keeps the full multi-LOD source — `--info`/`--stats`
         // there report every level. lod-meta output keeps every level (path below).
         if (outputFormat !== null && outputFormat !== 'lod' && options.lodSelect.length > 1) {
             throw new Error('Cannot write multiple LOD levels (--lod-select) to a single-scene output; select one level, or output lod-meta.json.');
@@ -1159,7 +1174,7 @@ const main = async () => {
             // A real single-LOD writer collapses each multi-LOD input to the
             // selected level (finest by default) via a selectLod node, so
             // transforms operate on one LOD; null output keeps every level (so an
-            // --info/--summary action there reports the whole source). `--lod`
+            // --info/--stats action there reports the whole source). `--lod`
             // actions are lod-meta grouping metadata (never data ops), so strip them.
             const selectSingleLod = outputFormat !== null;
             const processed: ChunkSource[] = [];
@@ -1181,7 +1196,7 @@ const main = async () => {
             }
 
             logger.info(`${fmtCount(combined.meta.numGaussians)} gaussians · ${combined.meta.shBands} SH bands`);
-            if (outputFormat !== null) { // null output: process for side-effects (e.g. --summary), skip the write
+            if (outputFormat !== null) { // null output: process for side-effects (e.g. --stats), skip the write
                 await writeSource({
                     filename: outputFilename,
                     outputFormat,
