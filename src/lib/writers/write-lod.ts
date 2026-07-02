@@ -152,7 +152,8 @@ const accumulateBound = (
 // `bins` maps LOD -> flat analysis indices; each is gathered from its own LOD
 // (flat index `g` -> local row `g - cum[lod]`).
 const calcBound = async (
-    source: ChunkSource, pool: ChunkDataPool, bins: Map<number, Uint32Array>, cum: number[]
+    source: ChunkSource, pool: ChunkDataPool, bins: Map<number, Uint32Array>, cum: number[],
+    tick?: (n: number) => void
 ): Promise<Aabb> => {
     const min = [Infinity, Infinity, Infinity];
     const max = [-Infinity, -Infinity, -Infinity];
@@ -179,6 +180,7 @@ const calcBound = async (
             );
             pos.release();
             geo.release();
+            tick?.(count);
         }
     }
 
@@ -410,12 +412,20 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
         }
 
         // bound over the leaf's gaussians, gathered per structural LOD.
-        const bound = await calcBound(mainSource, pool, bins, cum);
+        const bound = await calcBound(mainSource, pool, bins, cum, n => chunkingBar.tick(n));
 
         return { bound, lods };
     };
 
-    const tree = await build(bTree.root);
+    // Every gaussian lands in exactly one leaf, so leaf-bounds batches tick the
+    // bar to the total gaussian count across LODs.
+    const chunkingBar = logger.bar('chunking', cum[numLods]);
+    let tree: MetaNode;
+    try {
+        tree = await build(bTree.root);
+    } finally {
+        chunkingBar.end();
+    }
 
     // count splats per lod level
     const counts = new Array(lodLevels).fill(0);
