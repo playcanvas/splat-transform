@@ -87,7 +87,7 @@
     "test:fixtures": "node --import tsx test/fixtures/create-fixtures.mjs"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.0.0"
   },
   "type": "module"
 }

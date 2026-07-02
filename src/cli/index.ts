@@ -863,17 +863,14 @@ const main = async () => {
     const startTime = performance.now();
 
     // Kernel-tracked peak resident set size in bytes.
-    // `process.resourceUsage().maxRSS` (getrusage `ru_maxrss`) is in **kilobytes
-    // on Linux** but **bytes on macOS and Windows**; normalize to bytes for
-    // fmtBytes (multiplying everywhere over-reports macOS peak ~1024×).
+    // `process.resourceUsage().maxRSS` is kilobytes on every platform from
+    // node 20.3+ (libuv 1.45 normalized macOS, which previously reported
+    // bytes — on node 18/macOS this over-reports 1024×).
     // Note: V8 fatal OOM (`FATAL ERROR: Reached heap limit`) and external
     // SIGKILL bypass all JS handlers (uncaughtException, beforeExit, exit),
     // so peak rss cannot be reported in those cases - use an external wrapper
     // such as `/usr/bin/time -l` (macOS) or `/usr/bin/time -v` (Linux).
-    const peakMemoryBytes = (): number => {
-        const raw = process.resourceUsage().maxRSS;
-        return process.platform === 'linux' ? raw * 1024 : raw;
-    };
+    const peakMemoryBytes = (): number => process.resourceUsage().maxRSS * 1024;
 
     // V8-tracked currently-live memory: heapUsed (JS objects) + external
     // (C++-bound, includes ArrayBuffer storage for typed arrays — which is

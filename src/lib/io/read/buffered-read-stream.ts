@@ -57,9 +57,13 @@ class BufferedReadStream extends ReadStream {
             }
         }
 
-        // Read a chunk from inner stream
+        // Read a chunk from inner stream. Cap read-ahead at the bytes left in
+        // the stream's range (when known) so a small range read doesn't allocate
+        // and zero a full chunkSize buffer — per-record gathers create one
+        // stream per run, so over-allocating here dominates the gather cost.
         const remaining = target.length - written;
-        const readSize = Math.max(this.chunkSize, remaining);
+        const rangeLeft = this.expectedSize !== undefined ? this.expectedSize - this.bytesRead : Infinity;
+        const readSize = Math.max(Math.min(this.chunkSize, rangeLeft), remaining);
         const chunk = new Uint8Array(readSize);
         const n = await this.inner.pull(chunk);
 
