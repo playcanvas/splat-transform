@@ -750,6 +750,12 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
     // interleaved chunk in memory at once.
     const SUB_BLOCK = 1 << 16;
 
+    // Gather coalescing: merge index runs separated by less than GATHER_MERGE_GAP
+    // bytes into one range read; cap any one merged read (and thus the gather
+    // scratch) at GATHER_MAX_WINDOW bytes.
+    const GATHER_MERGE_GAP = 64 * 1024;
+    const GATHER_MAX_WINDOW = 8 * 1024 * 1024;
+
     // Reused scratch buffers. Reads are sequential per the ChunkSource contract,
     // so single shared buffers avoid re-allocating on every read: `recordBuffer`
     // for the contiguous sub-block sweep, `gatherScratch` for one coalesced run.
@@ -783,30 +789,44 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
             for (let j = 0; j < count; j++) slot[j] = j;
             slot.sort((a, b) => indices[indexOffset + a] - indices[indexOffset + b]);
 
+            // Merge nearby runs into one bounded range read: a positioned read
+            // costs ~a syscall + await round-trip regardless of size, so rows
+            // separated by less than GATHER_MERGE_GAP bytes of unwanted data are
+            // cheaper to read-and-skip than to fetch separately. The window cap
+            // bounds both the scratch buffer and the worst-case waste; it also
+            // splits fully-consecutive runs that previously grew the scratch
+            // without bound.
             let j = 0;
             while (j < count) {
                 const first = indices[indexOffset + slot[j]];
+                let last = first;
                 let k = j + 1;
-                while (k < count && indices[indexOffset + slot[k]] === first + (k - j)) k++;
-                const runLen = k - j;
+                while (k < count) {
+                    const next = indices[indexOffset + slot[k]];
+                    if ((next - last) * recordStride > GATHER_MERGE_GAP) break;
+                    if ((next - first + 1) * recordStride > GATHER_MAX_WINDOW) break;
+                    last = next;
+                    k++;
+                }
 
-                const need = runLen * recordStride;
+                const need = (last - first + 1) * recordStride;
                 if (!gatherScratch || gatherScratch.length < need) {
                     gatherScratch = new Uint8Array(need);
                 }
                 const recordBytes = gatherScratch.subarray(0, need);
                 const got = await readExact(
-                    source.read(headerBytes + first * recordStride, headerBytes + (first + runLen) * recordStride),
+                    source.read(headerBytes + first * recordStride, headerBytes + (last + 1) * recordStride),
                     recordBytes, 0, need
                 );
                 if (got !== need) {
                     throw new Error(`readPly: short gather read (${got}/${need}) at row ${first}`);
                 }
 
-                for (let t = 0; t < runLen; t++) {
-                    const rec = recordBytes.subarray(t * recordStride, (t + 1) * recordStride);
+                for (let t = j; t < k; t++) {
+                    const row = indices[indexOffset + slot[t]] - first;
+                    const rec = recordBytes.subarray(row * recordStride, (row + 1) * recordStride);
                     for (const layer of requested) {
-                        fill(rec, 1, request[layer]!, plans[layer]!, slot[j + t]);
+                        fill(rec, 1, request[layer]!, plans[layer]!, slot[t]);
                     }
                 }
                 j = k;

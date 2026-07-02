@@ -3,7 +3,7 @@ import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { logWrittenFile } from './utils';
 import { writeSogSource } from './write-sog.js';
-import { type ChunkDataPool, type ChunkSource, createChunkDataPool } from '../chunk';
+import { type ChunkDataPool, type ChunkSource, type ReadRequest, createChunkDataPool } from '../chunk';
 import { Column, DataTable, sortMortonOrder } from '../data-table';
 import { type FileSystem } from '../io/write';
 import { bakeTransform, permuteSource } from '../ops';
@@ -66,6 +66,41 @@ const boundUnion = (result: Aabb, a: Aabb, b: Aabb) => {
  */
 type SlimColumns = {
     x: Float32Array; y: Float32Array; z: Float32Array;
+};
+
+/**
+ * Overlay a per-unit gathered source so position-layer reads are answered from
+ * the resident slim columns (`flat[outputRow]` is the flat analysis index)
+ * instead of re-reading the file — the LOD writer already holds every position
+ * in memory, so the SOG writer's position phase costs no I/O. Requests carrying
+ * other layers forward to `parent` with the position request stripped; requests
+ * without a position layer pass through untouched.
+ */
+const positionsFromSlim = (parent: ChunkSource, slim: SlimColumns, flat: Uint32Array): ChunkSource => {
+    const { chunkSize } = parent.meta;
+    const read = async (request: ReadRequest): Promise<void> => {
+        const pos = request.position;
+        if (!pos) return parent.read(request);
+        const out = new Float32Array(pos.data);
+        if ('indices' in request) {
+            const { indices, indexOffset, count } = request;
+            for (let j = 0; j < count; j++) {
+                const g = flat[indices[indexOffset + j]];
+                out[j * 3] = slim.x[g]; out[j * 3 + 1] = slim.y[g]; out[j * 3 + 2] = slim.z[g];
+            }
+        } else {
+            const base = request.chunkIndex * chunkSize;
+            const count = Math.min(chunkSize, flat.length - base);
+            for (let j = 0; j < count; j++) {
+                const g = flat[base + j];
+                out[j * 3] = slim.x[g]; out[j * 3 + 1] = slim.y[g]; out[j * 3 + 2] = slim.z[g];
+            }
+        }
+        if (request.geometric || request.color || request.other) {
+            await parent.read({ ...request, position: undefined });
+        }
+    };
+    return { meta: parent.meta, read, close: () => parent.close() };
 };
 
 // Expand a batch of gathered (position, rotation, scale) records into ellipsoid
@@ -492,7 +527,10 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
                 // copy) and encode via the chunk-native SOG writer. The rows are
                 // already in write order, so pass an identity ordering to skip the
                 // writer's own Morton pass.
-                const unitSource = permuteSource(mainSource, orderedLocal, { lod: lodValue });
+                const unitSource = positionsFromSlim(
+                    permuteSource(mainSource, orderedLocal, { lod: lodValue }),
+                    slim, orderedIndices
+                );
                 const identity = new Uint32Array(totalIndices);
                 for (let j = 0; j < totalIndices; ++j) identity[j] = j;
 
@@ -513,4 +551,4 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     writingGroup.end();
 };
 
-export { writeLodSource };
+export { positionsFromSlim, writeLodSource };

@@ -17,7 +17,7 @@ import { MemoryFileSystem } from '../src/lib/io/write/index.js';
 import { bakeTransform, mapSource, stackLods } from '../src/lib/ops/index.js';
 import { readPly } from '../src/lib/readers/read-ply.js';
 import { createChunkDataPool } from '../src/lib/chunk/index.js';
-import { writeLodSource } from '../src/lib/writers/write-lod.js';
+import { positionsFromSlim, writeLodSource } from '../src/lib/writers/write-lod.js';
 import { version } from '../src/lib/version.js';
 
 import { encodePlyBinary } from './helpers/test-utils.mjs';
@@ -238,5 +238,76 @@ describe('writeLodSource: lod-meta.json contract', function () {
             assert.ok(meta.tree.bound.min[axis] >= lo[axis] - 0.2, `root bound min[${name}] within splat extents of baked positions`);
             assert.ok(meta.tree.bound.max[axis] <= hi[axis] + 0.2, `root bound max[${name}] within splat extents of baked positions`);
         });
+    });
+});
+
+describe('positionsFromSlim', () => {
+    const CHUNK = 4;
+    const makeParent = (n, calls) => ({
+        meta: { chunkSize: CHUNK, numGaussians: n, numLods: 1, lodCounts: [n], numChunks: [Math.ceil(n / CHUNK)] },
+        read: async (request) => {
+            calls.push(request);
+            if (request.geometric) {
+                // marker fill so forwarding is observable
+                new Float32Array(request.geometric.data).fill(99);
+            }
+        },
+        close: async () => {}
+    });
+    const slim = {
+        x: Float32Array.from({ length: 32 }, (_, i) => i + 0.25),
+        y: Float32Array.from({ length: 32 }, (_, i) => i + 0.5),
+        z: Float32Array.from({ length: 32 }, (_, i) => i + 0.75)
+    };
+    // unit of 6 rows mapping to scattered flat indices
+    const flat = Uint32Array.from([20, 3, 17, 8, 30, 11]);
+
+    it('serves chunk position reads from slim without touching the parent', async () => {
+        const calls = [];
+        const src = positionsFromSlim(makeParent(6, calls), slim, flat);
+        const pos = { data: new ArrayBuffer(CHUNK * 12) };
+        await src.read({ chunkIndex: 1, position: pos }); // rows 4..5
+        const f = new Float32Array(pos.data);
+        assert.strictEqual(f[0], slim.x[30]);
+        assert.strictEqual(f[1], slim.y[30]);
+        assert.strictEqual(f[2], slim.z[30]);
+        assert.strictEqual(f[3], slim.x[11]);
+        assert.strictEqual(calls.length, 0);
+    });
+
+    it('serves gather position reads from slim by output row', async () => {
+        const calls = [];
+        const src = positionsFromSlim(makeParent(6, calls), slim, flat);
+        const pos = { data: new ArrayBuffer(3 * 12) };
+        await src.read({ indices: Uint32Array.from([5, 0, 3]), indexOffset: 0, count: 3, position: pos });
+        const f = new Float32Array(pos.data);
+        assert.strictEqual(f[0], slim.x[11]); // unit row 5 -> flat 11
+        assert.strictEqual(f[3], slim.x[20]); // unit row 0 -> flat 20
+        assert.strictEqual(f[6], slim.x[8]);  // unit row 3 -> flat 8
+        assert.strictEqual(calls.length, 0);
+    });
+
+    it('forwards non-position layers with position stripped', async () => {
+        const calls = [];
+        const src = positionsFromSlim(makeParent(6, calls), slim, flat);
+        const pos = { data: new ArrayBuffer(CHUNK * 12) };
+        const geo = { data: new ArrayBuffer(CHUNK * 32) };
+        await src.read({ chunkIndex: 0, position: pos, geometric: geo });
+        assert.strictEqual(calls.length, 1);
+        assert.strictEqual(calls[0].position, undefined);
+        assert.strictEqual(calls[0].geometric, geo);
+        assert.strictEqual(calls[0].chunkIndex, 0);
+        assert.strictEqual(new Float32Array(geo.data)[0], 99); // parent filled it
+        assert.strictEqual(new Float32Array(pos.data)[0], slim.x[20]); // slim filled it
+    });
+
+    it('forwards position-free requests untouched', async () => {
+        const calls = [];
+        const src = positionsFromSlim(makeParent(6, calls), slim, flat);
+        const geo = { data: new ArrayBuffer(CHUNK * 32) };
+        const request = { chunkIndex: 0, geometric: geo };
+        await src.read(request);
+        assert.strictEqual(calls.length, 1);
+        assert.strictEqual(calls[0], request);
     });
 });
