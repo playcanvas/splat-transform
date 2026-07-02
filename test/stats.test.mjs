@@ -95,9 +95,9 @@ describe('stats process action', () => {
         assert.strictEqual(lods[0].numGaussians, 20);
         assert.deepStrictEqual(lods[0].columns, info.columns);
         for (const field of ['min', 'max', 'median', 'mean', 'stdDev', 'nanCount', 'infCount', 'histogram']) {
-            assert.strictEqual(lods[0][field].length, info.columns.length, `${field} length`);
+            assert.strictEqual(lods[0].data[field].length, info.columns.length, `${field} length`);
         }
-        for (const counts of lods[0].histogram) {
+        for (const counts of lods[0].data.histogram) {
             assert.strictEqual(counts.length, 16);
         }
     });
@@ -123,15 +123,15 @@ describe('computeStats accuracy', () => {
         for (let i = 0; i < lod.columns.length; i++) {
             const name = lod.columns[i];
             const expected = exactStats(dt.getColumnByName(name).data);
-            assert.ok(Math.abs(lod.min[i] - expected.min) <= 1e-5, `${name}.min`);
-            assert.ok(Math.abs(lod.max[i] - expected.max) <= 1e-5, `${name}.max`);
-            assert.ok(Math.abs(lod.mean[i] - expected.mean) <= 1e-5 * (1 + Math.abs(expected.mean)), `${name}.mean`);
-            assert.ok(Math.abs(lod.stdDev[i] - expected.stdDev) <= 1e-5 * (1 + expected.stdDev), `${name}.stdDev`);
-            assert.strictEqual(lod.nanCount[i], expected.nanCount, `${name}.nanCount`);
-            assert.strictEqual(lod.infCount[i], expected.infCount, `${name}.infCount`);
+            assert.ok(Math.abs(lod.data.min[i] - expected.min) <= 1e-5, `${name}.min`);
+            assert.ok(Math.abs(lod.data.max[i] - expected.max) <= 1e-5, `${name}.max`);
+            assert.ok(Math.abs(lod.data.mean[i] - expected.mean) <= 1e-5 * (1 + Math.abs(expected.mean)), `${name}.mean`);
+            assert.ok(Math.abs(lod.data.stdDev[i] - expected.stdDev) <= 1e-5 * (1 + expected.stdDev), `${name}.stdDev`);
+            assert.strictEqual(lod.data.nanCount[i], expected.nanCount, `${name}.nanCount`);
+            assert.strictEqual(lod.data.infCount[i], expected.infCount, `${name}.infCount`);
             const medianTolerance = Math.max((expected.max - expected.min) / 64, 1e-6);
-            assert.ok(Math.abs(lod.median[i] - expected.median) <= medianTolerance, `${name}.median (${lod.median[i]} vs ${expected.median})`);
-            assert.strictEqual(lod.histogram[i].reduce((a, b) => a + b, 0), 300 - expected.nanCount - expected.infCount, `${name}.histogram total`);
+            assert.ok(Math.abs(lod.data.median[i] - expected.median) <= medianTolerance, `${name}.median (${lod.data.median[i]} vs ${expected.median})`);
+            assert.strictEqual(lod.data.histogram[i].reduce((a, b) => a + b, 0), 300 - expected.nanCount - expected.infCount, `${name}.histogram total`);
         }
     });
 
@@ -143,11 +143,11 @@ describe('computeStats accuracy', () => {
         const { lods } = await computeStats(dt);
         const i = lods[0].columns.indexOf('x');
         const expected = exactStats(dt.getColumnByName('x').data);
-        assert.strictEqual(lods[0].min[i], -1000);
-        assert.strictEqual(lods[0].max[i], 1000);
-        assert.ok(Math.abs(lods[0].mean[i] - expected.mean) <= 1e-5 * (1 + Math.abs(expected.mean)), 'mean');
-        assert.ok(Math.abs(lods[0].median[i] - expected.median) <= (expected.max - expected.min) / 64, 'median');
-        assert.strictEqual(lods[0].histogram[i].reduce((a, b) => a + b, 0), values.length);
+        assert.strictEqual(lods[0].data.min[i], -1000);
+        assert.strictEqual(lods[0].data.max[i], 1000);
+        assert.ok(Math.abs(lods[0].data.mean[i] - expected.mean) <= 1e-5 * (1 + Math.abs(expected.mean)), 'mean');
+        assert.ok(Math.abs(lods[0].data.median[i] - expected.median) <= (expected.max - expected.min) / 64, 'median');
+        assert.strictEqual(lods[0].data.histogram[i].reduce((a, b) => a + b, 0), values.length);
     });
 
     it('reports stats per LOD without cross-LOD flattening', async () => {
@@ -170,15 +170,18 @@ describe('computeStats accuracy', () => {
         assert.strictEqual(lods.length, 2);
         const x0 = lods[0].columns.indexOf('x');
         assert.strictEqual(lods[0].numGaussians, 4);
-        assert.strictEqual(lods[0].min[x0], 0);
-        assert.strictEqual(lods[0].max[x0], 3);
+        assert.strictEqual(lods[0].data.min[x0], 0);
+        assert.strictEqual(lods[0].data.max[x0], 3);
         assert.strictEqual(lods[1].numGaussians, 2);
-        assert.strictEqual(lods[1].min[x0], 100);
-        assert.strictEqual(lods[1].max[x0], 101);
+        assert.strictEqual(lods[1].data.min[x0], 100);
+        assert.strictEqual(lods[1].data.max[x0], 101);
 
-        // Text output renders one labelled table per LOD.
+        // Text output renders one labelled table per LOD, with lods/lod counts
+        // lines mirroring the JSON numLods/lodCounts fields.
         const pool = createChunkDataPool();
         const outputs = await captureOutput(() => processSource(src, [{ kind: 'stats' }], pool));
+        assert.match(outputs[0], /lods: 2\n/);
+        assert.match(outputs[0], /lod counts: 4, 2\n/);
         assert.match(outputs[0], /lod 0: 4 gaussians/);
         assert.match(outputs[0], /lod 1: 2 gaussians/);
     });
@@ -190,12 +193,12 @@ describe('computeStats accuracy', () => {
         const json = JSON.parse(outputs[0]);
         for (const name of ['opacity', 'scale_0', 'f_dc_0']) {
             const i = lods[0].columns.indexOf(name);
-            const expected = +forwardTransforms[name](lods[0].mean[i]).toPrecision(6);
-            assert.strictEqual(json.stats[0].mean[i], expected, `${name} display mean`);
+            const expected = +forwardTransforms[name](lods[0].data.mean[i]).toPrecision(6);
+            assert.strictEqual(json.stats[0].data.mean[i], expected, `${name} display mean`);
         }
         // Untransformed columns pass through raw.
         const xi = lods[0].columns.indexOf('x');
-        assert.strictEqual(json.stats[0].mean[xi], lods[0].mean[xi]);
+        assert.strictEqual(json.stats[0].data.mean[xi], lods[0].data.mean[xi]);
     });
 
     it('accepts a DataTable and a ChunkSource with identical results', async () => {
@@ -234,8 +237,8 @@ describe('computeStats edge cases', () => {
         const outputs = await captureOutput(() => processDataTable(dt, [{ kind: 'stats', format: 'json' }]));
         const json = JSON.parse(outputs[0]);
         const i = json.stats[0].columns.indexOf('x');
-        assert.strictEqual(json.stats[0].min[i], null);
-        assert.strictEqual(json.stats[0].median[i], null);
+        assert.strictEqual(json.stats[0].data.min[i], null);
+        assert.strictEqual(json.stats[0].data.median[i], null);
     });
 
     it('counts Infinity separately and excludes it from min/max', async () => {

@@ -184,6 +184,15 @@ describe('info process action', () => {
         assert.match(outputs[0], /layers: position, geometric, color/);
     });
 
+    it('emits exact counts, never abbreviated', async () => {
+        const pool = createChunkDataPool();
+        const src = dataTableToChunkSource(createTestDataTable(1234));
+        const outputs = await captureOutput(() => processSource(src, [{ kind: 'info' }], pool));
+        assert.match(outputs[0], /gaussians: 1234\n/);
+        assert.match(outputs[0], /lods: 1\n/);
+        assert.match(outputs[0], /lod counts: 1234\n/);
+    });
+
     it('emits JSON when format is json', async () => {
         const pool = createChunkDataPool();
         const src = dataTableToChunkSource(createTestDataTable(20, { includeSH: true, shBands: 1 }));

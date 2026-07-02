@@ -10,4 +10,4 @@ export { reduceBandsSource } from './reduce-bands-source';
 export { concatSource } from './concat-source';
 export { filterNaNRows, filterByValueRows, filterBoxRows, filterSphereRows } from './filter-mask';
 export { computeSourceStats, NUM_BINS } from './stats';
-export type { LodStats, SourceStats } from './stats';
+export type { LodStats, LodStatsData, SourceStats } from './stats';

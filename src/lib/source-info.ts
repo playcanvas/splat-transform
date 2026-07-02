@@ -1,7 +1,6 @@
 import { type ChunkSourceMetadata, hasGaussianLayers, orderedLayers } from './chunk';
 import { columnNamesFromMeta } from './compat/data-table';
 import { type LodStats, type SourceStats } from './ops';
-import { fmtCount } from './utils';
 import { forwardTransforms } from './value-transforms';
 
 /**
@@ -38,18 +37,17 @@ const buildSourceInfo = (meta: ChunkSourceMetadata) => ({
 });
 
 /**
- * The info text lines — the text form of {@link buildSourceInfo}.
+ * The info text lines — the text form of {@link buildSourceInfo}, mirroring
+ * its fields one-to-one with exact (unabbreviated) counts.
  * @param meta - The source metadata.
  * @returns One `key: value` line per field.
  */
 const sourceInfoLines = (meta: ChunkSourceMetadata): string[] => {
-    const lods = meta.numLods > 1 ?
-        `${meta.numLods} (${meta.lodCounts.map(c => fmtCount(c)).join(', ')})` :
-        '1';
     return [
         `gaussian: ${hasGaussianLayers(meta.availableLayers) ? 'yes' : 'no'}`,
-        `gaussians: ${fmtCount(meta.numGaussians)}`,
-        `lods: ${lods}`,
+        `gaussians: ${meta.numGaussians}`,
+        `lods: ${meta.numLods}`,
+        `lod counts: ${meta.lodCounts.join(', ')}`,
         `sh bands: ${meta.shBands}`,
         `layers: ${orderedLayers(meta.availableLayers).join(', ')}`,
         `columns: ${columnNamesFromMeta(meta).join(', ')}`
@@ -99,27 +97,31 @@ const displayLodStats = (lod: LodStats): LodStats => {
     const mapped = (values: number[]): number[] => values.map((v, i) => displayValue(lod.columns[i], v));
     return {
         ...lod,
-        min: mapped(lod.min),
-        max: mapped(lod.max),
-        median: mapped(lod.median),
-        mean: mapped(lod.mean),
-        stdDev: mapped(lod.stdDev)
+        data: {
+            ...lod.data,
+            min: mapped(lod.data.min),
+            max: mapped(lod.data.max),
+            median: mapped(lod.data.median),
+            mean: mapped(lod.data.mean),
+            stdDev: mapped(lod.data.stdDev)
+        }
     };
 };
 
 // Render one LOD's stats as an aligned markdown-style table.
 const statsTable = (lod: LodStats): string[] => {
+    const { data } = lod;
     const headers = ['Column', 'min', 'max', 'median', 'mean', 'stdDev', 'nans', 'infs', 'histogram'];
     const rows = lod.columns.map((name, i) => [
         name,
-        String(displayValue(name, lod.min[i])),
-        String(displayValue(name, lod.max[i])),
-        String(displayValue(name, lod.median[i])),
-        String(displayValue(name, lod.mean[i])),
-        String(displayValue(name, lod.stdDev[i])),
-        String(lod.nanCount[i]),
-        String(lod.infCount[i]),
-        sparkline(lod.histogram[i])
+        String(displayValue(name, data.min[i])),
+        String(displayValue(name, data.max[i])),
+        String(displayValue(name, data.median[i])),
+        String(displayValue(name, data.mean[i])),
+        String(displayValue(name, data.stdDev[i])),
+        String(data.nanCount[i]),
+        String(data.infCount[i]),
+        sparkline(data.histogram[i])
     ]);
 
     const colWidths = headers.map((header, colIndex) => {
@@ -156,7 +158,7 @@ const formatSourceStats = (meta: ChunkSourceMetadata, stats: SourceStats, format
     for (const lod of stats.lods) {
         lines.push('');
         if (stats.lods.length > 1) {
-            lines.push(`lod ${lod.lod}: ${fmtCount(lod.numGaussians)} gaussians`);
+            lines.push(`lod ${lod.lod}: ${lod.numGaussians} gaussians`);
         }
         lines.push(...statsTable(lod));
     }

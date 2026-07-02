@@ -29,18 +29,10 @@ const round = (value: number): number => {
 };
 
 /**
- * Per-LOD column statistics in columnar (struct-of-arrays) form: every stat
- * field is an array index-aligned with `columns`. `JSON.stringify` of this is
- * the stats JSON output shape (NaN fields — e.g. an all-NaN column's min —
- * serialize as `null`).
+ * A LOD's measurements in columnar (struct-of-arrays) form: every field is an
+ * array index-aligned with the owning {@link LodStats}'s `columns`.
  */
-type LodStats = {
-    /** The LOD level these statistics describe. */
-    lod: number;
-    /** Gaussian count of this LOD. */
-    numGaussians: number;
-    /** Canonical column names; all stat arrays align with this order. */
-    columns: string[];
+type LodStatsData = {
     /** Per-column minimum (excluding NaN/Inf). */
     min: number[];
     /** Per-column maximum (excluding NaN/Inf). */
@@ -57,6 +49,23 @@ type LodStats = {
     infCount: number[];
     /** Per-column histogram: {@link NUM_BINS} counts over `[min[i], max[i]]`, raw space. */
     histogram: number[][];
+};
+
+/**
+ * Per-LOD column statistics: identity (`lod`, `numGaussians`), the column-name
+ * axis (`columns`), and the aligned measurement arrays (`data`).
+ * `JSON.stringify` of this is the stats JSON output shape (NaN fields — e.g.
+ * an all-NaN column's min — serialize as `null`).
+ */
+type LodStats = {
+    /** The LOD level these statistics describe. */
+    lod: number;
+    /** Gaussian count of this LOD. */
+    numGaussians: number;
+    /** Canonical column names; every array in `data` aligns with this order. */
+    columns: string[];
+    /** The column-aligned measurement arrays. */
+    data: LodStatsData;
 };
 
 /**
@@ -302,18 +311,20 @@ const computeSourceStats = async (src: ChunkSource, pool: ChunkDataPool): Promis
             lod,
             numGaussians: lodCount,
             columns: plans.map(p => p.name),
-            min: results.map(r => r.min),
-            max: results.map(r => r.max),
-            median: results.map(r => r.median),
-            mean: results.map(r => r.mean),
-            stdDev: results.map(r => r.stdDev),
-            nanCount: results.map(r => r.nanCount),
-            infCount: results.map(r => r.infCount),
-            histogram: results.map(r => r.histogram)
+            data: {
+                min: results.map(r => r.min),
+                max: results.map(r => r.max),
+                median: results.map(r => r.median),
+                mean: results.map(r => r.mean),
+                stdDev: results.map(r => r.stdDev),
+                nanCount: results.map(r => r.nanCount),
+                infCount: results.map(r => r.infCount),
+                histogram: results.map(r => r.histogram)
+            }
         });
     }
 
     return { lods };
 };
 
-export { computeSourceStats, NUM_BINS, type LodStats, type SourceStats };
+export { computeSourceStats, NUM_BINS, type LodStats, type LodStatsData, type SourceStats };

@@ -16,17 +16,18 @@ import { computeStats } from '../../src/lib/index.js';
 async function computeStatsView(input) {
     const { lods } = await computeStats(input);
     const lod = lods[0];
+    const { data } = lod;
     const columns = {};
     lod.columns.forEach((name, i) => {
         columns[name] = {
-            min: lod.min[i],
-            max: lod.max[i],
-            median: lod.median[i],
-            mean: lod.mean[i],
-            stdDev: lod.stdDev[i],
-            nanCount: lod.nanCount[i],
-            infCount: lod.infCount[i],
-            histogram: lod.histogram[i]
+            min: data.min[i],
+            max: data.max[i],
+            median: data.median[i],
+            mean: data.mean[i],
+            stdDev: data.stdDev[i],
+            nanCount: data.nanCount[i],
+            infCount: data.infCount[i],
+            histogram: data.histogram[i]
         };
     });
     return { rowCount: lod.numGaussians, columns };

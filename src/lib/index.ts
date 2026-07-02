@@ -4,7 +4,7 @@ export type { TypedArray, ColumnType, Row } from './data-table';
 
 // Statistics
 export { computeStats } from './stats';
-export type { LodStats, SourceStats } from './stats';
+export type { LodStats, LodStatsData, SourceStats } from './stats';
 
 // Utils
 export {
