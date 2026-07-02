@@ -230,23 +230,20 @@ const writeSogSource = async (
             const quats = new Uint8Array(width * height * channels);
             const q = [0, 0, 0, 0];
             const sqrt2 = Math.sqrt(2);
+            // Largest-3 component orders, indexed by the dropped component.
+            const quatIdx = [[1, 2, 3], [0, 2, 3], [0, 1, 3], [0, 1, 2]];
             for (let i = 0; i < numRows; ++i) {
                 const g = indices[i];
                 q[0] = r0[g]; q[1] = r1[g]; q[2] = r2[g]; q[3] = r3[g];
                 const l = Math.sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
-                q.forEach((v, j) => {
-                    q[j] = v / l;
-                });
-                const maxComp = q.reduce((v, _, j) => (Math.abs(q[j]) > Math.abs(q[v]) ? j : v), 0);
-                if (q[maxComp] < 0) {
-                    q.forEach((_v, j) => {
-                        q[j] *= -1;
-                    });
-                }
-                q.forEach((_v, j) => {
-                    q[j] *= sqrt2;
-                });
-                const idx = [[1, 2, 3], [0, 2, 3], [0, 1, 3], [0, 1, 2]][maxComp];
+                q[0] /= l; q[1] /= l; q[2] /= l; q[3] /= l;
+                let maxComp = 0;
+                if (Math.abs(q[1]) > Math.abs(q[maxComp])) maxComp = 1;
+                if (Math.abs(q[2]) > Math.abs(q[maxComp])) maxComp = 2;
+                if (Math.abs(q[3]) > Math.abs(q[maxComp])) maxComp = 3;
+                const s = (q[maxComp] < 0 ? -1 : 1) * sqrt2;
+                q[0] *= s; q[1] *= s; q[2] *= s; q[3] *= s;
+                const idx = quatIdx[maxComp];
                 const ti = i;
                 quats[ti * 4]     = 255 * (q[idx[0]] * 0.5 + 0.5);
                 quats[ti * 4 + 1] = 255 * (q[idx[1]] * 0.5 + 0.5);

@@ -75,6 +75,11 @@ type SlimColumns = {
  * in memory, so the SOG writer's position phase costs no I/O. Requests carrying
  * other layers forward to `parent` with the position request stripped; requests
  * without a position layer pass through untouched.
+ *
+ * @param parent - The gathered unit source to overlay.
+ * @param slim - The resident position columns, indexed by flat analysis index.
+ * @param flat - Flat analysis index of each unit output row.
+ * @returns The overlaid source.
  */
 const positionsFromSlim = (parent: ChunkSource, slim: SlimColumns, flat: Uint32Array): ChunkSource => {
     const { chunkSize } = parent.meta;
@@ -350,7 +355,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
         new Column('z', slim.z)
     ]);
 
-    const bTree = new BTree(centroidsTable);
+    let bTree: BTree | null = new BTree(centroidsTable);
 
     // approximate number of gaussians we'll place into file units
     const binSize = chunkCount * 1024;
@@ -362,6 +367,10 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     const lodFiles: Map<number, Uint32Array[][]> = new Map();
     const filenames: string[] = [];
     let lodLevels = 0;
+
+    // Every gaussian lands in exactly one leaf, so leaf-bounds batches tick the
+    // bar to the total gaussian count across LODs.
+    const chunkingBar = logger.bar('chunking', cum[numLods]);
 
     const build = async (node: BTreeNode): Promise<MetaNode> => {
         if (!node.indices && (node.count > binSize || (node.aabb && node.aabb.largestDim() > binDim))) {
@@ -417,15 +426,17 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
         return { bound, lods };
     };
 
-    // Every gaussian lands in exactly one leaf, so leaf-bounds batches tick the
-    // bar to the total gaussian count across LODs.
-    const chunkingBar = logger.bar('chunking', cum[numLods]);
     let tree: MetaNode;
     try {
         tree = await build(bTree.root);
     } finally {
         chunkingBar.end();
     }
+
+    // The kd-tree is dead once the partition is built (lodFiles holds its own
+    // index copies): release its N×4B index buffer and node AABBs before the
+    // unit writes, where peak memory lives.
+    bTree = null;
 
     // count splats per lod level
     const counts = new Array(lodLevels).fill(0);
