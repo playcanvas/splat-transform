@@ -2,7 +2,7 @@ import { GraphicsDevice } from 'playcanvas';
 
 import { KdTree } from './kd-tree';
 import { Column, DataTable } from '../data-table';
-import { GpuClustering } from '../gpu';
+import { GpuKmeans } from '../gpu';
 import { logger } from '../utils';
 
 // use floyd's algorithm to pick m unique random indices from 0..n-1
@@ -96,23 +96,27 @@ const kmeansInterleaved = async (
         initCentroids(points, numRows, nc, centroids, k);
     }
 
-    const gpuClustering = device && new GpuClustering(device, nc, k);
     const labels = new Uint32Array(numRows);
-
-    // recompute scratch (reused across iterations): per-cluster column sums
-    const sums = new Float64Array(k * nc);
-    const counts = new Uint32Array(k);
 
     logger.debug(`running k-means clustering: dims=${nc} points=${numRows} clusters=${k} iterations=${iterations}`);
 
     const bar = logger.bar('k-means', iterations);
-    try {
+    if (device) {
+        // flash-kmeans: the whole Lloyd loop runs on the GPU with a single
+        // readback of labels + centroids after the final iteration
+        const gpuKmeans = new GpuKmeans(device, nc, k);
+        try {
+            await gpuKmeans.run(points, numRows, centroids, labels, iterations, () => bar.tick());
+        } finally {
+            gpuKmeans.destroy();
+        }
+    } else {
+        // recompute scratch (reused across iterations): per-cluster column sums
+        const sums = new Float64Array(k * nc);
+        const counts = new Uint32Array(k);
+
         for (let step = 0; step < iterations; ++step) {
-            if (gpuClustering) {
-                await gpuClustering.execute(points, numRows, centroids, labels);
-            } else {
-                assignCpu(points, numRows, nc, centroids, k, labels);
-            }
+            assignCpu(points, numRows, nc, centroids, k, labels);
 
             // recompute centroids in one vectorized pass: accumulate per-cluster
             // column sums into typed arrays, then divide by the cluster count.
@@ -138,13 +142,9 @@ const kmeansInterleaved = async (
             }
             bar.tick();
         }
-    } catch (e) {
-        gpuClustering?.destroy();
-        throw e;
     }
 
     bar.end();
-    gpuClustering?.destroy();
 
     return { centroids, labels };
 };

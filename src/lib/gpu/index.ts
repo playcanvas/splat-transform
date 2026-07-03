@@ -1,7 +1,7 @@
-export { GpuClustering } from './gpu-clustering';
 export { GpuDilation } from './gpu-dilation';
 export { GpuEdgeCost } from './gpu-edge-cost';
 export type { EdgeCostCache } from './gpu-edge-cost';
+export { GpuKmeans } from './gpu-kmeans';
 export { GpuKnn } from './gpu-knn';
 export { GpuSplatRasterizer } from './gpu-splat-rasterizer';
 export type { SplatRasterizerOptions } from './gpu-splat-rasterizer';
