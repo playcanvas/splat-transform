@@ -68,6 +68,13 @@ const getDawnAdapterNames = async (): Promise<string[]> => {
     return [];
 };
 
+// Running peak of engine-tracked GPU memory in bytes, across every device
+// created by this module. Stays 0 until a device exists, so CPU-only runs
+// can suppress the readout entirely.
+let peakGpuBytes = 0;
+
+const getPeakGpuMemory = (): number => peakGpuBytes;
+
 // Cache enumerated adapters so we don't query Dawn multiple times
 let cachedAdapters: Array<{ index: number; name: string }> | null = null;
 
@@ -155,7 +162,30 @@ const createDevice = async (adapterName?: string): Promise<GraphicsDevice> => {
         escalateGpuError(`device lost: reason=${info?.reason || 'unknown'}, message=${info?.message || '(none)'}`);
     });
 
+    // Peak GPU memory tracking. Dawn's node bindings expose no memory-
+    // statistics API, but the engine maintains live VRAM counters in the
+    // private `_vram` object ({ tex, vb, ib, ub, sb }): every resource
+    // wrapper (StorageBuffer, Texture, vertex/index/uniform buffers)
+    // adjusts them synchronously at allocate/destroy. Wrapping the object
+    // in a Proxy folds each counter write into a running peak at the
+    // moment it happens — no sampling gap, so short-lived spikes are
+    // captured. Blind spots: engine-internal readback staging buffers
+    // bypass `_vram`, and Dawn's own overhead (pipelines, heap padding)
+    // is invisible — the peak is a lower bound on true device memory.
+    // @ts-ignore - _vram is private on GraphicsDevice
+    const vram = (graphicsDevice as any)._vram;
+    (graphicsDevice as any)._vram = new Proxy(vram, {
+        set(target, prop, value) {
+            target[prop] = value;
+            const total = target.tex + target.vb + target.ib + target.ub + target.sb;
+            if (total > peakGpuBytes) {
+                peakGpuBytes = total;
+            }
+            return true;
+        }
+    });
+
     return graphicsDevice;
 };
 
-export { createDevice, enumerateAdapters };
+export { createDevice, enumerateAdapters, getPeakGpuMemory };

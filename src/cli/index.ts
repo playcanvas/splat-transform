@@ -5,7 +5,7 @@ import { parseArgs } from 'node:util';
 
 import { GraphicsDevice, Vec3 } from 'playcanvas';
 
-import { createDevice, enumerateAdapters } from './node-device';
+import { createDevice, enumerateAdapters, getPeakGpuMemory } from './node-device';
 import { NodeFileSystem, NodeReadFileSystem } from './node-file-system';
 import {
     combine,
@@ -870,24 +870,17 @@ const main = async () => {
     // SIGKILL bypass all JS handlers (uncaughtException, beforeExit, exit),
     // so peak rss cannot be reported in those cases - use an external wrapper
     // such as `/usr/bin/time -l` (macOS) or `/usr/bin/time -v` (Linux).
-    const peakMemoryBytes = (): number => process.resourceUsage().maxRSS * 1024;
+    const peakCpuMemoryBytes = (): number => process.resourceUsage().maxRSS * 1024;
 
-    // V8-tracked currently-live memory: heapUsed (JS objects) + external
-    // (C++-bound, includes ArrayBuffer storage for typed arrays — which is
-    // most of our memory in this app). Drops when GC reclaims, so the
-    // delta between phase boundaries reveals whether each phase actually
-    // releases its scratch buffers (vs the kernel maxRSS metric, which is
-    // monotonic).
-    const liveMemoryBytes = (): number => {
-        const u = process.memoryUsage();
-        return u.heapUsed + u.external;
-    };
-
-    // Emit the final timing line plus peak memory usage.
+    // Emit the final timing line plus peak memory usage. Peak GPU memory
+    // (engine-tracked VRAM, see node-device.ts) is included only when a GPU
+    // device was actually created — CPU-only runs keep the shorter line.
     const reportDone = (failed = false) => {
         const elapsedMs = performance.now() - startTime;
         const verb = failed ? 'failed in' : 'done in';
-        const line = `${verb} ${fmtTime(elapsedMs)}  [peak ${fmtBytes(peakMemoryBytes())}]`;
+        const gpu = getPeakGpuMemory();
+        const gpuEntry = gpu > 0 ? ` gpu=${fmtBytes(gpu)}` : '';
+        const line = `${verb} ${fmtTime(elapsedMs)}  [peak cpu=${fmtBytes(peakCpuMemoryBytes())}${gpuEntry}]`;
         if (failed) {
             logger.error(line);
         } else {
@@ -939,8 +932,8 @@ const main = async () => {
     const renderer = new TextRenderer({
         write,
         output: chunk => process.stdout.write(chunk),
-        getPeakMemory: peakMemoryBytes,
-        getLiveMemory: liveMemoryBytes
+        getPeakCpuMemory: peakCpuMemoryBytes,
+        getPeakGpuMemory
     });
     logger.setRenderer(renderer);
 

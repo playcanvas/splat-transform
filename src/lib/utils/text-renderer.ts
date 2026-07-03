@@ -24,25 +24,22 @@ interface TextRendererOptions {
      */
     output?: (chunk: string) => void;
     /**
-     * Optional peak-memory probe in bytes. Used by the `[peak X]`
-     * overlay gated by the renderer's `mem` field. In Node this is
-     * typically derived from `process.resourceUsage().maxRSS` (which
-     * is kernel-tracked and reflects the whole process - including
+     * Optional peak CPU-side memory probe in bytes (monotonic). Used by
+     * the `[peak cpu=X]` overlay gated by the renderer's `mem` field. In
+     * Node this is typically derived from `process.resourceUsage().maxRSS`
+     * (which is kernel-tracked and reflects the whole process - including
      * ArrayBuffers - rather than just the V8 heap).
      */
-    getPeakMemory?: () => number;
+    getPeakCpuMemory?: () => number;
     /**
-     * Optional currently-live memory probe in bytes. When supplied
-     * alongside `getPeakMemory`, the `--mem` overlay becomes
-     * `[peak X | live Y]`, where `live` reflects memory that V8 still
-     * tracks as alive. Unlike `peak` (kernel max RSS, monotonic), this
-     * value drops when the GC reclaims unreferenced allocations, so
-     * the gap between consecutive phases reveals whether each phase
-     * actually releases its scratch buffers. In Node this is typically
-     * `heapUsed + external` from `process.memoryUsage()` so ArrayBuffer
-     * storage (typed arrays) is included.
+     * Optional peak GPU memory probe in bytes (monotonic, like
+     * `getPeakCpuMemory`). When supplied alongside `getPeakCpuMemory` and
+     * reporting a non-zero value, the `--mem` overlay gains a `gpu=Y`
+     * entry: `[peak cpu=X gpu=Y]`. Zero suppresses the entry, so runs
+     * that never touch the GPU keep the CPU-only overlay. In the CLI this
+     * is fed by the engine's VRAM counters (see node-device.ts).
      */
-    getLiveMemory?: () => number;
+    getPeakGpuMemory?: () => number;
 }
 
 const indent = (depth: number): string => '  '.repeat(Math.max(0, depth));
@@ -83,18 +80,19 @@ class TextRenderer implements Renderer {
 
     private readonly output: (chunk: string) => void;
 
-    private readonly getPeakMemory?: () => number;
+    private readonly getPeakCpuMemory?: () => number;
 
-    private readonly getLiveMemory?: () => number;
+    private readonly getPeakGpuMemory?: () => number;
 
     /**
-     * When true, scope-end and bar-end lines gain a `[peak X]` suffix
-     * (or `[peak X | live Y]` when {@link TextRendererOptions.getLiveMemory}
-     * is also supplied) sourced from
-     * {@link TextRendererOptions.getPeakMemory}. No effect when the probe
-     * is omitted. Defaults to `true` when `getPeakMemory` is provided so
-     * embedders that supply a probe see the overlay automatically. Mutable
-     * so the host can toggle the overlay without re-installing the renderer.
+     * When true, scope-end and bar-end lines gain a `[peak cpu=X]` suffix
+     * (extended to `[peak cpu=X gpu=Y]` when
+     * {@link TextRendererOptions.getPeakGpuMemory} is also supplied) sourced
+     * from {@link TextRendererOptions.getPeakCpuMemory}. No effect when the
+     * probe is omitted. Defaults to `true` when `getPeakCpuMemory` is
+     * provided so embedders that supply a probe see the overlay
+     * automatically. Mutable so the host can toggle the overlay without
+     * re-installing the renderer.
      */
     mem: boolean;
 
@@ -110,9 +108,9 @@ class TextRenderer implements Renderer {
     constructor(options: TextRendererOptions) {
         this.write = options.write;
         this.output = options.output ?? options.write;
-        this.getPeakMemory = options.getPeakMemory;
-        this.getLiveMemory = options.getLiveMemory;
-        this.mem = options.getPeakMemory !== undefined;
+        this.getPeakCpuMemory = options.getPeakCpuMemory;
+        this.getPeakGpuMemory = options.getPeakGpuMemory;
+        this.mem = options.getPeakCpuMemory !== undefined;
     }
 
     private rank(): number {
@@ -215,10 +213,10 @@ class TextRenderer implements Renderer {
     }
 
     private memSuffix(): string {
-        if (!this.mem || !this.getPeakMemory) return '';
-        const peak = fmtBytes(this.getPeakMemory());
-        if (!this.getLiveMemory) return `  [peak ${peak}]`;
-        return `  [peak ${peak} | live ${fmtBytes(this.getLiveMemory())}]`;
+        if (!this.mem || !this.getPeakCpuMemory) return '';
+        const gpu = this.getPeakGpuMemory?.() ?? 0;
+        const gpuEntry = gpu > 0 ? ` gpu=${fmtBytes(gpu)}` : '';
+        return `  [peak cpu=${fmtBytes(this.getPeakCpuMemory())}${gpuEntry}]`;
     }
 }
 
