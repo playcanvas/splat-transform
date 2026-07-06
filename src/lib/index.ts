@@ -1,6 +1,10 @@
 // Data table
-export { Column, DataTable, combine, convertToSpace, sortMortonOrder, sortByVisibility, simplifyGaussians, getSHBands } from './data-table';
+export { Column, DataTable, combine, convertToSpace, sortMortonOrder, getSHBands } from './data-table';
 export type { TypedArray, ColumnType, Row } from './data-table';
+
+// Chunk-native decimation
+export { decimateSource } from './decimate';
+export type { DecimateOptions, DecimateSpill } from './decimate';
 
 // Statistics
 export { computeStats } from './stats';

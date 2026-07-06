@@ -4,6 +4,6 @@ export { GaussianBVH } from './gaussian-bvh';
 export type { GaussianBVHNode, BVHBounds } from './gaussian-bvh';
 export { kmeans, kmeansInterleaved } from './k-means';
 export { KdTree } from './kd-tree';
-export type { KdTreeNode } from './kd-tree';
+export type { KdTreeNode, FlatKdTree } from './kd-tree';
 export { quantize1d } from './quantize-1d';
 export { RadixSortScratch, radixSortIndicesByFloat, isFloatBitsNonFinite } from './radix-sort';

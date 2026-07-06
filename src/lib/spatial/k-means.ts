@@ -41,13 +41,13 @@ const initCentroids1D = (points: Float32Array, numRows: number, centroids: Float
 // each point's nearest. points/centroids are row-major interleaved.
 const assignCpu = (points: Float32Array, numRows: number, nc: number, centroids: Float32Array, k: number, labels: Uint32Array) => {
     // de-interleave centroids into columns for the KdTree (k is small)
-    const cols: Column[] = [];
+    const cols: Float32Array[] = [];
     for (let j = 0; j < nc; ++j) {
         const col = new Float32Array(k);
         for (let i = 0; i < k; ++i) col[i] = centroids[i * nc + j];
-        cols.push(new Column(`c${j}`, col));
+        cols.push(col);
     }
-    const kdTree = new KdTree(new DataTable(cols));
+    const kdTree = new KdTree(cols);
 
     const point = new Float32Array(nc);
     for (let r = 0; r < numRows; ++r) {

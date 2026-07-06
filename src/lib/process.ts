@@ -1,8 +1,9 @@
 import { Vec3 } from 'playcanvas';
 
 import { createChunkDataPool } from './chunk';
-import { dataTableToChunkSource } from './compat/data-table';
-import { Column, DataTable, simplifyGaussians, sortMortonOrder, convertToSpace, getSHBands } from './data-table';
+import { dataTableToChunkSource, materializeToDataTable } from './compat/data-table';
+import { Column, DataTable, sortMortonOrder, convertToSpace, getSHBands } from './data-table';
+import { decimateSource } from './decimate';
 import { computeSourceStats } from './ops';
 import { formatSourceInfo, formatSourceStats } from './source-info';
 import type { DeviceCreator } from './types';
@@ -519,13 +520,30 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 }
                 keepCount = Math.max(0, keepCount);
 
-                // Pass the factory (not an eagerly-created device) so
-                // `simplifyGaussians` can create the device lazily — and skip
-                // creation entirely when the input is already at or below the
-                // target count. The caller of `processDataTable` is
-                // responsible for caching the device if it should be reused
-                // across actions (see `DeviceCreator` contract in types.ts).
-                result = await simplifyGaussians(result, keepCount, options?.createDevice);
+                if (keepCount === 0) {
+                    result = result.clone({ rows: [] });
+                    break;
+                }
+                if (keepCount >= result.numRows) {
+                    break;
+                }
+
+                // Bridge to the chunk-native decimator: DataTable callers are
+                // RAM-scale by definition, so intermediates use the in-memory
+                // materialization (no spill option needed). The device factory
+                // passes through so decimation shares the caller's cached GPU.
+                const pool = createChunkDataPool();
+                const src = dataTableToChunkSource(result);
+                const decimated = await decimateSource(src, pool, {
+                    targetCount: keepCount,
+                    createDevice: options?.createDevice
+                });
+                // The decimator works in PLY space (its spill/terminal format);
+                // convert back to the DataTable convention (identity space,
+                // pending transform baked). World-space result is unchanged —
+                // decimation is TRS-covariant.
+                result = convertToSpace(await materializeToDataTable(decimated, pool), Transform.IDENTITY);
+                await decimated.close();
                 break;
             }
             case 'filterFloaters': {

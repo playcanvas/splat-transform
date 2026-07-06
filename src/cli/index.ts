@@ -1,4 +1,4 @@
-import { lstat, mkdir, readFile as pathReadFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile as pathReadFile, unlink } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import process, { exit } from 'node:process';
 import { parseArgs } from 'node:util';
@@ -35,6 +35,7 @@ import {
 // until the migration is complete.
 import { type ChunkSource, type ChunkSourceMetadata, createChunkDataPool } from '../lib/chunk';
 import { dataTableToChunkSource, materializeToDataTable } from '../lib/compat/data-table';
+import { decimateSource } from '../lib/decimate';
 import { bakeTransform, concatSource, resolveLodLevels, selectLod, stackLods } from '../lib/ops';
 import { processSourceBridged } from '../lib/process-source';
 import { readLccSource, readLccEnvironmentSource } from '../lib/readers/read-lcc';
@@ -56,6 +57,7 @@ interface CliOptions extends LibOptions {
     noTty: boolean | undefined;
     listGpus: boolean;
     deviceIdx: number;  // -1 = auto, -2 = CPU, 0+ = GPU index
+    scratchDir: string | undefined;  // decimation spill location (default: output directory)
 }
 
 const fileExists = async (filename: string) => {
@@ -154,6 +156,8 @@ const cliOptionsConfig = {
     'up-end': { type: 'string' },
     'shutter': { type: 'string' },
     'motion-samples': { type: 'string' },
+
+    'scratch-dir': { type: 'string' },
 
     // per-file options
     translate: { type: 'string', short: 't', multiple: true },
@@ -499,6 +503,7 @@ const parseArguments = async () => {
         iterations: parseInteger(v.iterations),
         listGpus: v['list-gpus'],
         deviceIdx,
+        scratchDir: v['scratch-dir'],
         lodSelect: v['lod-select'].split(',').filter(v => !!v).map(parseInteger),
         viewerSettingsJson: viewerSettingsPath && await readJsonFile(viewerSettingsPath),
         unbundled: v.unbundled,
@@ -769,7 +774,10 @@ ACTIONS (executed in order; can be repeated)
     -S, --filter-sphere    <x,y,z,radius>   Remove Gaussians outside sphere
     -V, --filter-value     <name,cmp,value> Keep Gaussians where <name> <cmp> <value>;
                                               cmp ∈ {lt,lte,gt,gte,eq,neq}
-    -F, --decimate         <n|n%>           Simplify to n (or n%) Gaussians via pairwise merging
+    -F, --decimate         <n|n%>           Simplify to n (or n%) Gaussians via merge-based decimation.
+                                              Must be the final action, and the output must be .ply
+        --scratch-dir      <path>           Directory for decimation spill files (deep targets on huge
+                                              scenes). Default: the output file's directory
     -G, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel. Default: 0.05,0.1,0.004
     -D, --filter-cluster   [res,op,min]     Keep only the connected cluster at --seed-pos. Default: 1.0,0.999,0.1
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
@@ -1113,6 +1121,29 @@ const main = async () => {
         // also handles null output (processing for side-effects, skipping the
         // write). A --lod tag on single-scene output is rejected after the LOD path.
         const singleSceneActions = [...inputArgs.flatMap(a => a.processActions), ...outputArg.processActions];
+
+        // v1 decimation is terminal: the merge stream writes straight into the
+        // destination, so decimate must be the last action and the output must
+        // be plain PLY. Anything else needs two invocations (decimate to PLY,
+        // then convert).
+        const decimateIdx = singleSceneActions.map((a, i) => (a.kind === 'decimate' ? i : -1)).filter(i => i >= 0);
+        if (decimateIdx.length > 0) {
+            const ok = decimateIdx.length === 1 &&
+                decimateIdx[0] === singleSceneActions.length - 1 &&
+                !isNullOutput &&
+                outputFormat === 'ply';
+            if (!ok) {
+                failExit(
+                    '--decimate must be the final action and the output must be .ply ' +
+                    `(got ${isNullOutput ? 'no output' : `.${outputFormat}`}${decimateIdx[0] !== singleSceneActions.length - 1 || decimateIdx.length > 1 ? ', with actions after decimate' : ''}). ` +
+                    'Write a decimated PLY first, then convert in a second invocation.'
+                );
+            }
+        }
+        const decimateAction = decimateIdx.length === 1 ?
+            singleSceneActions[decimateIdx[0]] as Extract<ProcessAction, { kind: 'decimate' }> :
+            null;
+
         if (
             isNullOutput ||
             (outputFormat !== 'lod' && singleSceneActions.every(a => a.kind !== 'lod'))
@@ -1174,15 +1205,35 @@ const main = async () => {
                     const level = resolveLodLevels(options.lodSelect, src.meta.numLods)[0] ?? 0;
                     src = selectLod(src, level);
                 }
-                const actions = inputArg.processActions.filter(a => a.kind !== 'lod');
+                const actions = inputArg.processActions.filter(a => a.kind !== 'lod' && a.kind !== 'decimate');
                 processed.push(await processSourceBridged(src, actions, pool, processOptions));
             }
 
             let combined = await combineSources(processed);
-            combined = await processSourceBridged(combined, outputArg.processActions.filter(a => a.kind !== 'lod'), pool, processOptions);
+            combined = await processSourceBridged(combined, outputArg.processActions.filter(a => a.kind !== 'lod' && a.kind !== 'decimate'), pool, processOptions);
 
             if (combined.meta.numGaussians === 0) {
                 throw new Error('No Gaussians to write');
+            }
+
+            if (decimateAction) {
+                const n = combined.meta.numGaussians;
+                const keepCount = decimateAction.count !== null ?
+                    Math.min(decimateAction.count, n) :
+                    Math.round(n * (decimateAction.percent ?? 100) / 100);
+                if (keepCount < 1) {
+                    failExit(`--decimate target resolves to ${keepCount} gaussians; must keep at least 1`);
+                }
+                combined = await decimateSource(combined, pool, {
+                    targetCount: keepCount,
+                    createDevice: deviceCreator,
+                    spill: {
+                        writeFs: new NodeFileSystem(),
+                        readFs: new NodeReadFileSystem(),
+                        scratchDir: options.scratchDir ?? dirname(outputFilename),
+                        remove: path => unlink(path)
+                    }
+                });
             }
 
             logger.info(`${fmtCount(combined.meta.numGaussians)} gaussians · ${combined.meta.shBands} SH bands`);

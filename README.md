@@ -108,8 +108,15 @@ Actions execute in the order specified and can be repeated. Any action may appea
                                           opacity, scale_*, f_dc_* use transformed values
                                           (linear opacity 0-1, linear scale, linear color 0-1).
                                           Append _raw for raw PLY values (e.g. opacity_raw).
--F, --decimate         <n|n%>           Simplify to n Gaussians via progressive pairwise merging
-                                          Use n% to keep a percentage of Gaussians
+-F, --decimate         <n|n%>           Simplify to n Gaussians via merge-based decimation
+                                          Use n% to keep a percentage of Gaussians.
+                                          Memory-bounded and streaming: scales to scenes of 100M+
+                                          Gaussians. Must be the final action, and the output must
+                                          be .ply (write a decimated PLY first, then convert in a
+                                          second invocation). Deep targets on huge scenes spill
+                                          temporary files to --scratch-dir (default: the output
+                                          file's directory).
+    --scratch-dir      <path>           Directory for decimation spill files
 -G, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel.
                                           Evaluates each Gaussian at occupied voxel centers.
                                           Default: size=0.05, opacity=0.1, min=0.004 (1/255).
