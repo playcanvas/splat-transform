@@ -507,6 +507,20 @@ class GpuKmeans {
             const bindingLimit: number = wgpuLimits?.maxStorageBufferBindingSize ?? (128 * 1024 * 1024);
             const chunkCap = Math.min(4_000_000, Math.floor(bindingLimit / rowBytes)) & ~1;
             const numChunks = Math.ceil(numPoints / chunkCap);
+
+            // Pre-flight the whole-scene bindings so we fail with a clear
+            // message instead of a driver-side error mid-run (mirrors
+            // GpuEdgeCost). Point chunks are sliced under the limit above, but
+            // labels and sortedIdx are bound whole — the counting sort is
+            // global, so they can't be chunked. At 4 bytes/point they exceed a
+            // 128 MiB binding beyond ~33.5M points.
+            if (numPoints * 4 > bindingLimit) {
+                throw new Error(
+                    `GpuKmeans: labels/sortedIdx buffers (${numPoints * 4} bytes for ${numPoints} points) exceed ` +
+                    `device maxStorageBufferBindingSize (${bindingLimit}) — reduce the input (e.g. write streamed ` +
+                    'SOG / LOD units) or use a device with larger limits'
+                );
+            }
             // resident when all chunks fit a 2GB budget, else stream through
             // two ping-pong buffers re-uploaded every iteration
             const resident = numPoints * rowBytes <= 2 * 1024 * 1024 * 1024;
@@ -591,6 +605,10 @@ class GpuKmeans {
                 // modest (watchdog margin) without any CPU synchronization
                 const assignSub = 512 * 1024;
 
+                // streaming-mode staging bound (see the iteration-boundary sync
+                // below); 8 bytes keeps every mapAsync alignment rule satisfied
+                const syncScratch = new Float32Array(2);
+
                 for (let iter = 0; iter < iterations; iter++) {
                     countsBuf.clear();
                     sumsBuf.clear();
@@ -667,6 +685,18 @@ class GpuKmeans {
                     device.computeDispatch([divide.compute], 'kmeans-divide');
                     dispatchConvert();
                     submit();
+
+                    // Streaming mode re-uploads every point chunk twice per
+                    // iteration via queue.writeBuffer, which copies into
+                    // driver-owned staging that is reclaimed only as the GPU
+                    // consumes it — with zero CPU sync the loop would stage
+                    // ~2× the point data PER ITERATION (tens of GB of host
+                    // RAM). A tiny readback at the iteration boundary drains
+                    // the queue, capping staging at one iteration's worth.
+                    // Resident mode uploads once and stays fully zero-sync.
+                    if (!resident) {
+                        await centroidsBuf.read(0, 8, syncScratch, true);
+                    }
 
                     onIteration?.();
                 }
