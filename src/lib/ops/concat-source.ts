@@ -30,23 +30,23 @@ type MutableRowReadRequest = { indices: Uint32Array; indexOffset: number; count:
  * `set()` per layer, not a per-row gather). Source chunks are read on demand;
  * peak extra memory is one source chunk-set of temporaries.
  *
- * @param sources - The sources to concatenate (at least one).
+ * @param allSources - The sources to concatenate (at least one; empty sources contribute no rows but are still closed by `close()`).
  * @param pool - Pool for the temporary source read buffers; `chunkSize` must match the sources'.
  * @returns A derived source serving the concatenated gaussians chunk-by-chunk.
  */
-const concatSource = (sources: ChunkSource[], pool: ChunkDataPool): ChunkSource => {
-    if (sources.length === 0) {
+const concatSource = (allSources: ChunkSource[], pool: ChunkDataPool): ChunkSource => {
+    if (allSources.length === 0) {
         throw new Error('concatSource: at least one source is required');
     }
 
-    const ref = sources[0].meta;
+    const ref = allSources[0].meta;
     const layerKey = (m: ChunkSourceMetadata) => LAYERS.filter(l => m.availableLayers.has(l)).join(',');
     const extraKey = (m: ChunkSourceMetadata) => m.extraColumns.map(e => `${e.name}:${e.type}`).join(',');
     const refLayers = layerKey(ref);
     const refExtras = extraKey(ref);
 
-    for (let i = 1; i < sources.length; i++) {
-        const m = sources[i].meta;
+    for (let i = 1; i < allSources.length; i++) {
+        const m = allSources[i].meta;
         if (m.numLods !== 1 || ref.numLods !== 1) {
             throw new Error('concatSource: only single-LOD sources are supported');
         }
@@ -65,6 +65,15 @@ const concatSource = (sources: ChunkSource[], pool: ChunkDataPool): ChunkSource 
         if (!m.transform.equals(ref.transform)) {
             throw new Error('concatSource: transform mismatch between sources — bake to a common space first');
         }
+    }
+
+    // Drop empty sources from the read paths (a zero-count source would wedge
+    // the chunk stitcher's one-step source advance and the pool rejects
+    // zero-count acquires); close() still closes ALL inputs, dropped or not.
+    // Keep one source when everything is empty so the metadata stays derivable.
+    let sources = allSources.filter(s => s.meta.numGaussians > 0);
+    if (sources.length === 0) {
+        sources = [allSources[0]];
     }
 
     const S = ref.chunkSize;
@@ -186,7 +195,7 @@ const concatSource = (sources: ChunkSource[], pool: ChunkDataPool): ChunkSource 
     };
 
     const close = async (): Promise<void> => {
-        await Promise.all(sources.map(s => s.close()));
+        await Promise.all(allSources.map(s => s.close()));
     };
 
     return { meta, read, close };

@@ -1327,6 +1327,15 @@ const main = async () => {
                 if (envSource) envSource = await processSourceBridged(envSource, perLevelActions, pool, processOptions);
             }
 
+            // Levels must share a coordinate space before stacking (stackLods
+            // validates and the LOD writer bakes one delta over all levels), so
+            // bake to identity when per-input actions left transforms diverged.
+            if (perLevel.length > 1) {
+                const refTransform = perLevel[0].meta.transform;
+                if (!perLevel.every(s => s.meta.transform.equals(refTransform))) {
+                    perLevel = perLevel.map(s => bakeTransform(s, Transform.IDENTITY));
+                }
+            }
             const mainSource = perLevel.length === 1 ? perLevel[0] : stackLods(perLevel);
             const total = mainSource.meta.lodCounts.reduce((a, c) => a + c, 0);
             if (total === 0) {

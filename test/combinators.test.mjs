@@ -16,7 +16,7 @@ import { describe, it } from 'node:test';
 import { createTestDataTable } from './helpers/test-utils.mjs';
 import { combine, Transform } from '../src/lib/index.js';
 import { dataTableToChunkSource, materializeToDataTable } from '../src/lib/compat/data-table.js';
-import { concatSource, filterSource, permuteSource } from '../src/lib/ops/index.js';
+import { concatSource, filterSource, permuteSource, stackLods } from '../src/lib/ops/index.js';
 import { createChunkDataPool } from '../src/lib/chunk/index.js';
 
 // Compare two DataTables column-by-column (by name), exact.
@@ -134,6 +134,22 @@ describe('combinators: concatSource', () => {
         assert.throws(() => concatSource([sa, sb], pool), /transform mismatch/);
     });
 
+    it('tolerates an empty source in the middle', async () => {
+        const chunkSize = 64;
+        const dtA = createTestDataTable(100, { includeSH: true, shBands: 1 });
+        const dtB = createTestDataTable(50, { includeSH: true, shBands: 1 });
+        dtA.getColumnByName('f_dc_2').data.fill(1);
+        dtB.getColumnByName('f_dc_2').data.fill(2);
+
+        const pool = createChunkDataPool({ chunkSize });
+        // an emptied view, as a per-input filter that removed every row produces
+        const empty = filterSource(dataTableToChunkSource(dtA, chunkSize), new Uint32Array(0), pool);
+        const sources = [dataTableToChunkSource(dtA, chunkSize), empty, dataTableToChunkSource(dtB, chunkSize)];
+
+        const out = await materializeToDataTable(concatSource(sources, pool), pool);
+        assertSameRows(out, combine([dtA, dtB]));
+    });
+
     it('throws on an SH-band mismatch', () => {
         const chunkSize = 16;
         const pool = createChunkDataPool({ chunkSize });
@@ -167,5 +183,17 @@ describe('combinators: concatSource', () => {
                 assert.strictEqual(g[i], e[order[i]], `column '${name}' row ${i} (src ${order[i]})`);
             }
         }
+    });
+});
+
+describe('combinators: stackLods', () => {
+    it('throws on a per-level transform mismatch', () => {
+        const chunkSize = 16;
+        const a = createTestDataTable(20);
+        const b = createTestDataTable(20);
+        b.transform = new Transform().fromEulers(0, 0, 90);
+        const sa = dataTableToChunkSource(a, chunkSize);
+        const sb = dataTableToChunkSource(b, chunkSize);
+        assert.throws(() => stackLods([sa, sb]), /transform mismatch/);
     });
 });

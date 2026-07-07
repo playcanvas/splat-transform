@@ -622,9 +622,18 @@ const readLccSource = async (
     }
 
     // Open the bulk sources; kept open for the source's lifetime (read/readRows
-    // range-read them), closed on close().
+    // range-read them), closed on close(). Guard the second open so a missing
+    // shcoef.bin (hasSH is heuristic) doesn't leak the data.bin handle.
     const dataSource = await fileSystem.createSource(relatedFilename('data.bin'));
-    const shSource = hasSH ? await fileSystem.createSource(relatedFilename('shcoef.bin')) : undefined;
+    let shSource: ReadSource | undefined;
+    if (hasSH) {
+        try {
+            shSource = await fileSystem.createSource(relatedFilename('shcoef.bin'));
+        } catch (err) {
+            dataSource.close();
+            throw err;
+        }
+    }
 
     // Per selected LOD: the ordered list of non-empty unit runs (index.bin order).
     // `dataByteOffset` is the unit's LOD block start in data.bin (its SH block

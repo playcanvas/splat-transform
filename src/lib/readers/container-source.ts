@@ -96,6 +96,13 @@ const containerSource = async (
                     `containerSource: sub-file SH band mismatch (${src.meta.shBands} vs ${layout.shBands})`
                 );
             }
+            // A short decode (e.g. a malformed sub-file that no-ops) would
+            // otherwise leave stale pool-buffer bytes in the unread rows.
+            if (src.meta.numGaussians !== seg.count) {
+                throw new Error(
+                    `containerSource: sub-file gaussian count mismatch (decoded ${src.meta.numGaussians}, expected ${seg.count})`
+                );
+            }
             await src.read(req);
         },
         close: () => Promise.resolve()

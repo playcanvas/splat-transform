@@ -139,6 +139,18 @@ const writeSogSource = async (
     const height = Math.ceil(numRows / width / 4) * 4;
     const channels = 4;
 
+    // Hard failure point only: WebP's 16383-texel dimension ceiling. The
+    // practical threshold is far lower — beyond ~1-2M gaussians a scene should
+    // be written as streamed SOG (lod-meta.json output), not because of size
+    // but because the runtime then gets chunked frustum culling, much faster
+    // startup, and LOD rendering. Fail before any output is opened.
+    if (width > 16383 || height > 16383) {
+        throw new Error(
+            `SOG output is capped at 16383x16383 WebP texels (~268M gaussians); got ${numRows}. ` +
+            'Write streamed SOG (lod-meta.json output) instead — recommended for any scene beyond ~1-2M gaussians.'
+        );
+    }
+
     const bundleWriter = bundle ? await fs.createWriter(outputFilename) : null;
     const zipFs = bundleWriter ? new ZipFileSystem(bundleWriter) : null;
     const outputFs = zipFs || fs;
@@ -392,9 +404,11 @@ const writeSogSource = async (
     } catch (err) {
         if (bundleWriter) {
             try {
-                await bundleWriter.close();
+                // discard rather than close: close() commits the temp file to
+                // the destination, publishing a truncated bundle
+                await bundleWriter.abort();
             } catch {
-                // already failing — swallow secondary close errors
+                // already failing — swallow secondary abort errors
             }
         }
         throw err;

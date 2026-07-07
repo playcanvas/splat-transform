@@ -1,5 +1,5 @@
 import { randomBytes } from 'crypto';
-import { FileHandle, mkdir, open, rename, stat } from 'node:fs/promises';
+import { FileHandle, mkdir, open, rename, stat, unlink } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 
 import {
@@ -138,6 +138,7 @@ class FileWriter implements Writer {
     bytesWritten = 0;
     write: (data: Uint8Array) => Promise<void>;
     close: () => Promise<void>;
+    abort: () => Promise<void>;
 
     constructor(fileHandle: FileHandle, filename: string, tmpFilename: string) {
         this.write = async (data: Uint8Array) => {
@@ -159,6 +160,13 @@ class FileWriter implements Writer {
             await fileHandle.close();
             // atomically rename to target filename
             await rename(tmpFilename, filename);
+        };
+
+        this.abort = async () => {
+            // discard: close and remove the temp file, never touching the
+            // target filename (best-effort — this runs on already-failing paths)
+            await fileHandle.close().catch(() => {});
+            await unlink(tmpFilename).catch(() => {});
         };
     }
 }

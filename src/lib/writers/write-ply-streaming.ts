@@ -121,51 +121,60 @@ const writePlyStreaming = async (
     ];
 
     const writer = await fs.createWriter(options.filename);
-    await writer.write(new TextEncoder().encode(`${header.join('\n')}\n`));
+    try {
+        await writer.write(new TextEncoder().encode(`${header.join('\n')}\n`));
 
-    const chunkSize = meta.chunkSize;
-    const numChunks = meta.numChunks[0] ?? 0;
-    const outRecord = new Uint8Array(chunkSize * recordStride);
-    const outU32 = new Uint32Array(outRecord.buffer);
+        const chunkSize = meta.chunkSize;
+        const numChunks = meta.numChunks[0] ?? 0;
+        const outRecord = new Uint8Array(chunkSize * recordStride);
+        const outU32 = new Uint32Array(outRecord.buffer);
 
-    for (let k = 0; k < numChunks; k++) {
-        const count = Math.min(chunkSize, N - k * chunkSize);
+        for (let k = 0; k < numChunks; k++) {
+            const count = Math.min(chunkSize, N - k * chunkSize);
 
-        // Acquire one buffer per available layer (pool reuses across chunks).
-        const acquired: Partial<Record<ChunkLayer, ChunkData>> = {};
-        for (const layer of layers) {
-            acquired[layer] = pool.acquire(layer, meta.layouts[layer]!, count);
-        }
-
-        await baked.read({
-            chunkIndex: k,
-            position: acquired.position,
-            geometric: acquired.geometric,
-            color: acquired.color,
-            other: acquired.other
-        });
-
-        // Re-interleave the (already-baked) chunk into the output record: one
-        // contiguous block copy per layer, as raw 32-bit words. Little-endian
-        // only, matching the binary PLY format and every supported runtime.
-        for (const run of runs) {
-            const src = new Uint32Array(acquired[run.layer]!.data);
-            const ss = run.srcStrideWords;
-            const ds = run.dstStart;
-            const w = run.words;
-            for (let i = 0; i < count; i++) {
-                const s = i * ss;
-                const d = i * recordF + ds;
-                for (let j = 0; j < w; j++) outU32[d + j] = src[s + j];
+            // Acquire one buffer per available layer (pool reuses across chunks).
+            const acquired: Partial<Record<ChunkLayer, ChunkData>> = {};
+            for (const layer of layers) {
+                acquired[layer] = pool.acquire(layer, meta.layouts[layer]!, count);
             }
+
+            await baked.read({
+                chunkIndex: k,
+                position: acquired.position,
+                geometric: acquired.geometric,
+                color: acquired.color,
+                other: acquired.other
+            });
+
+            // Re-interleave the (already-baked) chunk into the output record: one
+            // contiguous block copy per layer, as raw 32-bit words. Little-endian
+            // only, matching the binary PLY format and every supported runtime.
+            for (const run of runs) {
+                const src = new Uint32Array(acquired[run.layer]!.data);
+                const ss = run.srcStrideWords;
+                const ds = run.dstStart;
+                const w = run.words;
+                for (let i = 0; i < count; i++) {
+                    const s = i * ss;
+                    const d = i * recordF + ds;
+                    for (let j = 0; j < w; j++) outU32[d + j] = src[s + j];
+                }
+            }
+
+            await writer.write(outRecord.subarray(0, count * recordStride));
+
+            for (const layer of layers) acquired[layer]!.release();
         }
 
-        await writer.write(outRecord.subarray(0, count * recordStride));
-
-        for (const layer of layers) acquired[layer]!.release();
+        await writer.close();
+    } catch (err) {
+        try {
+            await writer.abort();
+        } catch {
+            // already failing — swallow secondary abort errors
+        }
+        throw err;
     }
-
-    await writer.close();
 };
 
 export { writePlyStreaming };

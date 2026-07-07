@@ -837,7 +837,13 @@ const decodeChunkSource = async (
 ): Promise<ChunkSource> => {
     const source = await openChunkSource(fileSystem, fullPath);
     if (splatType === '.spz') {
-        return readSpz(source, pool); // owns `source`; closed on the returned source's close
+        try {
+            // owns `source` on success; closed on the returned source's close
+            return await readSpz(source, pool);
+        } catch (err) {
+            source.close();
+            throw err;
+        }
     }
     if (splatType === '.sog') {
         const zipFs = new ZipReadFileSystem(source);
@@ -850,6 +856,7 @@ const decodeChunkSource = async (
             zipFs.close(); // closes the zip wrapper (and the source)
         }
     }
+    source.close();
     throw new Error(`Unsupported LCC2 splatType: ${splatType}`);
 };
 
