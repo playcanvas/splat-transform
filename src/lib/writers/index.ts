@@ -6,6 +6,7 @@ export { writeHtml } from './write-html';
 export { writeImage } from './write-image';
 export type { WriteImageOptions } from './write-image';
 export { writeLodSource } from './write-lod';
+export type { WriteLodSourceOptions } from './write-lod';
 export { writePly } from './write-ply';
 export { writeSog, writeSogSource } from './write-sog';
 export { writeSpz } from './write-spz';

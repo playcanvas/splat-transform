@@ -122,16 +122,6 @@ type Param = {
 };
 
 /**
- * Assign a LOD level to all splats.
- */
-type Lod = {
-    /** Action type identifier. */
-    kind: 'lod';
-    /** LOD level to assign. */
-    value: number;
-};
-
-/**
  * Print per-LOD, per-column statistics (with the structural info block) to the
  * logger — the data-level counterpart to {@link Info}.
  */
@@ -237,13 +227,12 @@ type ProcessOptions = {
  * - `filterSphere` - Keep splats within a sphere
  * - `filterFloaters` - Remove splats not contributing to any occupied voxel (GPU)
  * - `filterCluster` - Keep splats in the connected cluster at a seed position (GPU)
- * - `lod` - Assign LOD level to all splats
  * - `stats` - Print per-LOD, per-column statistics to logger
  * - `info` - Print structural metadata to logger
  * - `mortonOrder` - Reorder splats by Morton code for spatial locality
  * - `decimate` - Simplify to target count via progressive pairwise merging
  */
-type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | FilterFloaters | FilterCluster | Param | Lod | Stats | Info | MortonOrder | Decimate;
+type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | FilterFloaters | FilterCluster | Param | Stats | Info | MortonOrder | Decimate;
 
 // Describe a delta as "removed N" / "added N" relative to the previous count.
 const describeDelta = (delta: number, noun: string): string => {
@@ -595,7 +584,6 @@ export {
     type FilterFloaters,
     type FilterCluster,
     type Param,
-    type Lod,
     type Stats,
     type Info,
     type MortonOrder,

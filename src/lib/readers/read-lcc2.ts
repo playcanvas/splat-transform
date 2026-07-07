@@ -650,10 +650,10 @@ const readLcc2 = async (
     const { totalLevels, splatFiles, splatType, envFileIndex, tree } = meta;
 
     // 2) Resolve LOD selection.
-    const inputLods = resolveLodSelection(options.lodSelect, totalLevels);
+    const inputLods = resolveLodSelection(options.lodSelect ?? [], totalLevels);
     if (inputLods.length === 0) {
         throw new Error(
-            `No valid LODs selected for LCC2 input file: ${filename} lods: ${JSON.stringify(options.lodSelect)}`
+            `No valid LODs selected for LCC2 input file: ${filename} lods: ${JSON.stringify(options.lodSelect ?? [])}`
         );
     }
 
@@ -868,12 +868,11 @@ const decodeChunkSource = async (
  * ascending file index), so `materialize`/flatten reproduces its merged table
  * (minus the legacy `lod` column, which is structural here).
  *
- * The optional environment chunk is **not** returned — it is only written for
- * `lod` output, which still uses the eager `readLcc2`; chunk-native conversion
- * (→ ply/sog) discards the environment, matching the eager path.
+ * The optional environment chunk is **not** returned — the LOD output path
+ * fetches it separately via {@link readLcc2EnvironmentSource}; chunk-native
+ * conversion (→ ply/sog) discards the environment, matching the eager path.
  *
- * Sub-files must share a layout (uniform SH bands); a mismatch throws (caller
- * falls back to eager `readLcc2`).
+ * Sub-files must share a layout (uniform SH bands); a mismatch throws.
  *
  * @param fileSystem - File system for reading the LCC2 files.
  * @param filename - Path to the meta.lcc2 file.
@@ -893,10 +892,10 @@ const readLcc2Source = async (
     const meta = parseLcc2Meta(new TextDecoder().decode(await readFile(fileSystem, filename)), filename);
     const { totalLevels, splatFiles, splatType, envFileIndex, tree } = meta;
 
-    const inputLods = resolveLodSelection(options.lodSelect, totalLevels);
+    const inputLods = resolveLodSelection(options.lodSelect ?? [], totalLevels);
     if (inputLods.length === 0) {
         throw new Error(
-            `No valid LODs selected for LCC2 input file: ${filename} lods: ${JSON.stringify(options.lodSelect)}`
+            `No valid LODs selected for LCC2 input file: ${filename} lods: ${JSON.stringify(options.lodSelect ?? [])}`
         );
     }
 

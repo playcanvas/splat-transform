@@ -16,7 +16,7 @@ import { logger, Transform } from './utils';
 
 /**
  * The `ProcessAction` kinds `processSource` can apply natively on the streaming
- * chunk path. Anything else (decimate, lod, mortonOrder, the GPU voxel filters)
+ * chunk path. Anything else (decimate, mortonOrder, the GPU voxel filters)
  * is applied by {@link processSourceBridged} as a `processDataTable` island.
  */
 const SOURCE_ACTION_KINDS: ReadonlySet<ProcessAction['kind']> = new Set([

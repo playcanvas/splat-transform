@@ -81,10 +81,10 @@ type ReadFileOptions = {
     filename: string;
     /** The format of the input file. */
     inputFormat: InputFormat;
-    /** Processing options. */
-    options: Options;
-    /** Parameters for generator modules (.mjs files). */
-    params: Param[];
+    /** Processing options (e.g. `lodSelect` for LCC inputs). Default: `{}`. */
+    options?: Options;
+    /** Parameters for generator modules (.mjs files). Default: `[]`. */
+    params?: Param[];
     /** File system abstraction for reading files. */
     fileSystem: ReadFileSystem;
 };
@@ -115,14 +115,12 @@ type ReadFileOptions = {
  * const sources = await readFile({
  *     filename,
  *     inputFormat: getInputFormat(filename),
- *     options: {},
- *     params: [],
  *     fileSystem
  * });
  * ```
  */
 const readFile = async (readFileOptions: ReadFileOptions): Promise<ChunkSource[]> => {
-    const { filename, inputFormat, options, params, fileSystem } = readFileOptions;
+    const { filename, inputFormat, options = {}, params = [], fileSystem } = readFileOptions;
 
     // Whole-blob / multi-source formats: the reader opens and closes its own
     // source(s) internally and returns DataTable(s); wrap each as a resident

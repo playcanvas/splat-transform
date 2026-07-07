@@ -8,20 +8,34 @@ import { GraphicsDevice, Vec3 } from 'playcanvas';
 import { createDevice, enumerateAdapters, getPeakGpuMemory } from './node-device';
 import { NodeFileSystem, NodeReadFileSystem } from './node-file-system';
 import {
+    bakeTransform,
     combine,
+    concatSource,
+    createChunkDataPool,
     DataTable,
+    dataTableToChunkSource,
+    decimateSource,
     fmtBytes,
     fmtCount,
     fmtTime,
     getInputFormat,
-    readFile,
     getOutputFormat,
+    materializeToDataTable,
+    processSourceBridged,
+    readFile,
+    readPly,
     revision,
+    selectLod,
+    stackLods,
     TextRenderer,
     Transform,
     UrlReadFileSystem,
     version,
     WorkerQueue,
+    writeLodSource,
+    writeSource,
+    type ChunkSource,
+    type ChunkSourceMetadata,
     type ProcessAction,
     type FilterFloaters,
     type FilterCluster,
@@ -30,19 +44,12 @@ import {
     type ReadFileSystem,
     logger
 } from '../lib';
-// Streaming chunk pipeline (ply load -> process -> ply/sog write, no DataTable).
-// Deep imports keep these internal/`@ignore` APIs off the public lib surface
-// until the migration is complete.
-import { type ChunkSource, type ChunkSourceMetadata, createChunkDataPool } from '../lib/chunk';
-import { dataTableToChunkSource, materializeToDataTable } from '../lib/compat/data-table';
-import { decimateSource } from '../lib/decimate';
-import { bakeTransform, concatSource, resolveLodLevels, selectLod, stackLods } from '../lib/ops';
-import { processSourceBridged } from '../lib/process-source';
+// CLI-only internals (deliberately off the public lib surface): the LOD-path
+// level resolver and the lcc/lcc2 source readers the LOD writer drives
+// directly (single-scene callers get these via readFile).
+import { resolveLodLevels } from '../lib/ops';
 import { readLccSource, readLccEnvironmentSource } from '../lib/readers/read-lcc';
 import { readLcc2Source, readLcc2EnvironmentSource } from '../lib/readers/read-lcc2';
-import { readPly } from '../lib/readers/read-ply';
-import { writeSource } from '../lib/write';
-import { writeLodSource } from '../lib/writers/write-lod';
 
 /**
  * CLI-specific options extending library options.
@@ -110,9 +117,19 @@ const resolveInput = (arg: string): ResolvedInput => {
     };
 };
 
+// CLI action list: the library's ProcessAction plus the CLI-only `--lod`
+// grouping tag (consumed while assembling the LOD writer's level stack —
+// never dispatched as a data operation).
+type CliAction = ProcessAction | { kind: 'lod'; value: number };
+
+// Strip the CLI-only lod tags, narrowing back to dispatchable actions.
+const stripLodTags = (actions: CliAction[]): ProcessAction[] => {
+    return actions.filter((a): a is ProcessAction => a.kind !== 'lod');
+};
+
 type File = {
     filename: string;
-    processActions: ProcessAction[];
+    processActions: CliAction[];
 };
 
 const cliOptionsConfig = {
@@ -1205,12 +1222,12 @@ const main = async () => {
                     const level = resolveLodLevels(options.lodSelect, src.meta.numLods)[0] ?? 0;
                     src = selectLod(src, level);
                 }
-                const actions = inputArg.processActions.filter(a => a.kind !== 'lod' && a.kind !== 'decimate');
+                const actions = stripLodTags(inputArg.processActions).filter(a => a.kind !== 'decimate');
                 processed.push(await processSourceBridged(src, actions, pool, processOptions));
             }
 
             let combined = await combineSources(processed);
-            combined = await processSourceBridged(combined, outputArg.processActions.filter(a => a.kind !== 'lod' && a.kind !== 'decimate'), pool, processOptions);
+            combined = await processSourceBridged(combined, stripLodTags(outputArg.processActions).filter(a => a.kind !== 'decimate'), pool, processOptions);
 
             if (combined.meta.numGaussians === 0) {
                 throw new Error('No Gaussians to write');
@@ -1269,7 +1286,7 @@ const main = async () => {
             let perLevel: ChunkSource[] = [];
             let envSource: ChunkSource | null = null;
             let container: ChunkSource | null = null; // shared multi-LOD parent (lcc/lcc2)
-            let inputActions: ProcessAction[] = [];
+            let inputActions: CliAction[] = [];
 
             if (single === 'lcc' || single === 'lcc2') {
                 // Intrinsic multi-LOD: view each level with selectLod (shared parent);
@@ -1292,7 +1309,7 @@ const main = async () => {
                     const ply = !isHttpUrl(a.filename) && getInputFormat(resolveInput(a.filename).classifyName) === 'ply';
                     const lods = a.processActions.filter(act => act.kind === 'lod');
                     const tag = lods.length > 0 ? (lods[lods.length - 1] as { value: number }).value : 0;
-                    const rest = a.processActions.filter(act => act.kind !== 'lod');
+                    const rest = stripLodTags(a.processActions);
                     return { arg: a, ply, tag, rest };
                 });
                 if (!tagged.every(t => t.ply)) {
@@ -1321,7 +1338,7 @@ const main = async () => {
 
             // Output (and single-input) actions apply PER LEVEL and to the env —
             // never across levels.
-            const perLevelActions = [...inputActions, ...outputArg.processActions].filter(a => a.kind !== 'lod');
+            const perLevelActions = stripLodTags([...inputActions, ...outputArg.processActions]);
             if (perLevelActions.length > 0) {
                 perLevel = await Promise.all(perLevel.map(s => processSourceBridged(s, perLevelActions, pool, processOptions)));
                 if (envSource) envSource = await processSourceBridged(envSource, perLevelActions, pool, processOptions);

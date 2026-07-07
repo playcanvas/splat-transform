@@ -468,8 +468,9 @@ const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Op
         const unitInfos: LccUnitInfo[] = parseIndexBin(indexData.buffer.slice(indexData.byteOffset, indexData.byteOffset + indexData.byteLength) as ArrayBuffer, lccJson);
 
         // build table of input -> output lods
-        const lods = options.lodSelect.length > 0 ?
-            options.lodSelect
+        const lodSelect = options.lodSelect ?? [];
+        const lods = lodSelect.length > 0 ?
+            lodSelect
             .map(lod => (lod < 0 ? splats.length + lod : lod))    // negative indices map from the end of lod
             .filter(lod => lod >= 0 && lod < splats.length) :
             new Array(splats.length).fill(0).map((_, i) => i);
@@ -612,8 +613,9 @@ const readLccSource = async (
     );
 
     // input -> output LOD mapping (mirrors readLcc).
-    const lods = options.lodSelect.length > 0 ?
-        options.lodSelect
+    const lodSelect = options.lodSelect ?? [];
+    const lods = lodSelect.length > 0 ?
+        lodSelect
         .map(lod => (lod < 0 ? splats.length + lod : lod))
         .filter(lod => lod >= 0 && lod < splats.length) :
         new Array(splats.length).fill(0).map((_, i) => i);

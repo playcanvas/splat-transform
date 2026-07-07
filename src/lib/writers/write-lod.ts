@@ -572,4 +572,4 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     writingGroup.end();
 };
 
-export { positionsFromSlim, writeLodSource };
+export { positionsFromSlim, writeLodSource, type WriteLodSourceOptions };

@@ -121,7 +121,7 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
                 filename,
                 dataTable,
                 bundle: outputFormat === 'sog-bundle',
-                iterations: options.iterations,
+                iterations: options.iterations ?? 10,
                 createDevice
             }, fs);
             break;
@@ -159,7 +159,7 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
                 dataTable,
                 viewerSettingsJson: options.viewerSettingsJson,
                 bundle: outputFormat === 'html-bundle',
-                iterations: options.iterations,
+                iterations: options.iterations ?? 10,
                 createDevice
             }, fs);
             break;
@@ -247,7 +247,7 @@ const writeSource = async (writeSourceOptions: WriteSourceOptions, fs: FileSyste
             await writeSogSource(source, pool, {
                 filename,
                 bundle: outputFormat === 'sog-bundle',
-                iterations: options.iterations,
+                iterations: options.iterations ?? 10,
                 createDevice
             }, fs);
             break;

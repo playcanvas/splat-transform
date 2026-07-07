@@ -14,7 +14,8 @@ import { describe, it } from 'node:test';
 import { Vec3 } from 'playcanvas';
 
 import { createTestDataTable } from './helpers/test-utils.mjs';
-import { convertToSpace, processDataTable, Transform } from '../src/lib/index.js';
+import { processDataTable, Transform } from '../src/lib/index.js';
+import { convertToSpace } from '../src/lib/data-table/index.js';
 import { dataTableToChunkSource, materializeToDataTable } from '../src/lib/compat/data-table.js';
 import { permuteSource, reduceBandsSource } from '../src/lib/ops/index.js';
 import { processSource, processSourceBridged } from '../src/lib/process-source.js';
