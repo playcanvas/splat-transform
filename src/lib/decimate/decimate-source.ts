@@ -104,8 +104,7 @@ const extractPositions = async (source: ChunkSource, pool: ChunkDataPool): Promi
 /**
  * Chunk-native, memory-bounded decimation to an exact target count.
  *
- * Design: `docs/specs/2026-07-03-chunk-decimation-design.md`. Positions
- * resident; KD blocks as an IO pattern only; per-block exact global 16-NN +
+ * Design: positions resident; KD blocks as an IO pattern only; per-block exact global 16-NN +
  * edge costs (GPU when a device is supplied) reduced to K resident
  * candidates; global bucketed greedy matching with chain closure; a second
  * heavy pass moment-matches groups and streams the output.

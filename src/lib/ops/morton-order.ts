@@ -8,8 +8,8 @@ import { logger } from '../utils';
  * Recursive-refined: a bucket of >256 indices sharing the same 10-bit code is
  * re-sorted by a finer pass over its sub-range.
  *
- * This is the canonical Morton implementation; the legacy `DataTable` path
- * delegates here after interleaving its separate x/y/z columns.
+ * The legacy `DataTable` path (`data-table/morton-order.ts`) carries its own
+ * copy of this algorithm; test/ops.test.mjs A/B-tests the two for equivalence.
  *
  * @param positions - Interleaved xyz; gaussian `g` is at `positions[g*3 + {0,1,2}]`.
  * @param indices - Indices to sort in place.

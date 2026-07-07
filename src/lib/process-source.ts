@@ -26,13 +26,6 @@ const SOURCE_ACTION_KINDS: ReadonlySet<ProcessAction['kind']> = new Set([
 ]);
 
 /**
- * Whether every action can be applied on the chunk path by {@link processSource}.
- * @param actions - The actions to check.
- * @returns `true` if all are {@link SOURCE_ACTION_KINDS}.
- */
-const canProcessSource = (actions: ProcessAction[]): boolean => actions.every(a => SOURCE_ACTION_KINDS.has(a.kind));
-
-/**
  * Apply a sequence of processing actions to a {@link ChunkSource}, the streaming
  * analog of `processDataTable`. Transforms compose lazily onto the pending
  * `meta.transform` (via {@link mapSource}); filters scan the source and return a
@@ -40,9 +33,9 @@ const canProcessSource = (actions: ProcessAction[]): boolean => actions.every(a 
  * per-LOD accumulation (via {@link computeSourceStats}) — a diagnostic pass
  * that leaves the data unchanged.
  *
- * Supports only the {@link SOURCE_ACTION_KINDS}; callers gate with
- * {@link canProcessSource} and fall back to `processDataTable` otherwise. Throws
- * on any unsupported action rather than silently dropping it.
+ * Supports only the {@link SOURCE_ACTION_KINDS}; throws on any unsupported
+ * action rather than silently dropping it ({@link processSourceBridged} owns
+ * the `processDataTable` fallback for everything else).
  *
  * @param source - The input source.
  * @param actions - Actions to apply in order.
@@ -149,4 +142,4 @@ const processSourceBridged = async (
     return src;
 };
 
-export { processSource, processSourceBridged, canProcessSource, SOURCE_ACTION_KINDS };
+export { processSource, processSourceBridged, SOURCE_ACTION_KINDS };

@@ -1,5 +1,4 @@
 import { type ChunkPayload } from './block-producer';
-import { splatMass } from './moment-match';
 import { type ResidentPositions } from './partition';
 import { gatherBlockView, indexOfSorted, type PriorityContext } from './priority';
 import { type SelectionResult } from './select';

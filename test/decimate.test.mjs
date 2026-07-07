@@ -2,8 +2,7 @@
  * Decimate action tests (processDataTable bridge over the chunk-native
  * decimator) + DataTable.clone coverage that historically lived here.
  *
- * Behavior changes vs the legacy simplifyGaussians (deliberate, see
- * docs/specs/2026-07-03-chunk-decimation-design.md):
+ * Behavior changes vs the legacy simplifyGaussians (deliberate):
  * - missing geometric/color columns throw instead of silently falling back
  *   to visibility pruning (sortByVisibility is gone);
  * - transforms are baked at decimation rather than kept pending (world-space

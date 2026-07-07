@@ -327,4 +327,4 @@ const computeSourceStats = async (src: ChunkSource, pool: ChunkDataPool): Promis
     return { lods };
 };
 
-export { computeSourceStats, NUM_BINS, type LodStats, type LodStatsData, type SourceStats };
+export { computeSourceStats, type LodStats, type LodStatsData, type SourceStats };

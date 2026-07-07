@@ -526,7 +526,6 @@ import {
 | `processDataTable` | Apply a sequence of processing actions |
 | `computeStats` | Streaming per-LOD, per-column statistics for a source or table |
 | `sortMortonOrder` | Sort indices by Morton code for spatial locality |
-| `sortByVisibility` | Sort indices by visibility score for filtering |
 | `writeVoxel` | Write sparse voxel octree files |
 | `writeImage` | Render a camera view to a lossless WebP image (requires GPU) |
 | `renderSplats` | Lower-level renderer returning the raw RGBA byte buffer |
@@ -624,16 +623,14 @@ type ProcessAction =
 Configure the logger for your environment:
 
 ```typescript
-import { logger } from '@playcanvas/splat-transform';
+import { logger, TextRenderer } from '@playcanvas/splat-transform';
 
-logger.setLogger({
-    log: console.log,
-    warn: console.warn,
-    error: console.error,
-    debug: console.debug,
-    progress: (text) => process.stdout.write(text),
-    output: console.log
-});
+// Route status output (scopes, progress bars, messages) to stderr and
+// pipeable output (e.g. JSON stats) to stdout
+logger.setRenderer(new TextRenderer({
+    write: process.stderr.write.bind(process.stderr),
+    output: process.stdout.write.bind(process.stdout)
+}));
 
-logger.setQuiet(true); // Suppress non-error output
+logger.setVerbosity('quiet'); // 'quiet' | 'normal' | 'verbose'
 ```

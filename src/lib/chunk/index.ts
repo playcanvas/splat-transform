@@ -28,6 +28,3 @@ export { type ChunkSource, type ReadRequest, type ReadTarget, type ChunkSourceMe
 
 // In-memory backing + compact
 export { InMemoryChunkSource, createInMemoryChunkSource, compact } from './in-memory';
-
-// Residency: LRU decode cache with a user byte budget
-export { cached } from './cached';

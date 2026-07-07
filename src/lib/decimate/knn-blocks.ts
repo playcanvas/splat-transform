@@ -60,7 +60,7 @@ const aabbAabbDist2 = (a: Float32Array, b: Float32Array): number => {
  * @param blockIdx - Which block to collect.
  * @param k - Neighbours per query (drives the halo radius estimate).
  * @param haloFactor - Multiplier on the k-NN radius estimate.
- * @param haloCap - Maximum halo size as a multiple of the owned count (buffer-sizing bound; over-cap members are dropped and verification corrects any resulting misses).
+ * @param haloCap - Maximum halo size as a multiple of the owned count (buffer-sizing bound; `h` shrinks until the full halo fits the cap — members are never dropped).
  * @returns The block's locals.
  */
 const collectBlock = (

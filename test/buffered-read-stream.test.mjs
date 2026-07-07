@@ -193,6 +193,18 @@ describe('BufferedReadStream', () => {
     });
 
     it('should use default chunkSize of 64KB', async () => {
+        const testData = new Uint8Array(100000);
+        const inner = new MockReadStream(testData);
+        const buffered = new BufferedReadStream(inner); // No chunkSize specified
+
+        const buf = new Uint8Array(10);
+        await buffered.pull(buf);
+
+        // Default read-ahead is 64KB and the range has more than that left
+        assert.strictEqual(inner.pullSizes[0], 65536);
+    });
+
+    it('should cap read-ahead at the bytes left in the range', async () => {
         const testData = new Uint8Array(1000);
         const inner = new MockReadStream(testData);
         const buffered = new BufferedReadStream(inner); // No chunkSize specified
@@ -200,8 +212,8 @@ describe('BufferedReadStream', () => {
         const buf = new Uint8Array(10);
         await buffered.pull(buf);
 
-        // Default is 64KB, but we only have 1000 bytes so it should request 64KB
-        // but only get 1000 bytes back
-        assert.strictEqual(inner.pullSizes[0], 65536);
+        // expectedSize is 1000, so the read-ahead shrinks to the range rather
+        // than allocating (and requesting) a full 64KB chunk
+        assert.strictEqual(inner.pullSizes[0], 1000);
     });
 });

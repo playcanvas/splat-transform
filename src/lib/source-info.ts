@@ -165,4 +165,4 @@ const formatSourceStats = (meta: ChunkSourceMetadata, stats: SourceStats, format
     return lines.join('\n');
 };
 
-export { buildSourceInfo, sourceInfoLines, formatSourceInfo, formatSourceStats };
+export { formatSourceInfo, formatSourceStats };

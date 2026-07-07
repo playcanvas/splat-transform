@@ -445,4 +445,4 @@ const renderRasterPass = async (
     return finalImage;
 };
 
-export { renderRasterPass, CHUNK_CAP };
+export { renderRasterPass };

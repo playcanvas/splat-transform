@@ -76,7 +76,7 @@
     "playcanvas": "^2.0.0"
   },
   "scripts": {
-    "build": "rollup -c && node -e \"fs=require('fs');fs.copyFileSync('dist/lib/index.d.ts','dist/lib/index.d.cts')\"",
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && rollup -c && node -e \"fs=require('fs');fs.copyFileSync('dist/lib/index.d.ts','dist/lib/index.d.cts')\"",
     "docs": "typedoc",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",

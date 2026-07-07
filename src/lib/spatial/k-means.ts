@@ -1,7 +1,6 @@
 import { GraphicsDevice } from 'playcanvas';
 
 import { KdTree } from './kd-tree';
-import { Column, DataTable } from '../data-table';
 import { GpuKmeans } from '../gpu';
 import { logger } from '../utils';
 
@@ -149,35 +148,4 @@ const kmeansInterleaved = async (
     return { centroids, labels };
 };
 
-/**
- * DataTable wrapper around {@link kmeansInterleaved} for the legacy writer.
- * Interleaves the input columns, clusters, then de-interleaves the centroids
- * back into a DataTable with the same column layout.
- * @ignore
- */
-const kmeans = async (points: DataTable, k: number, iterations: number, device?: GraphicsDevice) => {
-    const numRows = points.numRows;
-    const nc = points.numColumns;
-
-    // interleave columns into row-major order
-    const flat = new Float32Array(numRows * nc);
-    const cols = points.columns.map(c => c.data);
-    for (let r = 0; r < numRows; ++r) {
-        const base = r * nc;
-        for (let j = 0; j < nc; ++j) flat[base + j] = cols[j][r];
-    }
-
-    const { centroids, labels } = await kmeansInterleaved(flat, numRows, nc, k, iterations, device);
-
-    // de-interleave centroids back into the original column layout
-    const kRows = centroids.length / nc;
-    const outCols = points.columns.map((c, j) => {
-        const d = new Float32Array(kRows);
-        for (let i = 0; i < kRows; ++i) d[i] = centroids[i * nc + j];
-        return new Column(c.name, d);
-    });
-
-    return { centroids: new DataTable(outCols), labels };
-};
-
-export { kmeans, kmeansInterleaved };
+export { kmeansInterleaved };

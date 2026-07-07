@@ -20,14 +20,14 @@ import {
  * Appearance columns per storage chunk. The kernel exposes three appearance
  * bindings (appA/appB/appC), so the layout holds up to 3·APP_CHUNK columns; at
  * 16 the widest chunk reaches the ~2 GB per-binding limit around ~33.5M splats.
- * The CPU-side packing in `data-table/decimate.ts` imports this same constant,
+ * The CPU-side packing in `decimate/priority.ts` imports this same constant,
  * so the kernel strides and the host packing can't drift.
  */
 export const APP_CHUNK = 16;
 
 /**
- * WGSL kernel: per-edge KL-style cost (matches `computeEdgeCost` in
- * `data-table/decimate.ts`).
+ * WGSL kernel: per-edge KL-style cost (matches `computeEdgeCostView` in
+ * `decimate/edge-cost-cpu.ts`).
  *
  * Each thread = one edge (i, j). Reads the per-splat cache for both
  * endpoints, computes the merged Gaussian's covariance + determinant,
@@ -282,7 +282,7 @@ interface EdgeCostCache {
  * through both component PDFs, and adding an L2 distance over the
  * appearance (SH) coefficients. Output is `costs[e] = cost for edge e`.
  *
- * Mirrors the CPU `computeEdgeCost` in `data-table/decimate.ts`.
+ * Mirrors the CPU `computeEdgeCostView` in `decimate/edge-cost-cpu.ts`.
  */
 class GpuEdgeCost {
     /**
