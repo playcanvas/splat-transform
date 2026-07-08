@@ -178,7 +178,9 @@ const calcBound = async (
             await source.read({ indices: local, indexOffset: off, count, lod: lodValue, position: pos, geometric: geo });
             accumulateBound(
                 min, max,
-                pos.field('position') as Float32Array,
+                // position is full-stride packed xyz — read the pool buffer
+                // in place rather than copying it out per batch
+                new Float32Array(pos.data, 0, count * 3),
                 geo.field('rotation') as Float32Array,
                 geo.field('scale') as Float32Array,
                 count
@@ -270,7 +272,9 @@ const extractSlim = async (source: ChunkSource, pool: ChunkDataPool): Promise<Sl
             const pos = pool.acquire('position', meta.layouts.position!, count);
             await source.read({ chunkIndex: k, lod, position: pos });
 
-            const p = pos.field('position') as Float32Array;  // count × 3
+            // position is full-stride packed xyz — read the pool buffer in
+            // place (this loop visits every gaussian of every LOD)
+            const p = new Float32Array(pos.data, 0, count * 3);
             for (let i = 0; i < count; i++) {
                 const di = base + i;
                 cols.x[di] = p[i * 3]; cols.y[di] = p[i * 3 + 1]; cols.z[di] = p[i * 3 + 2];

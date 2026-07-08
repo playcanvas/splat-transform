@@ -85,7 +85,10 @@ const selectRows = async (
         for (const cd of acquired) cd.release();
     }
 
-    return kept.subarray(0, k);
+    // slice, not subarray: a subarray view would pin the full 4·N-byte index
+    // buffer for the lifetime of the filtered view chain (2 GB at 500M rows
+    // even for a 1% survivor set); the transient k-sized copy frees it
+    return k < N ? kept.slice(0, k) : kept;
 };
 
 /**

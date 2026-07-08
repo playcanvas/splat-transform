@@ -106,35 +106,58 @@ const concatSource = (allSources: ChunkSource[], pool: ChunkDataPool): ChunkSour
             const wanted: ChunkLayer[] = LAYERS.filter(l => request[l]);
             if (wanted.length === 0) return;
 
-            const buckets = new Map<number, { outRows: number[]; local: number[] }>();
+            // Bucket rows by source: binary-search `starts` per row (sources
+            // can number in the hundreds under an lcc2 container), accumulate
+            // the buckets in typed arrays via a count+fill pass, and scatter
+            // rows with a u32 word loop — no per-row allocation on this path
+            // (it serves every LOD-writer per-unit gather).
+            const nSrc = sources.length;
+            const srcOf = new Int32Array(count);
+            const bucketCount = new Uint32Array(nSrc);
             for (let j = 0; j < count; j++) {
                 const g = indices[indexOffset + j];
-                let si = 0;
-                while (si < sources.length && starts[si] + counts[si] <= g) si++;
-                let b = buckets.get(si);
-                if (!b) {
-                    b = { outRows: [], local: [] };
-                    buckets.set(si, b);
+                // largest s with starts[s] <= g (starts is strictly increasing
+                // once empty sources are dropped)
+                let lo = 0;
+                let hi = nSrc - 1;
+                while (lo < hi) {
+                    const mid = (lo + hi + 1) >> 1;
+                    if (starts[mid] <= g) lo = mid; else hi = mid - 1;
                 }
-                b.outRows.push(j);
-                b.local.push(g - starts[si]);
+                srcOf[j] = lo;
+                bucketCount[lo]++;
             }
 
-            for (const [si, b] of buckets) {
-                const m = b.outRows.length;
-                const localIdx = Uint32Array.from(b.local);
+            const offsets = new Uint32Array(nSrc + 1);
+            for (let s = 0; s < nSrc; s++) offsets[s + 1] = offsets[s] + bucketCount[s];
+            const outRows = new Uint32Array(count);
+            const localIdx = new Uint32Array(count);
+            const cursor = offsets.slice(0, nSrc);
+            for (let j = 0; j < count; j++) {
+                const s = srcOf[j];
+                const k = cursor[s]++;
+                outRows[k] = j;
+                localIdx[k] = indices[indexOffset + j] - starts[s];
+            }
+
+            for (let s = 0; s < nSrc; s++) {
+                const m = bucketCount[s];
+                if (m === 0) continue;
+                const base = offsets[s];
                 const temps = wanted.map(layer => ({ layer, tmp: pool.acquire(layer, ref.layouts[layer]!, m) }));
-                const req: MutableRowReadRequest = { indices: localIdx, indexOffset: 0, count: m };
+                const req: MutableRowReadRequest = { indices: localIdx.subarray(base, base + m), indexOffset: 0, count: m };
                 for (const { layer, tmp } of temps) req[layer] = tmp;
-                await sources[si].read(req);
+                await sources[s].read(req);
 
                 for (const { layer, tmp } of temps) {
                     const out = request[layer]!;
-                    const stride = tmp.stride;
-                    const src = new Uint8Array(tmp.data);
-                    const dst = new Uint8Array(out.data);
+                    const sw = tmp.stride >> 2;
+                    const src = new Uint32Array(tmp.data);
+                    const dst = new Uint32Array(out.data);
                     for (let t = 0; t < m; t++) {
-                        dst.set(src.subarray(t * stride, (t + 1) * stride), b.outRows[t] * stride);
+                        const so = t * sw;
+                        const do_ = outRows[base + t] * sw;
+                        for (let w = 0; w < sw; w++) dst[do_ + w] = src[so + w];
                     }
                 }
                 for (const { tmp } of temps) tmp.release();

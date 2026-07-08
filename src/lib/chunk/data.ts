@@ -90,20 +90,39 @@ class ChunkDataImpl implements ChunkData {
             throw new Error(`ChunkData.field: unknown field '${name}' for layer '${this.layer}'`);
         }
 
-        const out = f.type === 'float32' ?
-            new Float32Array(this.count * f.components) :
-            new Uint32Array(this.count * f.components);
-        const dv = new DataView(this.data);
-        for (let i = 0; i < this.count; i++) {
-            const recordOffset = i * this.stride + f.byteOffset;
-            for (let c = 0; c < f.components; c++) {
-                const byteOffset = recordOffset + c * 4;
-                const dstIndex = i * f.components + c;
-                if (f.type === 'float32') {
-                    (out as Float32Array)[dstIndex] = dv.getFloat32(byteOffset, true);
-                } else {
-                    (out as Uint32Array)[dstIndex] = dv.getUint32(byteOffset, true);
+        // Every layout field is a 4-byte-aligned f32/u32, so decode with typed
+        // views and word indices — a per-element DataView loop here costs ~10×
+        // and sits under whole-scene passes (e.g. the LOD writer's slim
+        // extract). Little-endian runtimes only, like the rest of the chunk
+        // model (see write-ply-streaming).
+        const n = this.count * f.components;
+        const strideW = this.stride >> 2;
+        const offW = f.byteOffset >> 2;
+        if (f.type === 'float32') {
+            const out = new Float32Array(n);
+            const src = new Float32Array(this.data);
+            if (offW === 0 && f.components === strideW) {
+                out.set(src.subarray(0, n)); // full-stride field: one block copy
+            } else {
+                const c = f.components;
+                for (let i = 0; i < this.count; i++) {
+                    const s = i * strideW + offW;
+                    const d = i * c;
+                    for (let j = 0; j < c; j++) out[d + j] = src[s + j];
                 }
+            }
+            return out;
+        }
+        const out = new Uint32Array(n);
+        const src = new Uint32Array(this.data);
+        if (offW === 0 && f.components === strideW) {
+            out.set(src.subarray(0, n)); // full-stride field: one block copy
+        } else {
+            const c = f.components;
+            for (let i = 0; i < this.count; i++) {
+                const s = i * strideW + offW;
+                const d = i * c;
+                for (let j = 0; j < c; j++) out[d + j] = src[s + j];
             }
         }
         return out;

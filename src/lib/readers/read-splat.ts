@@ -1,4 +1,4 @@
-import { fileChunkSource, readExact } from './reader-utils';
+import { fileChunkSource, readExact, sortGatherSlots, gatherRuns } from './reader-utils';
 import {
     type ReadRequest,
     type ChunkSource,
@@ -136,13 +136,13 @@ const readSplat = async (source: ReadSource, pool: ChunkDataPool): Promise<Chunk
         const col = request.color ? new Float32Array(request.color.data) : null;
         if (!pos && !geo && !col) return;
 
-        // Decode `n` records held contiguously in `buf` (record `t` at byte
-        // `t*32`) into the output slots given by `dstRow`. Shared by both the
+        // Decode `n` records held in `buf` (record `t` at byte `srcRec(t)*32`)
+        // into the output slots given by `dstRow`. Shared by both the
         // contiguous-chunk and the scatter-gather paths so they stay identical.
-        const decode = (buf: Uint8Array, n: number, dstRow: (t: number) => number): void => {
+        const decode = (buf: Uint8Array, n: number, dstRow: (t: number) => number, srcRec: (t: number) => number = t => t): void => {
             const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
             for (let t = 0; t < n; t++) {
-                const o = t * BYTES_PER_SPLAT;
+                const o = srcRec(t) * BYTES_PER_SPLAT;
                 const d = dstRow(t);
                 if (pos) decodePosition(dv, o, pos, d);
                 if (geo) decodeGeometric(dv, buf, o, geo, d);
@@ -151,38 +151,31 @@ const readSplat = async (source: ReadSource, pool: ChunkDataPool): Promise<Chunk
         };
 
         if ('indices' in request) {
-            // Gather: order output slots by source row so reads run forward and
-            // consecutive records coalesce into one range read.
+            // Gather: order output slots by source row so reads run forward,
+            // coalescing nearby records into one bounded range read.
             const { indices, indexOffset, count } = request;
             if (count <= 0) return;
-            const slot = new Uint32Array(count);
-            for (let j = 0; j < count; j++) slot[j] = j;
-            slot.sort((a, b) => indices[indexOffset + a] - indices[indexOffset + b]);
+            const slot = sortGatherSlots(count, s => indices[indexOffset + s]);
+            const rowAt = (t: number) => indices[indexOffset + slot[t]];
 
-            let j = 0;
-            while (j < count) {
-                const first = indices[indexOffset + slot[j]];
-                let k = j + 1;
-                while (k < count && indices[indexOffset + slot[k]] === first + (k - j)) k++;
-                const runLen = k - j;
-                const byteStart = first * BYTES_PER_SPLAT;
-                const byteLen = runLen * BYTES_PER_SPLAT;
+            for (const run of gatherRuns(count, t => rowAt(t) * BYTES_PER_SPLAT, BYTES_PER_SPLAT)) {
+                const firstRow = run.firstByte / BYTES_PER_SPLAT;
+                const byteLen = run.recordCount * BYTES_PER_SPLAT;
 
                 let buf: Uint8Array;
                 if (resident) {
-                    buf = resident.subarray(byteStart, byteStart + byteLen);
+                    buf = resident.subarray(run.firstByte, run.firstByte + byteLen);
                 } else {
                     if (!gatherScratch || gatherScratch.length < byteLen) {
                         gatherScratch = new Uint8Array(byteLen);
                     }
                     buf = gatherScratch.subarray(0, byteLen);
-                    if (await readExact(source.read(byteStart, byteStart + byteLen), buf, 0, byteLen) !== byteLen) {
-                        throw new Error(`readSplat: short gather read at row ${first}`);
+                    if (await readExact(source.read(run.firstByte, run.firstByte + byteLen), buf, 0, byteLen) !== byteLen) {
+                        throw new Error(`readSplat: short gather read at row ${firstRow}`);
                     }
                 }
-                const base = j;
-                decode(buf, runLen, t => slot[base + t]);
-                j = k;
+                const { j0 } = run;
+                decode(buf, run.j1 - j0, t => slot[j0 + t], t => rowAt(j0 + t) - firstRow);
             }
             return;
         }

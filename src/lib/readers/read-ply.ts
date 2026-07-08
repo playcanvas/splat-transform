@@ -1,5 +1,5 @@
 import { isCompressedPly, decompressPly } from './decompress-ply';
-import { fileChunkSource, readExact } from './reader-utils';
+import { fileChunkSource, readExact, sortGatherSlots, gatherRuns } from './reader-utils';
 import {
     type ChunkData,
     type ChunkLayer,
@@ -471,43 +471,43 @@ const readCompressedChunked = (source: ReadSource, header: PlyHeader, pool: Chun
         };
 
         if ('indices' in request) {
-            // Gather: sort output slots into source-file order, coalesce
-            // consecutive records into one range read (vertex + parallel sh).
+            // Gather: sort output slots into source-file order, coalesce nearby
+            // records into one bounded range read (vertex + parallel sh; the
+            // combined per-record cost drives the gap/window accounting).
             const { indices, indexOffset, count } = request;
             if (count <= 0) return;
-            const slot = new Uint32Array(count);
-            for (let j = 0; j < count; j++) slot[j] = j;
-            slot.sort((a, b) => indices[indexOffset + a] - indices[indexOffset + b]);
+            const slot = sortGatherSlots(count, s => indices[indexOffset + s]);
+            const rowAt = (t: number) => indices[indexOffset + slot[t]];
+            const wantSh = !!(col && shEl);
+            const costBytes = vertexRowSize + (wantSh ? shRowSize : 0);
 
-            let j = 0;
-            while (j < count) {
-                const first = indices[indexOffset + slot[j]];
-                let k = j + 1;
-                while (k < count && indices[indexOffset + slot[k]] === first + (k - j)) k++;
-                const runLen = k - j;
+            for (const run of gatherRuns(count, t => rowAt(t) * vertexRowSize, vertexRowSize, costBytes)) {
+                const firstRow = run.firstByte / vertexRowSize;
+                const rc = run.recordCount;
 
-                const vNeed = runLen * vertexRowSize;
+                const vNeed = rc * vertexRowSize;
                 if (!gatherV || gatherV.length < vNeed) gatherV = new Uint8Array(vNeed);
                 const vBytes = gatherV.subarray(0, vNeed);
-                if (await readExact(source.read(vertexOffset + first * vertexRowSize, vertexOffset + (first + runLen) * vertexRowSize), vBytes, 0, vNeed) !== vNeed) {
-                    throw new Error(`readPly: short gather vertex read at row ${first}`);
+                if (await readExact(source.read(vertexOffset + firstRow * vertexRowSize, vertexOffset + (firstRow + rc) * vertexRowSize), vBytes, 0, vNeed) !== vNeed) {
+                    throw new Error(`readPly: short gather vertex read at row ${firstRow}`);
                 }
-                const vU32 = new Uint32Array(gatherV.buffer, gatherV.byteOffset, runLen * vWords);
+                const vU32 = new Uint32Array(gatherV.buffer, gatherV.byteOffset, rc * vWords);
 
                 let sBytes: Uint8Array | null = null;
-                if (col && shEl) {
-                    const sNeed = runLen * shRowSize;
+                if (wantSh) {
+                    const sNeed = rc * shRowSize;
                     if (!gatherS || gatherS.length < sNeed) gatherS = new Uint8Array(sNeed);
                     sBytes = gatherS.subarray(0, sNeed);
-                    if (await readExact(source.read(shOffset + first * shRowSize, shOffset + (first + runLen) * shRowSize), sBytes, 0, sNeed) !== sNeed) {
-                        throw new Error(`readPly: short gather sh read at row ${first}`);
+                    if (await readExact(source.read(shOffset + firstRow * shRowSize, shOffset + (firstRow + rc) * shRowSize), sBytes, 0, sNeed) !== sNeed) {
+                        throw new Error(`readPly: short gather sh read at row ${firstRow}`);
                     }
                 }
 
-                for (let t = 0; t < runLen; t++) {
-                    decodeRecord(vU32, t, sBytes, t, first + t, slot[j + t]);
+                for (let t = run.j0; t < run.j1; t++) {
+                    const gi = rowAt(t);
+                    const vi = gi - firstRow;
+                    decodeRecord(vU32, vi, sBytes, vi, gi, slot[t]);
                 }
-                j = k;
             }
             return;
         }
@@ -750,12 +750,6 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
     // interleaved chunk in memory at once.
     const SUB_BLOCK = 1 << 16;
 
-    // Gather coalescing: merge index runs separated by less than GATHER_MERGE_GAP
-    // bytes into one range read; cap any one merged read (and thus the gather
-    // scratch) at GATHER_MAX_WINDOW bytes.
-    const GATHER_MERGE_GAP = 64 * 1024;
-    const GATHER_MAX_WINDOW = 8 * 1024 * 1024;
-
     // Reused scratch buffers. Reads are sequential per the ChunkSource contract,
     // so single shared buffers avoid re-allocating on every read: `recordBuffer`
     // for the contiguous sub-block sweep, `gatherScratch` for one coalesced run.
@@ -785,51 +779,28 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
             const { indices, indexOffset, count } = request;
             if (count <= 0) return;
 
-            const slot = new Uint32Array(count);
-            for (let j = 0; j < count; j++) slot[j] = j;
-            slot.sort((a, b) => indices[indexOffset + a] - indices[indexOffset + b]);
+            const slot = sortGatherSlots(count, s => indices[indexOffset + s]);
+            const byteAt = (t: number) => indices[indexOffset + slot[t]] * recordStride;
 
-            // Merge nearby runs into one bounded range read: a positioned read
-            // costs ~a syscall + await round-trip regardless of size, so rows
-            // separated by less than GATHER_MERGE_GAP bytes of unwanted data are
-            // cheaper to read-and-skip than to fetch separately. The window cap
-            // bounds both the scratch buffer and the worst-case waste; it also
-            // splits fully-consecutive runs that previously grew the scratch
-            // without bound.
-            let j = 0;
-            while (j < count) {
-                const first = indices[indexOffset + slot[j]];
-                let last = first;
-                let k = j + 1;
-                while (k < count) {
-                    const next = indices[indexOffset + slot[k]];
-                    if ((next - last) * recordStride > GATHER_MERGE_GAP) break;
-                    if ((next - first + 1) * recordStride > GATHER_MAX_WINDOW) break;
-                    last = next;
-                    k++;
-                }
-
-                const need = (last - first + 1) * recordStride;
+            for (const run of gatherRuns(count, byteAt, recordStride)) {
+                const need = run.recordCount * recordStride;
                 if (!gatherScratch || gatherScratch.length < need) {
                     gatherScratch = new Uint8Array(need);
                 }
                 const recordBytes = gatherScratch.subarray(0, need);
-                const got = await readExact(
-                    source.read(headerBytes + first * recordStride, headerBytes + (last + 1) * recordStride),
-                    recordBytes, 0, need
-                );
+                const base = headerBytes + run.firstByte;
+                const got = await readExact(source.read(base, base + need), recordBytes, 0, need);
                 if (got !== need) {
-                    throw new Error(`readPly: short gather read (${got}/${need}) at row ${first}`);
+                    throw new Error(`readPly: short gather read (${got}/${need}) at byte ${base}`);
                 }
 
-                for (let t = j; t < k; t++) {
-                    const row = indices[indexOffset + slot[t]] - first;
+                for (let t = run.j0; t < run.j1; t++) {
+                    const row = (byteAt(t) - run.firstByte) / recordStride;
                     const rec = recordBytes.subarray(row * recordStride, (row + 1) * recordStride);
                     for (const layer of requested) {
                         fill(rec, 1, request[layer]!, plans[layer]!, slot[t]);
                     }
                 }
-                j = k;
             }
             return;
         }

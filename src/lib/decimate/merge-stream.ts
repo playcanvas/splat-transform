@@ -51,11 +51,11 @@ async function *mergeStream(
     const payload = (): ChunkPayload => {
         const p: ChunkPayload = {
             count: rows,
-            position: outPos.buffer.slice(0, rows * 12),
-            geometric: outGeo.buffer.slice(0, rows * 32),
-            color: outColor.buffer.slice(0, rows * colorDim * 4)
+            position: outPos.subarray(0, rows * 3),
+            geometric: outGeo.subarray(0, rows * 8),
+            color: outColor.subarray(0, rows * colorDim)
         };
-        if (outOther) p.other = outOther.buffer.slice(0, rows * otherDim * 4);
+        if (outOther) p.other = outOther.subarray(0, rows * otherDim);
         return p;
     };
 

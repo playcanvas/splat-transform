@@ -250,6 +250,8 @@ type MergeScratch = {
     rM: Float64Array;
     eigA: Float64Array;
     eigV: Float64Array;
+    /** Per-member normalized weights (grown on demand; groups cap at ~4). */
+    weights: Float64Array;
 };
 
 const createMergeScratch = (): MergeScratch => ({
@@ -261,7 +263,8 @@ const createMergeScratch = (): MergeScratch => ({
     sig: new Float64Array(9),
     rM: new Float64Array(9),
     eigA: new Float64Array(9),
-    eigV: new Float64Array(9)
+    eigV: new Float64Array(9),
+    weights: new Float64Array(8)
 });
 
 /**
@@ -302,14 +305,27 @@ const mergeGroup = (
 ): void => {
     const { pos, geo, color, colorDim } = view;
 
+    // Per-member normalized weights, computed once — splatMass is
+    // transcendental-heavy and was previously re-evaluated per loop (and per
+    // coefficient in the color loop); caching the identical values is
+    // bit-exact.
+    let weights = scratch.weights;
+    if (count > weights.length) {
+        weights = scratch.weights = new Float64Array(count);
+    }
     let W = 0;
-    for (let m = 0; m < count; m++) W += splatMass(geo, members[m]);
+    for (let m = 0; m < count; m++) {
+        const mass = splatMass(geo, members[m]);
+        weights[m] = mass;
+        W += mass;
+    }
+    for (let m = 0; m < count; m++) weights[m] /= W;
 
     // Merged mean (weighted).
     let mux = 0, muy = 0, muz = 0;
     for (let m = 0; m < count; m++) {
         const i = members[m];
-        const p = splatMass(geo, i) / W;
+        const p = weights[m];
         mux += p * pos[i * 3];
         muy += p * pos[i * 3 + 1];
         muz += p * pos[i * 3 + 2];
@@ -323,7 +339,7 @@ const mergeGroup = (
     for (let m = 0; m < count; m++) {
         const i = members[m];
         const i8 = i * 8;
-        const p = splatMass(geo, i) / W;
+        const p = weights[m];
 
         let qw = geo[i8], qx = geo[i8 + 1], qy = geo[i8 + 2], qz = geo[i8 + 3];
         const qn = 1 / Math.max(Math.hypot(qw, qx, qy, qz), 1e-12);
@@ -405,8 +421,7 @@ const mergeGroup = (
     for (let c = 0; c < colorDim; c++) {
         let acc = 0;
         for (let m = 0; m < count; m++) {
-            const i = members[m];
-            acc += (splatMass(geo, i) / W) * color[i * colorDim + c];
+            acc += weights[m] * color[members[m] * colorDim + c];
         }
         out.color[c] = acc;
     }

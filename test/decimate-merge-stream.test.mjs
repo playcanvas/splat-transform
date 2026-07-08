@@ -150,9 +150,9 @@ describe('createBlockProducerSource', () => {
 
     const onePayload = () => ({
         count: 1,
-        position: new ArrayBuffer(12),
-        geometric: new ArrayBuffer(32),
-        color: new ArrayBuffer(12)
+        position: new Float32Array(3),
+        geometric: new Float32Array(8),
+        color: new Float32Array(3)
     });
 
     it('rejects gather reads and out-of-order chunk reads', async () => {
@@ -176,7 +176,7 @@ describe('createBlockProducerSource', () => {
         const pool = createChunkDataPool({ chunkSize: 1 });
         async function* gen() {
             const p = onePayload();
-            new Float32Array(p.position)[0] = 42;
+            p.position[0] = 42;
             yield p;
             yield onePayload();
         }

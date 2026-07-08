@@ -102,7 +102,10 @@ const kmeansInterleaved = async (
     const bar = logger.bar('k-means', iterations);
     if (device) {
         // flash-kmeans: the whole Lloyd loop runs on the GPU with a single
-        // readback of labels + centroids after the final iteration
+        // readback of labels + centroids after the final iteration. Kernels
+        // are built per call — caching them across calls was benched (M4,
+        // 12-unit LOD run) at no measurable win; the driver shader cache
+        // already absorbs the recompile.
         const gpuKmeans = new GpuKmeans(device, nc, k);
         try {
             await gpuKmeans.run(points, numRows, centroids, labels, iterations, () => bar.tick());

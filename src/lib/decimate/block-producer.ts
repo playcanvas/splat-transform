@@ -1,16 +1,18 @@
 import { type ChunkData, type ChunkLayer, type ChunkSource, type ChunkSourceMetadata, type ReadRequest } from '../chunk';
 
 /**
- * One output chunk of the merge stream. Buffers hold exactly `count` records
- * at the layer strides; they may be reused by the generator after the
- * consumer's read copies them out.
+ * One output chunk of the merge stream. The views hold exactly `count`
+ * records at the layer strides and alias the generator's rolling scratch —
+ * valid only until the generator's next `next()`; the consumer's read copies
+ * them out (yielding views instead of slices avoids a full extra copy of
+ * every output byte).
  */
 type ChunkPayload = {
     count: number;
-    position: ArrayBuffer;
-    geometric: ArrayBuffer;
-    color: ArrayBuffer;
-    other?: ArrayBuffer;
+    position: Float32Array;
+    geometric: Float32Array;
+    color: Float32Array;
+    other?: Uint32Array;
 };
 
 /**
@@ -69,7 +71,7 @@ const createBlockProducerSource = (
                 throw new Error(`decimate output has no '${layer}' layer`);
             }
             const bytes = payload.count * cd.stride;
-            new Uint8Array(cd.data, 0, bytes).set(new Uint8Array(src, 0, bytes));
+            new Uint8Array(cd.data, 0, bytes).set(new Uint8Array(src.buffer, src.byteOffset, bytes));
         };
         fill(request.position, 'position');
         fill(request.geometric, 'geometric');

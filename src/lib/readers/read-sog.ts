@@ -50,26 +50,31 @@ const invLogTransform = (v: number) => {
     return v < 0 ? -e : e;
 };
 
-const unpackQuat = (px: number, py: number, pz: number, tag: number): [number, number, number, number] => {
+// Component order of the three packed values for each maxComp (flat, 3 per
+// row), plus a shared output scratch — this decode runs once per gaussian per
+// read, so it must not allocate (single-threaded, mirroring read-spz's
+// tmpQuat pattern).
+const QUAT_IDX = [1, 2, 3, 0, 2, 3, 0, 1, 3, 0, 1, 2];
+const SQRT2 = Math.sqrt(2);
+const tmpQuat = new Float32Array(4);
+
+// Decode a smallest-three packed quaternion into `tmpQuat` as [w, x, y, z].
+const unpackQuat = (px: number, py: number, pz: number, tag: number): void => {
     const maxComp = tag - 252;
-    const a = px / 255 * 2 - 1;
-    const b = py / 255 * 2 - 1;
-    const c = pz / 255 * 2 - 1;
-    const sqrt2 = Math.sqrt(2);
-    const comps = [0, 0, 0, 0];
-    const idx = [
-        [1, 2, 3],
-        [0, 2, 3],
-        [0, 1, 3],
-        [0, 1, 2]
-    ][maxComp];
-    comps[idx[0]] = a / sqrt2;
-    comps[idx[1]] = b / sqrt2;
-    comps[idx[2]] = c / sqrt2;
+    const a = (px / 255 * 2 - 1) / SQRT2;
+    const b = (py / 255 * 2 - 1) / SQRT2;
+    const c = (pz / 255 * 2 - 1) / SQRT2;
+    tmpQuat[0] = 0;
+    tmpQuat[1] = 0;
+    tmpQuat[2] = 0;
+    tmpQuat[3] = 0;
+    const base = maxComp * 3;
+    tmpQuat[QUAT_IDX[base]] = a;
+    tmpQuat[QUAT_IDX[base + 1]] = b;
+    tmpQuat[QUAT_IDX[base + 2]] = c;
     // reconstruct max component to make unit length with positive sign
-    const t = 1 - (comps[0] * comps[0] + comps[1] * comps[1] + comps[2] * comps[2] + comps[3] * comps[3]);
-    comps[maxComp] = Math.sqrt(Math.max(0, t));
-    return comps as [number, number, number, number];
+    const t = 1 - (a * a + b * b + c * c);
+    tmpQuat[maxComp] = Math.sqrt(Math.max(0, t));
 };
 
 const sigmoidInv = (y: number) => {
@@ -167,13 +172,6 @@ const readSogSourceV2 = async (
     }
     const colorSw = 3 + restCount;
 
-    const getCentroidPixel = (centroidIndex: number, coeff: number): [number, number, number] => {
-        const cx = (centroidIndex % 64) * shCoeffs + coeff;
-        const cy = Math.floor(centroidIndex / 64);
-        if (cx >= cW || cy >= cH) return [0, 0, 0];
-        const idx = (cy * cW + cx) * 4;
-        return [centroidsRGBA![idx], centroidsRGBA![idx + 1], centroidsRGBA![idx + 2]];
-    };
 
     const layouts: Partial<Record<ChunkLayer, LayerLayout>> = {
         position: { stride: POSITION_STRIDE, fields: positionFields() },
@@ -223,8 +221,8 @@ const readSogSourceV2 = async (
             if (tag < 252 || tag > 255) {
                 geoOut[o] = 1; geoOut[o + 1] = 0; geoOut[o + 2] = 0; geoOut[o + 3] = 0;
             } else {
-                const [w, x, y, z] = unpackQuat(qr[o4], qr[o4 + 1], qr[o4 + 2], tag);
-                geoOut[o] = w; geoOut[o + 1] = x; geoOut[o + 2] = y; geoOut[o + 3] = z;
+                unpackQuat(qr[o4], qr[o4 + 1], qr[o4 + 2], tag);
+                geoOut[o] = tmpQuat[0]; geoOut[o + 1] = tmpQuat[1]; geoOut[o + 2] = tmpQuat[2]; geoOut[o + 3] = tmpQuat[3];
             }
             geoOut[o + 4] = sCode[sl[o4]];
             geoOut[o + 5] = sCode[sl[o4 + 1]];
@@ -240,8 +238,19 @@ const readSogSourceV2 = async (
             if (restCount > 0) {
                 const label = labelsRGBA![o4] | (labelsRGBA![o4 + 1] << 8); // 16-bit palette index
                 if (label < paletteCount) {
+                    // centroid texel coordinates: row from the label, column
+                    // base from the label's slot, one column per coefficient
+                    // (per-coeff work is pure index math — no allocation)
+                    const cy = Math.floor(label / 64);
+                    const cxBase = (label % 64) * shCoeffs;
+                    const cyOk = cy < cH;
                     for (let j = 0; j < shCoeffs; j++) {
-                        const [lr, lg, lb] = getCentroidPixel(label, j);
+                        const cx = cxBase + j;
+                        const ok = cyOk && cx < cW;
+                        const idx = (cy * cW + cx) * 4;
+                        const lr = ok ? centroidsRGBA![idx] : 0;
+                        const lg = ok ? centroidsRGBA![idx + 1] : 0;
+                        const lb = ok ? centroidsRGBA![idx + 2] : 0;
                         colOut[o + 3 + j]                = shCodebook![lr] ?? 0;
                         colOut[o + 3 + j + shCoeffs]     = shCodebook![lg] ?? 0;
                         colOut[o + 3 + j + shCoeffs * 2] = shCodebook![lb] ?? 0;
