@@ -272,53 +272,57 @@ const dataTableToChunkSource = (
  * Materialize a `ChunkSource` into the legacy columnar `DataTable`
  * representation.
  *
- * Each available layer is read chunk-by-chunk and scattered into the
+ * Each requested layer is read chunk-by-chunk and scattered into the
  * appropriate named columns (`x, y, z, rot_*, scale_*, opacity, f_dc_*,
  * f_rest_*`, plus extras).
  * @param src - The source to materialize.
  * @param pool - The `ChunkData` pool used for the temporary read buffers; its `chunkSize` must be >= the source's.
+ * @param layers - Optional layer filter; when set, only these layers (intersected with the source's) are read and allocated. Omit for every available layer. Consumers of a subset (e.g. voxelization needs only position + geometric) skip the unused columns entirely rather than loading and discarding them.
  * @returns A `DataTable` holding the source's gaussians in canonical column form.
  */
 const materializeToDataTable = async (
     src: ChunkSource,
-    pool: ChunkDataPool
+    pool: ChunkDataPool,
+    layers?: Set<ChunkLayer>
 ): Promise<DataTable> => {
     const { meta } = src;
     // Flatten every LOD (lod 0, 1, …) into one table; `numGaussians` is only the
     // LOD-0 count, so size to the sum across all LODs.
     const N = meta.lodCounts.reduce((acc, c) => acc + c, 0);
 
-    const x = new Float32Array(N);
-    const y = new Float32Array(N);
-    const z = new Float32Array(N);
+    // A layer is materialized only if the source exposes it AND (no filter, or
+    // the filter includes it). Arrays for skipped layers are never allocated.
+    const want = (layer: ChunkLayer) => meta.availableLayers.has(layer) && (!layers || layers.has(layer));
+    const wantsPosition = want('position');
+    const wantsGeometric = want('geometric');
+    const wantsColor = want('color');
+    const wantsOther = want('other') && meta.extraColumns.length > 0;
 
-    const rot0 = new Float32Array(N);
-    const rot1 = new Float32Array(N);
-    const rot2 = new Float32Array(N);
-    const rot3 = new Float32Array(N);
-    const scale0 = new Float32Array(N);
-    const scale1 = new Float32Array(N);
-    const scale2 = new Float32Array(N);
-    const opacity = new Float32Array(N);
+    const x = wantsPosition ? new Float32Array(N) : null;
+    const y = wantsPosition ? new Float32Array(N) : null;
+    const z = wantsPosition ? new Float32Array(N) : null;
 
-    const dc0 = new Float32Array(N);
-    const dc1 = new Float32Array(N);
-    const dc2 = new Float32Array(N);
+    const rot0 = wantsGeometric ? new Float32Array(N) : null;
+    const rot1 = wantsGeometric ? new Float32Array(N) : null;
+    const rot2 = wantsGeometric ? new Float32Array(N) : null;
+    const rot3 = wantsGeometric ? new Float32Array(N) : null;
+    const scale0 = wantsGeometric ? new Float32Array(N) : null;
+    const scale1 = wantsGeometric ? new Float32Array(N) : null;
+    const scale2 = wantsGeometric ? new Float32Array(N) : null;
+    const opacity = wantsGeometric ? new Float32Array(N) : null;
+
+    const dc0 = wantsColor ? new Float32Array(N) : null;
+    const dc1 = wantsColor ? new Float32Array(N) : null;
+    const dc2 = wantsColor ? new Float32Array(N) : null;
 
     const numRest = SH_REST_COUNTS[meta.shBands];
-    const restArrays: Float32Array[] = [];
-    for (let i = 0; i < numRest; i++) restArrays.push(new Float32Array(N));
+    const restArrays: Float32Array[] = wantsColor ? Array.from({ length: numRest }, () => new Float32Array(N)) : [];
 
-    const extraArrays = meta.extraColumns.map(e => ({
+    const extraArrays = wantsOther ? meta.extraColumns.map(e => ({
         name: e.name,
         type: e.type,
         data: e.type === 'float32' ? new Float32Array(N) : new Uint32Array(N)
-    }));
-
-    const wantsPosition = meta.availableLayers.has('position');
-    const wantsGeometric = meta.availableLayers.has('geometric');
-    const wantsColor = meta.availableLayers.has('color');
-    const wantsOther = meta.availableLayers.has('other') && extraArrays.length > 0;
+    })) : [];
 
     const chunkSize = meta.chunkSize;
 
@@ -372,28 +376,30 @@ const materializeToDataTable = async (
         for (const { layer, chunkData } of acquired) {
             const elemsPerRow = chunkData.stride >> 2;
 
+            // A layer only appears in `acquired` when it was requested, so its
+            // destination arrays are non-null here (the `!` assertions below).
             if (layer === 'position') {
                 const f32 = new Float32Array(chunkData.data, 0, count * elemsPerRow);
                 for (let i = 0; i < count; i++) {
                     const di = rowStart + i;
                     const si = i * 3;
-                    x[di] = f32[si + 0];
-                    y[di] = f32[si + 1];
-                    z[di] = f32[si + 2];
+                    x![di] = f32[si + 0];
+                    y![di] = f32[si + 1];
+                    z![di] = f32[si + 2];
                 }
             } else if (layer === 'geometric') {
                 const f32 = new Float32Array(chunkData.data, 0, count * elemsPerRow);
                 for (let i = 0; i < count; i++) {
                     const di = rowStart + i;
                     const si = i * 8;
-                    rot0[di] = f32[si + 0];
-                    rot1[di] = f32[si + 1];
-                    rot2[di] = f32[si + 2];
-                    rot3[di] = f32[si + 3];
-                    scale0[di] = f32[si + 4];
-                    scale1[di] = f32[si + 5];
-                    scale2[di] = f32[si + 6];
-                    opacity[di] = f32[si + 7];
+                    rot0![di] = f32[si + 0];
+                    rot1![di] = f32[si + 1];
+                    rot2![di] = f32[si + 2];
+                    rot3![di] = f32[si + 3];
+                    scale0![di] = f32[si + 4];
+                    scale1![di] = f32[si + 5];
+                    scale2![di] = f32[si + 6];
+                    opacity![di] = f32[si + 7];
                 }
             } else if (layer === 'color') {
                 const f32 = new Float32Array(chunkData.data, 0, count * elemsPerRow);
@@ -401,9 +407,9 @@ const materializeToDataTable = async (
                 for (let i = 0; i < count; i++) {
                     const di = rowStart + i;
                     const si = i * stride;
-                    dc0[di] = f32[si + 0];
-                    dc1[di] = f32[si + 1];
-                    dc2[di] = f32[si + 2];
+                    dc0![di] = f32[si + 0];
+                    dc1![di] = f32[si + 1];
+                    dc2![di] = f32[si + 2];
                     for (let r = 0; r < numRest; r++) {
                         restArrays[r][di] = f32[si + 3 + r];
                     }
@@ -430,25 +436,25 @@ const materializeToDataTable = async (
 
     const columns: Column[] = [];
     if (wantsPosition) {
-        columns.push(new Column('x', x), new Column('y', y), new Column('z', z));
+        columns.push(new Column('x', x!), new Column('y', y!), new Column('z', z!));
     }
     if (wantsGeometric) {
         columns.push(
-            new Column('rot_0', rot0),
-            new Column('rot_1', rot1),
-            new Column('rot_2', rot2),
-            new Column('rot_3', rot3),
-            new Column('scale_0', scale0),
-            new Column('scale_1', scale1),
-            new Column('scale_2', scale2),
-            new Column('opacity', opacity)
+            new Column('rot_0', rot0!),
+            new Column('rot_1', rot1!),
+            new Column('rot_2', rot2!),
+            new Column('rot_3', rot3!),
+            new Column('scale_0', scale0!),
+            new Column('scale_1', scale1!),
+            new Column('scale_2', scale2!),
+            new Column('opacity', opacity!)
         );
     }
     if (wantsColor) {
         columns.push(
-            new Column('f_dc_0', dc0),
-            new Column('f_dc_1', dc1),
-            new Column('f_dc_2', dc2)
+            new Column('f_dc_0', dc0!),
+            new Column('f_dc_1', dc1!),
+            new Column('f_dc_2', dc2!)
         );
         for (let r = 0; r < numRest; r++) {
             columns.push(new Column(`f_rest_${r}`, restArrays[r]));

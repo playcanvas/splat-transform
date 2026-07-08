@@ -85,6 +85,34 @@ describe('ChunkSource data model', () => {
             const out = await materializeToDataTable(compacted, pool);
             assertTablesEqual(out, dt, 'compact round-trip');
         });
+
+        it('layers filter materializes only requested layers, byte-identical (voxel path)', async () => {
+            const dt = createTestDataTable(10, { includeSH: true, shBands: 2 });
+            const chunkSize = 4;
+            const src = dataTableToChunkSource(dt, chunkSize);
+            const pool = createChunkDataPool({ chunkSize });
+
+            const full = await materializeToDataTable(src, pool);
+            const slim = await materializeToDataTable(src, pool, new Set(['position', 'geometric']));
+
+            // exactly the 11 position + geometric columns; no color/SH loaded
+            assert.deepStrictEqual(
+                [...slim.columnNames].sort(),
+                ['opacity', 'rot_0', 'rot_1', 'rot_2', 'rot_3', 'scale_0', 'scale_1', 'scale_2', 'x', 'y', 'z']
+            );
+            assert.ok(!slim.hasColumn('f_dc_0') && !slim.hasColumn('f_rest_0'), 'color/SH not loaded');
+            assert.strictEqual(slim.numRows, 10);
+
+            // the loaded columns are byte-identical to the full materialize — so
+            // voxelization (which reads only these) sees exactly the same input.
+            for (const name of slim.columnNames) {
+                assert.deepStrictEqual(
+                    slim.getColumnByName(name).data,
+                    full.getColumnByName(name).data,
+                    `column ${name} identical to full materialize`
+                );
+            }
+        });
     });
 
     describe('ChunkDataPool', () => {

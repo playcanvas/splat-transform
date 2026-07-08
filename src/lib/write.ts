@@ -1,4 +1,4 @@
-import { type ChunkDataPool, type ChunkSource } from './chunk';
+import { type ChunkDataPool, type ChunkLayer, type ChunkSource } from './chunk';
 import { materializeToDataTable } from './compat/data-table';
 import { DataTable } from './data-table';
 import { type FileSystem } from './io/write';
@@ -256,6 +256,15 @@ const writeSource = async (writeSourceOptions: WriteSourceOptions, fs: FileSyste
             break;
         case 'lod':
             throw new Error('writeSource: lod output must be written via writeLodSource');
+        case 'voxel': {
+            // Voxelization consumes only position + geometric (see writeVoxel:
+            // x/y/z, rot, scale, opacity — no color/SH). Materialize just those
+            // layers so color and SH are never loaded (they were previously read
+            // into the full table and discarded).
+            const dataTable = await materializeToDataTable(source, pool, new Set<ChunkLayer>(['position', 'geometric']));
+            await writeFile({ filename, outputFormat, dataTable, options, createDevice }, fs);
+            break;
+        }
         default: {
             // No streaming writer yet — materialize and delegate to the DataTable
             // writer (the inline bridge around the unconverted writer).
