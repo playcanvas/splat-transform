@@ -137,12 +137,29 @@ describe('processSource A/B vs processDataTable', () => {
         assert.strictEqual(tableA.numRows, 120);
         assertEquivalent(tableA, tableB);
     });
+
+    it('mortonOrder reorders rows identically to the DataTable path (chunk-native gather)', async () => {
+        const { tableA, tableB } = await runAB(300, { includeSH: true, shBands: 1 }, [
+            { kind: 'mortonOrder' }
+        ]);
+        assertEquivalent(tableA, tableB);
+    });
+
+    it('mortonOrder composes with a pending transform (orders on raw positions)', async () => {
+        const { tableA, tableB } = await runAB(300, {}, [
+            { kind: 'translate', value: new Vec3(3, 0, 0) },
+            { kind: 'mortonOrder' },
+            { kind: 'scale', value: 0.5 }
+        ]);
+        assertEquivalent(tableA, tableB);
+    });
 });
 
-// processSourceBridged applies chunk-native runs via processSource and DataTable-
-// only runs (mortonOrder here) via a materialize -> processDataTable -> re-bridge
-// island. It must equal the pure DataTable path, including ordering and the
-// pending transform carried across the island.
+// processSourceBridged groups consecutive actions into maximal same-mode runs:
+// chunk-native runs go through processSource, DataTable-only runs (decimate, the
+// GPU voxel filters) through a materialize -> processDataTable -> re-bridge island.
+// Either way the result must equal the pure DataTable path, including ordering
+// and the pending transform carried across run boundaries.
 const runBridged = async (count, opts, actions) => {
     const chunkSize = 64;
     const make = () => createTestDataTable(count, opts);
@@ -154,7 +171,11 @@ const runBridged = async (count, opts, actions) => {
 };
 
 describe('processSourceBridged (chunk-native runs + DataTable islands)', () => {
-    it('bridges a DataTable-only op between chunk-native transforms ([translate, mortonOrder, scale])', async () => {
+    // mortonOrder is chunk-native, so this whole list routes through processSource
+    // as one run — verifies the bridge groups and executes a fully-native list.
+    // The island (else) branch serves the remaining DataTable-only ops (decimate,
+    // GPU voxel filters), covered by their own device-gated integration tests.
+    it('routes a fully chunk-native list through the bridge ([translate, mortonOrder, scale])', async () => {
         const { tableA, tableB } = await runBridged(300, { includeSH: true, shBands: 1 }, [
             { kind: 'translate', value: new Vec3(1, 2, 3) },
             { kind: 'mortonOrder' },

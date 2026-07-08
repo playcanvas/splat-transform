@@ -1128,9 +1128,10 @@ const main = async () => {
 
         // Single-scene pipeline (one chunk-native path for every non-lod output).
         // Each input is read as a ChunkSource; its actions are applied by
-        // processSourceBridged (chunk-native runs stream; DataTable-only ops —
-        // decimate, morton-order, band drop, the GPU voxel filters — bridge inline
-        // as islands); the inputs are stitched (concatSource when uniform, else a
+        // processSourceBridged (chunk-native runs stream — transforms, filters,
+        // band drop, morton reorder; the remaining DataTable-only ops, the GPU
+        // voxel filters, bridge inline as islands; decimate is applied terminally
+        // below); the inputs are stitched (concatSource when uniform, else a
         // DataTable combine() bridge for mismatched layouts), the output actions
         // applied, and the result written by writeSource (streaming for
         // ply/sog/compressed-ply; materialize-at-the-writer for csv/glb/html/image/

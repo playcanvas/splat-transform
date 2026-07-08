@@ -8,6 +8,8 @@ import {
     filterSphereRows,
     filterSource,
     mapSource,
+    mortonOrder,
+    permuteSource,
     reduceBandsSource
 } from './ops';
 import { processDataTable, type ProcessAction, type ProcessOptions } from './process';
@@ -16,12 +18,13 @@ import { logger, Transform } from './utils';
 
 /**
  * The `ProcessAction` kinds `processSource` can apply natively on the streaming
- * chunk path. Anything else (decimate, mortonOrder, the GPU voxel filters)
- * is applied by {@link processSourceBridged} as a `processDataTable` island.
+ * chunk path. Anything else (decimate, the GPU voxel filters) is applied by
+ * {@link processSourceBridged} as a `processDataTable` island.
  */
 const SOURCE_ACTION_KINDS: ReadonlySet<ProcessAction['kind']> = new Set([
     'translate', 'rotate', 'scale',
     'filterNaN', 'filterByValue', 'filterBox', 'filterSphere', 'filterBands',
+    'mortonOrder',
     'stats', 'info', 'param'
 ]);
 
@@ -75,6 +78,19 @@ const processSource = async (
             case 'filterBands':
                 src = reduceBandsSource(src, action.value, pool);
                 break;
+            case 'mortonOrder': {
+                // Compute a Morton (Z-order) permutation from the raw (unbaked)
+                // positions and apply it as a lazy gather view — the chunk-native
+                // equivalent of the DataTable path's sortMortonOrder +
+                // permuteRowsInPlace, holding only positions resident (12 B/gaussian)
+                // rather than materializing every layer. processDataTable defers
+                // transforms too, so both paths order on the same raw positions.
+                if (src.meta.numLods > 1) {
+                    throw new Error('mortonOrder: reorder one LOD at a time — select a single LOD first');
+                }
+                src = permuteSource(src, await mortonOrder(src, pool));
+                break;
+            }
             case 'stats':
                 // One streaming pass per LOD; no materialization. Reflects the
                 // source's current, unbaked values — matching processDataTable
@@ -102,7 +118,7 @@ const processSource = async (
  * chunk-native runs and bridging only the DataTable-only runs. Consecutive
  * actions are grouped into maximal same-mode runs (order preserved): a
  * chunk-native run ({@link SOURCE_ACTION_KINDS}) goes through {@link processSource};
- * a DataTable-only run (decimate, mortonOrder, the GPU voxel filters, …)
+ * a DataTable-only run (decimate, the GPU voxel filters, …)
  * materializes once, runs `processDataTable`, and re-bridges to a source via
  * `dataTableToChunkSource`. So the not-yet-chunked ops do their work inline as
  * islands and everything around them keeps streaming.

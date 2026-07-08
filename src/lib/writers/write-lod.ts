@@ -4,9 +4,9 @@ import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 import { logWrittenFile } from './utils';
 import { writeSogSource } from './write-sog.js';
 import { type ChunkDataPool, type ChunkSource, type ReadRequest, createChunkDataPool } from '../chunk';
-import { Column, DataTable, sortMortonOrder } from '../data-table';
+import { Column, DataTable } from '../data-table';
 import { type FileSystem } from '../io/write';
-import { bakeTransform, permuteSource } from '../ops';
+import { bakeTransform, permuteSource, sortMortonColumns } from '../ops';
 import { BTreeNode, BTree } from '../spatial';
 import type { DeviceCreator } from '../types';
 import { logger, Transform } from '../utils';
@@ -538,7 +538,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
                 const orderedIndices = new Uint32Array(totalIndices);
                 for (let j = 0, offset = 0; j < fileUnit.length; ++j) {
                     orderedIndices.set(fileUnit[j], offset);
-                    sortMortonOrder(centroidsTable, orderedIndices.subarray(offset, offset + fileUnit[j].length));
+                    sortMortonColumns(slim.x, slim.y, slim.z, orderedIndices.subarray(offset, offset + fileUnit[j].length));
                     offset += fileUnit[j].length;
                 }
 
