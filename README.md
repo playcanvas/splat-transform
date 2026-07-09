@@ -139,7 +139,7 @@ Actions execute in the order specified and can be repeated. Any action may appea
 -v, --version                           Show version and exit
 -q, --quiet                             Suppress non-error output
     --verbose                           Show debug-level diagnostics
-    --mem                               Show memory usage in progress output
+    --mem                               Show peak memory in progress output
     --tty                               Interactive bar rendering (default on a TTY; --no-tty to disable)
 -w, --overwrite                         Overwrite output file if it exists
 ```
@@ -161,6 +161,7 @@ Apply when writing `.sog`, `meta.json`, `lod-meta.json`, or `.html` outputs.
 
 ```none
 -i, --iterations       <n>              Iterations for SH compression (more=better). Default: 10
+    --max-workers      <n>              Worker threads for SOG encoding (0 = inline/serial). Default: 4
 ```
 
 ## SPZ Output Options
