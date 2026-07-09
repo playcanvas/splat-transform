@@ -38,7 +38,7 @@ const selectLod = (src: ChunkSource, level: number): ChunkSource => {
 };
 
 /**
- * Resolve a user `lodSelect` (from `--lod-select`) into concrete level indices
+ * Resolve a user `lodSelect` (from `--select-lod`) into concrete level indices
  * against a source's actual level count: negative indices count from the end,
  * out-of-range entries are dropped, and an empty selection means all levels.
  * Used by the CLI to drive {@link selectLod} nodes — LOD selection is a pipeline

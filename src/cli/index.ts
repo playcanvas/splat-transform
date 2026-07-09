@@ -117,7 +117,7 @@ const resolveInput = (arg: string): ResolvedInput => {
     };
 };
 
-// CLI action list: the library's ProcessAction plus the CLI-only `--lod`
+// CLI action list: the library's ProcessAction plus the CLI-only `--tag-lod`
 // grouping tag (consumed while assembling the LOD writer's level stack —
 // never dispatched as a data operation).
 type CliAction = ProcessAction | { kind: 'lod'; value: number };
@@ -139,38 +139,39 @@ const cliOptionsConfig = {
     version: { type: 'boolean', short: 'v', default: false },
     quiet: { type: 'boolean', short: 'q', default: false },
     verbose: { type: 'boolean', default: false },
-    mem: { type: 'boolean', default: false },
+    memory: { type: 'boolean', default: false },
     tty: { type: 'boolean' },
-    iterations: { type: 'string', short: 'i', default: '10' },
+    'sh-iterations': { type: 'string', short: 'i', default: '10' },
     'max-workers': { type: 'string' },
-    'list-gpus': { type: 'boolean', short: 'L', default: false },
+    'list-gpus': { type: 'boolean', default: false },
     gpu: { type: 'string', short: 'g', default: '-1' },
-    'lod-select': { type: 'string', short: 'O', default: '' },
-    'viewer-settings': { type: 'string', short: 'E', default: '' },
-    'lod-chunk-count': { type: 'string', short: 'C', default: '512' },
-    'lod-chunk-extent': { type: 'string', short: 'X', default: '16' },
+    'select-lod': { type: 'string', short: 'L', default: '' },
+    'viewer-settings': { type: 'string', default: '' },
+    'lod-chunk-count': { type: 'string', default: '512' },
+    'lod-chunk-extent': { type: 'string', default: '16' },
     'spz-version': { type: 'string', default: '4' },
-    unbundled: { type: 'boolean', short: 'U', default: false },
-    'voxel-params': { type: 'string', default: '' },
+    unbundled: { type: 'boolean', default: false },
+    'voxel-size': { type: 'string' },
+    'voxel-opacity': { type: 'string' },
     'voxel-external-fill': { type: 'string' },
     'voxel-floor-fill': { type: 'string' },
     'voxel-carve': { type: 'string' },
     'seed-pos': { type: 'string', default: '' },
-    'collision-mesh': { type: 'string', short: 'K' },
+    'collision-mesh': { type: 'string' },
     'projection': { type: 'string' },
-    'camera': { type: 'string' },
-    'look-at': { type: 'string' },
-    'up': { type: 'string' },
-    'fov': { type: 'string' },
+    'camera-pos': { type: 'string' },
+    'camera-target': { type: 'string' },
+    'camera-up': { type: 'string' },
+    'camera-fov': { type: 'string' },
     'resolution': { type: 'string' },
-    'near': { type: 'string' },
+    'camera-near': { type: 'string' },
     'background': { type: 'string' },
     'f-stop': { type: 'string' },
     'focus-distance': { type: 'string' },
     'sensor-size': { type: 'string' },
-    'camera-end': { type: 'string' },
-    'look-at-end': { type: 'string' },
-    'up-end': { type: 'string' },
+    'camera-pos-end': { type: 'string' },
+    'camera-target-end': { type: 'string' },
+    'camera-up-end': { type: 'string' },
     'shutter': { type: 'string' },
     'motion-samples': { type: 'string' },
 
@@ -185,14 +186,14 @@ const cliOptionsConfig = {
     'filter-harmonics': { type: 'string', short: 'H', multiple: true },
     'filter-box': { type: 'string', short: 'B', multiple: true },
     'filter-sphere': { type: 'string', short: 'S', multiple: true },
-    'decimate': { type: 'string', short: 'F', multiple: true },
-    'filter-cluster': { type: 'string', short: 'D', multiple: true },
-    'filter-floaters': { type: 'string', short: 'G', multiple: true },
+    'decimate': { type: 'string', short: 'd', multiple: true },
+    'filter-cluster': { type: 'string', short: 'C', multiple: true },
+    'filter-floaters': { type: 'string', short: 'F', multiple: true },
     params: { type: 'string', short: 'p', multiple: true },
-    lod: { type: 'string', short: 'l', multiple: true },
-    stats: { type: 'string', short: 'm', multiple: true },
-    info: { type: 'string', short: 'I', multiple: true },
-    'morton-order': { type: 'boolean', short: 'M', multiple: true }
+    'tag-lod': { type: 'string', short: 'l', multiple: true },
+    stats: { type: 'string', multiple: true },
+    info: { type: 'string', multiple: true },
+    'morton-order': { type: 'boolean', short: 'm', multiple: true }
 } as const;
 
 const stringOptionNames = new Set(Object.entries(cliOptionsConfig)
@@ -210,19 +211,15 @@ const isTextJsonFormat = (s: string) => /^(?:text|json)$/i.test(s);
 type OptionalValueValidator = (next: string) => boolean;
 const optionalValueOptions: Map<string, OptionalValueValidator> = new Map([
     ['--filter-cluster', isNumericValue],
-    ['-D', isNumericValue],
+    ['-C', isNumericValue],
     ['--filter-floaters', isNumericValue],
-    ['-G', isNumericValue],
+    ['-F', isNumericValue],
     ['--voxel-external-fill', isNumericValue],
     ['--voxel-floor-fill', isNumericValue],
     ['--voxel-carve', isNumericValue],
-    ['--voxel-params', isNumericValue],
     ['--collision-mesh', isCollisionMeshShape],
-    ['-K', isCollisionMeshShape],
     ['--info', isTextJsonFormat],
-    ['-I', isTextJsonFormat],
-    ['--stats', isTextJsonFormat],
-    ['-m', isTextJsonFormat]
+    ['--stats', isTextJsonFormat]
 ]);
 
 const shortToLong = new Map<string, string>(
@@ -368,21 +365,19 @@ const parseArguments = async () => {
     const viewerSettingsPath = v['viewer-settings'];
 
     // Parse voxel processing options
-    const voxelParamsStr = v['voxel-params'];
+    const voxelSizeStr = v['voxel-size'];
+    const voxelOpacityStr = v['voxel-opacity'];
     const externalFillStr = v['voxel-external-fill'];
     const carveStr = v['voxel-carve'];
     const seedPosStr = v['seed-pos'];
 
     let voxelResolution = 0.05;
     let opacityCutoff = 0.1;
-    if (voxelParamsStr) {
-        const parts = voxelParamsStr.split(',').map((p: string) => p.trim());
-        if (parts.length >= 1 && parts[0] !== '') {
-            voxelResolution = parseNumber(parts[0], 0);
-        }
-        if (parts.length >= 2) {
-            opacityCutoff = parseNumber(parts[1], 0);
-        }
+    if (voxelSizeStr) {
+        voxelResolution = parseNumber(voxelSizeStr, 0);
+    }
+    if (voxelOpacityStr) {
+        opacityCutoff = parseNumber(voxelOpacityStr, 0);
     }
 
     let navExteriorRadius: number | undefined;
@@ -433,21 +428,21 @@ const parseArguments = async () => {
         renderProjection = v.projection;
     }
     let renderCameraPosition: { x: number; y: number; z: number } | undefined;
-    if (v.camera !== undefined) {
-        const [cx, cy, cz] = parseVec(v.camera, 3);
+    if (v['camera-pos'] !== undefined) {
+        const [cx, cy, cz] = parseVec(v['camera-pos'], 3);
         renderCameraPosition = { x: cx, y: cy, z: cz };
     }
     let renderLookAt: { x: number; y: number; z: number } | undefined;
-    if (v['look-at'] !== undefined) {
-        const [lx, ly, lz] = parseVec(v['look-at'], 3);
+    if (v['camera-target'] !== undefined) {
+        const [lx, ly, lz] = parseVec(v['camera-target'], 3);
         renderLookAt = { x: lx, y: ly, z: lz };
     }
     let renderUp: { x: number; y: number; z: number } | undefined;
-    if (v.up !== undefined) {
-        const [ux, uy, uz] = parseVec(v.up, 3);
+    if (v['camera-up'] !== undefined) {
+        const [ux, uy, uz] = parseVec(v['camera-up'], 3);
         renderUp = { x: ux, y: uy, z: uz };
     }
-    const renderFov = v.fov !== undefined ? parseNumber(v.fov, 0) : undefined;
+    const renderFov = v['camera-fov'] !== undefined ? parseNumber(v['camera-fov'], 0) : undefined;
     let renderWidth: number | undefined;
     let renderHeight: number | undefined;
     if (v.resolution !== undefined) {
@@ -458,7 +453,7 @@ const parseArguments = async () => {
         renderWidth = parseInteger(m[1]);
         renderHeight = parseInteger(m[2]);
     }
-    const renderNear = v.near !== undefined ? parseNumber(v.near, 0) : undefined;
+    const renderNear = v['camera-near'] !== undefined ? parseNumber(v['camera-near'], 0) : undefined;
     const renderFStop = v['f-stop'] !== undefined ? parseNumber(v['f-stop'], 0) : undefined;
     if (renderFStop !== undefined && renderFStop <= 0) {
         throw new Error(`Invalid --f-stop value: ${v['f-stop']}. Must be > 0.`);
@@ -472,18 +467,18 @@ const parseArguments = async () => {
         throw new Error(`Invalid --sensor-size value: ${v['sensor-size']}. Must be > 0.`);
     }
     let renderCameraEndPosition: { x: number; y: number; z: number } | undefined;
-    if (v['camera-end'] !== undefined) {
-        const [cx, cy, cz] = parseVec(v['camera-end'], 3);
+    if (v['camera-pos-end'] !== undefined) {
+        const [cx, cy, cz] = parseVec(v['camera-pos-end'], 3);
         renderCameraEndPosition = { x: cx, y: cy, z: cz };
     }
     let renderLookAtEnd: { x: number; y: number; z: number } | undefined;
-    if (v['look-at-end'] !== undefined) {
-        const [lx, ly, lz] = parseVec(v['look-at-end'], 3);
+    if (v['camera-target-end'] !== undefined) {
+        const [lx, ly, lz] = parseVec(v['camera-target-end'], 3);
         renderLookAtEnd = { x: lx, y: ly, z: lz };
     }
     let renderUpEnd: { x: number; y: number; z: number } | undefined;
-    if (v['up-end'] !== undefined) {
-        const [ux, uy, uz] = parseVec(v['up-end'], 3);
+    if (v['camera-up-end'] !== undefined) {
+        const [ux, uy, uz] = parseVec(v['camera-up-end'], 3);
         renderUpEnd = { x: ux, y: uy, z: uz };
     }
     const renderShutter = v.shutter !== undefined ? parseNumber(v.shutter) : undefined;
@@ -515,13 +510,13 @@ const parseArguments = async () => {
         version: v.version,
         quiet: v.quiet,
         verbose: v.verbose,
-        mem: v.mem,
+        mem: v.memory,
         noTty: v.tty === undefined ? undefined : !v.tty,
-        iterations: parseInteger(v.iterations),
+        iterations: parseInteger(v['sh-iterations']),
         listGpus: v['list-gpus'],
         deviceIdx,
         scratchDir: v['scratch-dir'],
-        lodSelect: v['lod-select'].split(',').filter(v => !!v).map(parseInteger),
+        lodSelect: v['select-lod'].split(',').filter(v => !!v).map(parseInteger),
         viewerSettingsJson: viewerSettingsPath && await readJsonFile(viewerSettingsPath),
         unbundled: v.unbundled,
         lodChunkCount: parseInteger(v['lod-chunk-count']),
@@ -663,10 +658,10 @@ const parseArguments = async () => {
                     }
                     break;
                 }
-                case 'lod': {
+                case 'tag-lod': {
                     const lod = parseInteger(t.value);
                     if (lod < -1) {
-                        throw new Error(`Invalid lod value: ${t.value}. Must be >= 0, or -1 for environment.`);
+                        throw new Error(`Invalid --tag-lod value: ${t.value}. Must be >= 0, or -1 for environment.`);
                     }
                     current.processActions.push({
                         kind: 'lod',
@@ -791,85 +786,86 @@ ACTIONS (executed in order; can be repeated)
     -S, --filter-sphere    <x,y,z,radius>   Remove Gaussians outside sphere
     -V, --filter-value     <name,cmp,value> Keep Gaussians where <name> <cmp> <value>;
                                               cmp ∈ {lt,lte,gt,gte,eq,neq}
-    -F, --decimate         <n|n%>           Simplify to n (or n%) Gaussians via merge-based decimation.
+    -d, --decimate         <n|n%>           Simplify to n (or n%) Gaussians via merge-based decimation.
                                               Must be the final action, and the output must be .ply
         --scratch-dir      <path>           Directory for decimation spill files (deep targets on huge
                                               scenes). Default: the output file's directory
-    -G, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel. Default: 0.05,0.1,0.004
-    -D, --filter-cluster   [res,op,min]     Keep only the connected cluster at --seed-pos. Default: 1.0,0.999,0.1
+    -F, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel. Default: 0.05,0.1,0.004
+    -C, --filter-cluster   [res,op,min]     Keep only the connected cluster at --seed-pos. Default: 1.0,0.999,0.1
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
-    -l, --lod              <n>              Tag the Gaussians with LOD level n (n >= 0, or -1 for environment)
-    -m, --stats            [text|json]      Print file info and per-column statistics to stdout. Default: text
-    -I, --info             [text|json]      Print structural metadata (per-LOD counts, columns) to stdout. Default: text
-    -M, --morton-order                      Reorder Gaussians by Morton code (Z-order curve)
+    -l, --tag-lod          <n>              Tag the Gaussians with LOD level n (n >= 0, or -1 for environment)
+        --stats            [text|json]      Print file info and per-column statistics to stdout. Default: text
+        --info             [text|json]      Print structural metadata (per-LOD counts, columns) to stdout. Default: text
+    -m, --morton-order                      Reorder Gaussians by Morton code (Z-order curve)
 
 GENERAL
     -h, --help                              Show this help and exit
     -v, --version                           Show version and exit
     -q, --quiet                             Suppress non-error output
         --verbose                           Show debug-level diagnostics
-        --mem                               Show peak memory in progress output
+        --memory                            Show peak memory in progress output
         --tty                               Interactive bar rendering (--no-tty to disable)
     -w, --overwrite                         Overwrite output file if it exists
 
 GPU (used by SOG compression and GPU voxelization: --filter-cluster, --filter-floaters, .voxel.json output)
-    -L, --list-gpus                         List available GPU adapters and exit
+        --list-gpus                         List available GPU adapters and exit
     -g, --gpu              <n|cpu>          Device for GPU operations: GPU adapter index | 'cpu'
                                               ('cpu' disables GPU and is incompatible with GPU-only features)
 
 SOG COMPRESSION (.sog, meta.json, lod-meta.json, .html outputs)
-    -i, --iterations       <n>              SH compression iterations (more=better). Default: 10
+    -i, --sh-iterations    <n>              SH compression iterations (more=better). Default: 10
         --max-workers      <n>              Worker threads for SOG encoding (0 = inline/serial). Default: 4
 
 SPZ OUTPUT (.spz)
         --spz-version      <3|4>            The SPZ format version to write. Default: 4
 
 HTML VIEWER OUTPUT (.html)
-    -E, --viewer-settings  <settings.json>  HTML viewer settings JSON file
-    -U, --unbundled                         Generate unbundled HTML viewer with separate files
+        --viewer-settings  <settings.json>  HTML viewer settings JSON file
+        --unbundled                         Generate unbundled HTML viewer with separate files
 
 LCC / LCC2 INPUT (.lcc, .lcc2)
-    -O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC / LCC2 input
+    -L, --select-lod       <n,n,...>        Comma-separated LOD levels to read from LCC / LCC2 input
 
 LOD OUTPUT (lod-meta.json)
-    -C, --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
-    -X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
+        --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
+        --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
 
 VOXEL OUTPUT (.voxel.json)
-        --voxel-params     [size,opacity]   Voxel size and opacity threshold for .voxel.json. Default: 0.05,0.1
+        --voxel-size       <n>              Voxel size for .voxel.json. Default: 0.05
+        --voxel-opacity    <n>              Voxel opacity threshold for .voxel.json. Default: 0.1
         --voxel-external-fill [size]        Fill exterior voxels via boundary flood fill (interior scenes). Default: 1.6
         --voxel-floor-fill [size]           Fill columns upward from bottom (exterior scenes). Default: 1.6
         --voxel-carve [h,r]                 Carve navigable space using capsule flood fill from seed. Default: 1.6,0.2
         --seed-pos         <x,y,z>          Seed position for voxel processing and --filter-cluster. Default: 0,0,0
-    -K, --collision-mesh   [smooth|faces]   Generate collision mesh (.collision.glb). Default shape: smooth
+        --collision-mesh   [smooth|faces]   Generate collision mesh (.collision.glb). Default shape: smooth
 
 IMAGE OUTPUT (.webp) — lossless WebP rendered via GPU rasterizer
         --projection       <pinhole|equirect>  Camera projection. Default: pinhole.
-                                            equirect = 360°×180° panorama from --camera; --fov must be omitted;
+                                            equirect = 360°×180° panorama from --camera-pos; --camera-fov must be omitted;
                                             --resolution must be 2:1 (default 2048x1024).
-        --camera           <x,y,z>          Camera position in world space. Default: 2,1,-2
-        --look-at          <x,y,z>          Camera target point. Default: 0,0,0
-        --up               <x,y,z>          World up vector. Default: 0,1,0
-        --fov              <degrees>        Vertical field of view in degrees. Default: 60. Rejected with --projection equirect.
+        --camera-pos       <x,y,z>          Camera position in world space. Default: 2,1,-2
+        --camera-target    <x,y,z>          Camera target point. Default: 0,0,0
+        --camera-up        <x,y,z>          World up vector. Default: 0,1,0
+        --camera-fov       <degrees>        Vertical field of view in degrees. Default: 60. Rejected with --projection equirect.
         --resolution       <WxH>            Output resolution, e.g. 1920x1080. Default: 1280x720 (pinhole) or 2048x1024 (equirect)
-        --near             <n>              Near clip distance. Default: 0.2 (matches reference 3DGS)
+        --camera-near      <n>              Near clip distance. Default: 0.2 (matches reference 3DGS)
         --background       <r,g,b[,a]>      Background color in [0,1]. Default: 0,0,0,1
         --f-stop           <N>              Aperture as a photographic f-stop (e.g. 2.8, 5.6, 11). Enables defocus blur;
                                             smaller = more blur. Pinhole only. Default: disabled (no defocus).
-        --focus-distance   <n>              Camera-space Z of the focus plane (world units). Default: distance to --look-at.
+        --focus-distance   <n>              Camera-space Z of the focus plane (world units). Default: distance to --camera-target.
                                             Pinhole only; only meaningful with --f-stop.
         --sensor-size      <n>              Vertical sensor height in world units. Gives --f-stop a physical meaning.
                                             Default: 0.024 (35mm full-frame, world units = meters). Scale to your world:
                                             world unit = decimeter → 0.24, world unit = millimeter → 24.
-        --camera-end       <x,y,z>          End camera position. When set, enables camera motion blur: the renderer
-                                            averages sub-frames with the camera interpolated from --camera (shutter open)
-                                            to --camera-end (shutter close). Default: disabled (no motion blur).
-        --look-at-end      <x,y,z>          End camera target. Default: same as --look-at. Only with --camera-end.
-        --up-end           <x,y,z>          End up vector. Default: same as --up. Only with --camera-end.
+        --camera-pos-end   <x,y,z>          End camera position. When set, enables camera motion blur: the renderer
+                                            averages sub-frames with the camera interpolated from --camera-pos (shutter open)
+                                            to --camera-pos-end (shutter close). Default: disabled (no motion blur).
+        --camera-target-end <x,y,z>         End camera target. Default: same as --camera-target. Only with --camera-pos-end.
+        --camera-up-end    <x,y,z>          End up vector. Default: same as --camera-up. Only with --camera-pos-end.
         --shutter          <0..1>           Fraction of the start→end segment integrated, centered on the midpoint
-                                            (1.0 = full motion; 0.5 = 180° shutter). Default: 1. Only with --camera-end.
+                                            (1.0 = full motion; 0.5 = 180° shutter). Default: 1. Only with --camera-pos-end.
         --motion-samples   <n>              Sub-frames to accumulate for motion blur. Cost is N× a single render.
-                                            Default: 16. Only with --camera-end.
+                                            Default: 16. Only with --camera-pos-end.
 
 EXAMPLES
     # Convert formats
@@ -1117,13 +1113,13 @@ const main = async () => {
 
         // LODs are overlapping representations of the *same* scene — alternatives,
         // not additive layers. A single-scene WRITER takes exactly one LOD: the
-        // finest (LOD 0) by default, or the one --lod-select picks (reject multiple).
+        // finest (LOD 0) by default, or the one --select-lod picks (reject multiple).
         // Selection is applied as a selectLod node right after the reader (below),
         // so the pipeline operates on that single level. `null` output has no
         // writer, so it keeps the full multi-LOD source — `--info`/`--stats`
         // there report every level. lod-meta output keeps every level (path below).
         if (outputFormat !== null && outputFormat !== 'lod' && options.lodSelect.length > 1) {
-            throw new Error('Cannot write multiple LOD levels (--lod-select) to a single-scene output; select one level, or output lod-meta.json.');
+            throw new Error('Cannot write multiple LOD levels (--select-lod) to a single-scene output; select one level, or output lod-meta.json.');
         }
 
         // Single-scene pipeline (one chunk-native path for every non-lod output).
@@ -1137,7 +1133,7 @@ const main = async () => {
         // ply/sog/compressed-ply; materialize-at-the-writer for csv/glb/html/image/
         // voxel/spz). LOD output has its own structural path below; this pipeline
         // also handles null output (processing for side-effects, skipping the
-        // write). A --lod tag on single-scene output is rejected after the LOD path.
+        // write). A --tag-lod tag on single-scene output is rejected after the LOD path.
         const singleSceneActions = [...inputArgs.flatMap(a => a.processActions), ...outputArg.processActions];
 
         // v1 decimation is terminal: the merge stream writes straight into the
@@ -1213,7 +1209,7 @@ const main = async () => {
             // A real single-LOD writer collapses each multi-LOD input to the
             // selected level (finest by default) via a selectLod node, so
             // transforms operate on one LOD; null output keeps every level (so an
-            // --info/--stats action there reports the whole source). `--lod`
+            // --info/--stats action there reports the whole source). `--tag-lod`
             // actions are lod-meta grouping metadata (never data ops), so strip them.
             const selectSingleLod = outputFormat !== null;
             const processed: ChunkSource[] = [];
@@ -1274,7 +1270,7 @@ const main = async () => {
 
         // LOD-meta output: keep every level, structurally separate — LODs are
         // overlapping surfaces and are NEVER combined. Levels come from a single
-        // lcc/lcc2's intrinsic LODs, or from --lod-tagged PLY inputs (env = -1,
+        // lcc/lcc2's intrinsic LODs, or from PLY inputs tagged with --tag-lod (env = -1,
         // untagged = level 0). Each level (and the env) is processed independently
         // via processSourceBridged, the levels are stacked, and writeLodSource
         // streams them. With no actions this matches the previous streaming-LOD
@@ -1300,11 +1296,11 @@ const main = async () => {
                 envSource = single === 'lcc2' ?
                     await readLcc2EnvironmentSource(fileSystem, inFile, pool) :
                     await readLccEnvironmentSource(fileSystem, inFile, pool);
-                // --lod-select picks which levels go into the lod-meta (default all).
+                // --select-lod picks which levels go into the lod-meta (default all).
                 perLevel = resolveLodLevels(options.lodSelect, multi.meta.numLods).map(lvl => selectLod(multi, lvl));
                 inputActions = inputArgs[0].processActions;
             } else {
-                // PLY inputs grouped by --lod tag (env = -1, untagged = level 0);
+                // PLY inputs grouped by --tag-lod tag (env = -1, untagged = level 0);
                 // each input's own actions applied before grouping.
                 const tagged = inputArgs.map((a) => {
                     const ply = !isHttpUrl(a.filename) && getInputFormat(resolveInput(a.filename).classifyName) === 'ply';
@@ -1314,7 +1310,7 @@ const main = async () => {
                     return { arg: a, ply, tag, rest };
                 });
                 if (!tagged.every(t => t.ply)) {
-                    throw new Error('lod-meta.json output requires a single LCC/LCC2 input, or local PLY input(s) (optionally --lod tagged).');
+                    throw new Error('lod-meta.json output requires a single LCC/LCC2 input, or local PLY input(s) (optionally --tag-lod tagged).');
                 }
                 const opened = await Promise.all(tagged.map(async (t) => {
                     const { filename: inFile, fileSystem } = resolveInput(t.arg.filename);
@@ -1380,11 +1376,11 @@ const main = async () => {
             exit(0);
         }
 
-        // Anything reaching here is a single-scene (non-lod) output carrying --lod
+        // Anything reaching here is a single-scene (non-lod) output carrying --tag-lod
         // *tags*: tags build lod-meta.json levels and don't apply to single-scene
         // output. (Tag-free non-lod conversions and null output ran the single-scene
         // pipeline above; lod-meta output ran the LOD path.)
-        throw new Error('--lod tags apply to lod-meta.json output; for single-scene output choose a level with --lod-select (-O).');
+        throw new Error('--tag-lod tags apply to lod-meta.json output; for single-scene output choose a level with --select-lod (-L).');
     } catch (err) {
         failExit(err);
     }

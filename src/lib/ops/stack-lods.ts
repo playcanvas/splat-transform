@@ -14,7 +14,7 @@ const LAYERS: ChunkLayer[] = ['position', 'geometric', 'color', 'other'];
  * `sources[i]`'s gaussian count.
  *
  * This is how per-detail-level inputs become one structural scene for the LOD
- * writer — multi-PLY `--lod` tags (one source per tagged level) or a DataTable
+ * writer — multi-PLY `--tag-lod` tags (one source per tagged level) or a DataTable
  * split by its `lod` column — replacing the old per-gaussian lod tag array. LOD
  * is a structural axis here; no source carries a per-gaussian LOD tag.
  *
