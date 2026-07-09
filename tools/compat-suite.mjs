@@ -3,8 +3,8 @@
  * Compatibility + performance suite: runs the same matrix of code paths through
  * BOTH the globally-installed prod CLI (v1.10.1) and the local built CLI
  * (v2.7.1, bin/cli.mjs -> dist), under `/usr/bin/time -l` so peak RSS and wall
- * time are measured uniformly (prod has no --mem). v2 also reports its own peak
- * cpu/gpu via --mem.
+ * time are measured uniformly (prod has no --memory). v2 also reports its own peak
+ * cpu/gpu via --memory.
  *
  * Coverage: every reader (input format), every writer (output format), every
  * action, info/stats, plus a few chained/merge cases. Outputs are compared by
@@ -64,7 +64,7 @@ const CASES = [
     { group: 'writer', name: 'csv', input: S.plySH0, args: [], out: 'o.csv', cmp: 'exists', mode: 'both' },
     { group: 'writer', name: 'glb', input: S.plySH0, args: [], out: 'o.glb', cmp: 'exists', mode: 'both' },
     { group: 'writer', name: 'html-bundle', input: S.plySH0, args: [], out: 'o.html', cmp: 'exists', mode: 'both' },
-    { group: 'writer', name: 'voxel', input: S.plySH0, args: ['--voxel-params', '0.2'], v1Args: ['-R', '0.2'], out: 'o.voxel.json', cmp: 'exists', mode: 'both', note: 'GPU; v1 uses -R, v2 --voxel-params' },
+    { group: 'writer', name: 'voxel', input: S.plySH0, args: ['--voxel-size', '0.2'], v1Args: ['-R', '0.2'], out: 'o.voxel.json', cmp: 'exists', mode: 'both', note: 'GPU; v1 uses -R, v2 --voxel-size' },
     { group: 'writer', name: 'spz', input: S.spzSH3, args: [], out: 'o.spz', cmp: 'count', mode: 'v2only', note: 'v2-only output' },
     { group: 'writer', name: 'webp-image', input: S.plySH0, args: [], out: 'o.webp', cmp: 'exists', mode: 'v2only', note: 'v2-only output, GPU' },
     { group: 'writer', name: 'lod-from-lcc', input: S.lcc, args: [], out: 'lod/lod-meta.json', cmp: 'exists', mode: 'both', note: 'lod-selection semantics changed' },
@@ -78,13 +78,13 @@ const CASES = [
     { group: 'action', name: 'filter-sphere', input: S.plySH0, args: ['-S', '0,0,0,2'], out: 'o.ply', cmp: 'count', mode: 'both' },
     { group: 'action', name: 'filter-value', input: S.plySH0, args: ['-V', 'opacity,gt,0.1'], out: 'o.ply', cmp: 'count', mode: 'both' },
     { group: 'action', name: 'filter-harmonics', input: S.spzSH3, args: ['-H', '1'], out: 'o.ply', cmp: 'count', mode: 'both', note: 'SH3->1' },
-    { group: 'action', name: 'morton-order', input: S.plySH0, args: ['-M'], out: 'o.ply', cmp: 'count', mode: 'both' },
-    { group: 'action', name: 'decimate-50pct', input: S.plySH0, args: ['-F', '50%'], out: 'o.ply', cmp: 'count', mode: 'both', note: 'new decimator; quality differs' },
-    { group: 'action', name: 'filter-floaters', input: S.plySH0, args: ['-G'], out: 'o.ply', cmp: 'count', mode: 'v2only', note: 'v2-only, GPU' },
+    { group: 'action', name: 'morton-order', input: S.plySH0, args: ['-m'], v1Args: ['-M'], out: 'o.ply', cmp: 'count', mode: 'both' },
+    { group: 'action', name: 'decimate-50pct', input: S.plySH0, args: ['-d', '50%'], v1Args: ['-F', '50%'], out: 'o.ply', cmp: 'count', mode: 'both', note: 'new decimator; quality differs' },
+    { group: 'action', name: 'filter-floaters', input: S.plySH0, args: ['-F'], out: 'o.ply', cmp: 'count', mode: 'v2only', note: 'v2-only, GPU' },
 
     // ---- info / stats ----
-    { group: 'info', name: 'stats-summary', input: S.plySH0, args: ['-m'], out: 'null', cmp: 'none', mode: 'both', note: 'v1 --summary vs v2 --stats; output format differs' },
-    { group: 'info', name: 'info', input: S.plySH0, args: ['-I'], out: 'null', cmp: 'none', mode: 'v2only', note: 'v2-only' },
+    { group: 'info', name: 'stats-summary', input: S.plySH0, args: ['--stats'], v1Args: ['-m'], out: 'null', cmp: 'none', mode: 'both', note: 'v1 --summary vs v2 --stats; output format differs' },
+    { group: 'info', name: 'info', input: S.plySH0, args: ['--info'], out: 'null', cmp: 'none', mode: 'v2only', note: 'v2-only' },
 
     // ---- chained / merge ----
     { group: 'chain', name: 'transform-to-sog', input: S.plySH0, args: ['-t', '1,0,0', '-s', '2'], out: 'o.sog', cmp: 'count', mode: 'both' },
@@ -126,7 +126,7 @@ const timeRun = (bin, args, mem) => {
 // meta.json / lod-meta.json inside an output dir.
 const countOf = (path) => {
     if (!existsSync(path)) return null;
-    const res = spawnSync(V2NODE, ['bin/cli.mjs', path, '-I', 'null'], { cwd: repoRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 300_000 });
+    const res = spawnSync(V2NODE, ['bin/cli.mjs', path, '--info', 'null'], { cwd: repoRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 300_000 });
     if (res.status !== 0) return null;
     const m = /gaussians:\s*(\d+)/.exec(res.stdout ?? '');
     // lod-meta reports per-lod; fall back to summed lod counts
@@ -141,7 +141,7 @@ const dirNonEmpty = (p) => { try { return statSync(p).isDirectory() ? readdirSyn
 const buildArgs = (c, outPath, mem, label) => {
     const inputs = Array.isArray(c.input) ? c.input : [c.input];
     const parts = ['-w'];
-    if (mem) parts.push('--mem');
+    if (mem) parts.push('--memory');
     inputs.forEach((inp, i) => {
         parts.push(inp);
         if (c.perInputArgs?.[i]) parts.push(...c.perInputArgs[i]);

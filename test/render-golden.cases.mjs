@@ -21,9 +21,9 @@ const CASES = [
         args: [
             'test/fixtures/generator.mjs',
             '-p', 'width=20,height=20,spacing=1.0,scale=0.1',
-            '--camera', '0,5,-8',
-            '--look-at', '0,0,0',
-            '--fov', '60',
+            '--camera-pos', '0,5,-8',
+            '--camera-target', '0,0,0',
+            '--camera-fov', '60',
             '--resolution', '320x240'
         ],
         goldenPath: 'fixtures/golden-render/tiny.webp'
@@ -36,9 +36,9 @@ const CASES = [
         args: [
             'test/fixtures/generator.mjs',
             '-p', 'width=220,height=220,spacing=0.3,scale=0.05',
-            '--camera', '0,10,-15',
-            '--look-at', '0,0,0',
-            '--fov', '60',
+            '--camera-pos', '0,10,-15',
+            '--camera-target', '0,0,0',
+            '--camera-fov', '60',
             '--resolution', '640x360'
         ],
         goldenPath: 'fixtures/golden-render/mid.webp'
@@ -55,9 +55,9 @@ const CASES = [
         args: [
             'test/fixtures/generator.mjs',
             '-p', 'width=20,height=20,spacing=1.0,scale=0.1',
-            '--camera', '0,5,-8',
-            '--look-at', '0,0,0',
-            '--fov', '60',
+            '--camera-pos', '0,5,-8',
+            '--camera-target', '0,0,0',
+            '--camera-fov', '60',
             '--resolution', '320x240',
             '--f-stop', '2.8',
             '--sensor-size', '0.5'

@@ -130,7 +130,7 @@ const decimateSource = async (
 
     if (inputMeta.numLods > 1) {
         throw new Error(
-            `decimate requires a single-LOD source (got ${inputMeta.numLods} LODs); select a level first (--lod-select / selectLod)`
+            `decimate requires a single-LOD source (got ${inputMeta.numLods} LODs); select a level first (--select-lod / selectLod)`
         );
     }
     for (const layer of ['position', 'geometric', 'color'] as const) {

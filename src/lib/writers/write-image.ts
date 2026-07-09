@@ -165,7 +165,7 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     let { fov, width, height } = options;
     if (projection === 'equirect') {
         if (fov !== undefined) {
-            throw new Error('writeImage: --fov is not valid with --projection equirect (the projection covers a full 360°×180° sphere).');
+            throw new Error('writeImage: --camera-fov is not valid with --projection equirect (the projection covers a full 360°×180° sphere).');
         }
         if (fStop !== undefined) {
             throw new Error('writeImage: --f-stop is not valid with --projection equirect (defocus blur needs a focal length, which the equirect projection does not have).');
@@ -203,8 +203,8 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         }
     }
 
-    // Motion blur: enabled iff `--camera-end` is supplied. The end pose
-    // for missing `look-at-end` / `up-end` defaults to the start pose so
+    // Motion blur: enabled iff `--camera-pos-end` is supplied. The end pose
+    // for missing `camera-target-end` / `camera-up-end` defaults to the start pose so
     // pure translations don't need redundant flags.
     const motionBlur = cameraEndPosition !== undefined;
     const motionN = motionBlur ? (motionSamples ?? 16) : 1;
@@ -259,7 +259,7 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
             } else {
                 const fwdLen = Math.hypot(tgt.x - pos.x, tgt.y - pos.y, tgt.z - pos.z);
                 if (fwdLen === 0) {
-                    throw new Error('writeImage: cannot derive default --focus-distance because --camera equals --look-at.');
+                    throw new Error('writeImage: cannot derive default --focus-distance because --camera-pos equals --camera-target.');
                 }
                 fDist = fwdLen;
             }

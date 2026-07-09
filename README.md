@@ -108,7 +108,7 @@ Actions execute in the order specified and can be repeated. Any action may appea
                                           opacity, scale_*, f_dc_* use transformed values
                                           (linear opacity 0-1, linear scale, linear color 0-1).
                                           Append _raw for raw PLY values (e.g. opacity_raw).
--F, --decimate         <n|n%>           Simplify to n Gaussians via merge-based decimation
+-d, --decimate         <n|n%>           Simplify to n Gaussians via merge-based decimation
                                           Use n% to keep a percentage of Gaussians.
                                           Memory-bounded and streaming: scales to scenes of 100M+
                                           Gaussians. Must be the final action, and the output must
@@ -117,19 +117,19 @@ Actions execute in the order specified and can be repeated. Any action may appea
                                           temporary files to --scratch-dir (default: the output
                                           file's directory).
     --scratch-dir      <path>           Directory for decimation spill files
--G, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel.
+-F, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel.
                                           Evaluates each Gaussian at occupied voxel centers.
                                           Default: size=0.05, opacity=0.1, min=0.004 (1/255).
                                           Bare flag (no value) uses all defaults.
--D, --filter-cluster   [res,op,min]     Keep only the connected cluster at --seed-pos.
+-C, --filter-cluster   [res,op,min]     Keep only the connected cluster at --seed-pos.
                                           GPU-voxelizes at coarse resolution (res world units/voxel).
                                           Default: res=1.0, opacity=0.999, min=0.1.
                                           Bare flag (no value) uses all defaults.
 -p, --params           <key=val,...>    Pass parameters to .mjs generator script
--l, --lod              <n>              Tag the Gaussians with LOD level n (n >= 0, or -1 for environment)
--m, --stats            [text|json]      Print file info and per-column statistics to stdout. Default: text
--I, --info             [text|json]      Print structural metadata (per-LOD counts, columns) to stdout. Default: text
--M, --morton-order                      Reorder Gaussians by Morton code (Z-order curve)
+-l, --tag-lod          <n>              Tag the Gaussians with LOD level n (n >= 0, or -1 for environment)
+    --stats            [text|json]      Print file info and per-column statistics to stdout. Default: text
+    --info             [text|json]      Print structural metadata (per-LOD counts, columns) to stdout. Default: text
+-m, --morton-order                      Reorder Gaussians by Morton code (Z-order curve)
 ```
 
 ## General Options
@@ -139,7 +139,7 @@ Actions execute in the order specified and can be repeated. Any action may appea
 -v, --version                           Show version and exit
 -q, --quiet                             Suppress non-error output
     --verbose                           Show debug-level diagnostics
-    --mem                               Show peak memory in progress output
+    --memory                            Show peak memory in progress output
     --tty                               Interactive bar rendering (default on a TTY; --no-tty to disable)
 -w, --overwrite                         Overwrite output file if it exists
 ```
@@ -149,7 +149,7 @@ Actions execute in the order specified and can be repeated. Any action may appea
 Used by SOG compression and GPU voxelization (`--filter-cluster`, `--filter-floaters`, `.voxel.json` output).
 
 ```none
--L, --list-gpus                         List available GPU adapters and exit
+    --list-gpus                         List available GPU adapters and exit
 -g, --gpu              <n|cpu>          Device for GPU operations: GPU adapter index | 'cpu'
                                           ('cpu' disables GPU and is incompatible with
                                           GPU-only features like --filter-cluster)
@@ -160,7 +160,7 @@ Used by SOG compression and GPU voxelization (`--filter-cluster`, `--filter-floa
 Apply when writing `.sog`, `meta.json`, `lod-meta.json`, or `.html` outputs.
 
 ```none
--i, --iterations       <n>              Iterations for SH compression (more=better). Default: 10
+-i, --sh-iterations    <n>              Iterations for SH compression (more=better). Default: 10
     --max-workers      <n>              Worker threads for SOG encoding (0 = inline/serial). Default: 4
 ```
 
@@ -177,19 +177,19 @@ Apply when writing `.spz` outputs.
 Apply when writing `.html` outputs.
 
 ```none
--E, --viewer-settings  <settings.json>  HTML viewer settings JSON file
--U, --unbundled                         Generate unbundled HTML viewer with separate files
+    --viewer-settings  <settings.json>  HTML viewer settings JSON file
+    --unbundled                         Generate unbundled HTML viewer with separate files
 ```
 
 > [!NOTE]
-> See the [SuperSplat Viewer Settings Schema](https://github.com/playcanvas/supersplat-viewer?tab=readme-ov-file#settings-schema) for details on how to pass data to the `-E` option.
+> See the [SuperSplat Viewer Settings Schema](https://github.com/playcanvas/supersplat-viewer?tab=readme-ov-file#settings-schema) for details on how to pass data to the `--viewer-settings` option.
 
 ## LCC / LCC2 Input Options
 
 Apply when reading `.lcc` and `.lcc2` files.
 
 ```none
--O, --lod-select       <n,n,...>        Comma-separated LOD levels to read from LCC / LCC2 input
+-L, --select-lod       <n,n,...>        Comma-separated LOD levels to read from LCC / LCC2 input
 ```
 
 ## LOD Output Options
@@ -197,8 +197,8 @@ Apply when reading `.lcc` and `.lcc2` files.
 Apply when writing `lod-meta.json` (multi-LOD streaming SOG bundle).
 
 ```none
--C, --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
--X, --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
+    --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
+    --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
 ```
 
 See [Generating Streamed SOG](https://developer.playcanvas.com/user-manual/splat-transform/#generating-lod-format) for an end-to-end walkthrough.
@@ -208,7 +208,8 @@ See [Generating Streamed SOG](https://developer.playcanvas.com/user-manual/splat
 Apply when writing `.voxel.json` (sparse voxel octree for collision detection). See the [Collision Mesh Guide](https://developer.playcanvas.com/user-manual/splat-transform/collision/) for a deep dive on each step and tuning.
 
 ```none
-    --voxel-params     [size,opacity]   Voxel size and opacity threshold. Default: 0.05,0.1
+    --voxel-size       <n>              Voxel size for .voxel.json. Default: 0.05
+    --voxel-opacity    <n>              Voxel opacity threshold for .voxel.json. Default: 0.1
     --voxel-external-fill [size]        Seal exterior voxels via boundary flood fill (interior scenes).
                                           [size] (world units) is the dilation distance applied
                                           before the flood fill to bridge small wall gaps.
@@ -224,7 +225,7 @@ Apply when writing `.voxel.json` (sparse voxel octree for collision detection). 
                                           Default: height=1.6, radius=0.2
     --seed-pos         <x,y,z>          Seed position for voxel fill/carve and --filter-cluster.
                                           Default: 0,0,0
--K, --collision-mesh   [smooth|faces]   Generate collision mesh (.collision.glb). Default: smooth
+    --collision-mesh   [smooth|faces]   Generate collision mesh (.collision.glb). Default: smooth
 ```
 
 ## Image Output Options
@@ -233,31 +234,31 @@ Apply when writing `.webp` (lossless WebP rendered via GPU rasterizer).
 
 ```none
     --projection       <pinhole|equirect>  Camera projection. Default: pinhole.
-                                        equirect = 360°×180° panorama from --camera; --fov must be
+                                        equirect = 360°×180° panorama from --camera-pos; --camera-fov must be
                                         omitted; --resolution must be 2:1 (default 2048x1024).
-    --camera           <x,y,z>          Camera position in world space. Default: 2,1,-2
-    --look-at          <x,y,z>          Camera target point. Default: 0,0,0
-    --up               <x,y,z>          World up vector. Default: 0,1,0
-    --fov              <degrees>        Vertical field of view in degrees. Default: 60. Rejected with --projection equirect.
+    --camera-pos       <x,y,z>          Camera position in world space. Default: 2,1,-2
+    --camera-target    <x,y,z>          Camera target point. Default: 0,0,0
+    --camera-up        <x,y,z>          World up vector. Default: 0,1,0
+    --camera-fov       <degrees>        Vertical field of view in degrees. Default: 60. Rejected with --projection equirect.
     --resolution       <WxH>            Output resolution, e.g. 1920x1080. Default: 1280x720 (pinhole) or 2048x1024 (equirect)
-    --near             <n>              Near clip distance. Default: 0.2 (matches reference 3DGS)
+    --camera-near      <n>              Near clip distance. Default: 0.2 (matches reference 3DGS)
     --background       <r,g,b[,a]>      Background color in [0,1]. Default: 0,0,0,1
     --f-stop           <N>              Aperture as a photographic f-stop (e.g. 2.8, 5.6, 11). Enables defocus blur;
                                         smaller = more blur. Pinhole only. Default: disabled (no defocus).
-    --focus-distance   <n>              Camera-space Z of the focus plane (world units). Default: distance to --look-at.
+    --focus-distance   <n>              Camera-space Z of the focus plane (world units). Default: distance to --camera-target.
                                         Pinhole only; only meaningful with --f-stop.
     --sensor-size      <n>              Vertical sensor height in world units. Gives --f-stop a physical meaning.
                                         Default: 0.024 (35mm full-frame, world units = meters). Scale to your world:
                                         world unit = decimeter → 0.24, world unit = millimeter → 24.
-    --camera-end       <x,y,z>          End camera position. When set, enables camera motion blur: the renderer
-                                        averages sub-frames with the camera interpolated from --camera (shutter open)
-                                        to --camera-end (shutter close). Default: disabled (no motion blur).
-    --look-at-end      <x,y,z>          End camera target. Default: same as --look-at. Only with --camera-end.
-    --up-end           <x,y,z>          End up vector. Default: same as --up. Only with --camera-end.
+    --camera-pos-end   <x,y,z>          End camera position. When set, enables camera motion blur: the renderer
+                                        averages sub-frames with the camera interpolated from --camera-pos (shutter open)
+                                        to --camera-pos-end (shutter close). Default: disabled (no motion blur).
+    --camera-target-end <x,y,z>         End camera target. Default: same as --camera-target. Only with --camera-pos-end.
+    --camera-up-end    <x,y,z>          End up vector. Default: same as --camera-up. Only with --camera-pos-end.
     --shutter          <0..1>           Fraction of the start→end segment integrated, centered on the midpoint
-                                        (1.0 = full motion; 0.5 = 180° shutter). Default: 1. Only with --camera-end.
+                                        (1.0 = full motion; 0.5 = 180° shutter). Default: 1. Only with --camera-pos-end.
     --motion-samples   <n>              Sub-frames to accumulate for motion blur. Cost is N× a single render.
-                                        Default: 16. Only with --camera-end.
+                                        Default: 16. Only with --camera-pos-end.
 ```
 
 ## Examples
@@ -297,10 +298,10 @@ splat-transform output/meta.json restored.ply
 splat-transform input.ply output.html
 
 # Convert to unbundled HTML viewer (separate CSS, JS, and SOG files)
-splat-transform -U input.ply output.html
+splat-transform --unbundled input.ply output.html
 
 # Convert to HTML viewer with custom settings
-splat-transform -E settings.json input.ply output.html
+splat-transform --viewer-settings settings.json input.ply output.html
 ```
 
 ### Transformations
@@ -332,7 +333,7 @@ splat-transform input.ply --filter-harmonics 2 output.ply
 splat-transform input.ply --decimate 50000 output.ply
 
 # Simplify to 25% of original splat count
-splat-transform input.ply -F 25% output.ply
+splat-transform input.ply -d 25% output.ply
 ```
 
 ### Advanced Usage
@@ -354,7 +355,7 @@ Generate per-column statistics for data analysis or test validation:
 splat-transform input.ply --stats output.ply
 
 # Print stats without writing a file (discard output)
-splat-transform input.ply -m null
+splat-transform input.ply --stats null
 
 # Print stats as JSON for scripting
 splat-transform input.ply --stats json null
@@ -375,7 +376,7 @@ splat-transform gen-grid.mjs -p width=10,height=10,scale=10,color=0.1 scenes/gri
 
 ### Voxel Format
 
-The voxel format stores sparse voxel octree data for collision detection. It consists of two files: `.voxel.json` (metadata) and `.voxel.bin` (binary octree data). Pass `-K` to also emit a `.collision.glb` mesh derived from the voxel grid.
+The voxel format stores sparse voxel octree data for collision detection. It consists of two files: `.voxel.json` (metadata) and `.voxel.bin` (binary octree data). Pass `--collision-mesh` to also emit a `.collision.glb` mesh derived from the voxel grid.
 
 For a step-by-step walkthrough of each option (with illustrations), see the [Collision Mesh Guide](https://developer.playcanvas.com/user-manual/splat-transform/collision/).
 
@@ -385,7 +386,7 @@ For a step-by-step walkthrough of each option (with illustrations), see the [Col
 splat-transform input.ply \
     --filter-cluster --seed-pos x,y,z \
     [--voxel-external-fill | --voxel-floor-fill] [--voxel-carve] \
-    [-K [smooth|faces]] \
+    [--collision-mesh [smooth|faces]] \
     output.voxel.json
 ```
 
@@ -399,7 +400,7 @@ Use `--voxel-external-fill` to seal the void around the room interior, then `--v
 splat-transform room.ply \
     --filter-cluster --seed-pos 0,1,0 \
     --voxel-external-fill --voxel-carve \
-    -K room.voxel.json
+    --collision-mesh room.voxel.json
 ```
 
 #### Exterior scenes (outdoor objects, terrain)
@@ -410,20 +411,20 @@ Use `--voxel-floor-fill` to fill the ground beneath surfaces, optionally followe
 splat-transform terrain.ply \
     --filter-cluster --seed-pos 0,0,0 \
     --voxel-floor-fill \
-    -K terrain.voxel.json
+    --collision-mesh terrain.voxel.json
 ```
 
 #### Other examples
 
 ```bash
 # Voxelize with custom resolution and opacity threshold
-splat-transform --voxel-params 0.1,0.3 input.ply output.voxel.json
+splat-transform --voxel-size 0.1 --voxel-opacity 0.3 input.ply output.voxel.json
 
 # Custom carve capsule (height, radius)
 splat-transform --seed-pos 1,0,0 --voxel-carve 2.0,0.3 input.ply output.voxel.json
 
 # Watertight voxel-face collision mesh
-splat-transform -K faces input.ply output.voxel.json
+splat-transform --collision-mesh faces input.ply output.voxel.json
 ```
 
 ### Image Rendering
@@ -436,13 +437,13 @@ splat-transform input.ply view.webp
 
 # Custom camera and resolution
 splat-transform input.ply view.webp \
-    --camera 2,1,-2 --look-at 0,0,0 \
-    --fov 50 --resolution 1920x1080
+    --camera-pos 2,1,-2 --camera-target 0,0,0 \
+    --camera-fov 50 --resolution 1920x1080
 
 # Transparent background
 splat-transform input.ply view.webp --background 0,0,0,0
 
-# Defocus blur (focus on look-at, f/2.8 aperture)
+# Defocus blur (focus on camera-target, f/2.8 aperture)
 splat-transform input.ply view.webp --f-stop 2.8
 
 # Defocus with explicit focus distance and a smaller world scale
@@ -451,11 +452,11 @@ splat-transform input.ply view.webp \
 
 # 360° equirectangular panorama from camera position
 splat-transform input.ply pano.webp \
-    --projection equirect --camera 0,1,0 --look-at 0,1,1
+    --projection equirect --camera-pos 0,1,0 --camera-target 0,1,1
 
 # Camera motion blur (dolly from start to end pose over the shutter)
 splat-transform input.ply view.webp \
-    --camera 2,1,-2 --camera-end 3,1,-2 \
+    --camera-pos 2,1,-2 --camera-pos-end 3,1,-2 \
     --motion-samples 16 --shutter 1
 ```
 
@@ -479,7 +480,7 @@ splat-transform -g cpu input.ply output.sog
 ```
 
 > [!NOTE]
-> When `-g` is not specified, WebGPU automatically selects the best available GPU. Use `-L` to list available adapters with their indices and names. The order and availability of adapters depends on your system and GPU drivers. Use `-g <index>` to select a specific adapter, or `-g cpu` to force CPU computation.
+> When `-g` is not specified, WebGPU automatically selects the best available GPU. Use `--list-gpus` to list available adapters with their indices and names. The order and availability of adapters depends on your system and GPU drivers. Use `-g <index>` to select a specific adapter, or `-g cpu` to force CPU computation.
 
 > [!WARNING]
 > CPU compression can be significantly slower than GPU compression (often 5-10x slower). Use CPU mode only if GPU drivers are unavailable or problematic.

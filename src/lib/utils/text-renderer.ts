@@ -34,7 +34,7 @@ interface TextRendererOptions {
     /**
      * Optional peak GPU memory probe in bytes (monotonic, like
      * `getPeakCpuMemory`). When supplied alongside `getPeakCpuMemory` and
-     * reporting a non-zero value, the `--mem` overlay gains a `gpu=Y`
+     * reporting a non-zero value, the `--memory` overlay gains a `gpu=Y`
      * entry: `[peak cpu=X gpu=Y]`. Zero suppresses the entry, so runs
      * that never touch the GPU keep the CPU-only overlay. In the CLI this
      * is fed by the engine's VRAM counters (see node-device.ts).

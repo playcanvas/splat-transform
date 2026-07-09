@@ -4,7 +4,7 @@
  * to <= --target gaussians, then stack all levels (finest = the original, LOD 0)
  * into a single lod-meta.json. Runs the whole recipe through one CLI version and
  * times every step under /usr/bin/time -l (wall + peak RSS). v2 also emits its
- * own peak cpu/gpu via --mem.
+ * own peak cpu/gpu via --memory.
  *
  *   node tools/lod-pyramid.mjs --ver v2 --input <big.ply> [--target 1000000]
  *   node tools/lod-pyramid.mjs --ver v1 --input <big.ply>   # prod, 32GB heap
@@ -49,7 +49,7 @@ const run = (args) => {
 // count via v2 --info (fast, reads every format), on a file or lod-meta.json.
 const countOf = (p) => {
     if (!existsSync(p)) return null;
-    const r = spawnSync(V2NODE, ['bin/cli.mjs', p, '-I', 'null'], { cwd: repoRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 300_000 });
+    const r = spawnSync(V2NODE, ['bin/cli.mjs', p, '--info', 'null'], { cwd: repoRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 300_000 });
     const g = /gaussians:\s*(\d+)/.exec(r.stdout ?? '');
     if (g) return parseInt(g[1], 10);
     const lc = /lod counts:\s*([\d,\s]+)/.exec(r.stdout ?? '');
@@ -72,9 +72,9 @@ let i = 0;
 while (curCount != null && curCount > target) {
     i++;
     const out = join(wd, `L${i}.ply`);
-    const memArgs = cfg.mem ? ['--mem'] : [];
-    process.stdout.write(`  decimate L${i - 1}->L${i} (${curCount} -F 50%) ...`);
-    const r = run(['-w', ...memArgs, cur, '-F', '50%', out]);
+    const memArgs = cfg.mem ? ['--memory'] : [];
+    process.stdout.write(`  decimate L${i - 1}->L${i} (${curCount} -d 50%) ...`);
+    const r = run(['-w', ...memArgs, cur, '-d', '50%', out]);
     const n = r.ok ? countOf(out) : null;
     steps.push({ step: `dec-L${i}`, ...r, count: n });
     console.log(` ${r.ok ? 'ok' : `FAIL(${r.status}${r.timedOut ? ' TIMEOUT' : ''})`} ${(r.wallMs / 1000).toFixed(1)}s rss=${r.rssMB}MB${r.gpuMB ? ` gpu=${r.gpuMB}MB` : ''} -> ${n}`);
@@ -87,7 +87,7 @@ let stack = null;
 if (levels.length > 1 && steps.every(s => s.ok)) {
     const lodOut = join(wd, 'lod', 'lod-meta.json');
     mkdirSync(dirname(lodOut), { recursive: true });
-    const memArgs = cfg.mem ? ['--mem'] : [];
+    const memArgs = cfg.mem ? ['--memory'] : [];
     const stackArgs = ['-w', ...memArgs];
     levels.forEach((L, idx) => { stackArgs.push(L.path, '-l', String(idx)); });
     stackArgs.push(lodOut);
