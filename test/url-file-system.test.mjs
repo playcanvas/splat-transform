@@ -25,10 +25,26 @@ import {
     writeSog
 } from '../src/lib/index.js';
 
+import { materializeToDataTable } from '../src/lib/compat/data-table.js';
+import { createChunkDataPool } from '../src/lib/chunk/index.js';
+
 import { createMinimalTestData } from './helpers/test-utils.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(__dirname, 'fixtures', 'splat');
+
+// readFile now yields chunk sources; materialize them to DataTables for these
+// (DataTable-asserting) tests, releasing each source.
+const readTables = async (opts) => {
+    const sources = await readFile(opts);
+    const pool = createChunkDataPool();
+    const tables = [];
+    for (const src of sources) {
+        tables.push(await materializeToDataTable(src, pool));
+        await src.close();
+    }
+    return tables;
+};
 
 // Required so the SOG writer/reader can locate the WebP wasm during the
 // in-process .sog round-trip test below.
@@ -113,7 +129,7 @@ describe('UrlReadFileSystem (CLI integration)', () => {
         try {
             const url = `${server.url}/minimal.splat`;
             const fileSystem = new UrlReadFileSystem();
-            const tables = await readFile({
+            const tables = await readTables({
                 filename: url,
                 inputFormat: getInputFormat(url),
                 options: {},
@@ -132,7 +148,7 @@ describe('UrlReadFileSystem (CLI integration)', () => {
         try {
             const url = `${server.url}/minimal.ksplat`;
             const fileSystem = new UrlReadFileSystem();
-            const tables = await readFile({
+            const tables = await readTables({
                 filename: url,
                 inputFormat: getInputFormat(url),
                 options: {},
@@ -161,7 +177,7 @@ describe('UrlReadFileSystem (CLI integration)', () => {
             const fileSystem = new UrlReadFileSystem(baseUrl);
 
             // Primary leaf read goes through readFile().
-            const tables = await readFile({
+            const tables = await readTables({
                 filename: 'minimal.splat',
                 inputFormat: 'splat',
                 options: {},
@@ -202,7 +218,7 @@ describe('UrlReadFileSystem (CLI integration)', () => {
         try {
             const baseUrl = `${server.url}/`;
             const fileSystem = new UrlReadFileSystem(baseUrl);
-            const tables = await readFile({
+            const tables = await readTables({
                 filename: 'scene.splat?token=abc',
                 inputFormat: 'splat',
                 options: {},
@@ -252,7 +268,7 @@ describe('UrlReadFileSystem (CLI integration)', () => {
             const inputFormat = getInputFormat(`${baseUrl}${filename}`);
             assert.strictEqual(inputFormat, 'sog');
 
-            const tables = await readFile({
+            const tables = await readTables({
                 filename,
                 inputFormat,
                 options: {},

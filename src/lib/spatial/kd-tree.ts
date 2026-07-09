@@ -1,4 +1,15 @@
-import { DataTable } from '../data-table';
+/**
+ * KD-tree over raw column arrays (build, nearest / k-nearest queries, GPU
+ * flatten).
+ *
+ * Engine-free by contract: worker tasks build trees off-thread, and the
+ * worker bundle inlines its whole import graph — an engine import here would
+ * embed playcanvas into dist/worker.mjs (see the note atop workers/tasks.ts).
+ *
+ * Dimensionality is the number of columns: 3 for spatial consumers, arbitrary
+ * for k-means centroid assignment. `flatten()` assumes the first three
+ * columns are x, y, z.
+ */
 
 interface KdTreeNode {
     index: number;
@@ -7,7 +18,24 @@ interface KdTreeNode {
     right?: KdTreeNode;
 }
 
-const nthElement = (arr: Uint32Array, lo: number, hi: number, k: number, values: any) => {
+/**
+ * The kd-tree flattened into GPU-friendly parallel typed arrays. For tree
+ * index `t`, the node holds splat `nodeSplatIdx[t]` whose position is
+ * `(nodeX[t], nodeY[t], nodeZ[t])`; children live at `nodeLeft[t]` /
+ * `nodeRight[t]` with the sentinel `0xFFFFFFFF` for missing children. The
+ * root is at index 0.
+ */
+type FlatKdTree = {
+    nodeSplatIdx: Uint32Array;
+    nodeX: Float32Array;
+    nodeY: Float32Array;
+    nodeZ: Float32Array;
+    nodeLeft: Uint32Array;
+    nodeRight: Uint32Array;
+    rootIdx: number;
+};
+
+const nthElement = (arr: Uint32Array, lo: number, hi: number, k: number, values: ArrayLike<number>) => {
     while (lo < hi) {
         const mid = (lo + hi) >> 1;
         const va = values[arr[lo]], vb = values[arr[mid]], vc = values[arr[hi]];
@@ -46,15 +74,15 @@ const nthElement = (arr: Uint32Array, lo: number, hi: number, k: number, values:
 };
 
 class KdTree {
-    centroids: DataTable;
     root: KdTreeNode;
-    private colData: any[];
+    readonly colData: ArrayLike<number>[];
+    readonly numRows: number;
 
-    constructor(centroids: DataTable) {
-        const numCols = centroids.numColumns;
-        const colData = centroids.columns.map(c => c.data);
+    constructor(colData: ArrayLike<number>[]) {
+        const numCols = colData.length;
+        const numRows = colData[0].length;
 
-        const indices = new Uint32Array(centroids.numRows);
+        const indices = new Uint32Array(numRows);
         for (let i = 0; i < indices.length; ++i) {
             indices[i] = i;
         }
@@ -93,12 +121,12 @@ class KdTree {
             };
         };
 
-        this.centroids = centroids;
         this.colData = colData;
+        this.numRows = numRows;
         this.root = build(0, indices.length - 1, 0);
     }
 
-    findNearest(point: Float32Array, filterFunc?: (index: number) => boolean) {
+    findNearest(point: ArrayLike<number>, filterFunc?: (index: number) => boolean) {
         const colData = this.colData;
         const numCols = colData.length;
 
@@ -142,11 +170,11 @@ class KdTree {
         return { index: mini, distanceSqr: mind, cnt };
     }
 
-    findKNearest(point: Float32Array, k: number, filterFunc?: (index: number) => boolean) {
+    findKNearest(point: ArrayLike<number>, k: number, filterFunc?: (index: number) => boolean) {
         if (k <= 0) {
             return { indices: new Int32Array(0), distances: new Float32Array(0) };
         }
-        k = Math.min(k, this.centroids.numRows);
+        k = Math.min(k, this.numRows);
 
         const colData = this.colData;
         const numCols = colData.length;
@@ -245,34 +273,20 @@ class KdTree {
     }
 
     /**
-     * Flatten the tree into GPU-friendly typed arrays. Each tree node is
-     * assigned a tree-index in pre-order DFS. The arrays are parallel:
-     * for tree-index `t`, the node holds splat `nodeSplatIdx[t]` whose
-     * position is `(nodeX[t], nodeY[t], nodeZ[t])`. Children live at
-     * `nodeLeft[t]` and `nodeRight[t]` (tree indices), with the sentinel
-     * `0xFFFFFFFF` for missing children.
+     * Flatten the tree into GPU-friendly typed arrays (see {@link FlatKdTree}).
+     * Each tree node is assigned a tree-index in pre-order DFS.
      *
      * Positions are denormalised at each tree node (rather than indirected
      * through `nodeSplatIdx` + the source position arrays) so a tree-walk
      * does one read per visit instead of two. Costs 12 bytes/node extra.
      *
-     * Layout assumes the underlying `centroids` DataTable has columns
-     * `x`, `y`, `z` (the first three columns). The constructor accepts
-     * any column set, so callers must ensure these are present and first.
+     * Layout assumes the first three columns are `x`, `y`, `z`. Callers with
+     * other dimensionalities must not call this.
      *
      * @returns Parallel arrays of length N where N = number of points.
-     * The root is at index 0.
      */
-    flattenForGpu(): {
-        nodeSplatIdx: Uint32Array;
-        nodeX: Float32Array;
-        nodeY: Float32Array;
-        nodeZ: Float32Array;
-        nodeLeft: Uint32Array;
-        nodeRight: Uint32Array;
-        rootIdx: number;
-        } {
-        const n = this.centroids.numRows;
+    flatten(): FlatKdTree {
+        const n = this.numRows;
         const nodeSplatIdx = new Uint32Array(n);
         const nodeX = new Float32Array(n);
         const nodeY = new Float32Array(n);
@@ -290,9 +304,9 @@ class KdTree {
         // ourselves. Encoded entries: nodeRef + (parentTreeIdx, side) where
         // side ∈ {0 = left of parent, 1 = right of parent, 2 = root}.
         //
-        // Max DFS depth is the tree's height. `KdTree.build` is recursive and
-        // splits at the nthElement median, so the tree is near-balanced and
-        // its height is bounded by JS's recursion limit (~10K). A fixed 64
+        // Max DFS depth is the tree's height. `build` is recursive and splits
+        // at the nthElement median, so the tree is near-balanced and its
+        // height is bounded by JS's recursion limit (~10K). A fixed 64
         // entries is enough for any tree this codebase can actually build
         // (2^64 ≫ 10K) and avoids an `n+1`-sized scratch (~85 MB at N=17.9M).
         const stackCap = 64;
@@ -337,4 +351,4 @@ class KdTree {
     }
 }
 
-export { KdTreeNode, KdTree };
+export { KdTree, type KdTreeNode, type FlatKdTree };

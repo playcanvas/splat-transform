@@ -6,8 +6,15 @@ interface Writer {
     // write data to the stream
     write(data: Uint8Array): void | Promise<void>;
 
-    // close the writing stream. return value depends on writer implementation.
+    // close the writing stream, committing the output. return value depends
+    // on writer implementation.
     close(): void | Promise<void>;
+
+    // abandon the stream WITHOUT committing: release resources and discard
+    // partial output where the implementation can (e.g. delete the temp file
+    // instead of renaming it over the destination). Error paths call this
+    // instead of close() so a failed write never publishes a truncated file.
+    abort(): void | Promise<void>;
 }
 
 interface FileSystem {

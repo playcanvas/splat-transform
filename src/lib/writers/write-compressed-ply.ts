@@ -2,6 +2,8 @@ import { basename } from 'pathe';
 
 import { CompressedChunk } from './compressed-chunk';
 import { logWrittenFile } from './utils';
+import { type ChunkSource, type ChunkDataPool } from '../chunk';
+import { materializeToDataTable } from '../compat/data-table';
 import { DataTable, sortMortonOrder, convertToSpace, getSHBands, shRestNames } from '../data-table';
 import { type FileSystem } from '../io/write';
 import { logger, Transform } from '../utils';
@@ -140,4 +142,26 @@ const writeCompressedPly = async (options: WriteCompressedPlyOptions, fs: FileSy
     writingGroup.end();
 };
 
-export { writeCompressedPly };
+/**
+ * `ChunkSource` adapter over {@link writeCompressedPly}. Compressed PLY is a
+ * legacy output format, so rather than a streaming encoder this **materializes**
+ * the source to a `DataTable` (memory-inefficient by design — acceptable here)
+ * and delegates. New code should prefer SOG.
+ *
+ * @param source - The source to encode (its pending transform is baked to PLY space by the underlying writer).
+ * @param pool - Pool for the temporary read buffers used while materializing.
+ * @param options - Output options (filename).
+ * @param fs - File system to write through.
+ * @ignore
+ */
+const writeCompressedPlySource = async (
+    source: ChunkSource,
+    pool: ChunkDataPool,
+    options: { filename: string },
+    fs: FileSystem
+): Promise<void> => {
+    const dataTable = await materializeToDataTable(source, pool);
+    await writeCompressedPly({ filename: options.filename, dataTable }, fs);
+};
+
+export { writeCompressedPly, writeCompressedPlySource };

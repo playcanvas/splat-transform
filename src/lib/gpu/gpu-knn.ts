@@ -15,8 +15,7 @@ import {
     UniformFormat
 } from 'playcanvas';
 
-import { Column, DataTable } from '../data-table/data-table';
-import { KdTree } from '../spatial/kd-tree';
+import { type FlatKdTree } from '../spatial/kd-tree';
 
 /**
  * WGSL kernel: iterative KD-tree K-nearest-neighbours.
@@ -177,25 +176,31 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
  * candidate-rejection path is a single compare. Same O(N log N) total work
  * as the CPU KD-tree the kernel mirrors, just parallelised across queries.
  *
- * Setup cost: O(N log N) for the CPU `KdTree` build + an O(N) DFS to
- * flatten into typed arrays.
+ * The flattened tree is built by the caller (`KdTree.flatten`, typically
+ * off-thread via the `flattenKdTree` worker task) — this class only uploads
+ * and traverses it.
  *
  * Memory footprint: ~24 N bytes for the flattened tree (3 floats + 3
  * u32 per node), plus query positions and the per-query output indices.
  */
 class GpuKnn {
     /**
-     * @param px - x coordinates of the N points (which double as queries).
-     * @param py - y coordinates.
-     * @param pz - z coordinates.
+     * @param tree - Prebuilt flattened KD-tree over the `n` local points
+     * (see `KdTree.flatten`; node splat ids are LOCAL indices).
+     * @param positions - Interleaved xyz for all `n` local points; queries
+     * are the first `queryCount` of them (owned-first ordering).
+     * @param n - Total local point count (tree size).
+     * @param queryCount - How many leading points to query.
      * @param outNeighbours - destination for per-query K neighbour indices,
-     * length `N * k`. `outNeighbours[i * k + j]` is one of the k nearest
-     * neighbours of point i (UNSORTED). Excludes i itself.
+     * length `queryCount * k`. `outNeighbours[i * k + j]` is one of the k
+     * nearest LOCAL neighbours of point i (UNSORTED). Excludes i itself;
+     * sentinel 0xFFFFFFFF fills surplus slots.
      */
     execute: (
-        px: Float32Array,
-        py: Float32Array,
-        pz: Float32Array,
+        tree: FlatKdTree,
+        positions: Float32Array,
+        n: number,
+        queryCount: number,
         outNeighbours: Uint32Array
     ) => Promise<void>;
     destroy: () => void;
@@ -264,49 +269,33 @@ class GpuKnn {
         compute.setParameter('outIndices', outBuf);
 
         // Pack scratches reused across execute() calls — avoids allocating
-        // O(N) every call when simplifyGaussians runs the KNN per iteration.
-        let positionsPacked = new Float32Array(0);
+        // O(N) every call when the decimator runs KNN per block.
         let nodePosPacked = new Float32Array(0);
         let nodeChildrenPacked = new Uint32Array(0);
 
         this.execute = async (
-            px: Float32Array,
-            py: Float32Array,
-            pz: Float32Array,
+            tree: FlatKdTree,
+            positions: Float32Array,
+            n: number,
+            queryCount: number,
             outNeighbours: Uint32Array
         ) => {
-            const n = px.length;
             if (n > maxN) {
                 throw new Error(`GpuKnn: N=${n} exceeds maxN=${maxN}`);
             }
-            if (py.length !== n || pz.length !== n) {
-                throw new Error('GpuKnn: px, py, pz must all have same length');
+            if (positions.length < n * 3) {
+                throw new Error(`GpuKnn: positions length ${positions.length} must be at least N*3 = ${n * 3}`);
             }
-            if (outNeighbours.length !== n * k) {
-                throw new Error(`GpuKnn: outNeighbours length ${outNeighbours.length} must be N*k = ${n * k}`);
+            if (queryCount > n) {
+                throw new Error(`GpuKnn: queryCount=${queryCount} exceeds N=${n}`);
+            }
+            if (outNeighbours.length !== queryCount * k) {
+                throw new Error(`GpuKnn: outNeighbours length ${outNeighbours.length} must be queryCount*k = ${queryCount * k}`);
             }
 
-            // Build the KD-tree on CPU. The existing `KdTree` constructor
-            // accepts a DataTable with x/y/z columns first.
-            const posTable = new DataTable([
-                new Column('x', px),
-                new Column('y', py),
-                new Column('z', pz)
-            ]);
-            const tree = new KdTree(posTable);
-            const flat = tree.flattenForGpu();
-
-            // Pack query positions xyz-interleaved into a scratch (one buffer
-            // upload instead of three).
-            if (positionsPacked.length < n * 3) positionsPacked = new Float32Array(n * 3);
-            for (let i = 0; i < n; i++) {
-                positionsPacked[i * 3 + 0] = px[i];
-                positionsPacked[i * 3 + 1] = py[i];
-                positionsPacked[i * 3 + 2] = pz[i];
-            }
             // Pack node positions xyz-interleaved.
             if (nodePosPacked.length < n * 3) nodePosPacked = new Float32Array(n * 3);
-            const nodeX = flat.nodeX, nodeY = flat.nodeY, nodeZ = flat.nodeZ;
+            const nodeX = tree.nodeX, nodeY = tree.nodeY, nodeZ = tree.nodeZ;
             for (let i = 0; i < n; i++) {
                 nodePosPacked[i * 3 + 0] = nodeX[i];
                 nodePosPacked[i * 3 + 1] = nodeY[i];
@@ -314,33 +303,33 @@ class GpuKnn {
             }
             // Pack node children (left, right) pairs.
             if (nodeChildrenPacked.length < n * 2) nodeChildrenPacked = new Uint32Array(n * 2);
-            const nodeLeft = flat.nodeLeft, nodeRight = flat.nodeRight;
+            const nodeLeft = tree.nodeLeft, nodeRight = tree.nodeRight;
             for (let i = 0; i < n; i++) {
                 nodeChildrenPacked[i * 2 + 0] = nodeLeft[i];
                 nodeChildrenPacked[i * 2 + 1] = nodeRight[i];
             }
 
-            positionsBuf.write(0, positionsPacked, 0, n * 3);
-            nSplatIdxBuf.write(0, flat.nodeSplatIdx, 0, n);
+            positionsBuf.write(0, positions, 0, n * 3);
+            nSplatIdxBuf.write(0, tree.nodeSplatIdx, 0, n);
             nPositionsBuf.write(0, nodePosPacked, 0, n * 3);
             nChildrenBuf.write(0, nodeChildrenPacked, 0, n * 2);
-            compute.setParameter('rootIdx', flat.rootIdx);
+            compute.setParameter('rootIdx', tree.rootIdx);
 
-            const numBatches = Math.ceil(n / queriesPerBatch);
+            const numBatches = Math.ceil(queryCount / queriesPerBatch);
             for (let batch = 0; batch < numBatches; batch++) {
                 const queryOffset = batch * queriesPerBatch;
-                const queryCount = Math.min(queriesPerBatch, n - queryOffset);
-                const groups = Math.ceil(queryCount / workgroupSize);
+                const batchCount = Math.min(queriesPerBatch, queryCount - queryOffset);
+                const groups = Math.ceil(batchCount / workgroupSize);
 
                 compute.setParameter('queryOffset', queryOffset);
-                compute.setParameter('queryCount', queryCount);
+                compute.setParameter('queryCount', batchCount);
 
                 compute.setupDispatch(groups);
                 device.computeDispatch([compute], `knn-dispatch-${batch}`);
 
-                const readBytes = queryCount * k * 4;
+                const readBytes = batchCount * k * 4;
                 await outBuf.read(0, readBytes, outScratch, true);
-                outNeighbours.set(outScratch.subarray(0, queryCount * k), queryOffset * k);
+                outNeighbours.set(outScratch.subarray(0, batchCount * k), queryOffset * k);
             }
         };
 

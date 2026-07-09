@@ -1,8 +1,7 @@
 import { GraphicsDevice } from 'playcanvas';
 
 import { KdTree } from './kd-tree';
-import { Column, DataTable } from '../data-table';
-import { GpuClustering } from '../gpu';
+import { GpuKmeans } from '../gpu';
 import { logger } from '../utils';
 
 // use floyd's algorithm to pick m unique random indices from 0..n-1
@@ -15,160 +14,141 @@ const pickRandomIndices = (n: number, m: number) => {
     return [...chosen];
 };
 
-const initializeCentroids = (dataTable: DataTable, centroids: DataTable, row: any) => {
-    const indices = pickRandomIndices(dataTable.numRows, centroids.numRows);
-    for (let i = 0; i < centroids.numRows; ++i) {
-        dataTable.getRow(indices[i], row);
-        centroids.setRow(i, row);
+// seed centroids by copying k random points (interleaved in/out)
+const initCentroids = (points: Float32Array, numRows: number, nc: number, centroids: Float32Array, k: number) => {
+    const indices = pickRandomIndices(numRows, k);
+    for (let i = 0; i < k; ++i) {
+        const src = indices[i] * nc;
+        const dst = i * nc;
+        for (let j = 0; j < nc; ++j) centroids[dst + j] = points[src + j];
     }
 };
 
-// in the 1d case we use quantile-based initialization for better handling of skewed data
-const initializeCentroids1D = (dataTable: DataTable, centroids: DataTable) => {
-    const data = dataTable.getColumn(0).data;
-    const n = dataTable.numRows;
-    const k = centroids.numRows;
-
-    // Sort data to compute quantiles
-    const sorted = Float32Array.from(data).sort((a, b) => a - b);
-
-    const centroidsData = centroids.getColumn(0).data;
+// 1D case: quantile-based init handles skewed data better. nc === 1, so the
+// interleaved buffer is already a flat column.
+const initCentroids1D = (points: Float32Array, numRows: number, centroids: Float32Array, k: number) => {
+    const sorted = points.slice(0, numRows).sort();
     for (let i = 0; i < k; ++i) {
-        // Place centroid at the center of its expected cluster region
+        // place centroid at the center of its expected cluster region
         const quantile = (2 * i + 1) / (2 * k);
-        const index = Math.min(Math.floor(quantile * n), n - 1);
-        centroidsData[i] = sorted[index];
+        const index = Math.min(Math.floor(quantile * numRows), numRows - 1);
+        centroids[i] = sorted[index];
     }
 };
 
-const calcAverage = (dataTable: DataTable, cluster: number[], row: any) => {
-    const keys = dataTable.columnNames;
-
-    for (let i = 0; i < keys.length; ++i) {
-        row[keys[i]] = 0;
+// CPU assignment fallback (no GPU): build a kd-tree over the centroids and find
+// each point's nearest. points/centroids are row-major interleaved.
+const assignCpu = (points: Float32Array, numRows: number, nc: number, centroids: Float32Array, k: number, labels: Uint32Array) => {
+    // de-interleave centroids into columns for the KdTree (k is small)
+    const cols: Float32Array[] = [];
+    for (let j = 0; j < nc; ++j) {
+        const col = new Float32Array(k);
+        for (let i = 0; i < k; ++i) col[i] = centroids[i * nc + j];
+        cols.push(col);
     }
+    const kdTree = new KdTree(cols);
 
-    const dataRow: any = {};
-    for (let i = 0; i < cluster.length; ++i) {
-        dataTable.getRow(cluster[i], dataRow);
-
-        for (let j = 0; j < keys.length; ++j) {
-            const key = keys[j];
-            row[key] += dataRow[key];
-        }
-    }
-
-    if (cluster.length > 0) {
-        for (let i = 0; i < keys.length; ++i) {
-            row[keys[i]] /= cluster.length;
-        }
+    const point = new Float32Array(nc);
+    for (let r = 0; r < numRows; ++r) {
+        const base = r * nc;
+        for (let j = 0; j < nc; ++j) point[j] = points[base + j];
+        labels[r] = kdTree.findNearest(point).index;
     }
 };
 
-const clusterKdTreeCpu = (points: DataTable, centroids: DataTable, labels: Uint32Array) => {
-    const kdTree = new KdTree(centroids);
+/**
+ * k-means over row-major interleaved points (a numRows×numColumns Float32Array).
+ * Returns interleaved centroids (k×numColumns) and per-point labels.
+ *
+ * @param points - Interleaved point data.
+ * @param numRows - Number of points.
+ * @param numColumns - Dimensions per point.
+ * @param k - Number of clusters.
+ * @param iterations - Lloyd iterations to run.
+ * @param device - Optional GPU device; falls back to a CPU kd-tree assign.
+ * @returns Interleaved `centroids` (k×numColumns) and `labels`.
+ * @ignore
+ */
+const kmeansInterleaved = async (
+    points: Float32Array,
+    numRows: number,
+    numColumns: number,
+    k: number,
+    iterations: number,
+    device?: GraphicsDevice
+): Promise<{ centroids: Float32Array, labels: Uint32Array }> => {
+    const nc = numColumns;
 
-    // construct a kdtree over the centroids so we can find the nearest quickly
-    const point = new Float32Array(points.numColumns);
-    const row: any = {};
-
-    // assign each point to the nearest centroid
-    for (let i = 0; i < points.numRows; ++i) {
-        points.getRow(i, row);
-        points.columns.forEach((c, i) => {
-            point[i] = row[c.name];
-        });
-
-        const a = kdTree.findNearest(point);
-
-        labels[i] = a.index;
-    }
-};
-
-const groupLabels = (labels: Uint32Array, k: number) => {
-    const clusters: number[][] = [];
-
-    for (let i = 0; i < k; ++i) {
-        clusters[i] = [];
-    }
-
-    for (let i = 0; i < labels.length; ++i) {
-        clusters[labels[i]].push(i);
-    }
-
-    return clusters;
-};
-
-const kmeans = async (points: DataTable, k: number, iterations: number, device?: GraphicsDevice) => {
-    // too few data points
-    if (points.numRows < k) {
+    // too few data points: each point is its own centroid
+    if (numRows < k) {
         return {
-            centroids: points.clone(),
-            // use a typed array here so downstream code can rely on
-            // labels supporting subarray(), even in this early-return
-            // path used for very small datasets.
-            labels: new Uint32Array(points.numRows).map((_, i) => i)
+            centroids: points.slice(0, numRows * nc),
+            labels: new Uint32Array(numRows).map((_, i) => i)
         };
     }
 
-    const row: any = {};
-
-    // construct centroids data table and assign initial values
-    const centroids = new DataTable(points.columns.map(c => new Column(c.name, new Float32Array(k))));
-    if (points.numColumns === 1) {
-        initializeCentroids1D(points, centroids);
+    // construct + seed centroids
+    const centroids = new Float32Array(k * nc);
+    if (nc === 1) {
+        initCentroids1D(points, numRows, centroids, k);
     } else {
-        initializeCentroids(points, centroids, row);
+        initCentroids(points, numRows, nc, centroids, k);
     }
 
-    const gpuClustering = device && new GpuClustering(device, points.numColumns, k);
-    const labels = new Uint32Array(points.numRows);
+    const labels = new Uint32Array(numRows);
 
-    let converged = false;
-    let steps = 0;
-
-    logger.debug(`running k-means clustering: dims=${points.numColumns} points=${points.numRows} clusters=${k} iterations=${iterations}`);
+    logger.debug(`running k-means clustering: dims=${nc} points=${numRows} clusters=${k} iterations=${iterations}`);
 
     const bar = logger.bar('k-means', iterations);
-    try {
-        while (!converged) {
-            if (gpuClustering) {
-                await gpuClustering.execute(points, centroids, labels);
-            } else {
-                clusterKdTreeCpu(points, centroids, labels);
-            }
+    if (device) {
+        // flash-kmeans: the whole Lloyd loop runs on the GPU with a single
+        // readback of labels + centroids after the final iteration. Kernels
+        // are built per call — caching them across calls was benched (M4,
+        // 12-unit LOD run) at no measurable win; the driver shader cache
+        // already absorbs the recompile.
+        const gpuKmeans = new GpuKmeans(device, nc, k);
+        try {
+            await gpuKmeans.run(points, numRows, centroids, labels, iterations, () => bar.tick());
+        } finally {
+            gpuKmeans.destroy();
+        }
+    } else {
+        // recompute scratch (reused across iterations): per-cluster column sums
+        const sums = new Float64Array(k * nc);
+        const counts = new Uint32Array(k);
 
-            // calculate the new centroid positions
-            const groups = groupLabels(labels, k);
-            for (let i = 0; i < centroids.numRows; ++i) {
-                if (groups[i].length === 0) {
-                    // re-seed this centroid to a random point to avoid zero vector
-                    const idx = Math.floor(Math.random() * points.numRows);
-                    points.getRow(idx, row);
-                    centroids.setRow(i, row);
+        for (let step = 0; step < iterations; ++step) {
+            assignCpu(points, numRows, nc, centroids, k, labels);
+
+            // recompute centroids in one vectorized pass: accumulate per-cluster
+            // column sums into typed arrays, then divide by the cluster count.
+            sums.fill(0);
+            counts.fill(0);
+            for (let r = 0; r < numRows; ++r) {
+                const c = labels[r];
+                counts[c]++;
+                const sb = c * nc;
+                const pb = r * nc;
+                for (let j = 0; j < nc; ++j) sums[sb + j] += points[pb + j];
+            }
+            for (let i = 0; i < k; ++i) {
+                const cb = i * nc;
+                if (counts[i] === 0) {
+                    // re-seed empty cluster to a random point to avoid a zero vector
+                    const src = Math.floor(Math.random() * numRows) * nc;
+                    for (let j = 0; j < nc; ++j) centroids[cb + j] = points[src + j];
                 } else {
-                    calcAverage(points, groups[i], row);
-                    centroids.setRow(i, row);
+                    const inv = 1 / counts[i];
+                    for (let j = 0; j < nc; ++j) centroids[cb + j] = sums[cb + j] * inv;
                 }
             }
-
-            steps++;
-
-            if (steps >= iterations) {
-                converged = true;
-            }
-
             bar.tick();
         }
-    } catch (e) {
-        gpuClustering?.destroy();
-        throw e;
     }
 
     bar.end();
-    gpuClustering?.destroy();
 
     return { centroids, labels };
 };
 
-export { kmeans };
+export { kmeansInterleaved };

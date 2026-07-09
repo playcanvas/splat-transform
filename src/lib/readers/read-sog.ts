@@ -1,6 +1,23 @@
-import { Column, DataTable } from '../data-table';
+import {
+    type ReadRequest,
+    type ChunkSource,
+    type ChunkSourceMetadata,
+    type ChunkDataPool,
+    type ChunkLayer,
+    type LayerLayout,
+    type SHBands,
+    POSITION_STRIDE,
+    GEOMETRIC_STRIDE,
+    colorStride,
+    positionFields,
+    geometricFields,
+    colorFields,
+    createChunkDataPool
+} from '../chunk';
+import { dataTableToChunkSource, materializeToDataTable } from '../compat/data-table';
+import { type DataTable } from '../data-table';
 import { basename, dirname, join, type ReadFileSystem, readFile } from '../io/read';
-import { logger, Transform, WebPCodec } from '../utils';
+import { Transform, WebPCodec } from '../utils';
 import { readSogV1, type MetaV1 } from './read-sog-v1';
 
 // V2 (current) SOG meta layout - codebook-based quantization for scales /
@@ -26,19 +43,6 @@ type ReadSogOptions = {
     logging?: 'own' | 'silent';
 };
 
-const decodeMeans = (lo: Uint8Array, hi: Uint8Array, count: number) => {
-    const xs = new Uint16Array(count);
-    const ys = new Uint16Array(count);
-    const zs = new Uint16Array(count);
-    for (let i = 0; i < count; i++) {
-        const o = i * 4;
-        xs[i] = lo[o + 0] | (hi[o + 0] << 8);
-        ys[i] = lo[o + 1] | (hi[o + 1] << 8);
-        zs[i] = lo[o + 2] | (hi[o + 2] << 8);
-    }
-    return { xs, ys, zs };
-};
-
 // Inverse of logTransform(x) = sign(x) * ln(|x| + 1)
 const invLogTransform = (v: number) => {
     const a = Math.abs(v);
@@ -46,26 +50,31 @@ const invLogTransform = (v: number) => {
     return v < 0 ? -e : e;
 };
 
-const unpackQuat = (px: number, py: number, pz: number, tag: number): [number, number, number, number] => {
+// Component order of the three packed values for each maxComp (flat, 3 per
+// row), plus a shared output scratch — this decode runs once per gaussian per
+// read, so it must not allocate (single-threaded, mirroring read-spz's
+// tmpQuat pattern).
+const QUAT_IDX = [1, 2, 3, 0, 2, 3, 0, 1, 3, 0, 1, 2];
+const SQRT2 = Math.sqrt(2);
+const tmpQuat = new Float32Array(4);
+
+// Decode a smallest-three packed quaternion into `tmpQuat` as [w, x, y, z].
+const unpackQuat = (px: number, py: number, pz: number, tag: number): void => {
     const maxComp = tag - 252;
-    const a = px / 255 * 2 - 1;
-    const b = py / 255 * 2 - 1;
-    const c = pz / 255 * 2 - 1;
-    const sqrt2 = Math.sqrt(2);
-    const comps = [0, 0, 0, 0];
-    const idx = [
-        [1, 2, 3],
-        [0, 2, 3],
-        [0, 1, 3],
-        [0, 1, 2]
-    ][maxComp];
-    comps[idx[0]] = a / sqrt2;
-    comps[idx[1]] = b / sqrt2;
-    comps[idx[2]] = c / sqrt2;
+    const a = (px / 255 * 2 - 1) / SQRT2;
+    const b = (py / 255 * 2 - 1) / SQRT2;
+    const c = (pz / 255 * 2 - 1) / SQRT2;
+    tmpQuat[0] = 0;
+    tmpQuat[1] = 0;
+    tmpQuat[2] = 0;
+    tmpQuat[3] = 0;
+    const base = maxComp * 3;
+    tmpQuat[QUAT_IDX[base]] = a;
+    tmpQuat[QUAT_IDX[base + 1]] = b;
+    tmpQuat[QUAT_IDX[base + 2]] = c;
     // reconstruct max component to make unit length with positive sign
-    const t = 1 - (comps[0] * comps[0] + comps[1] * comps[1] + comps[2] * comps[2] + comps[3] * comps[3]);
-    comps[maxComp] = Math.sqrt(Math.max(0, t));
-    return comps as [number, number, number, number];
+    const t = 1 - (a * a + b * b + c * c);
+    tmpQuat[maxComp] = Math.sqrt(Math.max(0, t));
 };
 
 const sigmoidInv = (y: number) => {
@@ -73,47 +82,31 @@ const sigmoidInv = (y: number) => {
     return Math.log(e / (1 - e));
 };
 
+const SH_COEFFS = [0, 3, 8, 15];
+
 /**
- * Read a SOG file from a ReadFileSystem.
+ * Native (V2) SOG `ChunkSource`: the decoded WebP textures (RGBA) + codebooks /
+ * SH palette are held resident, and `read`/`readRows` expand only the requested
+ * gaussians on demand — the per-row inverse of `writeSog`'s texel encode. Peak
+ * resident is the (quantized) textures (~tens of bytes/gaussian), not the f32
+ * scene; a position-only pass costs one texel lookup per gaussian. WebP has no
+ * sub-image random access, so each texture is decoded once up front.
  *
- * The current (V2) format is decoded inline. Legacy V1 files (no `version`
- * field, per-channel mins/maxs instead of codebooks) are detected here and
- * forwarded to {@link readSogV1} in read-sog-v1.ts.
- *
- * @param fileSystem - The file system to read from
- * @param filename - Path to meta.json (relative paths resolved from its directory).
- * The basename is used verbatim for the initial meta fetch so
- * any URL querystring/fragment (e.g. presigned `?token=...`)
- * is preserved.
- * @param options - Options controlling progress reporting.
- * @returns DataTable with Gaussian splat data
- * @ignore
+ * @param meta - The parsed V2 meta.
+ * @param fileSystem - File system for the texture files.
+ * @param resolve - Resolves a texture filename relative to meta.json's directory.
+ * @param pool - Pool whose `chunkSize` sets the chunking granularity.
+ * @returns A lazy `ChunkSource` over the SOG's gaussians.
  */
-const readSog = async (fileSystem: ReadFileSystem, filename: string, options: ReadSogOptions = {}): Promise<DataTable> => {
-    const baseDir = dirname(filename);
-    const metaName = basename(filename);
-    const resolve = (name: string) => (baseDir ? join(baseDir, name) : name);
-
-    const metaBytes = await readFile(fileSystem, resolve(metaName));
-    const rawMeta = JSON.parse(new TextDecoder().decode(metaBytes)) as MetaV2 | (MetaV1 & { version?: number });
-
-    // Dispatch:
-    //   - V1 (legacy) has no `version` field        -> readSogV1
-    //   - V2 (current) has `version: 2`             -> handled inline below
-    //   - any other (future/unknown) version        -> hard error rather than
-    //     silently mis-routing to V1, which would surface as confusing
-    //     downstream failures (missing `means.shape`, etc.).
-    const version = rawMeta.version;
-    if (version === undefined) {
-        return readSogV1(fileSystem, baseDir, rawMeta as MetaV1, options);
-    }
-    if (version !== 2) {
-        throw new Error(`Unsupported SOG meta version: ${version}`);
-    }
-    const meta = rawMeta as MetaV2;
-
+const readSogSourceV2 = async (
+    meta: MetaV2,
+    fileSystem: ReadFileSystem,
+    resolve: (name: string) => string,
+    pool: ChunkDataPool
+): Promise<ChunkSource> => {
     const decoder = await WebPCodec.create();
     const count = meta.count;
+    const chunkSize = pool.chunkSize;
 
     const load = async (name: string): Promise<Uint8Array> => {
         const src = await fileSystem.createSource(resolve(name));
@@ -124,168 +117,281 @@ const readSog = async (fileSystem: ReadFileSystem, filename: string, options: Re
         }
     };
 
-    const columns: Column[] = [
-        new Column('x', new Float32Array(count)),
-        new Column('y', new Float32Array(count)),
-        new Column('z', new Float32Array(count)),
-        new Column('scale_0', new Float32Array(count)),
-        new Column('scale_1', new Float32Array(count)),
-        new Column('scale_2', new Float32Array(count)),
-        new Column('f_dc_0', new Float32Array(count)),
-        new Column('f_dc_1', new Float32Array(count)),
-        new Column('f_dc_2', new Float32Array(count)),
-        new Column('opacity', new Float32Array(count)),
-        new Column('rot_0', new Float32Array(count)),
-        new Column('rot_1', new Float32Array(count)),
-        new Column('rot_2', new Float32Array(count)),
-        new Column('rot_3', new Float32Array(count))
-    ];
-
-    // One bar across all per-gaussian decode passes. Total = passes * count
-    // (means, quats, scales, sh0, plus an optional shN pass). Each pass ticks
-    // with `count` once it has finished writing into the output columns.
-    const numPasses = 4 + (meta.shN ? 1 : 0);
-    const bar = options.logging === 'silent' ? null : logger.bar('decoding', numPasses * count);
-    let passesDone = 0;
-    const tickPass = () => {
-        bar?.update(++passesDone * count);
-    };
-
-    // means: two textures means_l (low byte) + means_u (high byte) packed as
-    // a 16-bit lerp between mins/maxs of the logTransform'd positions.
-    const meansLoWebp = await load(meta.means.files[0]);
-    const meansHiWebp = await load(meta.means.files[1]);
-    const { rgba: lo, width, height } = decoder.decodeRGBA(meansLoWebp);
-    const { rgba: hi } = decoder.decodeRGBA(meansHiWebp);
-    if (width * height < count) throw new Error('SOG means texture too small for count');
+    // means: two textures (low + high byte) packed as a 16-bit lerp between the
+    // mins/maxs of the logTransform'd positions.
+    const meansLo = decoder.decodeRGBA(await load(meta.means.files[0]));
+    const lo = meansLo.rgba;
+    const hi = decoder.decodeRGBA(await load(meta.means.files[1])).rgba;
+    if (meansLo.width * meansLo.height < count) throw new Error('SOG means texture too small for count');
     const { mins, maxs } = meta.means;
-    const { xs, ys, zs } = decodeMeans(lo, hi, count);
-    const xCol = columns[0].data as Float32Array;
-    const yCol = columns[1].data as Float32Array;
-    const zCol = columns[2].data as Float32Array;
     const xMin = mins[0], xScale = (maxs[0] - mins[0]) || 1;
     const yMin = mins[1], yScale = (maxs[1] - mins[1]) || 1;
     const zMin = mins[2], zScale = (maxs[2] - mins[2]) || 1;
-    for (let i = 0; i < count; i++) {
-        xCol[i] = invLogTransform(xMin + xScale * (xs[i] / 65535));
-        yCol[i] = invLogTransform(yMin + yScale * (ys[i] / 65535));
-        zCol[i] = invLogTransform(zMin + zScale * (zs[i] / 65535));
-    }
-    tickPass();
 
-    // quats: 4 bytes per splat, last byte is the "largest component" tag
-    // (252-255 -> w/x/y/z is largest); other 3 encode the smaller components
-    // scaled by sqrt(2).
-    const quatsWebp = await load(meta.quats.files[0]);
-    const { rgba: qr, width: qw, height: qh } = decoder.decodeRGBA(quatsWebp);
-    if (qw * qh < count) throw new Error('SOG quats texture too small for count');
-    const r0 = columns[10].data as Float32Array;
-    const r1 = columns[11].data as Float32Array;
-    const r2 = columns[12].data as Float32Array;
-    const r3 = columns[13].data as Float32Array;
-    for (let i = 0; i < count; i++) {
-        const o = i * 4;
-        const tag = qr[o + 3];
-        if (tag < 252 || tag > 255) { // invalid tag, default to identity (rot_0 = w)
-            r0[i] = 1; r1[i] = 0; r2[i] = 0; r3[i] = 0;
-            continue;
-        }
-        // unpackQuat returns components in (w, x, y, z) order; rot_0..rot_3 map to (w, x, y, z).
-        const [w, x, y, z] = unpackQuat(qr[o], qr[o + 1], qr[o + 2], tag);
-        r0[i] = w; r1[i] = x; r2[i] = y; r3[i] = z;
-    }
-    tickPass();
+    // quats: 4 bytes/splat, last byte is the largest-component tag (252-255).
+    const quats = decoder.decodeRGBA(await load(meta.quats.files[0]));
+    const qr = quats.rgba;
+    if (quats.width * quats.height < count) throw new Error('SOG quats texture too small for count');
 
-    // scales: each byte indexes the shared 256-entry codebook.
-    const scalesWebp = await load(meta.scales.files[0]);
-    const { rgba: sl, width: sw, height: sh } = decoder.decodeRGBA(scalesWebp);
-    if (sw * sh < count) throw new Error('SOG scales texture too small for count');
+    // scales: 3 bytes index the shared 256-entry codebook.
+    const scales = decoder.decodeRGBA(await load(meta.scales.files[0]));
+    const sl = scales.rgba;
+    if (scales.width * scales.height < count) throw new Error('SOG scales texture too small for count');
     const sCode = new Float32Array(meta.scales.codebook);
-    const s0 = columns[3].data as Float32Array;
-    const s1 = columns[4].data as Float32Array;
-    const s2 = columns[5].data as Float32Array;
-    for (let i = 0; i < count; i++) {
-        const o = i * 4;
-        s0[i] = sCode[sl[o]];
-        s1[i] = sCode[sl[o + 1]];
-        s2[i] = sCode[sl[o + 2]];
-    }
-    tickPass();
 
-    // sh0: 3 color bytes index the shared codebook; opacity byte is a sigmoid
-    // value, decoded back to a logit via sigmoidInv.
-    const sh0Webp = await load(meta.sh0.files[0]);
-    const { rgba: c0, width: cw, height: ch } = decoder.decodeRGBA(sh0Webp);
-    if (cw * ch < count) throw new Error('SOG sh0 texture too small for count');
+    // sh0: 3 color bytes index the codebook; the 4th is a sigmoid'd opacity.
+    const sh0 = decoder.decodeRGBA(await load(meta.sh0.files[0]));
+    const c0 = sh0.rgba;
+    if (sh0.width * sh0.height < count) throw new Error('SOG sh0 texture too small for count');
     const cCode = new Float32Array(meta.sh0.codebook);
-    const dc0 = columns[6].data as Float32Array;
-    const dc1 = columns[7].data as Float32Array;
-    const dc2 = columns[8].data as Float32Array;
-    const opCol = columns[9].data as Float32Array;
-    for (let i = 0; i < count; i++) {
-        const o = i * 4;
-        dc0[i] = cCode[c0[o + 0]];
-        dc1[i] = cCode[c0[o + 1]];
-        dc2[i] = cCode[c0[o + 2]];
-        opCol[i] = sigmoidInv(c0[o + 3] / 255);
+
+    // shN (optional): label -> centroid palette -> codebook, channel-major f_rest.
+    let shBands: SHBands = 0;
+    let shCoeffs = 0;
+    let restCount = 0;
+    let shCodebook: Float32Array | null = null;
+    let centroidsRGBA: Uint8Array | null = null;
+    let labelsRGBA: Uint8Array | null = null;
+    let cW = 0;
+    let cH = 0;
+    let paletteCount = 0;
+    if (meta.shN && SH_COEFFS[meta.shN.bands] > 0) {
+        shBands = meta.shN.bands as SHBands;
+        shCoeffs = SH_COEFFS[shBands];
+        restCount = shCoeffs * 3;
+        shCodebook = new Float32Array(meta.shN.codebook);
+        const cen = decoder.decodeRGBA(await load(meta.shN.files[0]));
+        centroidsRGBA = cen.rgba; cW = cen.width; cH = cen.height;
+        const lab = decoder.decodeRGBA(await load(meta.shN.files[1]));
+        labelsRGBA = lab.rgba;
+        if (lab.width * lab.height < count) throw new Error('SOG shN labels texture too small for count');
+        if (cW !== 64 * shCoeffs) {
+            throw new Error(`SOG shN centroids texture width ${cW} does not match expected ${64 * shCoeffs} for ${shBands}-band palette`);
+        }
+        paletteCount = meta.shN.count;
     }
-    tickPass();
+    const colorSw = 3 + restCount;
 
-    // shN (optional): indirect lookup via labels -> centroids palette, with
-    // each centroid pixel byte indexing the shared codebook.
-    if (meta.shN) {
-        const { bands, count: paletteCount } = meta.shN;
-        const shCoeffs = [0, 3, 8, 15][bands];
-        if (shCoeffs > 0) {
-            const codebook = new Float32Array(meta.shN.codebook);
-            const centroidsWebp = await load(meta.shN.files[0]);
-            const labelsWebp = await load(meta.shN.files[1]);
-            const { rgba: centroidsRGBA, width: cW, height: cH } = decoder.decodeRGBA(centroidsWebp);
-            const { rgba: labelsRGBA, width: lW, height: lH } = decoder.decodeRGBA(labelsWebp);
 
-            // Validate texture geometry up-front: missing guards would let
-            // truncated textures silently produce zeros (out-of-bounds typed-
-            // array reads coerce to 0 via the bitwise ops below) instead of
-            // failing like the means/quats/scales/sh0 passes do.
-            if (lW * lH < count) throw new Error('SOG shN labels texture too small for count');
-            if (cW !== 64 * shCoeffs) throw new Error(`SOG shN centroids texture width ${cW} does not match expected ${64 * shCoeffs} for ${bands}-band palette`);
+    const layouts: Partial<Record<ChunkLayer, LayerLayout>> = {
+        position: { stride: POSITION_STRIDE, fields: positionFields() },
+        geometric: { stride: GEOMETRIC_STRIDE, fields: geometricFields() },
+        color: { stride: colorStride(shBands), fields: colorFields(shBands) }
+    };
 
-            const baseIdx = columns.length;
-            for (let i = 0; i < shCoeffs * 3; i++) {
-                columns.push(new Column(`f_rest_${i}`, new Float32Array(count)));
+    const meta_: ChunkSourceMetadata = {
+        numGaussians: count,
+        numLods: 1,
+        lodCounts: [count],
+        chunkSize,
+        numChunks: [count === 0 ? 0 : Math.ceil(count / chunkSize)],
+        shBands,
+        extraColumns: [],
+        transform: Transform.PLY.clone(),
+        availableLayers: new Set<ChunkLayer>(['position', 'geometric', 'color']),
+        layouts
+    };
+
+    // Expand source gaussian `g` into output row `r` of the requested layers.
+    // Shared by sequential `read` and random-access `readRows`. Every field of a
+    // requested layer is written (pool buffers may hold prior data), so the SH
+    // rest is explicitly zeroed for an out-of-range label rather than left stale.
+    const decodeInto = (
+        posOut: Float32Array | null,
+        geoOut: Float32Array | null,
+        colOut: Float32Array | null,
+        g: number,
+        r: number
+    ): void => {
+        const o4 = g * 4;
+
+        if (posOut) {
+            const o = r * 3;
+            const xv = lo[o4] | (hi[o4] << 8);
+            const yv = lo[o4 + 1] | (hi[o4 + 1] << 8);
+            const zv = lo[o4 + 2] | (hi[o4 + 2] << 8);
+            posOut[o]     = invLogTransform(xMin + xScale * (xv / 65535));
+            posOut[o + 1] = invLogTransform(yMin + yScale * (yv / 65535));
+            posOut[o + 2] = invLogTransform(zMin + zScale * (zv / 65535));
+        }
+
+        if (geoOut) {
+            const o = r * 8; // [rot0..3, scale0..2, opacity]
+            const tag = qr[o4 + 3];
+            if (tag < 252 || tag > 255) {
+                geoOut[o] = 1; geoOut[o + 1] = 0; geoOut[o + 2] = 0; geoOut[o + 3] = 0;
+            } else {
+                unpackQuat(qr[o4], qr[o4 + 1], qr[o4 + 2], tag);
+                geoOut[o] = tmpQuat[0]; geoOut[o + 1] = tmpQuat[1]; geoOut[o + 2] = tmpQuat[2]; geoOut[o + 3] = tmpQuat[3];
             }
+            geoOut[o + 4] = sCode[sl[o4]];
+            geoOut[o + 5] = sCode[sl[o4 + 1]];
+            geoOut[o + 6] = sCode[sl[o4 + 2]];
+            geoOut[o + 7] = sigmoidInv(c0[o4 + 3] / 255);
+        }
 
-            const stride = 4;
-            const getCentroidPixel = (centroidIndex: number, coeff: number) => {
-                const cx = (centroidIndex % 64) * shCoeffs + coeff;
-                const cy = Math.floor(centroidIndex / 64);
-                if (cx >= cW || cy >= cH) return [0, 0, 0] as [number, number, number];
-                const idx = (cy * cW + cx) * stride;
-                return [centroidsRGBA[idx], centroidsRGBA[idx + 1], centroidsRGBA[idx + 2]] as [number, number, number];
-            };
-
-            for (let i = 0; i < count; i++) {
-                const o = i * 4;
-                const label = labelsRGBA[o] | (labelsRGBA[o + 1] << 8); // 16-bit palette index
-                if (label >= paletteCount) continue; // safety
-                for (let j = 0; j < shCoeffs; j++) {
-                    const [lr, lg, lb] = getCentroidPixel(label, j);
-                    (columns[baseIdx + j + shCoeffs * 0].data as Float32Array)[i] = codebook[lr] ?? 0;
-                    (columns[baseIdx + j + shCoeffs * 1].data as Float32Array)[i] = codebook[lg] ?? 0;
-                    (columns[baseIdx + j + shCoeffs * 2].data as Float32Array)[i] = codebook[lb] ?? 0;
+        if (colOut) {
+            const o = r * colorSw; // [dc0..2, f_rest_0..N]
+            colOut[o]     = cCode[c0[o4]];
+            colOut[o + 1] = cCode[c0[o4 + 1]];
+            colOut[o + 2] = cCode[c0[o4 + 2]];
+            if (restCount > 0) {
+                const label = labelsRGBA![o4] | (labelsRGBA![o4 + 1] << 8); // 16-bit palette index
+                if (label < paletteCount) {
+                    // centroid texel coordinates: row from the label, column
+                    // base from the label's slot, one column per coefficient
+                    // (per-coeff work is pure index math — no allocation)
+                    const cy = Math.floor(label / 64);
+                    const cxBase = (label % 64) * shCoeffs;
+                    const cyOk = cy < cH;
+                    for (let j = 0; j < shCoeffs; j++) {
+                        const cx = cxBase + j;
+                        const ok = cyOk && cx < cW;
+                        const idx = (cy * cW + cx) * 4;
+                        const lr = ok ? centroidsRGBA![idx] : 0;
+                        const lg = ok ? centroidsRGBA![idx + 1] : 0;
+                        const lb = ok ? centroidsRGBA![idx + 2] : 0;
+                        colOut[o + 3 + j]                = shCodebook![lr] ?? 0;
+                        colOut[o + 3 + j + shCoeffs]     = shCodebook![lg] ?? 0;
+                        colOut[o + 3 + j + shCoeffs * 2] = shCodebook![lb] ?? 0;
+                    }
+                } else {
+                    for (let k = 0; k < restCount; k++) colOut[o + 3 + k] = 0;
                 }
             }
         }
-        tickPass();
-    }
+    };
 
-    // Close the bar only on success: leaving it open on the error path lets
-    // `logger.error() -> unwindAll(true)` mark it as failed instead of
-    // finalizing it as a successful bar first.
-    bar?.end();
+    // Fill the requested layers either from a contiguous chunk or from an
+    // explicit index list. The textures are resident, so a gather is index math
+    // only (no re-decode) — which is what lets a containerSource of SOG nodes
+    // serve the LOD writer's per-unit gather.
+    const read = (request: ReadRequest): Promise<void> => {
+        if ((request.lod ?? 0) !== 0) {
+            throw new Error('readSog: only lod 0 is supported');
+        }
+        const posOut = request.position ? new Float32Array(request.position.data) : null;
+        const geoOut = request.geometric ? new Float32Array(request.geometric.data) : null;
+        const colOut = request.color ? new Float32Array(request.color.data) : null;
+        if ('indices' in request) {
+            const { indices, indexOffset, count: cnt } = request;
+            for (let j = 0; j < cnt; j++) decodeInto(posOut, geoOut, colOut, indices[indexOffset + j], j);
+        } else {
+            const start = request.chunkIndex * chunkSize;
+            const cnt = Math.min(chunkSize, count - start);
+            if (cnt <= 0) {
+                throw new Error(`readSog: chunkIndex ${request.chunkIndex} out of range`);
+            }
+            for (let i = 0; i < cnt; i++) decodeInto(posOut, geoOut, colOut, start + i, i);
+        }
+        return Promise.resolve();
+    };
 
-    return new DataTable(columns, Transform.PLY);
+    return { meta: meta_, read, close: () => Promise.resolve() };
 };
 
-export { readSog };
+// Fetch + parse the SOG meta.json. The basename is used verbatim for the fetch
+// so any URL querystring/fragment (e.g. a presigned `?token=...`) is preserved.
+const fetchSogMeta = async (fileSystem: ReadFileSystem, filename: string) => {
+    const baseDir = dirname(filename);
+    const metaName = basename(filename);
+    const resolve = (name: string) => (baseDir ? join(baseDir, name) : name);
+    const metaBytes = await readFile(fileSystem, resolve(metaName));
+    const rawMeta = JSON.parse(new TextDecoder().decode(metaBytes)) as MetaV2 | (MetaV1 & { version?: number });
+    return { baseDir, resolve, rawMeta };
+};
+
+/**
+ * Header-only SOG peek: parse `meta.json` and report the metadata a file-info
+ * summary needs — gaussian count, SH bands and available layers — **without**
+ * decoding any WebP texture. SOG always carries position/geometric/color and no
+ * extra columns. V2 only; legacy V1 (no `version`) returns `null` so the caller
+ * can fall back to a full read.
+ *
+ * @param fileSystem - The file system to read meta.json from.
+ * @param filename - Path to meta.json.
+ * @returns The meta summary, or `null` for non-V2 files.
+ */
+const statSogSource = async (
+    fileSystem: ReadFileSystem,
+    filename: string
+): Promise<Pick<ChunkSourceMetadata, 'numGaussians' | 'numLods' | 'lodCounts' | 'shBands' | 'availableLayers' | 'extraColumns'> | null> => {
+    const { rawMeta } = await fetchSogMeta(fileSystem, filename);
+    if (rawMeta.version !== 2) return null;
+    const meta = rawMeta as MetaV2;
+    const count = meta.count;
+    const rawBands = meta.shN?.bands ?? 0;
+    const shBands = ((rawBands === 1 || rawBands === 2 || rawBands === 3) ? rawBands : 0) as SHBands;
+    return {
+        numGaussians: count,
+        numLods: 1,
+        lodCounts: [count],
+        shBands,
+        availableLayers: new Set<ChunkLayer>(['position', 'geometric', 'color']),
+        extraColumns: []
+    };
+};
+
+/**
+ * Open a SOG scene as a lazy, layered {@link ChunkSource}.
+ *
+ * Current (V2) files decode chunk-native: the WebP textures + codebooks stay
+ * resident and `read`/`readRows` expand on demand (see {@link readSogSourceV2}).
+ * Legacy V1 files (no `version`, per-channel mins/maxs) are decoded eagerly by
+ * {@link readSogV1} and bridged to a resident source — they're rare and
+ * deprecated, so they keep the simpler whole-scene path.
+ *
+ * @param fileSystem - The file system to read from.
+ * @param filename - Path to meta.json (relative texture paths resolved from its directory).
+ * @param pool - Pool whose `chunkSize` sets the chunking granularity.
+ * @param options - Options controlling progress reporting (V1 only).
+ * @returns A `ChunkSource` over the SOG's gaussians.
+ * @ignore
+ */
+const readSogSource = async (
+    fileSystem: ReadFileSystem,
+    filename: string,
+    pool: ChunkDataPool,
+    options: ReadSogOptions = {}
+): Promise<ChunkSource> => {
+    const { baseDir, resolve, rawMeta } = await fetchSogMeta(fileSystem, filename);
+    const version = rawMeta.version;
+    if (version === undefined) {
+        // Legacy V1: eager decode, bridged resident (deprecated, low volume).
+        return dataTableToChunkSource(await readSogV1(fileSystem, baseDir, rawMeta as MetaV1, options), pool.chunkSize);
+    }
+    if (version !== 2) {
+        throw new Error(`Unsupported SOG meta version: ${version}`);
+    }
+    return readSogSourceV2(rawMeta as MetaV2, fileSystem, resolve, pool);
+};
+
+/**
+ * Read a SOG file as a `DataTable` (the eager, whole-scene representation).
+ *
+ * The DataTable-input adapter / byte-identity oracle: V2 materializes the native
+ * {@link readSogSourceV2}; V1 is decoded directly by {@link readSogV1}. New code
+ * that wants a streaming source should use {@link readSogSource}.
+ *
+ * @param fileSystem - The file system to read from.
+ * @param filename - Path to meta.json (relative paths resolved from its directory).
+ * @param options - Options controlling progress reporting.
+ * @returns DataTable with Gaussian splat data.
+ * @ignore
+ */
+const readSog = async (fileSystem: ReadFileSystem, filename: string, options: ReadSogOptions = {}): Promise<DataTable> => {
+    const { baseDir, resolve, rawMeta } = await fetchSogMeta(fileSystem, filename);
+    const version = rawMeta.version;
+    if (version === undefined) {
+        return readSogV1(fileSystem, baseDir, rawMeta as MetaV1, options);
+    }
+    if (version !== 2) {
+        throw new Error(`Unsupported SOG meta version: ${version}`);
+    }
+    const pool = createChunkDataPool();
+    const src = await readSogSourceV2(rawMeta as MetaV2, fileSystem, resolve, pool);
+    return materializeToDataTable(src, pool);
+};
+
+export { readSog, readSogSource, statSogSource };
 export type { ReadSogOptions };

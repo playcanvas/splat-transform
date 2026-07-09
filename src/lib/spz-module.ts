@@ -2,6 +2,7 @@ import { Column, DataTable, convertToSpace } from './data-table';
 import { Transform } from './utils';
 
 type CoordinateSystem = {
+    UNSPECIFIED: number;
     RDF: number;
 };
 
@@ -233,17 +234,17 @@ const dataTableToGaussianCloud = (dataTable: DataTable): GaussianCloud => {
     };
 };
 
-// splat-transform treats SPZ as RDF on both sides: data is converted to PLY/RDF
-// space before saving (wasm flips RDF→RUB to produce a spec-compliant on-disk file),
-// and the reader requests `to: RDF` to flip back. The SPZ format itself stores no
-// coordinate-system metadata (see NgspFileHeader in the spec), so the convention is
-// purely by agreement; this matches the Niantic spec and lets splat-transform's
-// SPZ readers/writers round-trip through PLY losslessly.
+// splat-transform stores SPZ with no coordinate conversion: data is baked to
+// PLY/RDF space before saving and written with `from: UNSPECIFIED` (the spz
+// spec's default — the format carries no coordinate metadata), and the pure-JS
+// reader decodes raw (no conversion). Reader and writer therefore share one
+// convention and round-trip through PLY losslessly without imposing an
+// opinionated axis flip on the on-disk bytes.
 const makeSpzPackOptions = async (overrides: Partial<PackOptions> = {}): Promise<PackOptions> => {
     const spz = await getSpzModule();
     return {
         version: spz.LATEST_SPZ_HEADER_VERSION,
-        from: spz.CoordinateSystem.RDF,
+        from: spz.CoordinateSystem.UNSPECIFIED,
         sh1Bits: 5,
         shRestBits: 4,
         ...overrides

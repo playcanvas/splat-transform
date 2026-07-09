@@ -88,7 +88,7 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 | `.voxel.json` | ❌ | ✅ | Sparse voxel octree for collision detection |
 | `lod-meta.json` | ❌ | ✅ | Streamed LOD data stored in SOG chunks |
 | `.webp` | ❌ | ✅ | Lossless WebP image rendered from a camera view via GPU rasterizer |
-| `null` | ❌ | ✅ | Discard output (useful with `--summary` for analysis-only runs) |
+| `null` | ❌ | ✅ | Discard output (useful with `--stats` for analysis-only runs) |
 
 ## Actions
 
@@ -108,8 +108,15 @@ Actions execute in the order specified and can be repeated. Any action may appea
                                           opacity, scale_*, f_dc_* use transformed values
                                           (linear opacity 0-1, linear scale, linear color 0-1).
                                           Append _raw for raw PLY values (e.g. opacity_raw).
--F, --decimate         <n|n%>           Simplify to n Gaussians via progressive pairwise merging
-                                          Use n% to keep a percentage of Gaussians
+-F, --decimate         <n|n%>           Simplify to n Gaussians via merge-based decimation
+                                          Use n% to keep a percentage of Gaussians.
+                                          Memory-bounded and streaming: scales to scenes of 100M+
+                                          Gaussians. Must be the final action, and the output must
+                                          be .ply (write a decimated PLY first, then convert in a
+                                          second invocation). Deep targets on huge scenes spill
+                                          temporary files to --scratch-dir (default: the output
+                                          file's directory).
+    --scratch-dir      <path>           Directory for decimation spill files
 -G, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel.
                                           Evaluates each Gaussian at occupied voxel centers.
                                           Default: size=0.05, opacity=0.1, min=0.004 (1/255).
@@ -120,7 +127,8 @@ Actions execute in the order specified and can be repeated. Any action may appea
                                           Bare flag (no value) uses all defaults.
 -p, --params           <key=val,...>    Pass parameters to .mjs generator script
 -l, --lod              <n>              Tag the Gaussians with LOD level n (n >= 0, or -1 for environment)
--m, --summary                           Print per-column statistics to stdout
+-m, --stats            [text|json]      Print file info and per-column statistics to stdout. Default: text
+-I, --info             [text|json]      Print structural metadata (per-LOD counts, columns) to stdout. Default: text
 -M, --morton-order                      Reorder Gaussians by Morton code (Z-order curve)
 ```
 
@@ -131,7 +139,7 @@ Actions execute in the order specified and can be repeated. Any action may appea
 -v, --version                           Show version and exit
 -q, --quiet                             Suppress non-error output
     --verbose                           Show debug-level diagnostics
-    --mem                               Show memory usage in progress output
+    --mem                               Show peak memory in progress output
     --tty                               Interactive bar rendering (default on a TTY; --no-tty to disable)
 -w, --overwrite                         Overwrite output file if it exists
 ```
@@ -153,6 +161,7 @@ Apply when writing `.sog`, `meta.json`, `lod-meta.json`, or `.html` outputs.
 
 ```none
 -i, --iterations       <n>              Iterations for SH compression (more=better). Default: 10
+    --max-workers      <n>              Worker threads for SOG encoding (0 = inline/serial). Default: 4
 ```
 
 ## SPZ Output Options
@@ -336,22 +345,25 @@ splat-transform -w cloudA.ply -r 0,90,0 cloudB.ply -s 2 merged.compressed.ply
 splat-transform input1.ply input2.ply output.ply -t 0,0,10 -s 0.5
 ```
 
-### Statistical Summary
+### Statistics
 
 Generate per-column statistics for data analysis or test validation:
 
 ```bash
-# Print summary, then write output
-splat-transform input.ply --summary output.ply
+# Print stats, then write output
+splat-transform input.ply --stats output.ply
 
-# Print summary without writing a file (discard output)
+# Print stats without writing a file (discard output)
 splat-transform input.ply -m null
 
-# Print summary before and after a transform
-splat-transform input.ply --summary -s 0.5 --summary output.ply
+# Print stats as JSON for scripting
+splat-transform input.ply --stats json null
+
+# Print stats before and after a transform
+splat-transform input.ply --stats -s 0.5 --stats output.ply
 ```
 
-The summary includes min, max, median, mean, stdDev, nanCount and infCount for each column in the data.
+The output starts with the file info block (including the `gaussian` verdict — `false` for a readable container that isn't splat data, such as a plain point-cloud PLY), followed by min, max, median, mean, stdDev, nanCount, infCount and a histogram for each column, one table per LOD. The JSON form is the same info fields plus a columnar per-LOD `stats` array. The stats are computed in a single streaming pass; the median is approximated from a 1024-bin histogram (error within ~1/1000 of the column's range), all other fields are exact.
 
 ### Generators (Beta)
 
@@ -486,39 +498,51 @@ splat-transform --help
 
 ## Library Usage
 
-SplatTransform exposes a programmatic API for reading, processing, and writing Gaussian splat data.
+SplatTransform exposes a programmatic API for reading, processing, and writing Gaussian splat data. Scenes flow through lazy, chunked `ChunkSource`s, so resident memory is bounded by chunk size rather than scene size — the same pipeline the CLI uses to process scenes of hundreds of millions of gaussians.
 
 ### Basic Import
 
 ```typescript
 import {
     readFile,
-    writeFile,
+    writeSource,
     getInputFormat,
     getOutputFormat,
-    DataTable,
-    processDataTable
+    createChunkDataPool,
+    processSourceBridged
 } from '@playcanvas/splat-transform';
 ```
 
 ### Key Exports
 
+Chunk-source pipeline (the primary API):
+
 | Export | Description |
 | ------ | ----------- |
-| `readFile` | Read splat data from various formats |
-| `writeFile` | Write splat data to various formats |
+| `readFile` | Read a splat file as lazy `ChunkSource`s |
+| `readFileInfo` | Header-only structural metadata (validate/inspect without decoding) |
 | `getInputFormat` | Detect input format from filename |
 | `getOutputFormat` | Detect output format from filename |
-| `DataTable`, `Column` | Core data structures for splat data |
+| `ChunkSource` | The streaming contract: chunked/gathered reads over one scene |
+| `createChunkDataPool` | Pooled read buffers shared across a pipeline |
+| `processSource`, `processSourceBridged` | Apply a sequence of processing actions to a source |
+| `selectLod`, `stackLods`, `concatSource`, `bakeTransform` | Structural combinators (lazy views) |
+| `decimateSource` | Chunk-native, memory-bounded decimation to an exact target count |
+| `writeSource` | Stream a source to any single-scene output format |
+| `writeLodSource` | Write streamed SOG (`lod-meta.json` + chunked units) from a multi-LOD source |
+| `computeStats` | Streaming per-LOD, per-column statistics for a source or table |
+
+DataTable compat (secondary; every entry materializes the whole scene in memory):
+
+| Export | Description |
+| ------ | ----------- |
+| `DataTable`, `Column` | Legacy whole-scene table |
 | `combine` | Merge multiple DataTables into one |
-| `convertToSpace` | Convert a DataTable between coordinate spaces |
-| `processDataTable` | Apply a sequence of processing actions |
-| `computeSummary` | Generate statistical summary of data |
-| `sortMortonOrder` | Sort indices by Morton code for spatial locality |
-| `sortByVisibility` | Sort indices by visibility score for filtering |
+| `processDataTable` | Apply processing actions to a DataTable |
+| `dataTableToChunkSource`, `materializeToDataTable` | Bridges between the DataTable and chunk-source worlds |
+| `writeFile` | Write a DataTable to any output format |
 | `writeVoxel` | Write sparse voxel octree files |
 | `writeImage` | Render a camera view to a lossless WebP image (requires GPU) |
-| `renderSplats` | Lower-level renderer returning the raw RGBA byte buffer |
 
 ### File System Abstractions
 
@@ -539,51 +563,51 @@ The library uses abstract file system interfaces for maximum flexibility:
 import { Vec3 } from 'playcanvas';
 import {
     readFile,
-    writeFile,
+    writeSource,
     getInputFormat,
     getOutputFormat,
-    processDataTable,
+    createChunkDataPool,
+    processSourceBridged,
     UrlReadFileSystem,
     MemoryFileSystem
 } from '@playcanvas/splat-transform';
 
-// Read a PLY file from URL
-const fileSystem = new UrlReadFileSystem();
-const inputFormat = getInputFormat('scene.ply');
-
-const dataTables = await readFile({
-    filename: 'https://example.com/scene.ply',
-    inputFormat,
-    options: { iterations: 10 },
-    params: [],
+// Read a PLY file from a URL as a lazy, chunked source
+const fileSystem = new UrlReadFileSystem('https://example.com/');
+const [source] = await readFile({
+    filename: 'scene.ply',
+    inputFormat: getInputFormat('scene.ply'),
     fileSystem
 });
 
-// Apply transformations
-const processed = processDataTable(dataTables[0], [
+// Apply actions: transforms compose lazily, filters stream chunk-by-chunk
+const pool = createChunkDataPool();
+const processed = await processSourceBridged(source, [
     { kind: 'scale', value: 0.5 },
     { kind: 'translate', value: new Vec3(0, 1, 0) },
     { kind: 'filterNaN' }
-]);
+], pool);
 
-// Write to in-memory buffer
+// Stream the result to an in-memory PLY
 const memFs = new MemoryFileSystem();
-const outputFormat = getOutputFormat('output.ply', {});
-
-await writeFile({
+await writeSource({
     filename: 'output.ply',
-    outputFormat,
-    dataTable: processed,
+    outputFormat: getOutputFormat('output.ply', {}),
+    source: processed,
+    pool,
     options: {}
 }, memFs);
+await processed.close();
 
 // Get the output data
-const outputBuffer = memFs.files.get('output.ply');
+const outputBuffer = memFs.results.get('output.ply');
 ```
+
+Consumers still on the `DataTable` API can bridge in either direction with `materializeToDataTable(source, pool)` and `dataTableToChunkSource(dataTable)` — both materialize the full scene, so prefer staying on sources for large inputs.
 
 ### Processing Actions
 
-The `processDataTable` function accepts an array of actions:
+`processSource` / `processSourceBridged` (and the compat `processDataTable`) accept an array of actions:
 
 ```typescript
 type ProcessAction =
@@ -599,29 +623,27 @@ type ProcessAction =
     | { kind: 'filterCluster'; voxelResolution?: number; seed?: Vec3; opacityCutoff?: number; minContribution?: number } // GPU
     | { kind: 'decimate'; count: number | null; percent: number | null }
     | { kind: 'param'; name: string; value: string }
-    | { kind: 'lod'; value: number }
-    | { kind: 'summary' }
+    | { kind: 'stats'; format?: 'text' | 'json' }
+    | { kind: 'info'; format?: 'text' | 'json' }
     | { kind: 'mortonOrder' };
 ```
 
 > [!NOTE]
-> `filterFloaters` and `filterCluster` require a GPU device — pass `createDevice` via the `ProcessOptions` argument to `processDataTable`.
+> `filterFloaters` and `filterCluster` require a GPU device — pass `createDevice` via the `ProcessOptions` argument. `processSource` streams and throws on actions that need the DataTable bridge (`decimate`, `mortonOrder`, the GPU voxel filters); `processSourceBridged` handles every action, materializing only those runs.
 
 ### Custom Logging
 
 Configure the logger for your environment:
 
 ```typescript
-import { logger } from '@playcanvas/splat-transform';
+import { logger, TextRenderer } from '@playcanvas/splat-transform';
 
-logger.setLogger({
-    log: console.log,
-    warn: console.warn,
-    error: console.error,
-    debug: console.debug,
-    progress: (text) => process.stdout.write(text),
-    output: console.log
-});
+// Route status output (scopes, progress bars, messages) to stderr and
+// pipeable output (e.g. JSON stats) to stdout
+logger.setRenderer(new TextRenderer({
+    write: process.stderr.write.bind(process.stderr),
+    output: process.stdout.write.bind(process.stdout)
+}));
 
-logger.setQuiet(true); // Suppress non-error output
+logger.setVerbosity('quiet'); // 'quiet' | 'normal' | 'verbose'
 ```

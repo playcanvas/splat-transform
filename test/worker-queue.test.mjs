@@ -11,9 +11,9 @@ import assert from 'node:assert';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { Column, DataTable, WorkerQueue } from '../src/lib/index.js';
-import { quantize1d } from '../src/lib/spatial/quantize-1d.js';
-import { runQuantize1d, runEncodeWebp } from '../src/lib/workers/index.js';
+import { WorkerQueue } from '../src/lib/index.js';
+import { quantize1dColumns } from '../src/lib/spatial/quantize-1d-core.js';
+import { runQuantize1dColumns, runEncodeWebp } from '../src/lib/workers/index.js';
 import { WebPCodec } from '../src/lib/utils/webp-codec.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -26,23 +26,23 @@ describe('worker queue', () => {
         assert.strictEqual(WorkerQueue.isInline, true);
     });
 
-    it('runQuantize1d matches direct quantize1d output', async () => {
+    it('runQuantize1dColumns matches direct quantize1dColumns output', async () => {
         const data = new Float32Array(10000);
         for (let i = 0; i < data.length; ++i) {
             data[i] = Math.sin(i * 0.37) * 5;
         }
-        const makeTable = () => new DataTable([new Column('a', data.slice())]);
+        const makeColumns = () => [{ name: 'a', data: data.slice() }];
 
-        const direct = quantize1d(makeTable());
-        const viaQueue = await runQuantize1d(makeTable());
+        const direct = quantize1dColumns(makeColumns());
+        const viaQueue = await runQuantize1dColumns(makeColumns());
 
         assert.deepStrictEqual(
-            Array.from(viaQueue.centroids.getColumn(0).data),
-            Array.from(direct.centroids.getColumn(0).data)
+            Array.from(viaQueue.centroids),
+            Array.from(direct.centroids)
         );
         assert.deepStrictEqual(
-            Array.from(viaQueue.labels.getColumn(0).data),
-            Array.from(direct.labels.getColumn(0).data)
+            Array.from(viaQueue.labels[0].data),
+            Array.from(direct.labels[0].data)
         );
     });
 

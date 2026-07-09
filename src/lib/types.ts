@@ -11,22 +11,22 @@ type CollisionMeshShape = 'smooth' | 'faces';
  */
 type Options = {
     /** Number of iterations for SOG SH compression (higher = better quality). Default: 10 */
-    iterations: number;
+    iterations?: number;
 
-    /** LOD levels to read from LCC input */
-    lodSelect: number[];
+    /** LOD levels to read from LCC input. Default: all levels. */
+    lodSelect?: number[];
 
     /** Viewer settings JSON for HTML output */
     viewerSettingsJson?: any;
 
-    /** Whether to generate unbundled HTML output with separate files */
-    unbundled: boolean;
+    /** Whether to generate unbundled HTML output with separate files. Default: false */
+    unbundled?: boolean;
 
     /** Approximate number of Gaussians per LOD chunk (in thousands). Default: 512 */
-    lodChunkCount: number;
+    lodChunkCount?: number;
 
     /** Approximate size of an LOD chunk in world units (meters). Default: 16 */
-    lodChunkExtent: number;
+    lodChunkExtent?: number;
 
     /** SPZ format version to write. Default: 4. */
     spzVersion?: 3 | 4;
@@ -143,8 +143,7 @@ type Options = {
 };
 
 /**
- * Parameter passed to MJS generator scripts.
- * @ignore
+ * Parameter passed to MJS generator scripts (see `ReadFileOptions.params`).
  */
 type Param = {
     name: string;

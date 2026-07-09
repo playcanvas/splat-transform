@@ -13,7 +13,6 @@ import {
     Column,
     DataTable,
     Transform,
-    computeSummary,
     getInputFormat,
     readFile,
     readPly,
@@ -32,7 +31,14 @@ import {
     WebPCodec
 } from '../src/lib/index.js';
 
-import { compareSummaries, compareDataTables } from './helpers/summary-compare.mjs';
+import { dataTableToChunkSource, materializeToDataTable } from '../src/lib/compat/data-table.js';
+import { decodePlyToDataTable } from '../src/lib/readers/read-ply.js';
+import { decodeSplatToDataTable } from '../src/lib/readers/read-splat.js';
+import { writeCompressedPlySource } from '../src/lib/writers/write-compressed-ply.js';
+import { gaussianCloudToDataTable, getSpzModule } from '../src/lib/spz-module.js';
+import { createChunkDataPool } from '../src/lib/chunk/index.js';
+
+import { compareSummaries, compareDataTables, computeStatsView } from './helpers/summary-compare.mjs';
 import { createMinimalTestData, createTestDataTable, encodePlyBinary } from './helpers/test-utils.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -148,26 +154,32 @@ const createSpzFixture = async ({ version = 4, shDegree = 0, extensionBytes = nu
     return extensionBytes ? addSpzV4HeaderExtensions(bytes, extensionBytes) : bytes;
 };
 
+// readSpz is a lazy ChunkSource; materialize it to a DataTable for these tests.
+const readSpzTable = async (source) => {
+    const pool = createChunkDataPool();
+    return materializeToDataTable(await readSpz(source, pool), pool);
+};
+
 describe('PLY Format', () => {
     let testData;
     let plyBytes;
     let expectedSummary;
 
-    before(() => {
+    before(async () => {
         testData = createMinimalTestData();
         testData.transform = Transform.PLY.clone();
         plyBytes = encodePlyBinary(testData);
-        expectedSummary = computeSummary(testData);
+        expectedSummary = await computeStatsView(testData);
     });
 
     it('should read PLY binary data', async () => {
         const source = new BufferReadSource(plyBytes);
-        const dataTable = await readPly(source);
+        const dataTable = await decodePlyToDataTable(source);
 
         assert.strictEqual(dataTable.numRows, 16);
         assert.strictEqual(dataTable.numColumns, 14);
 
-        const actualSummary = computeSummary(dataTable);
+        const actualSummary = await computeStatsView(dataTable);
         compareSummaries(actualSummary, expectedSummary, { tolerance: 1e-5 });
     });
 
@@ -188,7 +200,7 @@ describe('PLY Format', () => {
 
         // Read back
         const source = new BufferReadSource(writtenPly);
-        const readBack = await readPly(source);
+        const readBack = await decodePlyToDataTable(source);
 
         // Compare data tables (should be identical)
         compareDataTables(readBack, testData, 0);
@@ -217,7 +229,7 @@ describe('PLY Format', () => {
         messy.set(header, 0);
         messy.set(body, header.length);
 
-        const dataTable = await readPly(new BufferReadSource(messy));
+        const dataTable = await decodePlyToDataTable(new BufferReadSource(messy));
         assert.strictEqual(dataTable.numRows, testData.numRows);
         assert.strictEqual(dataTable.numColumns, testData.columns.length);
     });
@@ -227,10 +239,10 @@ describe('Compressed PLY Format', () => {
     let testData;
     let expectedSummary;
 
-    before(() => {
+    before(async () => {
         testData = createMinimalTestData();
         testData.transform = Transform.PLY.clone();
-        expectedSummary = computeSummary(testData);
+        expectedSummary = await computeStatsView(testData);
     });
 
     it('should round-trip Compressed PLY with acceptable loss', async () => {
@@ -245,15 +257,76 @@ describe('Compressed PLY Format', () => {
         assert(writtenPly, 'Compressed PLY file should be written');
         assert(writtenPly.length > 0, 'Compressed PLY file should not be empty');
 
-        // Read back (readPly auto-detects compressed format)
+        // Read back via the public reader (readPly detects + decodes compressed)
         const source = new BufferReadSource(writtenPly);
-        const readBack = await readPly(source);
+        const pool = createChunkDataPool();
+        const readBack = await materializeToDataTable(await readPly(source, pool), pool);
 
         assert.strictEqual(readBack.numRows, testData.numRows);
 
         // Compare with tolerance (lossy compression)
-        const actualSummary = computeSummary(readBack);
+        const actualSummary = await computeStatsView(readBack);
         compareSummaries(actualSummary, expectedSummary, { tolerance: 0.1 });
+    });
+
+    it('writeCompressedPlySource (ChunkSource adapter) == writeCompressedPly byte-for-byte', async () => {
+        const dt = createTestDataTable(300, { includeSH: true, shBands: 1 });
+        dt.transform = Transform.PLY.clone();
+
+        const legacyFs = new MemoryFileSystem();
+        await writeCompressedPly({ filename: 'out.compressed.ply', dataTable: dt }, legacyFs);
+
+        const pool = createChunkDataPool();
+        const sourceFs = new MemoryFileSystem();
+        await writeCompressedPlySource(dataTableToChunkSource(dt, pool.chunkSize), pool, { filename: 'out.compressed.ply' }, sourceFs);
+
+        const a = legacyFs.results.get('out.compressed.ply');
+        const b = sourceFs.results.get('out.compressed.ply');
+        assert.ok(a && b, 'both wrote output');
+        assert.strictEqual(
+            Buffer.compare(Buffer.from(a.buffer, a.byteOffset, a.byteLength), Buffer.from(b.buffer, b.byteOffset, b.byteLength)),
+            0,
+            'compressed-ply bytes must be identical'
+        );
+    });
+
+    it('gathers a shuffled subset identically to the sequential decode', async () => {
+        const dt = createTestDataTable(300, { includeSH: true, shBands: 1 });
+        dt.transform = Transform.PLY.clone();
+        const writeFs = new MemoryFileSystem();
+        await writeCompressedPly({ filename: 'g.compressed.ply', dataTable: dt }, writeFs);
+        const bytes = writeFs.results.get('g.compressed.ply');
+
+        const pool = createChunkDataPool({ chunkSize: 64 });
+        // Sequential decode (chunk arm) is the oracle.
+        const full = await materializeToDataTable(await readPly(new BufferReadSource(bytes), pool), pool);
+
+        // Gather the same rows (indices arm). Both paths share decodeRecord, so a
+        // gathered row must bit-equal the sequential row at the same source index
+        // (independent of compression loss). Non-ascending, chunk-straddling, repeat.
+        const src = await readPly(new BufferReadSource(bytes), pool);
+        const order = Uint32Array.from([299, 0, 150, 64, 63, 7, 7, 256]);
+        const count = order.length;
+        const acq = {};
+        for (const layer of ['position', 'geometric', 'color']) {
+            acq[layer] = pool.acquire(layer, src.meta.layouts[layer], count);
+        }
+        await src.read({ indices: order, indexOffset: 0, count, position: acq.position, geometric: acq.geometric, color: acq.color });
+
+        const px = acq.position.field('position');
+        const op = acq.geometric.field('opacity');
+        const dc = acq.color.field('dc');
+        const x = full.getColumnByName('x').data;
+        const opF = full.getColumnByName('opacity').data;
+        const dc0 = full.getColumnByName('f_dc_0').data;
+        for (let j = 0; j < count; j++) {
+            const e = order[j];
+            assert.strictEqual(px[j * 3], x[e], `x out-row ${j}`);
+            assert.strictEqual(op[j], opF[e], `opacity out-row ${j}`);
+            assert.strictEqual(dc[j * 3], dc0[e], `f_dc_0 out-row ${j}`);
+        }
+        for (const layer of ['position', 'geometric', 'color']) acq[layer].release();
+        await src.close();
     });
 });
 
@@ -261,10 +334,10 @@ describe('SOG Format (Bundled)', () => {
     let testData;
     let expectedSummary;
 
-    before(() => {
+    before(async () => {
         testData = createMinimalTestData();
         testData.transform = Transform.PLY.clone();
-        expectedSummary = computeSummary(testData);
+        expectedSummary = await computeStatsView(testData);
     });
 
     it('should round-trip SOG bundled format with acceptable loss', async () => {
@@ -294,7 +367,7 @@ describe('SOG Format (Bundled)', () => {
             assert.strictEqual(readBack.numRows, testData.numRows);
 
             // Compare with higher tolerance (lossy compression)
-            const actualSummary = computeSummary(readBack);
+            const actualSummary = await computeStatsView(readBack);
             compareSummaries(actualSummary, expectedSummary, {
                 tolerance: 0.5,
                 allowExtraColumns: true
@@ -309,10 +382,10 @@ describe('SOG Format (Unbundled)', () => {
     let testData;
     let expectedSummary;
 
-    before(() => {
+    before(async () => {
         testData = createMinimalTestData();
         testData.transform = Transform.PLY.clone();
-        expectedSummary = computeSummary(testData);
+        expectedSummary = await computeStatsView(testData);
     });
 
     it('should round-trip SOG unbundled format with acceptable loss', async () => {
@@ -344,7 +417,7 @@ describe('SOG Format (Unbundled)', () => {
         assert.strictEqual(readBack.numRows, testData.numRows);
 
         // Compare with higher tolerance (lossy compression)
-        const actualSummary = computeSummary(readBack);
+        const actualSummary = await computeStatsView(readBack);
         compareSummaries(actualSummary, expectedSummary, {
             tolerance: 0.5,
             allowExtraColumns: true
@@ -538,7 +611,8 @@ describe('SPLAT Format (Input Only)', () => {
     it('should read .splat file', async () => {
         const splatData = await fsReadFile(join(fixturesDir, 'minimal.splat'));
         const source = new BufferReadSource(splatData);
-        const dataTable = await readSplat(source);
+        const pool = createChunkDataPool();
+        const dataTable = await materializeToDataTable(await readSplat(source, pool), pool);
 
         assert.strictEqual(dataTable.numRows, 4);
         assert.strictEqual(dataTable.numColumns, 14);
@@ -556,12 +630,60 @@ describe('SPLAT Format (Input Only)', () => {
         }
 
         // Verify no NaN or Inf values
-        const summary = computeSummary(dataTable);
+        const summary = await computeStatsView(dataTable);
         for (const [name, stats] of Object.entries(summary.columns)) {
             assert.strictEqual(stats.nanCount, 0, `${name} has NaN values`);
             // Allow opacity to have Inf (for fully transparent/opaque)
             if (name !== 'opacity') {
                 assert.strictEqual(stats.infCount, 0, `${name} has Inf values`);
+            }
+        }
+    });
+
+    it('gathers a shuffled subset identically to the eager decode', async () => {
+        const splatData = await fsReadFile(join(fixturesDir, 'minimal.splat'));
+        const eager = await decodeSplatToDataTable(new BufferReadSource(splatData));
+
+        const pool = createChunkDataPool();
+        const src = await readSplat(new BufferReadSource(splatData), pool);
+        // shuffled, with a repeat — sorted source order coalesces a multi-record run.
+        const order = Uint32Array.from([3, 0, 2, 1, 0]);
+        const count = order.length;
+        const acq = {};
+        for (const layer of ['position', 'geometric', 'color']) {
+            acq[layer] = pool.acquire(layer, src.meta.layouts[layer], count);
+        }
+        await src.read({ indices: order, indexOffset: 0, count, position: acq.position, geometric: acq.geometric, color: acq.color });
+
+        const px = acq.position.field('position');
+        const op = acq.geometric.field('opacity');
+        const dc = acq.color.field('dc');
+        const x = eager.getColumnByName('x').data;
+        const opF = eager.getColumnByName('opacity').data;
+        const dc0 = eager.getColumnByName('f_dc_0').data;
+        for (let j = 0; j < count; j++) {
+            const e = order[j];
+            assert.strictEqual(px[j * 3], x[e], `x out-row ${j}`);
+            assert.strictEqual(op[j], opF[e], `opacity out-row ${j}`);
+            assert.strictEqual(dc[j * 3], dc0[e], `f_dc_0 out-row ${j}`);
+        }
+        for (const layer of ['position', 'geometric', 'color']) acq[layer].release();
+        await src.close();
+    });
+
+    it('lazy chunked read matches the eager decode byte-for-byte (multi-chunk)', async () => {
+        const splatData = await fsReadFile(join(fixturesDir, 'minimal.splat'));
+        const pool = createChunkDataPool({ chunkSize: 2 }); // 4 splats -> 2 chunks (+ short last)
+        const lazy = await materializeToDataTable(await readSplat(new BufferReadSource(splatData), pool), pool);
+        const eager = await decodeSplatToDataTable(new BufferReadSource(splatData));
+
+        assert.strictEqual(lazy.numRows, eager.numRows);
+        assert.deepStrictEqual([...lazy.columnNames].sort(), [...eager.columnNames].sort());
+        for (const name of eager.columnNames) {
+            const a = lazy.getColumnByName(name).data;
+            const b = eager.getColumnByName(name).data;
+            for (let i = 0; i < eager.numRows; i++) {
+                assert.strictEqual(a[i], b[i], `column '${name}' row ${i}`);
             }
         }
     });
@@ -588,7 +710,7 @@ describe('KSPLAT Format (Input Only)', () => {
         }
 
         // Verify no NaN values
-        const summary = computeSummary(dataTable);
+        const summary = await computeStatsView(dataTable);
         for (const [name, stats] of Object.entries(summary.columns)) {
             assert.strictEqual(stats.nanCount, 0, `${name} has NaN values`);
         }
@@ -596,10 +718,46 @@ describe('KSPLAT Format (Input Only)', () => {
 });
 
 describe('SPZ Format (Input Only)', () => {
+    it('readRows gathers arbitrary rows identically to a full read (v4 + SH)', async () => {
+        const spzData = await createSpzFixture({ version: 4, shDegree: 2 });
+        const full = await readSpzTable(new BufferReadSource(spzData));
+        const n = full.numRows;
+        assert.ok(n >= 2, 'fixture needs at least 2 rows');
+
+        const pool = createChunkDataPool();
+        const src = await readSpz(new BufferReadSource(spzData), pool);
+
+        // shuffled subset spanning the scene
+        const order = Uint32Array.from(n > 2 ? [n - 1, 0, (n / 2) | 0] : [n - 1, 0]);
+        const count = order.length;
+        const acq = {};
+        for (const layer of ['position', 'geometric', 'color']) {
+            acq[layer] = pool.acquire(layer, src.meta.layouts[layer], count);
+        }
+        await src.read({ indices: order, indexOffset: 0, count, position: acq.position, geometric: acq.geometric, color: acq.color });
+
+        // readRows shares the per-gaussian decode with read(), so gathered row j
+        // must exactly equal the full-decode row order[j].
+        const px = acq.position.field('position'); // count×3
+        const op = acq.geometric.field('opacity'); // count
+        const dc = acq.color.field('dc');           // count×3
+        const x = full.getColumnByName('x').data;
+        const opF = full.getColumnByName('opacity').data;
+        const dc0 = full.getColumnByName('f_dc_0').data;
+        for (let j = 0; j < count; j++) {
+            const e = order[j];
+            assert.strictEqual(px[j * 3], x[e], `x out-row ${j}`);
+            assert.strictEqual(op[j], opF[e], `opacity out-row ${j}`);
+            assert.strictEqual(dc[j * 3], dc0[e], `f_dc_0 out-row ${j}`);
+        }
+        for (const layer of ['position', 'geometric', 'color']) acq[layer].release();
+        await src.close();
+    });
+
     it('should read .spz v2 fixture file', async () => {
         const spzData = await fsReadFile(join(fixturesDir, 'minimal-v2.spz'));
         const source = new BufferReadSource(spzData);
-        const dataTable = await readSpz(source);
+        const dataTable = await readSpzTable(source);
 
         assert.strictEqual(dataTable.numRows, 4);
 
@@ -616,7 +774,7 @@ describe('SPZ Format (Input Only)', () => {
         }
 
         // Verify no NaN values
-        const summary = computeSummary(dataTable);
+        const summary = await computeStatsView(dataTable);
         for (const [name, stats] of Object.entries(summary.columns)) {
             assert.strictEqual(stats.nanCount, 0, `${name} has NaN values`);
         }
@@ -625,11 +783,11 @@ describe('SPZ Format (Input Only)', () => {
     it('should read .spz v4 fixture file', async () => {
         const spzData = await fsReadFile(join(fixturesDir, 'minimal-v4.spz'));
         const source = new BufferReadSource(spzData);
-        const dataTable = await readSpz(source);
+        const dataTable = await readSpzTable(source);
 
         assert.strictEqual(dataTable.numRows, 4);
 
-        const summary = computeSummary(dataTable);
+        const summary = await computeStatsView(dataTable);
         for (const [name, stats] of Object.entries(summary.columns)) {
             assert.strictEqual(stats.nanCount, 0, `${name} has NaN values`);
         }
@@ -652,7 +810,7 @@ describe('SPZ Format (Input Only)', () => {
         const wrapped = new Uint8Array(spzData.length + 17);
         wrapped.set(spzData, 17);
         const source = new BufferReadSource(wrapped.subarray(17));
-        const dataTable = await readSpz(source);
+        const dataTable = await readSpzTable(source);
 
         assert.strictEqual(dataTable.numRows, 4);
     });
@@ -660,11 +818,11 @@ describe('SPZ Format (Input Only)', () => {
     it('should read .spz v3 fixture file', async () => {
         const spzData = await fsReadFile(join(fixturesDir, 'minimal-v3.spz'));
         const source = new BufferReadSource(spzData);
-        const dataTable = await readSpz(source);
+        const dataTable = await readSpzTable(source);
 
         assert.strictEqual(dataTable.numRows, 4);
 
-        const summary = computeSummary(dataTable);
+        const summary = await computeStatsView(dataTable);
         for (const [name, stats] of Object.entries(summary.columns)) {
             assert.strictEqual(stats.nanCount, 0, `${name} has NaN values`);
         }
@@ -673,7 +831,7 @@ describe('SPZ Format (Input Only)', () => {
     it('should read .spz v3 file with correct quaternion decoding', async () => {
         const spzData = await createSpzFixture({ version: 3 });
         const source = new BufferReadSource(spzData);
-        const dataTable = await readSpz(source);
+        const dataTable = await readSpzTable(source);
 
         assert.strictEqual(dataTable.numRows, 2);
 
@@ -688,7 +846,7 @@ describe('SPZ Format (Input Only)', () => {
             assert(dataTable.hasColumn(col), `Missing column: ${col}`);
         }
 
-        const summary = computeSummary(dataTable);
+        const summary = await computeStatsView(dataTable);
         for (const [name, stats] of Object.entries(summary.columns)) {
             assert.strictEqual(stats.nanCount, 0, `${name} has NaN values`);
         }
@@ -712,11 +870,11 @@ describe('SPZ Format (Input Only)', () => {
     it('should read .spz v4 file with shDegree=0', async () => {
         const spzData = await createSpzFixture({ version: 4, shDegree: 0 });
         const source = new BufferReadSource(spzData);
-        const dataTable = await readSpz(source);
+        const dataTable = await readSpzTable(source);
 
         assert.strictEqual(dataTable.numRows, 2);
 
-        const summary = computeSummary(dataTable);
+        const summary = await computeStatsView(dataTable);
         for (const [name, stats] of Object.entries(summary.columns)) {
             assert.strictEqual(stats.nanCount, 0, `${name} has NaN values`);
         }
@@ -737,28 +895,19 @@ describe('SPZ Format (Input Only)', () => {
         assert(Math.abs(Math.abs(rot3[1]) - Math.sin(Math.PI / 4)) < 0.01);
     });
 
-    it('should read .spz v4 file with shDegree=4', async () => {
+    it('rejects .spz v4 files with shDegree=4 (band 4 exceeds the chunk model)', async () => {
         const spzData = await createSpzFixture({ version: 4, shDegree: 4 });
-        const source = new BufferReadSource(spzData);
-        const dataTable = await readSpz(source);
-
-        assert.strictEqual(dataTable.numRows, 2);
-        for (let i = 0; i < 72; i++) {
-            assert(dataTable.hasColumn(`f_rest_${i}`));
-        }
-
-        for (let i = 0; i < 72; i++) {
-            const col = dataTable.getColumnByName(`f_rest_${i}`).data;
-            assert(Math.abs(col[0]) < 1e-6);
-            assert(Math.abs(col[1]) < 1e-6);
-        }
+        await assert.rejects(
+            readSpzTable(new BufferReadSource(spzData)),
+            /SH degree 4|band 4/
+        );
     });
 
     it('should return an empty table for v4 files with mismatched stream count', async () => {
         const spzData = await createSpzFixture({ version: 4, shDegree: 0 });
         spzData[15] = 4;
         const source = new BufferReadSource(spzData);
-        const dataTable = await readSpz(source);
+        const dataTable = await readSpzTable(source);
         assert.strictEqual(dataTable.numRows, 0);
     });
 
@@ -767,7 +916,7 @@ describe('SPZ Format (Input Only)', () => {
         const view = new DataView(spzData.buffer, spzData.byteOffset, spzData.byteLength);
         view.setUint32(16, spzData.length + 100, true);
         const source = new BufferReadSource(spzData);
-        const dataTable = await readSpz(source);
+        const dataTable = await readSpzTable(source);
         assert.strictEqual(dataTable.numRows, 0);
     });
 
@@ -782,11 +931,11 @@ describe('SPZ Format (Input Only)', () => {
             ])
         });
         const source = new BufferReadSource(spzData);
-        const dataTable = await readSpz(source);
+        const dataTable = await readSpzTable(source);
 
         assert.strictEqual(dataTable.numRows, 2);
 
-        const summary = computeSummary(dataTable);
+        const summary = await computeStatsView(dataTable);
         for (const [name, stats] of Object.entries(summary.columns)) {
             assert.strictEqual(stats.nanCount, 0, `${name} has NaN values`);
         }
@@ -817,13 +966,13 @@ describe('SPZ Format (Output)', () => {
         assert.strictEqual(header.getUint32(4, true), 4);
 
         const source = new BufferReadSource(writtenSpz);
-        const readBack = await readSpz(source);
+        const readBack = await readSpzTable(source);
 
         assert.strictEqual(readBack.numRows, testData.numRows);
         assert.strictEqual(readBack.transform.equals(Transform.PLY), true);
 
-        const actualSummary = computeSummary(readBack);
-        const expectedSummary = computeSummary(testData);
+        const actualSummary = await computeStatsView(readBack);
+        const expectedSummary = await computeStatsView(testData);
         compareSummaries(actualSummary, expectedSummary, {
             tolerance: 0.25,
             allowExtraColumns: true
@@ -843,9 +992,47 @@ describe('SPZ Format (Output)', () => {
         assert.strictEqual(writtenSpz[0], 0x1f);
         assert.strictEqual(writtenSpz[1], 0x8b);
 
-        const readBack = await readSpz(new BufferReadSource(writtenSpz));
+        const readBack = await readSpzTable(new BufferReadSource(writtenSpz));
         assert.strictEqual(readBack.numRows, testData.numRows);
         assert.strictEqual(readBack.transform.equals(Transform.PLY), true);
+    });
+});
+
+describe('SPZ pure-JS decoder vs @adobe/spz (raw decode)', () => {
+    // The migration rests on this: decode each .spz with the pure-JS reader and
+    // with the WASM at `to: UNSPECIFIED` (raw — the convention both reader and
+    // writer now share) and confirm they agree column-for-column.
+    const assertTablesClose = (a, b, tol) => {
+        assert.strictEqual(a.numRows, b.numRows, 'row count');
+        assert.deepStrictEqual([...a.columnNames].sort(), [...b.columnNames].sort(), 'columns');
+        for (const name of a.columnNames) {
+            const x = a.getColumnByName(name).data;
+            const y = b.getColumnByName(name).data;
+            for (let i = 0; i < a.numRows; i++) {
+                assert.ok(Math.abs(x[i] - y[i]) <= tol + tol * Math.abs(y[i]), `column '${name}' row ${i}: ${x[i]} vs ${y[i]}`);
+            }
+        }
+    };
+
+    const wasmRawDecode = async (bytes) => {
+        const spz = await getSpzModule();
+        const buf = (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) ? bytes : bytes.slice();
+        const cloud = await spz.loadSpzFromBuffer(buf, { to: spz.CoordinateSystem.UNSPECIFIED });
+        return gaussianCloudToDataTable(cloud);
+    };
+
+    for (const name of ['minimal-v2.spz', 'minimal-v3.spz', 'minimal-v4.spz']) {
+        it(`matches the WASM raw decode: ${name}`, async () => {
+            const bytes = new Uint8Array(await fsReadFile(join(fixturesDir, name)));
+            const mine = await readSpzTable(new BufferReadSource(bytes));
+            assertTablesClose(mine, await wasmRawDecode(bytes), 1e-4);
+        });
+    }
+
+    it('matches the WASM raw decode for a v4 degree-3 SH fixture', async () => {
+        const bytes = await createSpzFixture({ version: 4, shDegree: 3 });
+        const mine = await readSpzTable(new BufferReadSource(bytes));
+        assertTablesClose(mine, await wasmRawDecode(bytes), 1e-4);
     });
 });
 
@@ -915,7 +1102,7 @@ describe('MJS Generator Format (Input Only)', () => {
         assert.strictEqual(dataTable.numRows, 16);
 
         // Verify summary is reasonable
-        const summary = computeSummary(dataTable);
+        const summary = await computeStatsView(dataTable);
         assert.strictEqual(summary.rowCount, 16);
 
         // Positions should span expected range

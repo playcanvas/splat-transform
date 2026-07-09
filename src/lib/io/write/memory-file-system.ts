@@ -5,6 +5,7 @@ class MemoryWriter implements Writer {
     bytesWritten = 0;
     write: (data: Uint8Array) => void;
     close: () => void;
+    abort: () => void;
 
     constructor(onclose: (buffers: Uint8Array[]) => void) {
         const buffers: Uint8Array[] = [];
@@ -47,6 +48,14 @@ class MemoryWriter implements Writer {
                 cursor = 0;
             }
             onclose(buffers);
+        };
+
+        this.abort = () => {
+            // discard everything written; onclose never fires so no result is
+            // published
+            buffers.length = 0;
+            buffer = null;
+            cursor = 0;
         };
     }
 }

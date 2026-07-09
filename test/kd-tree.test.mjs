@@ -1,26 +1,87 @@
 /**
- * KdTree tests for splat-transform.
+ * KdTree tests — the engine-free kd-tree over raw column arrays, used by
+ * worker tasks (which must not import DataTable/playcanvas), decimation
+ * block KNN, and the k-means CPU assignment fallback.
  *
- * Regression coverage for the O(N^2) build hang on degenerate inputs where many
- * points share a coordinate (e.g. a splat with every gaussian at the origin):
- * the build must stay O(N log N), and nearest-neighbour queries must remain
- * correct when ties are present.
+ * Includes regression coverage for the O(N^2) build hang on degenerate
+ * inputs where many points share a coordinate (e.g. a splat with every
+ * gaussian at the origin): the build must stay O(N log N), and
+ * nearest-neighbour queries must remain correct when ties are present.
  */
 
 import assert from 'node:assert';
 import { performance } from 'node:perf_hooks';
 import { describe, it } from 'node:test';
 
-import { Column, DataTable } from '../src/lib/index.js';
 import { KdTree } from '../src/lib/spatial/kd-tree.js';
 
-const buildTree = (xs, ys, zs) => new KdTree(new DataTable([
-    new Column('x', Float32Array.from(xs)),
-    new Column('y', Float32Array.from(ys)),
-    new Column('z', Float32Array.from(zs))
-]));
+const mulberry = (seed) => {
+    let t = seed >>> 0;
+    return () => {
+        t += 0x6d2b79f5;
+        let r = Math.imul(t ^ (t >>> 15), t | 1);
+        r ^= r + Math.imul(r ^ (r >>> 7), r | 61);
+        return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+    };
+};
+
+const randomCols = (n, dims, seed) => {
+    const rand = mulberry(seed);
+    return Array.from({ length: dims }, () => Float32Array.from({ length: n }, () => rand() * 10));
+};
 
 describe('KdTree', () => {
+    it('findKNearest matches brute force (3D)', () => {
+        const n = 2000;
+        const [x, y, z] = randomCols(n, 3, 12345);
+        const tree = new KdTree([x, y, z]);
+        const q = new Float32Array([5, 5, 5]);
+        const k = 8;
+        const got = tree.findKNearest(q, k);
+        const d2 = i => (x[i] - q[0]) ** 2 + (y[i] - q[1]) ** 2 + (z[i] - q[2]) ** 2;
+        const brute = Array.from({ length: n }, (_, i) => i).sort((a, b) => d2(a) - d2(b)).slice(0, k);
+        assert.deepStrictEqual([...got.indices], brute);
+        for (let i = 0; i < k; i++) {
+            assert.ok(Math.abs(got.distances[i] - d2(brute[i])) < 1e-5);
+        }
+    });
+
+    it('findNearest matches brute force and respects filter (5D, k-means shape)', () => {
+        const n = 500;
+        const cols = randomCols(n, 5, 777);
+        const tree = new KdTree(cols);
+        const rand = mulberry(42);
+        for (let t = 0; t < 50; t++) {
+            const q = Float32Array.from({ length: 5 }, () => rand() * 10);
+            const d2 = i => cols.reduce((acc, c, j) => acc + (c[i] - q[j]) ** 2, 0);
+            const bruteAll = Array.from({ length: n }, (_, i) => i).sort((a, b) => d2(a) - d2(b));
+            assert.strictEqual(tree.findNearest(q).index, bruteAll[0]);
+            const filter = i => i % 2 === 0;
+            assert.strictEqual(tree.findNearest(q, filter).index, bruteAll.find(filter));
+        }
+    });
+
+    it('flatten produces a traversable tree covering all points exactly once', () => {
+        const n = 257;
+        const [x, y, z] = randomCols(n, 3, 99);
+        const flat = new KdTree([x, y, z]).flatten();
+        assert.strictEqual(flat.rootIdx, 0);
+        const seen = new Set();
+        const stack = [flat.rootIdx];
+        while (stack.length) {
+            const t = stack.pop();
+            const splat = flat.nodeSplatIdx[t];
+            assert.ok(!seen.has(splat), 'splat appears once');
+            seen.add(splat);
+            assert.strictEqual(flat.nodeX[t], x[splat]);
+            assert.strictEqual(flat.nodeY[t], y[splat]);
+            assert.strictEqual(flat.nodeZ[t], z[splat]);
+            if (flat.nodeLeft[t] !== 0xFFFFFFFF) stack.push(flat.nodeLeft[t]);
+            if (flat.nodeRight[t] !== 0xFFFFFFFF) stack.push(flat.nodeRight[t]);
+        }
+        assert.strictEqual(seen.size, n);
+    });
+
     it('builds in sub-quadratic time over a large all-identical point set', { timeout: 5000 }, () => {
         // Pre-fix the 2-way Lomuto partition degenerated to O(N^2) in the KD-tree
         // *build* (~5e9 ops at N=100k → tens of seconds), which is exactly how the
@@ -31,11 +92,7 @@ describe('KdTree', () => {
         const N = 100_000;
 
         const start = performance.now();
-        const tree = new KdTree(new DataTable([
-            new Column('x', new Float32Array(N)),
-            new Column('y', new Float32Array(N)),
-            new Column('z', new Float32Array(N))
-        ]));
+        const tree = new KdTree([new Float32Array(N), new Float32Array(N), new Float32Array(N)]);
         const { indices, distances } = tree.findKNearest(new Float32Array([0, 0, 0]), 8);
         const elapsed = performance.now() - start;
 
@@ -56,10 +113,10 @@ describe('KdTree', () => {
     it('returns correct neighbours when the set contains duplicate coordinates', () => {
         // Five duplicates at the origin plus distinct points along +x. Exercises
         // the equal-block handling while keeping a well-defined nearest result.
-        const xs = [0, 0, 0, 0, 0, 1, 2, 5];
-        const ys = [0, 0, 0, 0, 0, 0, 0, 0];
-        const zs = [0, 0, 0, 0, 0, 0, 0, 0];
-        const tree = buildTree(xs, ys, zs);
+        const xs = Float32Array.from([0, 0, 0, 0, 0, 1, 2, 5]);
+        const ys = new Float32Array(8);
+        const zs = new Float32Array(8);
+        const tree = new KdTree([xs, ys, zs]);
 
         // Nearest to (1.9, 0, 0) is index 6 at (2,0,0), dist^2 = 0.01.
         const near = tree.findNearest(new Float32Array([1.9, 0, 0]));
@@ -90,7 +147,7 @@ describe('KdTree', () => {
             ys.push(rand());
             zs.push(rand());
         }
-        const tree = buildTree(xs, ys, zs);
+        const tree = new KdTree([xs, ys, zs]);
 
         const k = 5;
         for (const qi of [0, 17, 199, 333, 499]) {
@@ -112,5 +169,12 @@ describe('KdTree', () => {
                     `query ${qi} neighbour ${i}: got ${distances[i]}, expected ${all[i]}`);
             }
         }
+    });
+
+    it('is engine-free (module source imports nothing from data-table or playcanvas)', async () => {
+        const { readFile } = await import('node:fs/promises');
+        const src = await readFile(new URL('../src/lib/spatial/kd-tree.ts', import.meta.url), 'utf8');
+        assert.ok(!/from '.*data-table/.test(src), 'no data-table import');
+        assert.ok(!/from 'playcanvas'/.test(src), 'no playcanvas import');
     });
 });

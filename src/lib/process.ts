@@ -1,8 +1,14 @@
 import { Vec3 } from 'playcanvas';
 
-import { Column, DataTable, simplifyGaussians, sortMortonOrder, computeSummary, type SummaryData, convertToSpace, getSHBands } from './data-table';
+import { createChunkDataPool } from './chunk';
+import { dataTableToChunkSource, materializeToDataTable } from './compat/data-table';
+import { Column, DataTable, sortMortonOrder, convertToSpace, getSHBands } from './data-table';
+import { decimateSource } from './decimate';
+import { computeSourceStats } from './ops';
+import { formatSourceInfo, formatSourceStats } from './source-info';
 import type { DeviceCreator } from './types';
 import { fmtCount, type Group, logger, Transform } from './utils';
+import { inverseTransforms, rawColumnMap, isTransformColumn } from './value-transforms';
 import { filterCluster as filterClusterFn } from './voxel/filter-cluster';
 import { filterFloaters as filterFloatersFn } from './voxel/filter-floaters';
 
@@ -116,21 +122,25 @@ type Param = {
 };
 
 /**
- * Assign a LOD level to all splats.
+ * Print per-LOD, per-column statistics (with the structural info block) to the
+ * logger — the data-level counterpart to {@link Info}.
  */
-type Lod = {
+type Stats = {
     /** Action type identifier. */
-    kind: 'lod';
-    /** LOD level to assign. */
-    value: number;
+    kind: 'stats';
+    /** Output format. Default: 'text' */
+    format?: 'text' | 'json';
 };
 
 /**
- * Print a statistical summary to the logger.
+ * Print structural metadata (per-LOD counts, columns, SH bands) to the logger —
+ * the cheap, header-level counterpart to {@link Stats} (no data specifics).
  */
-type Summary = {
+type Info = {
     /** Action type identifier. */
-    kind: 'summary';
+    kind: 'info';
+    /** Output format. Default: 'text' */
+    format?: 'text' | 'json';
 };
 
 /**
@@ -217,56 +227,12 @@ type ProcessOptions = {
  * - `filterSphere` - Keep splats within a sphere
  * - `filterFloaters` - Remove splats not contributing to any occupied voxel (GPU)
  * - `filterCluster` - Keep splats in the connected cluster at a seed position (GPU)
- * - `lod` - Assign LOD level to all splats
- * - `summary` - Print statistical summary to logger
+ * - `stats` - Print per-LOD, per-column statistics to logger
+ * - `info` - Print structural metadata to logger
  * - `mortonOrder` - Reorder splats by Morton code for spatial locality
  * - `decimate` - Simplify to target count via progressive pairwise merging
  */
-type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | FilterFloaters | FilterCluster | Param | Lod | Summary | MortonOrder | Decimate;
-
-const SH_C0 = 0.28209479177387814;
-
-// Inverse transforms: convert user-friendly values to raw PLY space.
-// All transforms are monotonic increasing, so comparison direction is preserved.
-const inverseTransforms: Record<string, (v: number) => number> = {
-    'opacity': v => Math.log(v / (1 - v)),
-    'scale_0': Math.log,
-    'scale_1': Math.log,
-    'scale_2': Math.log,
-    'f_dc_0': v => (v - 0.5) / SH_C0,
-    'f_dc_1': v => (v - 0.5) / SH_C0,
-    'f_dc_2': v => (v - 0.5) / SH_C0
-};
-
-// Forward transforms: convert raw PLY values to user-friendly space (for summary display).
-const forwardTransforms: Record<string, (v: number) => number> = {
-    'opacity': v => 1 / (1 + Math.exp(-v)),
-    'scale_0': Math.exp,
-    'scale_1': Math.exp,
-    'scale_2': Math.exp,
-    'f_dc_0': v => 0.5 + v * SH_C0,
-    'f_dc_1': v => 0.5 + v * SH_C0,
-    'f_dc_2': v => 0.5 + v * SH_C0
-};
-
-// Maps `_raw` suffixed column names to their underlying PLY column.
-const rawColumnMap: Record<string, string> = {
-    'opacity_raw': 'opacity',
-    'scale_0_raw': 'scale_0',
-    'scale_1_raw': 'scale_1',
-    'scale_2_raw': 'scale_2',
-    'f_dc_0_raw': 'f_dc_0',
-    'f_dc_1_raw': 'f_dc_1',
-    'f_dc_2_raw': 'f_dc_2'
-};
-
-const transformColumnNames = new Set([
-    'x', 'y', 'z',
-    'rot_0', 'rot_1', 'rot_2', 'rot_3',
-    'scale_0', 'scale_1', 'scale_2'
-]);
-
-const isTransformColumn = (name: string): boolean => transformColumnNames.has(name) || /^f_rest_\d+$/.test(name);
+type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | FilterFloaters | FilterCluster | Param | Stats | Info | MortonOrder | Decimate;
 
 // Describe a delta as "removed N" / "added N" relative to the previous count.
 const describeDelta = (delta: number, noun: string): string => {
@@ -284,54 +250,6 @@ const endFilterGroup = (g: Group, prev: DataTable, next: DataTable) => {
     if (removedCols !== 0) parts.push(describeDelta(removedCols, 'columns'));
     logger.info(parts.length > 0 ? parts.join(', ') : 'no change');
     g.end();
-};
-
-const formatMarkdown = (summary: SummaryData): string => {
-    const lines: string[] = [];
-
-    lines.push('# Summary');
-    lines.push('');
-    lines.push(`**Row Count:** ${summary.rowCount}`);
-    lines.push('');
-
-    // Build header and data rows as string arrays
-    const headers = ['Column', 'min', 'max', 'median', 'mean', 'stdDev', 'nans', 'infs', 'histogram'];
-    const rows: string[][] = [];
-
-    for (const [name, stats] of Object.entries(summary.columns)) {
-        const fn = forwardTransforms[name];
-        const fmt = (v: number) => String(fn ? +(fn(v).toPrecision(6)) : v);
-        rows.push([
-            name,
-            fmt(stats.min),
-            fmt(stats.max),
-            fmt(stats.median),
-            fmt(stats.mean),
-            fmt(stats.stdDev),
-            String(stats.nanCount),
-            String(stats.infCount),
-            stats.histogram
-        ]);
-    }
-
-    // Calculate max width for each column
-    const colWidths = headers.map((header, colIndex) => {
-        const dataWidths = rows.map(row => row[colIndex].length);
-        return Math.max(header.length, ...dataWidths);
-    });
-
-    // Build aligned table
-    const padRow = (cells: string[]) => `| ${cells.map((cell, i) => cell.padEnd(colWidths[i])).join(' | ')} |`;
-
-    const separator = `|${colWidths.map(w => '-'.repeat(w + 2)).join('|')}|`;
-
-    lines.push(padRow(headers));
-    lines.push(separator);
-    for (const row of rows) {
-        lines.push(padRow(row));
-    }
-
-    return lines.join('\n');
 };
 
 const filter = (dataTable: DataTable, predicate: (row: any, rowIndex: number) => boolean): DataTable => {
@@ -354,7 +272,7 @@ const filter = (dataTable: DataTable, predicate: (row: any, rowIndex: number) =>
  * Applies a sequence of processing actions to splat data.
  *
  * Actions are applied in order and can include transformations (translate, rotate, scale),
- * filters (NaN, value, box, sphere, bands), and analysis (summary).
+ * filters (NaN, value, box, sphere, bands), and analysis (stats).
  *
  * @param dataTable - The input splat data.
  * @param processActions - Array of actions to apply in sequence.
@@ -558,17 +476,19 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 // skip params
                 break;
             }
-            case 'lod': {
-                if (!result.getColumnByName('lod')) {
-                    result.addColumn(new Column('lod', new Float32Array(result.numRows)));
-                }
-                result.getColumnByName('lod').data.fill(processAction.value);
+            case 'stats': {
+                // Bridge to a transient ChunkSource and reuse the streaming
+                // stats pass; raw/unbaked values, exactly as the table holds them.
+                const src = dataTableToChunkSource(result);
+                const stats = await computeSourceStats(src, createChunkDataPool());
+                logger.output(formatSourceStats(src.meta, stats, processAction.format));
+                await src.close();
                 break;
             }
-            case 'summary': {
-                const summary = computeSummary(result);
-                const markdown = formatMarkdown(summary);
-                logger.output(markdown);
+            case 'info': {
+                const src = dataTableToChunkSource(result);
+                logger.output(formatSourceInfo(src.meta, processAction.format));
+                await src.close();
                 break;
             }
             case 'mortonOrder': {
@@ -589,13 +509,30 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 }
                 keepCount = Math.max(0, keepCount);
 
-                // Pass the factory (not an eagerly-created device) so
-                // `simplifyGaussians` can create the device lazily — and skip
-                // creation entirely when the input is already at or below the
-                // target count. The caller of `processDataTable` is
-                // responsible for caching the device if it should be reused
-                // across actions (see `DeviceCreator` contract in types.ts).
-                result = await simplifyGaussians(result, keepCount, options?.createDevice);
+                if (keepCount === 0) {
+                    result = result.clone({ rows: [] });
+                    break;
+                }
+                if (keepCount >= result.numRows) {
+                    break;
+                }
+
+                // Bridge to the chunk-native decimator: DataTable callers are
+                // RAM-scale by definition, so intermediates use the in-memory
+                // materialization (no spill option needed). The device factory
+                // passes through so decimation shares the caller's cached GPU.
+                const pool = createChunkDataPool();
+                const src = dataTableToChunkSource(result);
+                const decimated = await decimateSource(src, pool, {
+                    targetCount: keepCount,
+                    createDevice: options?.createDevice
+                });
+                // The decimator works in PLY space (its spill/terminal format);
+                // convert back to the DataTable convention (identity space,
+                // pending transform baked). World-space result is unchanged —
+                // decimation is TRS-covariant.
+                result = convertToSpace(await materializeToDataTable(decimated, pool), Transform.IDENTITY);
+                await decimated.close();
                 break;
             }
             case 'filterFloaters': {
@@ -647,8 +584,8 @@ export {
     type FilterFloaters,
     type FilterCluster,
     type Param,
-    type Lod,
-    type Summary,
+    type Stats,
+    type Info,
     type MortonOrder,
     type Decimate
 };

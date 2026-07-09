@@ -7,12 +7,16 @@ type ZipEntry = {
     filename: Uint8Array;
     crc: Crc;
     sizeBytes: number;
+    // byte offset of the entry's local header within the archive (central
+    // directory records point back at it)
+    headerOffset: number;
 };
 
 // Writer for a single zip entry
 class ZipEntryWriter implements Writer {
     write: (data: Uint8Array) => Promise<void>;
     close: () => Promise<void>;
+    abort: () => Promise<void>;
     get bytesWritten(): number {
         return this.entry.sizeBytes;
     }
@@ -29,6 +33,12 @@ class ZipEntryWriter implements Writer {
 
         this.close = async () => {
             // no-op, finalization is handled by ZipFileSystem
+        };
+
+        this.abort = async () => {
+            // a partially-written entry can't be removed from the stream, so
+            // the whole archive is unsalvageable — abort the underlying writer
+            await outputWriter.abort();
         };
     }
 }
@@ -62,6 +72,9 @@ class ZipFileSystem implements FileSystem {
         const textEncoder = new TextEncoder();
         const files: ZipEntry[] = [];
         let activeEntry: ZipEntry | null = null;
+        // running byte offset into the archive (next local header goes here;
+        // at close time this is where the central directory starts)
+        let offset = 0;
 
         const date = new Date();
         const dosTime = (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2);
@@ -83,15 +96,24 @@ class ZipFileSystem implements FileSystem {
             view.setUint16(26, nameLen, true);
             header.set(filenameBuf, 30);
 
+            const entry: ZipEntry = { filename: filenameBuf, crc: new Crc(), sizeBytes: 0, headerOffset: offset };
+            offset += header.length;
+
             await writer.write(header);
 
-            const entry: ZipEntry = { filename: filenameBuf, crc: new Crc(), sizeBytes: 0 };
             files.push(entry);
             return entry;
         };
 
         const writeEntryFooter = async (entry: ZipEntry) => {
             const { crc, sizeBytes } = entry;
+            offset += sizeBytes + 16;
+            // Plain (non-zip64) zip stores every size/offset as u32. Fail loud
+            // when the archive crosses 4 GiB rather than silently writing
+            // wrapped offsets (an unreadable file).
+            if (offset >= 0xffffffff) {
+                throw new Error('Zip output exceeds 4 GiB and zip64 is not supported — write unbundled output instead.');
+            }
             const data = new Uint8Array(16);
             const view = new DataView(data.buffer);
             view.setUint32(0, 0x08074b50, true);
@@ -127,9 +149,8 @@ class ZipFileSystem implements FileSystem {
             }
 
             // Write central directory records
-            let offset = 0;
             for (const file of files) {
-                const { filename, crc, sizeBytes } = file;
+                const { filename, crc, sizeBytes, headerOffset } = file;
                 const nameLen = filename.length;
 
                 const cdr = new Uint8Array(46 + nameLen);
@@ -145,16 +166,13 @@ class ZipFileSystem implements FileSystem {
                 view.setUint32(20, sizeBytes, true);
                 view.setUint32(24, sizeBytes, true);
                 view.setUint16(28, nameLen, true);
-                view.setUint32(42, offset, true);
+                view.setUint32(42, headerOffset, true);
                 cdr.set(filename, 46);
 
                 await writer.write(cdr);
-
-                offset += 30 + nameLen + sizeBytes + 16; // 30 local header + name + data + 16 descriptor
             }
 
             const filenameLength = files.reduce((tot, file) => tot + file.filename.length, 0);
-            const dataLength = files.reduce((tot, file) => tot + file.sizeBytes, 0);
 
             // Write end of central directory record
             const eocd = new Uint8Array(22);
@@ -163,7 +181,7 @@ class ZipFileSystem implements FileSystem {
             eocdView.setUint16(8, files.length, true);
             eocdView.setUint16(10, files.length, true);
             eocdView.setUint32(12, filenameLength + files.length * 46, true);
-            eocdView.setUint32(16, filenameLength + files.length * (30 + 16) + dataLength, true);
+            eocdView.setUint32(16, offset, true); // central directory starts where entry data ended
 
             await writer.write(eocd);
 

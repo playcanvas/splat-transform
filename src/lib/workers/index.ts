@@ -1,37 +1,32 @@
 import { WorkerQueue } from './worker-queue';
-import { Column, DataTable } from '../data-table/data-table';
-import { quantize1d } from '../spatial/quantize-1d';
+import { type TypedArray } from '../data-table/data-table';
+import { quantize1dColumns, type QuantizedColumns } from '../spatial/quantize-1d-core';
 
 /**
  * Typed client wrappers around WorkerQueue tasks. These own the marshalling
- * between rich types (DataTable) and the transferable shapes the worker
- * protocol uses, keeping call sites one-liners.
+ * between caller types and the transferable shapes the worker protocol uses,
+ * keeping call sites one-liners.
  */
 
 /**
- * quantize1d, preferring a worker thread.
+ * quantize1d over raw named columns, preferring a worker thread.
  *
- * @param dataTable - Input data table whose columns are pooled into 1D.
+ * @param columns - Input columns pooled into 1D.
  * @param k - Number of codebook entries.
  * @param alpha - Density weight exponent.
- * @returns Centroids and labels (see quantize1d).
+ * @returns Centroids (k Float32 codebook) and per-column Uint8 labels.
  * @ignore
  */
-const runQuantize1d = async (dataTable: DataTable, k?: number, alpha?: number): Promise<{ centroids: DataTable, labels: DataTable }> => {
+const runQuantize1dColumns = async (columns: { name: string, data: TypedArray }[], k?: number, alpha?: number): Promise<QuantizedColumns> => {
     if (WorkerQueue.isInline) {
         // zero-copy: no point marshalling when running on this thread anyway
-        return quantize1d(dataTable, k, alpha);
+        return quantize1dColumns(columns, k, alpha);
     }
 
     // compact copies: column data may be views into larger shared buffers,
     // and the originals must remain usable after the transfer
-    const columns = dataTable.columns.map(c => ({ name: c.name, data: c.data.slice() }));
-    const result = await WorkerQueue.run('quantize1d', { columns, k, alpha }, columns.map(c => c.data.buffer as ArrayBuffer));
-
-    return {
-        centroids: new DataTable([new Column('data', result.centroids)]),
-        labels: new DataTable(result.labels.map(c => new Column(c.name, c.data)))
-    };
+    const copies = columns.map(c => ({ name: c.name, data: c.data.slice() }));
+    return await WorkerQueue.run('quantize1d', { columns: copies, k, alpha }, copies.map(c => c.data.buffer as ArrayBuffer));
 };
 
 /**
@@ -47,4 +42,4 @@ const runEncodeWebp = (rgba: Uint8Array, width: number, height: number): Promise
     return WorkerQueue.run('encodeWebp', { rgba, width, height }, [rgba.buffer as ArrayBuffer]);
 };
 
-export { WorkerQueue, runQuantize1d, runEncodeWebp };
+export { WorkerQueue, runQuantize1dColumns, runEncodeWebp };

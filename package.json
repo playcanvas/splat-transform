@@ -61,6 +61,7 @@
     "@typescript-eslint/parser": "8.62.1",
     "eslint": "9.39.4",
     "eslint-import-resolver-typescript": "4.4.5",
+    "fzstd": "^0.1.1",
     "pathe": "2.0.3",
     "playcanvas": "2.20.2",
     "publint": "0.3.21",
@@ -75,18 +76,18 @@
     "playcanvas": "^2.0.0"
   },
   "scripts": {
-    "build": "rollup -c && node -e \"fs=require('fs');fs.copyFileSync('dist/lib/index.d.ts','dist/lib/index.d.cts')\"",
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && rollup -c && node -e \"fs=require('fs');fs.copyFileSync('dist/lib/index.d.ts','dist/lib/index.d.cts')\"",
     "docs": "typedoc",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",
     "publint": "publint",
     "watch": "rollup -c -w",
     "pretest": "npm run build",
-    "test": "node --import tsx --test test/*.test.mjs",
+    "test": "node --import tsx --test --test-force-exit test/*.test.mjs",
     "test:fixtures": "node --import tsx test/fixtures/create-fixtures.mjs"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.0.0"
   },
   "type": "module"
 }
