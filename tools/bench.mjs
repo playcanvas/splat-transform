@@ -2,7 +2,7 @@
 /**
  * Benchmark harness: runs the BUILT CLI (bin/cli.mjs -> dist/cli.mjs) against
  * real scenes, one warmup + N timed repetitions per workload, and reports the
- * median wall time and peak memory (parsed from the CLI's --mem output).
+ * median wall time and peak memory (parsed from the CLI's --memory output).
  *
  * Build first (`npm run build`), then:
  *
@@ -57,11 +57,11 @@ const WORKLOADS = [
     // lcc2 (sog sub-files) -> streamed SOG over 4 levels (~9.1M rows, 0 SH
     // bands so k-means is skipped); exercises containerSource/concatSource
     // gathers and the sog sub-file decode
-    { name: 'lcc2-lod', reps: 2, input: lcc2, out: 'lod-meta.json', args: ['-O', '2,3,4,5'] },
+    { name: 'lcc2-lod', reps: 2, input: lcc2, out: 'lod-meta.json', args: ['-L', '2,3,4,5'] },
 
     // merge-based decimation to 50% (6.1M rows); exercises the priority pass,
     // moment-match merges, and the merge stream terminal
-    { name: 'decimate', reps: 2, input: join(scenes, 'decimate-pill.ply'), out: 'out.ply', args: ['-F', '50%'] },
+    { name: 'decimate', reps: 2, input: join(scenes, 'decimate-pill.ply'), out: 'out.ply', args: ['-d', '50%'] },
 
     // v1 lcc (5 LODs, 6.18M finest, 0 SH bands so no k-means) -> streamed SOG;
     // GPU-free, dominated by the LOD writer's random-index gathers against
@@ -71,7 +71,7 @@ const WORKLOADS = [
     // big-scene decimation (53.2M rows, 0 SH bands): the per-block scratch
     // churn in the priority pass only shows at this scale. One cold run per
     // side (no warmup) — a warmup would double a very long workload.
-    { name: 'decimate-big', reps: 1, warmup: false, input: join(scenes, 'andrii-lod1.ply'), out: 'out.ply', args: ['-F', '50%'] }
+    { name: 'decimate-big', reps: 1, warmup: false, input: join(scenes, 'andrii-lod1.ply'), out: 'out.ply', args: ['-d', '50%'] }
 ];
 
 // ---- helpers ------------------------------------------------------------
@@ -96,7 +96,7 @@ const median = (xs) => {
 const runOnce = (w, outDir) => {
     rmSync(outDir, { recursive: true, force: true });
     mkdirSync(outDir, { recursive: true });
-    const args = ['bin/cli.mjs', w.input, ...w.args, join(outDir, w.out), '-w', '--mem'];
+    const args = ['bin/cli.mjs', w.input, ...w.args, join(outDir, w.out), '-w', '--memory'];
     const t0 = performance.now();
     const res = spawnSync(process.execPath, args, { cwd: repoRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
     const wallMs = performance.now() - t0;
