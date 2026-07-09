@@ -7,7 +7,7 @@ import {
 } from '../chunk';
 import { type FileSystem } from '../io/write';
 import { bakeTransform } from '../ops';
-import { Transform } from '../utils';
+import { logger, Transform } from '../utils';
 
 const GEOMETRIC_COLS = ['rot_0', 'rot_1', 'rot_2', 'rot_3', 'scale_0', 'scale_1', 'scale_2', 'opacity'];
 
@@ -129,6 +129,8 @@ const writePlyStreaming = async (
         const outRecord = new Uint8Array(chunkSize * recordStride);
         const outU32 = new Uint32Array(outRecord.buffer);
 
+        const bar = logger.bar('Writing', numChunks);
+
         for (let k = 0; k < numChunks; k++) {
             const count = Math.min(chunkSize, N - k * chunkSize);
 
@@ -164,7 +166,11 @@ const writePlyStreaming = async (
             await writer.write(outRecord.subarray(0, count * recordStride));
 
             for (const layer of layers) acquired[layer]!.release();
+
+            bar.tick();
         }
+
+        bar.end();
 
         await writer.close();
     } catch (err) {

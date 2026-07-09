@@ -59,7 +59,7 @@ export type { WriteLodSourceOptions } from './writers';
 // whole-scene table, its processor, and the bridges to/from the chunk-source
 // world. Everything here materializes the full scene in memory.
 // ---------------------------------------------------------------------------
-export { Column, DataTable, combine } from './data-table';
+export { Column, DataTable, combine, sortMortonOrder } from './data-table';
 export type { TypedArray, ColumnType, Row } from './data-table';
 export { dataTableToChunkSource, materializeToDataTable } from './compat/data-table';
 export { processDataTable } from './process';

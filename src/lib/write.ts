@@ -6,12 +6,14 @@ import { type DeviceCreator, type Options } from './types';
 import { writeCompressedPly, writeCsv, writeGlb, writeHtml, writeImage, writePly, writeSog, writeSogSource, writeSpz, writeVoxel } from './writers';
 import { writeCompressedPlySource } from './writers/write-compressed-ply';
 import { writePlyStreaming } from './writers/write-ply-streaming';
+import { writeSplatStreaming } from './writers/write-splat-streaming';
 
 /**
  * Supported output file formats for Gaussian splat data.
  *
  * - `ply` - Standard PLY format
  * - `compressed-ply` - Compressed PLY format
+ * - `splat` - antimatter15 / PlayCanvas viewer `.splat` format
  * - `spz` - Niantic Labs SPZ format
  * - `glb` - Binary glTF with KHR_gaussian_splatting extension
  * - `csv` - CSV text format (for debugging/analysis)
@@ -23,7 +25,7 @@ import { writePlyStreaming } from './writers/write-ply-streaming';
  * - `voxel` - Sparse voxel octree format for collision detection
  * - `image` - Rasterized RGBA image (lossless WebP) rendered from a camera view
  */
-type OutputFormat = 'csv' | 'sog' | 'sog-bundle' | 'lod' | 'compressed-ply' | 'ply' | 'spz' | 'glb' | 'html' | 'html-bundle' | 'voxel' | 'image';
+type OutputFormat = 'csv' | 'sog' | 'sog-bundle' | 'lod' | 'compressed-ply' | 'ply' | 'splat' | 'spz' | 'glb' | 'html' | 'html-bundle' | 'voxel' | 'image';
 
 /**
  * Options for writing a Gaussian splat file.
@@ -72,6 +74,8 @@ const getOutputFormat = (filename: string, options: Options): OutputFormat => {
         return 'compressed-ply';
     } else if (lowerFilename.endsWith('.ply')) {
         return 'ply';
+    } else if (lowerFilename.endsWith('.splat')) {
+        return 'splat';
     } else if (lowerFilename.endsWith('.spz')) {
         return 'spz';
     } else if (lowerFilename.endsWith('.glb')) {
@@ -130,6 +134,8 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
         case 'compressed-ply':
             await writeCompressedPly({ filename, dataTable }, fs);
             break;
+        case 'splat':
+            throw new Error('splat output is written from a ChunkSource via writeSource, not from a DataTable.');
         case 'ply':
             await writePly({
                 filename,
@@ -253,6 +259,9 @@ const writeSource = async (writeSourceOptions: WriteSourceOptions, fs: FileSyste
             break;
         case 'compressed-ply':
             await writeCompressedPlySource(source, pool, { filename }, fs);
+            break;
+        case 'splat':
+            await writeSplatStreaming(source, pool, { filename }, fs);
             break;
         case 'lod':
             throw new Error('writeSource: lod output must be written via writeLodSource');
