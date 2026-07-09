@@ -8,7 +8,7 @@ splat-transform is a library and CLI tool for 3D Gaussian splat format conversio
 
 - **Language**: TypeScript (ES2022)
 - **Module System**: ES Modules (`"type": "module"`)
-- **Node Version**: >=18.0.0 (per `package.json` `engines`)
+- **Node Version**: >=22.0.0 (per `package.json` `engines`)
 - **Build System**: Rollup
 - **Testing**: Node.js built-in test runner (`node:test`)
 - **Linting**: ESLint with `@playcanvas/eslint-config`
@@ -61,17 +61,22 @@ Base: `@playcanvas/eslint-config` with TypeScript overrides:
 src/
 ├── lib/                    # Platform-agnostic library (browser + Node)
 │   ├── index.ts            # Public API exports
-│   ├── read.ts             # High-level read orchestration
-│   ├── write.ts            # High-level write orchestration
-│   ├── process.ts          # processDataTable and action types
+│   ├── read.ts             # High-level read orchestration (readFile → ChunkSource[])
+│   ├── write.ts            # High-level write orchestration (writeSource / compat writeFile)
+│   ├── process-source.ts   # processSource / processSourceBridged (actions over a source)
+│   ├── process.ts          # processDataTable and the shared action types (compat)
+│   ├── source-info.ts      # --info/--stats text/JSON formatting over source metadata
+│   ├── stats.ts            # computeStats over a source or table
 │   ├── types.ts            # Options, Param types
-│   ├── data-table/         # Core data model
+│   ├── chunk/              # Core data model: ChunkSource contract, layer layouts, pooled buffers
+│   ├── ops/                # Source combinators (bake-transform, concat, filter, select-lod, stack-lods, permute, morton, stats)
+│   ├── decimate/           # Chunk-native decimation (partition → knn → priority → select → merge-stream)
+│   ├── compat/             # DataTable ↔ ChunkSource bridges
+│   ├── data-table/         # Legacy whole-scene data model (compat)
 │   │   ├── data-table.ts   # DataTable and Column classes
 │   │   ├── combine.ts      # Merge multiple DataTables
 │   │   ├── transform.ts    # Geometric transforms
-│   │   ├── summary.ts      # Statistical summary
-│   │   ├── morton-order.ts  # Morton code sorting
-│   │   └── decimate.ts
+│   │   └── morton-order.ts  # Morton code sorting (legacy copy)
 │   ├── io/
 │   │   ├── read/           # Read abstractions (FileSystem, streams)
 │   │   └── write/          # Write abstractions (FileSystem, helpers)
@@ -85,6 +90,7 @@ src/
 │   │   ├── read-lcc2.ts
 │   │   └── read-mjs.ts
 │   ├── writers/            # Format-specific writers (one per file)
+│   │   ├── write-ply-streaming.ts  # chunk-native PLY (the streaming hot path)
 │   │   ├── write-ply.ts
 │   │   ├── write-compressed-ply.ts
 │   │   ├── write-sog.ts
@@ -96,11 +102,11 @@ src/
 │   │   ├── write-image.ts
 │   │   └── write-voxel.ts
 │   ├── workers/            # Cross-platform worker pool (WorkerQueue, tasks)
-│   ├── spatial/            # Spatial algorithms (k-means, kd-tree, b-tree, quantize-1d)
+│   ├── spatial/            # Spatial algorithms (k-means, kd-tree, b-tree, radix sort, quantize-1d)
 │   ├── voxel/              # Voxel generation (BVH, octree, GPU voxelization)
 │   ├── mesh/               # Mesh generation (collision/marching cubes)
 │   ├── render/             # GPU splat rasterizer (for image output)
-│   ├── gpu/                # WebGPU compute (clustering)
+│   ├── gpu/                # WebGPU compute (k-means, knn, edge cost, voxelize, rasterize)
 │   └── utils/              # Logger, math, SH rotation, WebP codec
 └── cli/                    # Node.js CLI (NOT platform-agnostic)
     ├── index.ts            # CLI entry, argument parsing
@@ -141,9 +147,28 @@ Type declarations go to `dist/lib/`. A post-build step copies `index.d.ts` to `i
 
 ## Core Data Model
 
-### DataTable and Column
+### ChunkSource (primary)
 
-The central data structure is `DataTable` -- a columnar store of typed arrays:
+The central data structure is `ChunkSource` -- a lazy, chunked view over one scene. Data lives in fixed-layout interleaved layers (`position`, `geometric` = rotation/scale/opacity, `color` = SH coefficients, `other` = extra columns), read chunk-by-chunk (or gathered by row index) into pooled buffers, so resident memory is bounded by chunk size rather than scene size:
+
+```typescript
+type ChunkSource = {
+    meta: ChunkSourceMetadata;                  // counts, LODs, layer layouts, pending transform
+    read(request: ReadRequest): Promise<void>;  // fill pooled ChunkData buffers (contiguous chunk or row gather)
+    close(): void | Promise<void>;              // release underlying resources
+};
+```
+
+Two invariants to internalize:
+
+- **Transforms are deferred.** Reads return RAW stored values; `meta.transform` is the pending TRS describing what they mean. Transform actions compose lazily and are applied exactly once by a terminal `bakeTransform(source, targetSpace)` -- any geometry-consuming pass (bounds, partition, morton, writers) must bake first.
+- **LODs are structural and overlapping.** A multi-LOD container (LCC/LCC2) is ONE source with a structural LOD axis (`meta.numLods`, reads dispatch on `request.lod`). Levels are overlapping representations of one scene, so single-scene outputs take exactly one level (`selectLod`) and levels are never concatenated.
+
+Sources compose through lazy combinators (`concatSource`, `selectLod`, `stackLods`, `filterSource`, ...), actions run via `processSourceBridged`, and terminals (`writeSource`, `writeLodSource`, `decimateSource`) stream the result.
+
+### DataTable and Column (compat)
+
+The legacy whole-scene columnar store, still used by the not-yet-migrated readers/writers and the DataTable action islands. Bridge with `dataTableToChunkSource` / `materializeToDataTable` -- both materialize the full scene, so they must never sit in the streaming core:
 
 ```typescript
 class Column {
@@ -282,7 +307,7 @@ Generate docs with `npm run docs`. Published at https://api.playcanvas.com/splat
 ### Adding a New File Format Reader
 
 1. Create `src/lib/readers/read-<format>.ts`
-2. Implement a function that takes a `ReadFileSystem` and returns a `DataTable`
+2. Implement a function that takes a `ReadSource` (or `ReadFileSystem` for multi-file formats) plus a `ChunkDataPool` and returns a `ChunkSource` — expose chunked reads and row gathers, and keep resident memory bounded by chunk size (see `read-ply.ts`). Only formats that are inherently whole-blob (compressed monoliths) may decode eagerly; say so in the docstring.
 3. Register the format in `src/lib/read.ts` (`getInputFormat` and `readFile`)
 4. Export from `src/lib/index.ts`
 5. Add CLI support in `src/cli/index.ts`
@@ -291,25 +316,25 @@ Generate docs with `npm run docs`. Published at https://api.playcanvas.com/splat
 ### Adding a New File Format Writer
 
 1. Create `src/lib/writers/write-<format>.ts`
-2. Implement a function that takes a `DataTable` + `FileSystem` and writes files
-3. Register the format in `src/lib/write.ts` (`getOutputFormat` and `writeFile`)
+2. Implement a function that takes a `ChunkSource` + `ChunkDataPool` + `FileSystem` and streams the output chunk-by-chunk (see `write-ply-streaming.ts`); bake the pending transform via `bakeTransform` before consuming geometry
+3. Register the format in `src/lib/write.ts` (`getOutputFormat` and `writeSource`)
 4. Export from `src/lib/index.ts`
 5. Add CLI support in `src/cli/index.ts`
 6. Add tests in `test/`
 
 ### Processing Actions
 
-Transformations are applied via `await processDataTable(dataTable, actions)` (it is async):
+Actions are applied to a source via `await processSourceBridged(source, actions, pool, options?)` (the compat `processDataTable(dataTable, actions)` takes the same action list):
 
 ```typescript
-const result = await processDataTable(dataTable, [
+const result = await processSourceBridged(source, [
     { kind: 'translate', value: new Vec3(10, 0, 0) },
-    { kind: 'scale', value: new Vec3(2, 2, 2) },
+    { kind: 'scale', value: 2 },
     { kind: 'filterNaN' }
-]);
+], pool);
 ```
 
-Action `kind` values (camelCase): `translate`, `rotate`, `scale`, `filterNaN`, `filterByValue`, `filterBands`, `filterBox`, `filterSphere`, `filterFloaters`, `filterCluster`, `param`, `lod`, `summary`, `mortonOrder`, `decimate`.
+Action `kind` values (camelCase): `translate`, `rotate`, `scale`, `filterNaN`, `filterByValue`, `filterBands`, `filterBox`, `filterSphere`, `filterFloaters`, `filterCluster`, `param`, `stats`, `info`, `mortonOrder`, `decimate`.
 
 ## Things to Avoid
 
