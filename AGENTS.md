@@ -162,7 +162,7 @@ type ChunkSource = {
 Two invariants to internalize:
 
 - **Transforms are deferred.** Reads return RAW stored values; `meta.transform` is the pending TRS describing what they mean. Transform actions compose lazily and are applied exactly once by a terminal `bakeTransform(source, targetSpace)` -- any geometry-consuming pass (bounds, partition, morton, writers) must bake first.
-- **LODs are structural and overlapping.** A multi-LOD container (LCC/LCC2) is ONE source with a structural LOD axis (`meta.numLods`, reads dispatch on `request.lod`). Levels are overlapping representations of one scene, so single-scene outputs take exactly one level (`selectLod`) and levels are never concatenated.
+- **LODs are structural and overlapping.** A multi-LOD container (Streamed SOG/LCC/LCC2) is ONE source with a structural LOD axis (`meta.numLods`, reads dispatch on `request.lod`). Levels are overlapping representations of one scene, so single-scene outputs take exactly one level (`selectLod`) and levels are never concatenated.
 
 Sources compose through lazy combinators (`concatSource`, `selectLod`, `stackLods`, `filterSource`, ...), actions run via `processSourceBridged`, and terminals (`writeSource`, `writeLodSource`, `decimateSource`) stream the result.
 
@@ -207,7 +207,7 @@ Read and write operations use abstract interfaces so the same code works in brow
 
 ### Supported Formats
 
-**Input**: PLY, splat, KSplat, SOG, SPZ, LCC, LCC2, MJS
+**Input**: PLY, splat, KSplat, SOG, Streamed SOG, SPZ, LCC, LCC2, MJS
 
 **Output**: PLY, compressed PLY, SOG, SOG-bundle, SPZ, GLB, CSV, HTML, HTML-bundle, LOD, voxel, image (WebP)
 
