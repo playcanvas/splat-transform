@@ -1,3 +1,4 @@
+import { ABSENT, BlockIndexMap, SOLID } from './block-index-map';
 import { BlockMaskBuffer } from './block-mask-buffer';
 import {
     computeGaussianInverse,
@@ -9,9 +10,11 @@ import {
  * Pre-computed lookup structures for efficient voxel block queries.
  */
 interface BlockLookup {
-    solidSet: Set<number>;
-    mixedMap: Map<number, number>;
+    /** Block index -> state: `SOLID`, a mixed-array slot (`>= 0`), or `ABSENT`. */
+    blocks: BlockIndexMap;
     masks: Uint32Array;
+    solidCount: number;
+    mixedCount: number;
 }
 
 /**
@@ -33,25 +36,24 @@ interface BlockGridParams {
 /**
  * Build block lookup structures from the buffer's linear block indices.
  * The buffer's keys are already linear block indices, so this is a direct
- * copy into a Set / Map for O(1) random access.
+ * copy into a typed-array hash for O(1) random access (no V8 Set/Map cap).
  *
  * @param buffer - Block mask buffer containing voxelized blocks.
- * @returns Solid block set, mixed block map (linear index to masks array index), and masks.
+ * @returns Block-state lookup, masks array, and solid/mixed counts.
  */
 const buildBlockLookup = (
     buffer: BlockMaskBuffer
 ): BlockLookup => {
-    const solidSet = new Set<number>();
     const solidIdx = buffer.getSolidBlocks();
-    for (let i = 0; i < solidIdx.length; i++) {
-        solidSet.add(solidIdx[i]);
-    }
     const mixed = buffer.getMixedBlocks();
-    const mixedMap = new Map<number, number>();
-    for (let i = 0; i < mixed.blockIdx.length; i++) {
-        mixedMap.set(mixed.blockIdx[i], i);
+    const blocks = new BlockIndexMap(solidIdx.length + mixed.blockIdx.length);
+    for (let i = 0; i < solidIdx.length; i++) {
+        blocks.set(solidIdx[i], SOLID);
     }
-    return { solidSet, mixedMap, masks: mixed.masks };
+    for (let i = 0; i < mixed.blockIdx.length; i++) {
+        blocks.set(mixed.blockIdx[i], i);
+    }
+    return { blocks, masks: mixed.masks, solidCount: solidIdx.length, mixedCount: mixed.blockIdx.length };
 };
 
 /**
@@ -86,12 +88,13 @@ const isCenterInOccupiedVoxel = (
         return false;
     }
 
-    if (lookup.solidSet.has(centerBlockIdx)) {
+    const centerState = lookup.blocks.get(centerBlockIdx);
+    if (centerState === SOLID) {
         return true;
     }
 
-    const centerMixedIdx = lookup.mixedMap.get(centerBlockIdx);
-    if (centerMixedIdx !== undefined) {
+    if (centerState !== ABSENT) {
+        const centerMixedIdx = centerState;
         const lx = Math.floor((px - grid.gridMinX - centerBx * grid.blockSize) / grid.voxelResolution);
         const ly = Math.floor((py - grid.gridMinY - centerBy * grid.blockSize) / grid.voxelResolution);
         const lz = Math.floor((pz - grid.gridMinZ - centerBz * grid.blockSize) / grid.voxelResolution);
@@ -163,16 +166,16 @@ const gaussianContributesToVoxels = (
             for (let bbx = aabbMinBx; bbx <= aabbMaxBx; bbx++) {
                 const blockIdx = bbx + yzOff;
                 if (blockFilter && !blockFilter.has(blockIdx)) continue;
-                const isSolid = lookup.solidSet.has(blockIdx);
-                const mixedIdx = isSolid ? -1 : lookup.mixedMap.get(blockIdx);
-                if (!isSolid && mixedIdx === undefined) continue;
+                const state = lookup.blocks.get(blockIdx);
+                if (state === ABSENT) continue;
+                const isSolid = state === SOLID;
 
                 const blockOriginX = grid.gridMinX + bbx * grid.blockSize;
                 const blockOriginY = grid.gridMinY + bby * grid.blockSize;
                 const blockOriginZ = grid.gridMinZ + bbz * grid.blockSize;
 
-                const lo = isSolid ? 0xFFFFFFFF : lookup.masks[mixedIdx * 2];
-                const hi = isSolid ? 0xFFFFFFFF : lookup.masks[mixedIdx * 2 + 1];
+                const lo = isSolid ? 0xFFFFFFFF : lookup.masks[state * 2];
+                const hi = isSolid ? 0xFFFFFFFF : lookup.masks[state * 2 + 1];
 
                 for (let lz = 0; lz < 4; lz++) {
                     const vz = blockOriginZ + (lz + 0.5) * grid.voxelResolution;

@@ -10,7 +10,7 @@ import { GaussianBVH } from '../spatial';
 import type { CollisionMeshShape, DeviceCreator } from '../types';
 import { fmtCount, logger, Transform } from '../utils';
 import { version } from '../version';
-import { buildSparseOctree, type SparseOctree } from './sparse-octree';
+import { buildSparseOctree, buildSparseOctreeFromBuffer, MAX_V1_MIXED_LEAVES, type SparseOctree } from './sparse-octree';
 import {
     filterAndFillBlocks,
     alignGridBounds,
@@ -20,7 +20,106 @@ import {
     type NavSeed,
     voxelizeToBuffer
 } from '../voxel';
+import type { BlockMaskBuffer } from '../voxel/block-mask-buffer';
 import { SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
+
+const MAX_MUTABLE_GRID_PEAK_BYTES = 1024 * 1024 * 1024;
+
+interface OccupiedBlockBounds {
+    minBx: number;
+    minBy: number;
+    minBz: number;
+    maxBx: number;
+    maxBy: number;
+    maxBz: number;
+}
+
+const getBufferOccupiedBounds = (
+    buffer: BlockMaskBuffer,
+    nbx: number,
+    nby: number,
+    nbz: number
+): OccupiedBlockBounds | null => {
+    let minBx = nbx, minBy = nby, minBz = nbz;
+    let maxBx = -1, maxBy = -1, maxBz = -1;
+
+    const scan = (indices: Float64Array): void => {
+        for (let i = 0; i < indices.length; i++) {
+            const blockIdx = indices[i];
+            const bx = blockIdx % nbx;
+            const byBz = Math.floor(blockIdx / nbx);
+            const by = byBz % nby;
+            const bz = Math.floor(byBz / nby);
+            if (bx < minBx) minBx = bx;
+            if (by < minBy) minBy = by;
+            if (bz < minBz) minBz = bz;
+            if (bx > maxBx) maxBx = bx;
+            if (by > maxBy) maxBy = by;
+            if (bz > maxBz) maxBz = bz;
+        }
+    };
+
+    scan(buffer.getSolidBlocks());
+    scan(buffer.getMixedBlocks().blockIdx);
+    return maxBx < 0 ? null : { minBx, minBy, minBz, maxBx, maxBy, maxBz };
+};
+
+const cropBufferBounds = (
+    buffer: BlockMaskBuffer,
+    nbx: number,
+    nby: number,
+    nbz: number,
+    gridBounds: Bounds,
+    voxelResolution: number
+): { gridBounds: Bounds; region: { minBx: number; minBy: number; minBz: number } } => {
+    const occupied = getBufferOccupiedBounds(buffer, nbx, nby, nbz);
+    if (!occupied) {
+        return { gridBounds, region: { minBx: 0, minBy: 0, minBz: 0 } };
+    }
+
+    const blockSize = 4 * voxelResolution;
+    const min = new Vec3(
+        gridBounds.min.x + occupied.minBx * blockSize,
+        gridBounds.min.y + occupied.minBy * blockSize,
+        gridBounds.min.z + occupied.minBz * blockSize
+    );
+    return {
+        gridBounds: {
+            min,
+            max: new Vec3(
+                min.x + (occupied.maxBx - occupied.minBx + 1) * blockSize,
+                min.y + (occupied.maxBy - occupied.minBy + 1) * blockSize,
+                min.z + (occupied.maxBz - occupied.minBz + 1) * blockSize
+            )
+        },
+        region: { minBx: occupied.minBx, minBy: occupied.minBy, minBz: occupied.minBz }
+    };
+};
+
+const assertMutableGridFits = (
+    buffer: BlockMaskBuffer,
+    nbx: number,
+    nby: number,
+    nbz: number,
+    simultaneousGrids: number
+): void => {
+    const totalBlocks = nbx * nby * nbz;
+    if (!Number.isSafeInteger(totalBlocks) || totalBlocks > 0x100000000) {
+        throw new Error(`Voxel mutation requires ${fmtCount(totalBlocks)} blocks, exceeding the 32-bit mutable-grid limit. Use a coarser voxel resolution or disable navigation, fill, and collision output.`);
+    }
+
+    const typeBytes = Math.ceil(totalBlocks / 16) * 4;
+    const mixedCapacity = 2 ** Math.ceil(Math.log2(Math.max(16, Math.ceil(buffer.mixedCount / 0.7))));
+    const maskBytes = mixedCapacity * 16;
+    const estimatedPeak = typeBytes * simultaneousGrids + maskBytes;
+    if (estimatedPeak > MAX_MUTABLE_GRID_PEAK_BYTES) {
+        throw new Error(
+            `Voxel mutation would require approximately ${fmtCount(Math.ceil(estimatedPeak / (1024 * 1024)))} MiB ` +
+            `of mutable-grid storage, exceeding the ${MAX_MUTABLE_GRID_PEAK_BYTES / (1024 * 1024)} MiB safety limit. ` +
+            'Use a coarser voxel resolution or disable navigation, fill, and collision output.'
+        );
+    }
+};
 
 /**
  * Options for writing a voxel octree file.
@@ -428,88 +527,112 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         const nbxInit = Math.round((gridBounds.max.x - gridBounds.min.x) / (4 * voxelResolution));
         const nbyInit = Math.round((gridBounds.max.y - gridBounds.min.y) / (4 * voxelResolution));
         const nbzInit = Math.round((gridBounds.max.z - gridBounds.min.z) / (4 * voxelResolution));
-        const filteredBuffer = filterAndFillBlocks(buffer, nbxInit, nbyInit, nbzInit);
+        const filteredBuffer = filterAndFillBlocks(
+            buffer, nbxInit, nbyInit, nbzInit, MAX_V1_MIXED_LEAVES
+        );
         buffer.clear();
         filterSub.end();
 
-        // Buffer → grid: the single conversion in the pipeline. Every phase
-        // beyond this point operates on SparseVoxelGrid directly.
-        const loadSub = logger.group('Loading grid');
-        const nxInit = nbxInit << 2;
-        const nyInit = nbyInit << 2;
-        const nzInit = nbzInit << 2;
-        const loadBar = logger.bar('Loading grid', Math.max(1, filteredBuffer.count));
-        let grid = SparseVoxelGrid.fromBuffer(
-            filteredBuffer, nxInit, nyInit, nzInit,
-            (done, total) => loadBar.update(Math.min(done, total))
-        );
-        loadBar.end();
-        filteredBuffer.clear();
-        loadSub.end();
+        const needsMutableGrid = hasFillExterior || hasFloorFill || hasNav || collisionMeshShape !== null;
+        let glbBytes: Uint8Array | null = null;
+        let octree: SparseOctree;
 
-        // Reuse the same device for GPU dilation across exterior, floor, carve.
-        const needsGpuDilation = hasFillExterior || hasNav || (hasFloorFill && floorFillDilation > 0);
-        if (needsGpuDilation) {
-            gpuDilation = new GpuDilation(device);
-        }
-
-        if (hasFillExterior) {
-            const sub = logger.group('Fill exterior');
-            const fillResult = await fillExterior(
-                grid, gridBounds, voxelResolution,
-                navExteriorRadius!, navSeed!,
-                gpuDilation!
+        if (!needsMutableGrid) {
+            const cropSub = logger.group('Cropping');
+            const cropped = cropBufferBounds(
+                filteredBuffer, nbxInit, nbyInit, nbzInit, gridBounds, voxelResolution
             );
-            grid = fillResult.grid;
-            gridBounds = fillResult.gridBounds;
-            sub.end();
-        }
+            gridBounds = cropped.gridBounds;
+            cropSub.end();
 
-        if (hasFloorFill) {
-            const sub = logger.group('Fill floor');
-            const floorResult = await fillFloor(
-                grid, gridBounds, voxelResolution, floorFillDilation, gpuDilation
+            octree = buildSparseOctreeFromBuffer(
+                filteredBuffer,
+                nbxInit, nbyInit, nbzInit,
+                gridBounds, bounds, voxelResolution,
+                cropped.region
             );
-            grid = floorResult.grid;
-            gridBounds = floorResult.gridBounds;
-            sub.end();
-        }
+            filteredBuffer.clear();
+        } else {
+            const simultaneousGrids = hasFillExterior || hasFloorFill || hasNav ? 4 : 2;
+            assertMutableGridFits(filteredBuffer, nbxInit, nbyInit, nbzInit, simultaneousGrids);
 
-        if (hasNav) {
-            const sub = logger.group('Carve');
-            const navResult = await carve(
-                grid, gridBounds, voxelResolution,
-                navCapsule!.height, navCapsule!.radius,
-                navSeed!,
-                gpuDilation!
+            const loadSub = logger.group('Loading grid');
+            const nxInit = nbxInit * 4;
+            const nyInit = nbyInit * 4;
+            const nzInit = nbzInit * 4;
+            const loadBar = logger.bar('Loading grid', Math.max(1, filteredBuffer.count));
+            let grid = SparseVoxelGrid.fromBuffer(
+                filteredBuffer, nxInit, nyInit, nzInit,
+                (done, total) => loadBar.update(Math.min(done, total))
             );
-            grid = navResult.grid;
-            gridBounds = navResult.gridBounds;
-            sub.end();
+            loadBar.end();
+            filteredBuffer.clear();
+            loadSub.end();
+
+            // Reuse the same device for GPU dilation across exterior, floor, carve.
+            const needsGpuDilation = hasFillExterior || hasNav || (hasFloorFill && floorFillDilation > 0);
+            if (needsGpuDilation) {
+                gpuDilation = new GpuDilation(device);
+            }
+
+            if (hasFillExterior) {
+                const sub = logger.group('Fill exterior');
+                const fillResult = await fillExterior(
+                    grid, gridBounds, voxelResolution,
+                    navExteriorRadius!, navSeed!,
+                    gpuDilation!
+                );
+                grid = fillResult.grid;
+                gridBounds = fillResult.gridBounds;
+                sub.end();
+            }
+
+            if (hasFloorFill) {
+                const sub = logger.group('Fill floor');
+                const floorResult = await fillFloor(
+                    grid, gridBounds, voxelResolution, floorFillDilation, gpuDilation
+                );
+                grid = floorResult.grid;
+                gridBounds = floorResult.gridBounds;
+                sub.end();
+            }
+
+            if (hasNav) {
+                const sub = logger.group('Carve');
+                const navResult = await carve(
+                    grid, gridBounds, voxelResolution,
+                    navCapsule!.height, navCapsule!.radius,
+                    navSeed!,
+                    gpuDilation!
+                );
+                grid = navResult.grid;
+                gridBounds = navResult.gridBounds;
+                sub.end();
+            }
+
+            const cropSub = logger.group('Cropping');
+            const finalCrop = hasFillExterior || hasFloorFill ?
+                cropToNavigable(grid, gridBounds, voxelResolution) :
+                cropToOccupied(grid, gridBounds, voxelResolution);
+            grid = finalCrop.grid;
+            gridBounds = finalCrop.gridBounds;
+            cropSub.end();
+
+            gpuDilation?.destroy();
+            gpuDilation = null;
+
+            glbBytes = collisionMeshShape ?
+                buildCollisionMesh(grid, gridBounds, voxelResolution, collisionMeshShape) :
+                null;
+
+            octree = buildSparseOctree(
+                grid,
+                gridBounds,
+                bounds,
+                voxelResolution,
+                { consumeGrid: true }
+            );
         }
-
-        const cropSub = logger.group('Cropping');
-        const finalCrop = hasFillExterior || hasFloorFill ?
-            cropToNavigable(grid, gridBounds, voxelResolution) :
-            cropToOccupied(grid, gridBounds, voxelResolution);
-        grid = finalCrop.grid;
-        gridBounds = finalCrop.gridBounds;
-        cropSub.end();
-
-        gpuDilation?.destroy();
-        gpuDilation = null;
-
-        const glbBytes = collisionMeshShape ?
-            buildCollisionMesh(grid, gridBounds, voxelResolution, collisionMeshShape) :
-            null;
-
-        const octree = buildSparseOctree(
-            grid,
-            gridBounds,
-            bounds,
-            voxelResolution,
-            { consumeGrid: true }
-        );
 
         logger.info(`octree depth: ${octree.treeDepth}`);
         logger.info(`interior nodes: ${fmtCount(octree.numInteriorNodes)}`);

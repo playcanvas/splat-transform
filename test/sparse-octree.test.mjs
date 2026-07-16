@@ -33,6 +33,7 @@ function mortonToXYZ(m) {
 }
 import {
     buildSparseOctree,
+    buildSparseOctreeFromBuffer,
     SOLID_LEAF_MARKER
 } from '../src/lib/writers/sparse-octree.js';
 import { alignGridBounds } from '../src/lib/voxel/voxelize.js';
@@ -374,6 +375,48 @@ describe('BlockMaskBuffer', function () {
 // ============================================================================
 
 describe('buildSparseOctree', function () {
+    it('rejects source grids beyond the safe-integer block-index limit', function () {
+        const acc = new BlockMaskBuffer();
+        const gridBounds = {
+            min: new Vec3(0, 0, 0),
+            max: new Vec3(1, 1, 1)
+        };
+
+        assert.throws(
+            () => buildSparseOctreeFromBuffer(acc, 2 ** 27, 2 ** 27, 1, gridBounds, gridBounds, 0.25),
+            /exceeds the safe-integer block-index limit.*Use a coarser voxel resolution/
+        );
+    });
+
+    it('builds directly from block indices above 2^32', function () {
+        const sourceNbx = 65536;
+        const sourceNby = 65536;
+        const sourceNbz = 2;
+        const region = { minBx: 10, minBy: 20, minBz: 1 };
+        const acc = new BlockMaskBuffer();
+        acc.addBlock(linearBlockIdx(10, 20, 1, sourceNbx, sourceNby), 0xFFFFFFFF, 0xFFFFFFFF);
+        acc.addBlock(linearBlockIdx(11, 20, 1, sourceNbx, sourceNby), 0x12345678, 0x9ABCDEF0);
+
+        const gridBounds = {
+            min: new Vec3(0, 0, 0),
+            max: new Vec3(2, 1, 1)
+        };
+        const octree = buildSparseOctreeFromBuffer(
+            acc,
+            sourceNbx, sourceNby, sourceNbz,
+            gridBounds, gridBounds, 0.25,
+            region
+        );
+
+        assert.strictEqual(octree.numMixedLeaves, 1);
+        assert.strictEqual(octree.leafData[0], 0x12345678);
+        assert.strictEqual(octree.leafData[1], 0x9ABCDEF0);
+        assert.strictEqual(
+            Array.from(octree.nodes).filter(node => node === SOLID_LEAF_MARKER).length,
+            1
+        );
+    });
+
     describe('empty octree', function () {
         it('should handle empty buffer', function () {
             const acc = new BlockMaskBuffer();

@@ -6,6 +6,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { BlockMaskBuffer } from '../src/lib/voxel/block-mask-buffer.js';
+import { SOLID } from '../src/lib/voxel/block-index-map.js';
 import {
     buildBlockLookup,
     isCenterInOccupiedVoxel,
@@ -85,10 +86,10 @@ describe('voxel-query', function () {
             const strideZ = 4 * 4;
             const lookup = buildBlockLookup(buffer);
 
-            assert.strictEqual(lookup.solidSet.size, 2);
-            assert.ok(lookup.solidSet.has(0 + 0 * strideY + 0 * strideZ));
-            assert.ok(lookup.solidSet.has(2 + 1 * strideY + 0 * strideZ));
-            assert.strictEqual(lookup.mixedMap.size, 0);
+            assert.strictEqual(lookup.solidCount, 2);
+            assert.strictEqual(lookup.blocks.get(0 + 0 * strideY + 0 * strideZ), SOLID);
+            assert.strictEqual(lookup.blocks.get(2 + 1 * strideY + 0 * strideZ), SOLID);
+            assert.strictEqual(lookup.mixedCount, 0);
         });
 
         it('should index mixed blocks correctly', function () {
@@ -102,11 +103,11 @@ describe('voxel-query', function () {
             const strideZ = 16;
             const lookup = buildBlockLookup(buffer);
 
-            assert.strictEqual(lookup.solidSet.size, 0);
-            assert.strictEqual(lookup.mixedMap.size, 1);
+            assert.strictEqual(lookup.solidCount, 0);
+            assert.strictEqual(lookup.mixedCount, 1);
             const blockIdx = 1 + 1 * strideY + 1 * strideZ;
-            assert.ok(lookup.mixedMap.has(blockIdx));
-            const maskIdx = lookup.mixedMap.get(blockIdx);
+            const maskIdx = lookup.blocks.get(blockIdx);
+            assert.ok(maskIdx >= 0);
             assert.strictEqual(lookup.masks[maskIdx * 2], lo);
             assert.strictEqual(lookup.masks[maskIdx * 2 + 1], hi);
         });
@@ -115,8 +116,8 @@ describe('voxel-query', function () {
             const buffer = new BlockMaskBuffer();
             const lookup = buildBlockLookup(buffer);
 
-            assert.strictEqual(lookup.solidSet.size, 0);
-            assert.strictEqual(lookup.mixedMap.size, 0);
+            assert.strictEqual(lookup.solidCount, 0);
+            assert.strictEqual(lookup.mixedCount, 0);
         });
     });
 

@@ -64,6 +64,22 @@ function bufferFromMixedBlocks(entries, nbx, nby) {
     return buffer;
 }
 
+// findClusterVoxelFlood now returns a block count (`ccCount`), not a Set. The
+// `visited` grid is the source of truth for cluster membership; these helpers
+// recover per-block membership from it for assertions (test grids are tiny).
+function clusterHas(visited, bi) {
+    return visited.getBlockType(bi) !== BLOCK_EMPTY;
+}
+
+function clusterBlocks(visited) {
+    const set = new Set();
+    const total = visited.nbx * visited.nby * visited.nbz;
+    for (let bi = 0; bi < total; bi++) {
+        if (visited.getBlockType(bi) !== BLOCK_EMPTY) set.add(bi);
+    }
+    return set;
+}
+
 /**
  * Block-level BFS from seed through face-adjacent ccSet members.
  * Returns array of ccSet blocks NOT reachable from the seed.
@@ -294,8 +310,8 @@ describe('findClusterVoxelFlood', () => {
         const buffer = bufferFromSolidBlocks([[0, 0, 0]], nbx, nby);
         const result = findClusterVoxelFlood(buffer, nx, ny, nz, 1, 1, 1);
         assert.ok(result);
-        assert.strictEqual(result.ccSet.size, 1);
-        assert.ok(result.ccSet.has(0));
+        assert.strictEqual(result.ccCount, 1);
+        assert.ok(clusterHas(result.visited,0));
     });
 
     it('two solid cubes separated by gap -- should only reach seeded cluster', () => {
@@ -315,18 +331,18 @@ describe('findClusterVoxelFlood', () => {
 
         const result = findClusterVoxelFlood(buffer, nx, ny, nz, 1, 1, 1);
         assert.ok(result);
-        assert.strictEqual(result.ccSet.size, 8);
+        assert.strictEqual(result.ccCount, 8);
 
         for (const [bx, by, bz] of coordsA) {
-            assert.ok(result.ccSet.has(blockIdx(bx, by, bz, nbx, nby)),
+            assert.ok(clusterHas(result.visited,blockIdx(bx, by, bz, nbx, nby)),
                 `cluster A block (${bx},${by},${bz}) should be in ccSet`);
         }
         for (const [bx, by, bz] of coordsB) {
-            assert.ok(!result.ccSet.has(blockIdx(bx, by, bz, nbx, nby)),
+            assert.ok(!clusterHas(result.visited,blockIdx(bx, by, bz, nbx, nby)),
                 `cluster B block (${bx},${by},${bz}) should NOT be in ccSet`);
         }
 
-        const unreachable = verifyCcSetConnectivity(result.ccSet,
+        const unreachable = verifyCcSetConnectivity(clusterBlocks(result.visited),
             blockIdx(0, 0, 0, nbx, nby), nbx, nby, nz >> 2);
         assert.strictEqual(unreachable.length, 0, 'ccSet should be fully connected');
     });
@@ -353,14 +369,14 @@ describe('findClusterVoxelFlood', () => {
         for (let bz = 0; bz < 2; bz++) {
             for (let by = 0; by < 2; by++) {
                 for (let bx = 4; bx < 6; bx++) {
-                    assert.ok(!result.ccSet.has(blockIdx(bx, by, bz, nbx, nby)),
+                    assert.ok(!clusterHas(result.visited,blockIdx(bx, by, bz, nbx, nby)),
                         `cluster B block (${bx},${by},${bz}) should NOT be in ccSet`);
                 }
             }
         }
 
         const seedBi = blockIdx(0, 0, 0, nbx, nby);
-        const unreachable = verifyCcSetConnectivity(result.ccSet, seedBi, nbx, nby, nz >> 2);
+        const unreachable = verifyCcSetConnectivity(clusterBlocks(result.visited), seedBi, nbx, nby, nz >> 2);
         assert.strictEqual(unreachable.length, 0, 'ccSet should be fully connected');
     });
 
@@ -374,10 +390,10 @@ describe('findClusterVoxelFlood', () => {
 
         const result = findClusterVoxelFlood(buffer, nx, ny, nz, 1, 1, 1);
         assert.ok(result);
-        assert.strictEqual(result.ccSet.size, coords.length);
+        assert.strictEqual(result.ccCount, coords.length);
 
         for (const [bx, by, bz] of coords) {
-            assert.ok(result.ccSet.has(blockIdx(bx, by, bz, nbx, nby)),
+            assert.ok(clusterHas(result.visited,blockIdx(bx, by, bz, nbx, nby)),
                 `block (${bx},${by},${bz}) should be in ccSet`);
         }
     });
@@ -401,10 +417,10 @@ describe('findClusterVoxelFlood', () => {
         const result = findClusterVoxelFlood(buffer, nx, ny, nz, 1, 1, 1);
         assert.ok(result);
         const allCoords = [...coordsA, ...bridge, ...coordsB];
-        assert.strictEqual(result.ccSet.size, allCoords.length);
+        assert.strictEqual(result.ccCount, allCoords.length);
 
         for (const [bx, by, bz] of allCoords) {
-            assert.ok(result.ccSet.has(blockIdx(bx, by, bz, nbx, nby)),
+            assert.ok(clusterHas(result.visited,blockIdx(bx, by, bz, nbx, nby)),
                 `block (${bx},${by},${bz}) should be in ccSet`);
         }
     });
@@ -428,9 +444,9 @@ describe('findClusterVoxelFlood', () => {
         assert.ok(result);
 
         const allBlocks = [...coordsA, [2, 0, 0], ...coordsB];
-        assert.strictEqual(result.ccSet.size, allBlocks.length);
+        assert.strictEqual(result.ccCount, allBlocks.length);
         for (const [bx, by, bz] of allBlocks) {
-            assert.ok(result.ccSet.has(blockIdx(bx, by, bz, nbx, nby)),
+            assert.ok(clusterHas(result.visited,blockIdx(bx, by, bz, nbx, nby)),
                 `block (${bx},${by},${bz}) should be in ccSet`);
         }
     });
@@ -452,11 +468,11 @@ describe('findClusterVoxelFlood', () => {
         const result = findClusterVoxelFlood(buffer, nx, ny, nz, 1, 1, 1);
         assert.ok(result);
 
-        assert.ok(result.ccSet.has(blockIdx(0, 0, 0, nbx, nby)));
-        assert.ok(result.ccSet.has(blockIdx(1, 0, 0, nbx, nby)));
-        assert.ok(!result.ccSet.has(blockIdx(3, 0, 0, nbx, nby)),
+        assert.ok(clusterHas(result.visited,blockIdx(0, 0, 0, nbx, nby)));
+        assert.ok(clusterHas(result.visited,blockIdx(1, 0, 0, nbx, nby)));
+        assert.ok(!clusterHas(result.visited,blockIdx(3, 0, 0, nbx, nby)),
             'cluster B should not be reached through interior-only bridge');
-        assert.ok(!result.ccSet.has(blockIdx(4, 0, 0, nbx, nby)),
+        assert.ok(!clusterHas(result.visited,blockIdx(4, 0, 0, nbx, nby)),
             'cluster B should not be reached through interior-only bridge');
     });
 
@@ -467,8 +483,8 @@ describe('findClusterVoxelFlood', () => {
 
         const result = findClusterVoxelFlood(buffer, nx, ny, nz, 0, 0, 0);
         assert.ok(result);
-        assert.strictEqual(result.ccSet.size, 1);
-        assert.ok(result.ccSet.has(blockIdx(2, 2, 2, nbx, nby)));
+        assert.strictEqual(result.ccCount, 1);
+        assert.ok(clusterHas(result.visited,blockIdx(2, 2, 2, nbx, nby)));
     });
 });
 
@@ -494,20 +510,20 @@ describe('findClusterVoxelFlood grid dimension sweep', () => {
 
                     const result = findClusterVoxelFlood(buffer, nx, ny, nz, 1, 1, 1);
                     assert.ok(result, 'should find a cluster');
-                    assert.strictEqual(result.ccSet.size, 2,
-                        `should only have 2 blocks from cluster A, got ${result.ccSet.size}`);
+                    assert.strictEqual(result.ccCount, 2,
+                        `should only have 2 blocks from cluster A, got ${result.ccCount}`);
 
                     for (const [bx, by, bz] of coordsA) {
-                        assert.ok(result.ccSet.has(blockIdx(bx, by, bz, nbx, nby)),
+                        assert.ok(clusterHas(result.visited,blockIdx(bx, by, bz, nbx, nby)),
                             `cluster A block (${bx},${by},${bz}) should be in ccSet`);
                     }
                     for (const [bx, by, bz] of coordsB) {
-                        assert.ok(!result.ccSet.has(blockIdx(bx, by, bz, nbx, nby)),
+                        assert.ok(!clusterHas(result.visited,blockIdx(bx, by, bz, nbx, nby)),
                             `cluster B block (${bx},${by},${bz}) should NOT be in ccSet`);
                     }
 
                     const seedBi = blockIdx(0, 0, 0, nbx, nby);
-                    const unreachable = verifyCcSetConnectivity(result.ccSet, seedBi, nbx, nby, nbz);
+                    const unreachable = verifyCcSetConnectivity(clusterBlocks(result.visited), seedBi, nbx, nby, nbz);
                     assert.strictEqual(unreachable.length, 0, 'ccSet should be fully connected');
                 });
             }
@@ -584,12 +600,12 @@ describe('findClusterVoxelFlood randomized layouts', () => {
 
             for (const [bx, by, bz] of coordsB) {
                 const bi = blockIdx(bx, by, bz, nbx, nby);
-                assert.ok(!result.ccSet.has(bi),
+                assert.ok(!clusterHas(result.visited,bi),
                     `cluster B block (${bx},${by},${bz}) should NOT be in ccSet`);
             }
 
             const seedBi = blockIdx(seedCoord[0], seedCoord[1], seedCoord[2], nbx, nby);
-            const unreachable = verifyCcSetConnectivity(result.ccSet, seedBi, nbx, nby, nbz);
+            const unreachable = verifyCcSetConnectivity(clusterBlocks(result.visited), seedBi, nbx, nby, nbz);
             assert.strictEqual(unreachable.length, 0,
                 `ccSet should be fully connected, but ${unreachable.length} blocks are disconnected`);
         });
@@ -649,14 +665,14 @@ describe('findClusterVoxelFlood randomized mixed blocks', () => {
                 for (let by = 0; by < 2; by++) {
                     for (let bx = 0; bx < 2; bx++) {
                         const bi = blockIdx(farX + bx, farY + by, farZ, nbx, nby);
-                        assert.ok(!result.ccSet.has(bi),
+                        assert.ok(!clusterHas(result.visited,bi),
                             `cluster B block (${farX + bx},${farY + by},${farZ}) should NOT be in ccSet`);
                     }
                 }
             }
 
             const seedBi = blockIdx(0, 0, 0, nbx, nby);
-            const unreachable = verifyCcSetConnectivity(result.ccSet, seedBi, nbx, nby, nbz);
+            const unreachable = verifyCcSetConnectivity(clusterBlocks(result.visited), seedBi, nbx, nby, nbz);
             assert.strictEqual(unreachable.length, 0,
                 `ccSet should be fully connected, but ${unreachable.length} blocks are disconnected`);
         });
@@ -698,8 +714,8 @@ describe('buildInvertedGrid + BFS consistency', () => {
 
         const result = findClusterVoxelFlood(buffer, nx, ny, nz, 1, 1, 1);
         assert.ok(result);
-        assert.strictEqual(result.ccSet.size, 1, 'should only reach 1 block');
-        assert.ok(result.ccSet.has(0), 'should reach block at (0,0,0)');
+        assert.strictEqual(result.ccCount, 1, 'should only reach 1 block');
+        assert.ok(clusterHas(result.visited,0), 'should reach block at (0,0,0)');
     });
 });
 
@@ -756,7 +772,7 @@ describe('verifyVisitedVoxelConnectivity', () => {
         assert.strictEqual(check.totalReachable, check.totalVisited,
             `all visited voxels should be reachable, but ${check.totalVisited - check.totalReachable} are not`);
 
-        assert.ok(!result.ccSet.has(blockIdx(2, 0, 0, nbx, nby)),
+        assert.ok(!clusterHas(result.visited,blockIdx(2, 0, 0, nbx, nby)),
             'block (2,0,0) should not be reachable through lx=0-only bridge');
     });
 

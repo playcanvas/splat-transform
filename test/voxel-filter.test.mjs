@@ -295,6 +295,36 @@ describe('filterAndFillBlocks', function () {
             assert.strictEqual(result.mixedCount, 1,
                 'Mixed voxel adjacent to solid block should be preserved');
         });
+
+        it('should preserve adjacency for block indices above 2^32', function () {
+            const nbx = 65536;
+            const nby = 65536;
+            const buffer = new BlockMaskBuffer();
+            const block0 = 7 + 9 * nbx + nbx * nby;
+            const block1 = block0 + 1;
+            const [lo0, hi0] = voxelBit(3, 1, 1);
+            const [lo1, hi1] = voxelBit(0, 1, 1);
+            buffer.addBlock(block0, lo0, hi0);
+            buffer.addBlock(block1, lo1, hi1);
+
+            const result = filterAndFillBlocks(buffer, nbx, nby, 2);
+
+            assert.strictEqual(result.count, 2);
+            assert.deepStrictEqual(Array.from(result.getMixedBlocks().blockIdx), [block0, block1]);
+        });
+
+        it('should stop when the mixed-block output limit is exceeded', function () {
+            const buffer = new BlockMaskBuffer();
+            const [lo0, hi0] = voxelBit(3, 1, 1);
+            const [lo1, hi1] = voxelBit(0, 1, 1);
+            buffer.addBlock(0, lo0, hi0);
+            buffer.addBlock(1, lo1, hi1);
+
+            assert.throws(
+                () => filterAndFillBlocks(buffer, 2, 1, 1, 1),
+                /more than 1 mixed blocks/
+            );
+        });
     });
 
     // ============================================================================

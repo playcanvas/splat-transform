@@ -1,5 +1,6 @@
 import { BlockMaskBuffer } from './block-mask-buffer';
 import { popcount } from './morton';
+import { sortKeyMaskPairs } from './sort-key-mask';
 import { logger } from '../utils';
 
 // ============================================================================
@@ -38,140 +39,168 @@ const SOLID_MASK = 0xFFFFFFFF >>> 0;
  *
  * Blocks that become empty or solid as a consequence are handled automatically.
  *
- * @param buffer - BlockMaskBuffer with voxelization results (linear-keyed).
+ * @param buffer - BlockMaskBuffer with voxelization results (linear-keyed). Entry order may be changed.
  * @param nbx - Grid block dimension X (used to decode block indices).
  * @param nby - Grid block dimension Y (used to decode block indices).
  * @param nbz - Grid block dimension Z (used for neighbor bounds checks).
+ * @param maxMixedBlocks - Optional output limit; filtering stops once exceeded.
  * @returns New BlockMaskBuffer with filtered/filled data.
  */
 function filterAndFillBlocks(
     buffer: BlockMaskBuffer,
     nbx: number,
     nby: number,
-    nbz: number
+    nbz: number,
+    maxMixedBlocks: number = Number.POSITIVE_INFINITY
 ): BlockMaskBuffer {
     const mixed = buffer.getMixedBlocks();
     const solid = buffer.getSolidBlocks();
     const masks = mixed.masks;
     const bStride = nbx * nby;
+    const totalBlocks = bStride * nbz;
 
-    // Build lookup structures from original (unmodified) data
-    const solidSet = new Set<number>();
-    for (let i = 0; i < solid.length; i++) {
-        solidSet.add(solid[i]);
-    }
-
-    const mixedMap = new Map<number, number>();
-    for (let i = 0; i < mixed.blockIdx.length; i++) {
-        mixedMap.set(mixed.blockIdx[i], i);
-    }
+    // Sort the source arrays in place. Cross-block neighbor queries below are
+    // resolved as monotonic merges over fixed-size mixed-block chunks, avoiding
+    // a full-scene hash table and its power-of-two capacity overhead.
+    solid.sort();
+    sortKeyMaskPairs(mixed.blockIdx, masks, mixed.blockIdx.length);
 
     // New masks array (snapshot: cross-block lookups always read the original masks)
     const newMasks = new Uint32Array(masks.length);
     let voxelsRemoved = 0;
     let voxelsFilled = 0;
+    let mixedBlocks = 0;
+    let promotedSolidBlocks = 0;
+    const CHUNK_SIZE = 1 << 20;
+    const work = new Uint32Array(Math.min(CHUNK_SIZE, mixed.blockIdx.length) * 12);
 
-    for (let i = 0; i < mixed.blockIdx.length; i++) {
-        const idx = mixed.blockIdx[i];
-        const origLo = masks[i * 2];
-        const origHi = masks[i * 2 + 1];
+    const lowerBound = (keys: Float64Array, target: number): number => {
+        let lo = 0;
+        let hi = keys.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >>> 1;
+            if (keys[mid] < target) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    };
 
-        const bx = idx % nbx;
-        const byBz = (idx / nbx) | 0;
-        const by = byBz % nby;
-        const bz = (byBz / nby) | 0;
+    for (let chunkStart = 0; chunkStart < mixed.blockIdx.length; chunkStart += CHUNK_SIZE) {
+        const chunkLength = Math.min(CHUNK_SIZE, mixed.blockIdx.length - chunkStart);
 
-        // --- In-block per-direction occupancy masks ---
+        for (let local = 0; local < chunkLength; local++) {
+            const i = chunkStart + local;
+            const origLo = masks[i * 2];
+            const origHi = masks[i * 2 + 1];
+            const w = local * 12;
+            work[w] = (origLo >>> 1) & ~FACE_X3;
+            work[w + 1] = (origHi >>> 1) & ~FACE_X3;
+            work[w + 2] = (origLo << 1) & ~FACE_X0;
+            work[w + 3] = (origHi << 1) & ~FACE_X0;
+            work[w + 4] = (origLo >>> 4) & ~FACE_Y3;
+            work[w + 5] = (origHi >>> 4) & ~FACE_Y3;
+            work[w + 6] = (origLo << 4) & ~FACE_Y0;
+            work[w + 7] = (origHi << 4) & ~FACE_Y0;
+            work[w + 8] = (origLo >>> 16) | (origHi << 16);
+            work[w + 9] = origHi >>> 16;
+            work[w + 10] = origLo << 16;
+            work[w + 11] = (origHi << 16) | (origLo >>> 16);
+        }
 
-        // +X: result[p] = mask[p+1], valid for lx < 3
-        let pxLo = (origLo >>> 1) & ~FACE_X3;
-        let pxHi = (origHi >>> 1) & ~FACE_X3;
+        for (let direction = 0; direction < 6; direction++) {
+            let solidPos = -1;
+            let mixedPos = -1;
+            for (let local = 0; local < chunkLength; local++) {
+                const i = chunkStart + local;
+                const idx = mixed.blockIdx[i];
+                const bx = idx % nbx;
+                const by = Math.floor(idx / nbx) % nby;
+                let target = -1;
+                if (direction === 0 && bx < nbx - 1) target = idx + 1;
+                else if (direction === 1 && bx > 0) target = idx - 1;
+                else if (direction === 2 && by < nby - 1) target = idx + nbx;
+                else if (direction === 3 && by > 0) target = idx - nbx;
+                else if (direction === 4 && idx + bStride < totalBlocks) target = idx + bStride;
+                else if (direction === 5 && idx >= bStride) target = idx - bStride;
+                if (target < 0) continue;
 
-        // -X: result[p] = mask[p-1], valid for lx > 0
-        let mxLo = (origLo << 1) & ~FACE_X0;
-        let mxHi = (origHi << 1) & ~FACE_X0;
+                if (solidPos < 0) {
+                    solidPos = lowerBound(solid, target);
+                    mixedPos = lowerBound(mixed.blockIdx, target);
+                } else {
+                    while (solidPos < solid.length && solid[solidPos] < target) solidPos++;
+                    while (mixedPos < mixed.blockIdx.length && mixed.blockIdx[mixedPos] < target) mixedPos++;
+                }
 
-        // +Y: result[p] = mask[p+4], valid for ly < 3
-        let pyLo = (origLo >>> 4) & ~FACE_Y3;
-        let pyHi = (origHi >>> 4) & ~FACE_Y3;
+                let adjLo = 0;
+                let adjHi = 0;
+                if (solidPos < solid.length && solid[solidPos] === target) {
+                    adjLo = SOLID_MASK;
+                    adjHi = SOLID_MASK;
+                } else if (mixedPos < mixed.blockIdx.length && mixed.blockIdx[mixedPos] === target) {
+                    adjLo = masks[mixedPos * 2];
+                    adjHi = masks[mixedPos * 2 + 1];
+                } else {
+                    continue;
+                }
 
-        // -Y: result[p] = mask[p-4], valid for ly > 0
-        let myLo = (origLo << 4) & ~FACE_Y0;
-        let myHi = (origHi << 4) & ~FACE_Y0;
+                const w = local * 12 + direction * 2;
+                if (direction === 0) {
+                    work[w] |= (adjLo & FACE_X0) << 3;
+                    work[w + 1] |= (adjHi & FACE_X0) << 3;
+                } else if (direction === 1) {
+                    work[w] |= (adjLo & FACE_X3) >>> 3;
+                    work[w + 1] |= (adjHi & FACE_X3) >>> 3;
+                } else if (direction === 2) {
+                    work[w] |= (adjLo & FACE_Y0) << 12;
+                    work[w + 1] |= (adjHi & FACE_Y0) << 12;
+                } else if (direction === 3) {
+                    work[w] |= (adjLo & FACE_Y3) >>> 12;
+                    work[w + 1] |= (adjHi & FACE_Y3) >>> 12;
+                } else if (direction === 4) {
+                    work[w + 1] |= (adjLo & FACE_Z0_LO) << 16;
+                } else {
+                    work[w] |= (adjHi & FACE_Z3_HI) >>> 16;
+                }
+            }
+        }
 
-        // +Z: result[p] = mask[p+16], crosses lo/hi at lz=1->lz=2
-        let pzLo = (origLo >>> 16) | (origHi << 16);
-        let pzHi = origHi >>> 16;
+        for (let local = 0; local < chunkLength; local++) {
+            const i = chunkStart + local;
+            const origLo = masks[i * 2];
+            const origHi = masks[i * 2 + 1];
+            const w = local * 12;
+            const pxLo = work[w], pxHi = work[w + 1];
+            const mxLo = work[w + 2], mxHi = work[w + 3];
+            const pyLo = work[w + 4], pyHi = work[w + 5];
+            const myLo = work[w + 6], myHi = work[w + 7];
+            const pzLo = work[w + 8], pzHi = work[w + 9];
+            const mzLo = work[w + 10], mzHi = work[w + 11];
+            const neighborLo = pxLo | mxLo | pyLo | myLo | pzLo | mzLo;
+            const neighborHi = pxHi | mxHi | pyHi | myHi | pzHi | mzHi;
+            let lo = origLo & neighborLo;
+            let hi = origHi & neighborHi;
+            lo |= ~lo & pxLo & mxLo & pyLo & myLo & pzLo & mzLo;
+            hi |= ~hi & pxHi & mxHi & pyHi & myHi & pzHi & mzHi;
 
-        // -Z: result[p] = mask[p-16], crosses lo/hi at lz=2->lz=1
-        let mzLo = origLo << 16;
-        let mzHi = (origHi << 16) | (origLo >>> 16);
+            voxelsRemoved += popcount(origLo & ~lo) + popcount(origHi & ~hi);
+            voxelsFilled += popcount(lo & ~origLo) + popcount(hi & ~origHi);
+            newMasks[i * 2] = lo;
+            newMasks[i * 2 + 1] = hi;
 
-        // --- Cross-block contributions ---
-
-        // +X: our lx=3 face <- adjacent's lx=0 face (shifted left by 3)
-        addCrossFace(bx + 1, by, bz, nbx, nby, nbz, bStride, solidSet, mixedMap, masks,
-            FACE_X3, FACE_X0, 3, true, pxLo, pxHi,
-            (lo, hi) => {
-                pxLo = lo; pxHi = hi;
-            });
-
-        // -X: our lx=0 face <- adjacent's lx=3 face (shifted right by 3)
-        addCrossFace(bx - 1, by, bz, nbx, nby, nbz, bStride, solidSet, mixedMap, masks,
-            FACE_X0, FACE_X3, 3, false, mxLo, mxHi,
-            (lo, hi) => {
-                mxLo = lo; mxHi = hi;
-            });
-
-        // +Y: our ly=3 face <- adjacent's ly=0 face (shifted left by 12)
-        addCrossFace(bx, by + 1, bz, nbx, nby, nbz, bStride, solidSet, mixedMap, masks,
-            FACE_Y3, FACE_Y0, 12, true, pyLo, pyHi,
-            (lo, hi) => {
-                pyLo = lo; pyHi = hi;
-            });
-
-        // -Y: our ly=0 face <- adjacent's ly=3 face (shifted right by 12)
-        addCrossFace(bx, by - 1, bz, nbx, nby, nbz, bStride, solidSet, mixedMap, masks,
-            FACE_Y0, FACE_Y3, 12, false, myLo, myHi,
-            (lo, hi) => {
-                myLo = lo; myHi = hi;
-            });
-
-        // +Z: our lz=3 face (hi bits 16-31) <- adjacent's lz=0 face (lo bits 0-15)
-        addCrossFaceZ(bx, by, bz + 1, nbx, nby, nbz, bStride, solidSet, mixedMap, masks, true, pzLo, pzHi,
-            (lo, hi) => {
-                pzLo = lo; pzHi = hi;
-            });
-
-        // -Z: our lz=0 face (lo bits 0-15) <- adjacent's lz=3 face (hi bits 16-31)
-        addCrossFaceZ(bx, by, bz - 1, nbx, nby, nbz, bStride, solidSet, mixedMap, masks, false, mzLo, mzHi,
-            (lo, hi) => {
-                mzLo = lo; mzHi = hi;
-            });
-
-        // --- Apply operations ---
-
-        // Remove isolated voxels: keep only those with at least one occupied neighbor
-        const neighborLo = pxLo | mxLo | pyLo | myLo | pzLo | mzLo;
-        const neighborHi = pxHi | mxHi | pyHi | myHi | pzHi | mzHi;
-        let lo = origLo & neighborLo;
-        let hi = origHi & neighborHi;
-
-        // Fill isolated empties: fill where all 6 neighbors are occupied
-        const fillLo = ~lo & pxLo & mxLo & pyLo & myLo & pzLo & mzLo;
-        const fillHi = ~hi & pxHi & mxHi & pyHi & myHi & pzHi & mzHi;
-        lo |= fillLo;
-        hi |= fillHi;
-
-        voxelsRemoved += popcount(origLo & ~lo) + popcount(origHi & ~hi);
-        voxelsFilled += popcount(lo & ~origLo) + popcount(hi & ~origHi);
-
-        newMasks[i * 2] = lo;
-        newMasks[i * 2 + 1] = hi;
+            if ((lo >>> 0) === SOLID_MASK && (hi >>> 0) === SOLID_MASK) {
+                promotedSolidBlocks++;
+            } else if (lo !== 0 || hi !== 0) {
+                mixedBlocks++;
+                if (mixedBlocks > maxMixedBlocks) {
+                    throw new Error(`Voxel output has more than ${maxMixedBlocks} mixed blocks. Use a coarser voxel resolution.`);
+                }
+            }
+        }
     }
 
     // Rebuild buffer with state transitions (mixed->empty, mixed->solid)
-    const result = new BlockMaskBuffer();
+    const result = new BlockMaskBuffer(solid.length + promotedSolidBlocks, mixedBlocks);
 
     for (let i = 0; i < mixed.blockIdx.length; i++) {
         const lo = newMasks[i * 2];
@@ -186,93 +215,6 @@ function filterAndFillBlocks(
     logger.debug(`block cleanup: ${voxelsRemoved} voxels removed, ${voxelsFilled} voxels filled`);
 
     return result;
-}
-
-// ============================================================================
-// Cross-block face helpers
-// ============================================================================
-
-function addCrossFace(
-    nx: number, ny: number, nz: number,
-    nbx: number, nby: number, nbz: number, bStride: number,
-    solidSet: Set<number>,
-    mixedMap: Map<number, number>,
-    masks: Uint32Array,
-    ourFaceMask: number,
-    adjFaceMask: number,
-    shiftAmount: number,
-    shiftLeft: boolean,
-    curLo: number, curHi: number,
-    write: (lo: number, hi: number) => void
-): void {
-    if (nx < 0 || ny < 0 || nz < 0 || nx >= nbx || ny >= nby || nz >= nbz) {
-        write(curLo, curHi);
-        return;
-    }
-    const adjIdx = nx + ny * nbx + nz * bStride;
-
-    if (solidSet.has(adjIdx)) {
-        write(curLo | ourFaceMask, curHi | ourFaceMask);
-        return;
-    }
-
-    const mIdx = mixedMap.get(adjIdx);
-    if (mIdx === undefined) {
-        write(curLo, curHi);
-        return;
-    }
-
-    const adjLo = masks[mIdx * 2];
-    const adjHi = masks[mIdx * 2 + 1];
-    const faceLo = adjLo & adjFaceMask;
-    const faceHi = adjHi & adjFaceMask;
-
-    if (shiftLeft) {
-        write(curLo | (faceLo << shiftAmount), curHi | (faceHi << shiftAmount));
-    } else {
-        write(curLo | (faceLo >>> shiftAmount), curHi | (faceHi >>> shiftAmount));
-    }
-}
-
-function addCrossFaceZ(
-    nx: number, ny: number, nz: number,
-    nbx: number, nby: number, nbz: number, bStride: number,
-    solidSet: Set<number>,
-    mixedMap: Map<number, number>,
-    masks: Uint32Array,
-    plusZ: boolean,
-    curLo: number, curHi: number,
-    write: (lo: number, hi: number) => void
-): void {
-    if (nx < 0 || ny < 0 || nz < 0 || nx >= nbx || ny >= nby || nz >= nbz) {
-        write(curLo, curHi);
-        return;
-    }
-    const adjIdx = nx + ny * nbx + nz * bStride;
-
-    if (solidSet.has(adjIdx)) {
-        if (plusZ) {
-            write(curLo, curHi | FACE_Z3_HI);
-        } else {
-            write(curLo | FACE_Z0_LO, curHi);
-        }
-        return;
-    }
-
-    const mIdx = mixedMap.get(adjIdx);
-    if (mIdx === undefined) {
-        write(curLo, curHi);
-        return;
-    }
-
-    const adjLo = masks[mIdx * 2];
-    const adjHi = masks[mIdx * 2 + 1];
-
-    if (plusZ) {
-        write(curLo, curHi | ((adjLo & FACE_Z0_LO) << 16));
-    } else {
-        write(curLo | ((adjHi & FACE_Z3_HI) >>> 16), curHi);
-    }
 }
 
 export { filterAndFillBlocks };
