@@ -699,6 +699,12 @@ function buildSparseOctreeFromBuffer(
     }
     const sourceStride = sourceNbx * sourceNby;
     const totalBlocks = sourceStride * sourceNbz;
+    if (!Number.isSafeInteger(totalBlocks)) {
+        throw new Error(
+            `Voxel source grid ${sourceNbx}x${sourceNby}x${sourceNbz} exceeds the safe-integer block-index limit. ` +
+            'Use a coarser voxel resolution.'
+        );
+    }
 
     const convertToMorton = (stream: Float64Array): void => {
         for (let i = 0; i < stream.length; i++) {

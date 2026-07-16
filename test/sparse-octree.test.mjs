@@ -375,6 +375,19 @@ describe('BlockMaskBuffer', function () {
 // ============================================================================
 
 describe('buildSparseOctree', function () {
+    it('rejects source grids beyond the safe-integer block-index limit', function () {
+        const acc = new BlockMaskBuffer();
+        const gridBounds = {
+            min: new Vec3(0, 0, 0),
+            max: new Vec3(1, 1, 1)
+        };
+
+        assert.throws(
+            () => buildSparseOctreeFromBuffer(acc, 2 ** 27, 2 ** 27, 1, gridBounds, gridBounds, 0.25),
+            /exceeds the safe-integer block-index limit.*Use a coarser voxel resolution/
+        );
+    });
+
     it('builds directly from block indices above 2^32', function () {
         const sourceNbx = 65536;
         const sourceNby = 65536;
