@@ -41,6 +41,18 @@ class BlockMaskBuffer {
     /** Interleaved voxel masks for mixed blocks: [lo0, hi0, lo1, hi1, ...] */
     private _mixedMasks: Uint32Array = new Uint32Array(0);
 
+    constructor(solidCapacity = 0, mixedCapacity = 0) {
+        if (solidCapacity > 0) {
+            this._solidCap = solidCapacity;
+            this._solidIdx = new Float64Array(solidCapacity);
+        }
+        if (mixedCapacity > 0) {
+            this._mixedCap = mixedCapacity;
+            this._mixedIdx = new Float64Array(mixedCapacity);
+            this._mixedMasks = new Uint32Array(mixedCapacity * 2);
+        }
+    }
+
     /**
      * Add a non-empty block to the buffer.
      * Automatically classifies as solid or mixed based on mask values.

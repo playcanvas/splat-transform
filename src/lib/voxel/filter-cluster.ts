@@ -78,9 +78,9 @@ const buildInvertedGrid = (
 
 /**
  * Find the connected component of occupied voxels reachable from a seed
- * position via 6-connected voxel-level flood fill. Returns the set of block
- * linear indices that contain at least one reachable voxel, the visited grid,
- * and the resolved seed position.
+ * position via 6-connected voxel-level flood fill. Returns the count of blocks
+ * that contain at least one reachable voxel, the visited grid, and the resolved
+ * seed position.
  *
  * If the seed voxel is not occupied, finds the nearest occupied voxel first.
  *
@@ -91,13 +91,13 @@ const buildInvertedGrid = (
  * @param seedIx - Seed voxel X coordinate.
  * @param seedIy - Seed voxel Y coordinate.
  * @param seedIz - Seed voxel Z coordinate.
- * @returns Object with ccSet, visited grid, and the resolved seed, or null if no occupied voxel found.
+ * @returns Object with ccCount, visited grid, and the resolved seed, or null if no occupied voxel found.
  */
 const findClusterVoxelFlood = (
     buffer: BlockMaskBuffer,
     nx: number, ny: number, nz: number,
     seedIx: number, seedIy: number, seedIz: number
-): { ccSet: Set<number>; visited: SparseVoxelGrid; resolvedSeed: { ix: number; iy: number; iz: number } } | null => {
+): { ccCount: number; visited: SparseVoxelGrid; resolvedSeed: { ix: number; iy: number; iz: number } } | null => {
     const blocked = buildInvertedGrid(buffer, nx, ny, nz);
     const nbx = nx >> 2;
     const bStride = nbx * (ny >> 2);
@@ -120,7 +120,7 @@ const findClusterVoxelFlood = (
 
     const visited = twoLevelBFS(blocked, blockSeeds, voxelSeeds, nx, ny, nz);
 
-    const ccSet = new Set<number>();
+    let ccCount = 0;
     const totalBlocks = nbx * (ny >> 2) * (nz >> 2);
     const visitedTypes = visited.types;
     for (let w = 0; w < visitedTypes.length; w++) {
@@ -132,13 +132,13 @@ const findClusterVoxelFlood = (
             const bp = 31 - Math.clz32(nonEmpty & -nonEmpty);
             const blockIdx = baseIdx + (bp >>> 1);
             if (blockIdx < totalBlocks) {
-                ccSet.add(blockIdx);
+                ccCount++;
             }
             nonEmpty &= nonEmpty - 1;
         }
     }
 
-    return { ccSet, visited, resolvedSeed: { ix: seedIx, iy: seedIy, iz: seedIz } };
+    return { ccCount, visited, resolvedSeed: { ix: seedIx, iy: seedIy, iz: seedIz } };
 };
 
 /**
@@ -257,7 +257,7 @@ const filterCluster = async (
             return finish(dataTable.clone({ rows: [] }));
         }
 
-        const { ccSet, visited: visitedGrid, resolvedSeed } = floodResult;
+        const { ccCount, visited: visitedGrid, resolvedSeed } = floodResult;
         if (resolvedSeed.ix !== seedIx || resolvedSeed.iy !== seedIy || resolvedSeed.iz !== seedIz) {
             const worldX = gridBounds.min.x + (resolvedSeed.ix + 0.5) * clampedResolution;
             const worldY = gridBounds.min.y + (resolvedSeed.iy + 0.5) * clampedResolution;
@@ -265,7 +265,7 @@ const filterCluster = async (
             logger.warn(`seed (${seed.x.toFixed(2)}, ${seed.y.toFixed(2)}, ${seed.z.toFixed(2)}) unoccupied; resolved to nearest at (${worldX.toFixed(2)}, ${worldY.toFixed(2)}, ${worldZ.toFixed(2)})`);
         }
 
-        logger.info(`cluster is ${fmtCount(ccSet.size)} of ${fmtCount(buffer.count)} blocks`);
+        logger.info(`cluster is ${fmtCount(ccCount)} of ${fmtCount(buffer.count)} blocks`);
 
         // Build lookup from visited voxels only (not all original voxels in ccSet blocks).
         // Every visited voxel is originally-occupied (the BFS only traverses through them),
@@ -273,7 +273,8 @@ const filterCluster = async (
         const visitedBuffer = visitedGrid.toBuffer(0, 0, 0, nbx, nby, nbz);
         const lookup = buildBlockLookup(visitedBuffer);
 
-        if (ccSet.size === buffer.count) {
+        if (ccCount === buffer.count) {
+            lookup.blocks.releaseStorage();
             logger.info('all blocks in one cluster, no filtering needed');
             return finish(dataTable);
         }
@@ -314,6 +315,7 @@ const filterCluster = async (
             }
         }
 
+        lookup.blocks.releaseStorage();
         if (keepIndices.length === numRows) {
             return finish(dataTable);
         }

@@ -114,12 +114,15 @@ class SparseVoxelGrid {
         this.nx = nx;
         this.ny = ny;
         this.nz = nz;
-        this.nbx = nx >> 2;
-        this.nby = ny >> 2;
-        this.nbz = nz >> 2;
+        this.nbx = Math.floor(nx / 4);
+        this.nby = Math.floor(ny / 4);
+        this.nbz = Math.floor(nz / 4);
         this.bStride = this.nbx * this.nby;
         const totalBlocks = this.nbx * this.nby * this.nbz;
-        this.types = new Uint32Array((totalBlocks + BLOCKS_PER_WORD - 1) >>> 4);
+        if (!Number.isSafeInteger(totalBlocks) || totalBlocks > 0x100000000) {
+            throw new Error(`SparseVoxelGrid cannot address ${totalBlocks} blocks; the limit is 2^32`);
+        }
+        this.types = new Uint32Array(Math.ceil(totalBlocks / BLOCKS_PER_WORD));
         this.masks = new BlockMaskMap();
     }
 
@@ -224,9 +227,10 @@ class SparseVoxelGrid {
         nx: number, ny: number, nz: number,
         onProgress?: (done: number, total: number) => void
     ): SparseVoxelGrid {
-        const g = new SparseVoxelGrid(nx, ny, nz);
         const solidIdx = acc.getSolidBlocks();
         const mixed = acc.getMixedBlocks();
+        const g = new SparseVoxelGrid(nx, ny, nz);
+        g.masks = new BlockMaskMap(Math.ceil(mixed.blockIdx.length / 0.7));
         const total = solidIdx.length + mixed.blockIdx.length;
         const PROGRESS_INTERVAL = 1 << 16;
         let nextTick = PROGRESS_INTERVAL;

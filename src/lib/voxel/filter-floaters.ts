@@ -93,7 +93,7 @@ const filterFloaters = async (
 
         const lookup = buildBlockLookup(buffer);
 
-        logger.info(`occupied blocks: ${fmtCount(lookup.solidSet.size + lookup.mixedMap.size)} (${fmtCount(lookup.solidSet.size)} solid, ${fmtCount(lookup.mixedMap.size)} mixed)`);
+        logger.info(`occupied blocks: ${fmtCount(lookup.solidCount + lookup.mixedCount)} (${fmtCount(lookup.solidCount)} solid, ${fmtCount(lookup.mixedCount)} mixed)`);
 
         const gaussianCols = buildGaussianColumns(ctx);
         const keepIndices: number[] = [];
@@ -113,6 +113,7 @@ const filterFloaters = async (
             }
         }
 
+        lookup.blocks.releaseStorage();
         if (keepIndices.length === numRows) {
             return finish(dataTable);
         }

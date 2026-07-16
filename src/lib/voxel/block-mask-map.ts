@@ -9,7 +9,7 @@ const EMPTY = -1;
  * Uses Fibonacci hashing with linear probing and backward-shift deletion.
  */
 class BlockMaskMap {
-    keys: Int32Array;
+    keys: Float64Array;
     lo: Uint32Array;
     hi: Uint32Array;
     private _size: number;
@@ -17,11 +17,14 @@ class BlockMaskMap {
     private _mask: number;
 
     constructor(initialCapacity = 4096) {
-        const cap = 1 << (32 - Math.clz32(Math.max(15, initialCapacity - 1)));
+        const cap = 2 ** Math.ceil(Math.log2(Math.max(16, initialCapacity)));
+        if (!Number.isSafeInteger(initialCapacity) || initialCapacity < 0 || cap > 0x80000000) {
+            throw new Error(`BlockMaskMap capacity ${initialCapacity} exceeds the typed hash-table limit`);
+        }
         this._capacity = cap;
         this._mask = cap - 1;
         this._size = 0;
-        this.keys = new Int32Array(cap).fill(EMPTY);
+        this.keys = new Float64Array(cap).fill(EMPTY);
         this.lo = new Uint32Array(cap);
         this.hi = new Uint32Array(cap);
     }
@@ -39,7 +42,7 @@ class BlockMaskMap {
      */
     slot(key: number): number {
         const mask = this._mask;
-        let i = (Math.imul(key, 0x9E3779B9) >>> 0) & mask;
+        let i = this._hash(key) & mask;
         while (true) {
             const k = this.keys[i];
             if (k === key || k === EMPTY) return i;
@@ -65,7 +68,7 @@ class BlockMaskMap {
         this.lo[slot] = loVal;
         this.hi[slot] = hiVal;
         this._size++;
-        if (this._size > ((this._capacity * 0.7) | 0)) {
+        if (this._size > Math.floor(this._capacity * 0.7)) {
             this._grow();
         }
     }
@@ -82,7 +85,7 @@ class BlockMaskMap {
         if (this.keys[s] === EMPTY) {
             this.keys[s] = key;
             this._size++;
-            if (this._size > ((this._capacity * 0.7) | 0)) {
+            if (this._size > Math.floor(this._capacity * 0.7)) {
                 this._grow();
                 s = this.slot(key);
             }
@@ -105,7 +108,7 @@ class BlockMaskMap {
         while (true) {
             j = (j + 1) & mask;
             if (this.keys[j] === EMPTY) break;
-            const k = ((Math.imul(this.keys[j], 0x9E3779B9) >>> 0) & mask);
+            const k = this._hash(this.keys[j]) & mask;
             if ((i < j) ? (k <= i || k > j) : (k <= i && k > j)) {
                 this.keys[i] = this.keys[j];
                 this.lo[i] = this.lo[j];
@@ -133,7 +136,7 @@ class BlockMaskMap {
      * replacing it with a new instance.
      */
     releaseStorage(): void {
-        this.keys = new Int32Array(0);
+        this.keys = new Float64Array(0);
         this.lo = new Uint32Array(0);
         this.hi = new Uint32Array(0);
         this._size = 0;
@@ -167,8 +170,11 @@ class BlockMaskMap {
         const oldCap = this._capacity;
 
         this._capacity *= 2;
+        if (this._capacity > 0x80000000) {
+            throw new Error('BlockMaskMap exceeded the typed hash-table capacity limit');
+        }
         this._mask = this._capacity - 1;
-        this.keys = new Int32Array(this._capacity).fill(EMPTY);
+        this.keys = new Float64Array(this._capacity).fill(EMPTY);
         this.lo = new Uint32Array(this._capacity);
         this.hi = new Uint32Array(this._capacity);
         this._size = 0;
@@ -182,6 +188,12 @@ class BlockMaskMap {
                 this._size++;
             }
         }
+    }
+
+    private _hash(key: number): number {
+        const lo = key >>> 0;
+        const hi = Math.floor(key / 0x100000000) >>> 0;
+        return (Math.imul(lo, 0x9E3779B9) ^ Math.imul(hi, 0x85EBCA77)) >>> 0;
     }
 }
 
