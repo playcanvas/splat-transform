@@ -824,8 +824,8 @@ HTML VIEWER OUTPUT (.html)
         --viewer-settings  <settings.json>  HTML viewer settings JSON file
         --unbundled                         Generate unbundled HTML viewer with separate files
 
-LOD INPUT (.lcc, .lcc2, lod-meta.json)
-    -L, --select-lod       <n,n,...>        Comma-separated LOD levels to read from LCC / LCC2 / streamed SOG input
+LOD INPUT (lod-meta.json, .lcc, .lcc2)
+    -L, --select-lod       <n,n,...>        Comma-separated LOD levels to read from streamed SOG / LCC / LCC2 input
 
 LOD OUTPUT (lod-meta.json)
         --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
@@ -1271,7 +1271,7 @@ const main = async () => {
 
         // LOD-meta output: keep every level, structurally separate — LODs are
         // overlapping surfaces and are NEVER combined. Levels come from a single
-        // lcc/lcc2/streamed-SOG intrinsic LODs, or from PLY inputs tagged with --tag-lod (env = -1,
+        // streamed-SOG/lcc/lcc2 intrinsic LODs, or from PLY inputs tagged with --tag-lod (env = -1,
         // untagged = level 0). Each level (and the env) is processed independently
         // via processSourceBridged, the levels are stacked, and writeLodSource
         // streams them. With no actions this matches the previous streaming-LOD
@@ -1315,7 +1315,7 @@ const main = async () => {
                     return { arg: a, ply, tag, rest };
                 });
                 if (!tagged.every(t => t.ply)) {
-                    throw new Error('lod-meta.json output requires a single LCC/LCC2/streamed-SOG input, or local PLY input(s) (optionally --tag-lod tagged).');
+                    throw new Error('lod-meta.json output requires a single streamed-SOG/LCC/LCC2 input, or local PLY input(s) (optionally --tag-lod tagged).');
                 }
                 const opened = await Promise.all(tagged.map(async (t) => {
                     const { filename: inFile, fileSystem } = resolveInput(t.arg.filename);

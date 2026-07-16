@@ -11,13 +11,13 @@ import { Options, Param } from './types';
  * Supported input file formats for Gaussian splat data.
  *
  * - `ply` - PLY format (standard 3DGS training output)
- * - `splat` - Antimatter15 splat format
- * - `ksplat` - Kevin Kwok's compressed splat format
- * - `spz` - Niantic Labs compressed format
  * - `sog` - PlayCanvas SOG format (WebP-compressed)
+ * - `lod` - Streamed SOG (`lod-meta.json`) format
  * - `lcc` - XGrids LCC format
  * - `lcc2` - XGrids LCC2 (octree) format
- * - `lod` - Streamed SOG (`lod-meta.json`) format
+ * - `spz` - Niantic Labs compressed format
+ * - `splat` - Antimatter15 splat format
+ * - `ksplat` - Kevin Kwok's compressed splat format
  * - `mjs` - JavaScript module generator
  */
 type InputFormat = 'mjs' | 'ksplat' | 'splat' | 'sog' | 'ply' | 'spz' | 'lcc' | 'lcc2' | 'lod';
@@ -95,7 +95,7 @@ type ReadFileOptions = {
 
 /**
  * Reads a Gaussian splat file and returns its data as {@link ChunkSource}s
- * (usually one; an LCC/LCC2 container yields a single structural multi-LOD source).
+ * (usually one; a Streamed SOG/LCC/LCC2 container yields a single structural multi-LOD source).
  *
  * Readers are chunk-native: `ply`/`splat`/`spz`/`lcc`/`lcc2`/`lod` return lazy /
  * streaming sources whose `close()` releases the underlying file(s); whole-blob

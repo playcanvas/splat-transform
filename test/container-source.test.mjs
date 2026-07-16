@@ -1,5 +1,5 @@
 /**
- * Tests for the lazy multi-LOD container source (the LCC/LCC2 backend): segments
+ * Tests for the lazy multi-LOD container source (the Streamed SOG/LCC/LCC2 backend): segments
  * are decoded on demand, LRU-cached, and stitched per LOD via concatSource.
  */
 

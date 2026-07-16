@@ -75,6 +75,7 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 | `.ply` | ✅ | ✅ | Standard PLY format |
 | `.sog` | ✅ | ✅ | Bundled super-compressed format (recommended) |
 | `meta.json` | ✅ | ✅ | Unbundled super-compressed format (accompanied by `.webp` textures) |
+| `lod-meta.json` | ✅ | ✅ | Streamed LOD data stored in SOG chunks |
 | `.compressed.ply` | ✅ | ✅ | Compressed PLY format (auto-detected and decompressed on read) |
 | `.spz` | ✅ | ✅ | Compressed splat format (Niantic format, v2–4) |
 | `.lcc` | ✅ | ❌ | LCC file format (XGRIDS) |
@@ -86,7 +87,6 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 | `.csv` | ❌ | ✅ | Comma-separated values spreadsheet |
 | `.html` | ❌ | ✅ | HTML viewer app (single-page or unbundled) based on SOG |
 | `.voxel.json` | ❌ | ✅ | Sparse voxel octree for collision detection |
-| `lod-meta.json` | ✅ | ✅ | Streamed LOD data stored in SOG chunks |
 | `.webp` | ❌ | ✅ | Lossless WebP image rendered from a camera view via GPU rasterizer |
 | `null` | ❌ | ✅ | Discard output (useful with `--stats` for analysis-only runs) |
 
@@ -186,10 +186,10 @@ Apply when writing `.html` outputs.
 
 ## LOD Input Options
 
-Apply when reading `.lcc`, `.lcc2`, and `lod-meta.json` files.
+Apply when reading `lod-meta.json`, `.lcc`, and `.lcc2` files.
 
 ```none
--L, --select-lod       <n,n,...>        Comma-separated LOD levels to read from LCC / LCC2 / streamed SOG input
+-L, --select-lod       <n,n,...>        Comma-separated LOD levels to read from streamed SOG / LCC / LCC2 input
 ```
 
 ## LOD Output Options
