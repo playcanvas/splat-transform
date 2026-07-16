@@ -45,11 +45,12 @@ import {
     logger
 } from '../lib';
 // CLI-only internals (deliberately off the public lib surface): the LOD-path
-// level resolver and the lcc/lcc2 source readers the LOD writer drives
+// level resolver and the container source readers the LOD writer drives
 // directly (single-scene callers get these via readFile).
 import { resolveLodLevels } from '../lib/ops';
 import { readLccSource, readLccEnvironmentSource } from '../lib/readers/read-lcc';
 import { readLcc2Source, readLcc2EnvironmentSource } from '../lib/readers/read-lcc2';
+import { readLodSource, readLodEnvironmentSource } from '../lib/readers/read-lod';
 
 /**
  * CLI-specific options extending library options.
@@ -768,7 +769,7 @@ USAGE
   • Use 'null' as output to discard file output.
 
 SUPPORTED INPUTS
-    .ply   .compressed.ply   .sog   .spz   meta.json   .ksplat   .splat   .mjs   .lcc   .lcc2
+    .ply   .compressed.ply   .sog   .spz   meta.json   lod-meta.json   .ksplat   .splat   .mjs   .lcc   .lcc2
 
     Input filenames may also be http(s):// URLs (downloaded on demand;
     .mjs generators are local-only).
@@ -823,8 +824,8 @@ HTML VIEWER OUTPUT (.html)
         --viewer-settings  <settings.json>  HTML viewer settings JSON file
         --unbundled                         Generate unbundled HTML viewer with separate files
 
-LCC / LCC2 INPUT (.lcc, .lcc2)
-    -L, --select-lod       <n,n,...>        Comma-separated LOD levels to read from LCC / LCC2 input
+LOD INPUT (.lcc, .lcc2, lod-meta.json)
+    -L, --select-lod       <n,n,...>        Comma-separated LOD levels to read from LCC / LCC2 / streamed SOG input
 
 LOD OUTPUT (lod-meta.json)
         --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
@@ -1270,7 +1271,7 @@ const main = async () => {
 
         // LOD-meta output: keep every level, structurally separate — LODs are
         // overlapping surfaces and are NEVER combined. Levels come from a single
-        // lcc/lcc2's intrinsic LODs, or from PLY inputs tagged with --tag-lod (env = -1,
+        // lcc/lcc2/streamed-SOG intrinsic LODs, or from PLY inputs tagged with --tag-lod (env = -1,
         // untagged = level 0). Each level (and the env) is processed independently
         // via processSourceBridged, the levels are stacked, and writeLodSource
         // streams them. With no actions this matches the previous streaming-LOD
@@ -1282,20 +1283,24 @@ const main = async () => {
 
             let perLevel: ChunkSource[] = [];
             let envSource: ChunkSource | null = null;
-            let container: ChunkSource | null = null; // shared multi-LOD parent (lcc/lcc2)
+            let container: ChunkSource | null = null; // shared intrinsic multi-LOD parent
             let inputActions: CliAction[] = [];
 
-            if (single === 'lcc' || single === 'lcc2') {
+            if (single === 'lcc' || single === 'lcc2' || single === 'lod') {
                 // Intrinsic multi-LOD: view each level with selectLod (shared parent);
                 // env fetched separately. The input's own actions apply per level.
                 const { filename: inFile, fileSystem } = resolveInput(inputArgs[0].filename);
                 const multi = single === 'lcc2' ?
                     await readLcc2Source(fileSystem, inFile, { ...options, lodSelect: [] }, pool) :
-                    await readLccSource(fileSystem, inFile, { ...options, lodSelect: [] }, pool);
+                    single === 'lod' ?
+                        await readLodSource(fileSystem, inFile, { ...options, lodSelect: [] }, pool) :
+                        await readLccSource(fileSystem, inFile, { ...options, lodSelect: [] }, pool);
                 container = multi;
                 envSource = single === 'lcc2' ?
                     await readLcc2EnvironmentSource(fileSystem, inFile, pool) :
-                    await readLccEnvironmentSource(fileSystem, inFile, pool);
+                    single === 'lod' ?
+                        await readLodEnvironmentSource(fileSystem, inFile, pool) :
+                        await readLccEnvironmentSource(fileSystem, inFile, pool);
                 // --select-lod picks which levels go into the lod-meta (default all).
                 perLevel = resolveLodLevels(options.lodSelect, multi.meta.numLods).map(lvl => selectLod(multi, lvl));
                 inputActions = inputArgs[0].processActions;
@@ -1310,7 +1315,7 @@ const main = async () => {
                     return { arg: a, ply, tag, rest };
                 });
                 if (!tagged.every(t => t.ply)) {
-                    throw new Error('lod-meta.json output requires a single LCC/LCC2 input, or local PLY input(s) (optionally --tag-lod tagged).');
+                    throw new Error('lod-meta.json output requires a single LCC/LCC2/streamed-SOG input, or local PLY input(s) (optionally --tag-lod tagged).');
                 }
                 const opened = await Promise.all(tagged.map(async (t) => {
                     const { filename: inFile, fileSystem } = resolveInput(t.arg.filename);

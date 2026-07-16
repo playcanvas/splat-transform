@@ -4,6 +4,7 @@ import { ReadFileSystem, ZipReadFileSystem } from './io/read';
 import { readKsplat, readMjs, readPly, readSogSource, readSplat, readSpz, statSogSource } from './readers';
 import { readLccSource } from './readers/read-lcc';
 import { readLcc2Source } from './readers/read-lcc2';
+import { readLodSource } from './readers/read-lod';
 import { Options, Param } from './types';
 
 /**
@@ -16,9 +17,10 @@ import { Options, Param } from './types';
  * - `sog` - PlayCanvas SOG format (WebP-compressed)
  * - `lcc` - XGrids LCC format
  * - `lcc2` - XGrids LCC2 (octree) format
+ * - `lod` - Streamed SOG (`lod-meta.json`) format
  * - `mjs` - JavaScript module generator
  */
-type InputFormat = 'mjs' | 'ksplat' | 'splat' | 'sog' | 'ply' | 'spz' | 'lcc' | 'lcc2';
+type InputFormat = 'mjs' | 'ksplat' | 'splat' | 'sog' | 'ply' | 'spz' | 'lcc' | 'lcc2' | 'lod';
 
 /**
  * Determines the input format based on file extension.
@@ -58,6 +60,8 @@ const getInputFormat = (filename: string): InputFormat => {
         return 'ksplat';
     } else if (lowerFilename.endsWith('.splat')) {
         return 'splat';
+    } else if (lowerFilename.endsWith('lod-meta.json')) {
+        return 'lod';
     } else if (lowerFilename.endsWith('.sog') || lowerFilename.endsWith('meta.json')) {
         return 'sog';
     } else if (lowerFilename.endsWith('.ply')) {
@@ -93,7 +97,7 @@ type ReadFileOptions = {
  * Reads a Gaussian splat file and returns its data as {@link ChunkSource}s
  * (usually one; an LCC/LCC2 container yields a single structural multi-LOD source).
  *
- * Readers are chunk-native: `ply`/`splat`/`spz`/`lcc`/`lcc2` return lazy /
+ * Readers are chunk-native: `ply`/`splat`/`spz`/`lcc`/`lcc2`/`lod` return lazy /
  * streaming sources whose `close()` releases the underlying file(s); whole-blob
  * formats (`sog`/`mjs`/`ksplat`) are decoded up front and returned resident.
  * Callers that need a `DataTable` materialize at their own boundary (and call
@@ -152,6 +156,9 @@ const readFile = async (readFileOptions: ReadFileOptions): Promise<ChunkSource[]
     }
     if (inputFormat === 'lcc2') {
         return [await readLcc2Source(fileSystem, filename, options, createChunkDataPool())];
+    }
+    if (inputFormat === 'lod') {
+        return [await readLodSource(fileSystem, filename, options, createChunkDataPool())];
     }
 
     // Single-source binary formats over a seekable ReadSource. Lazy readers

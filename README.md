@@ -11,7 +11,7 @@
 
 SplatTransform is an open source library and CLI tool for converting and editing Gaussian splats. It can:
 
-📥 Read PLY, Compressed PLY, SOG, SPZ, SPLAT, KSPLAT, LCC and LCC2 formats  
+📥 Read PLY, Compressed PLY, SOG, Streamed SOG, SPZ, SPLAT, KSPLAT, LCC and LCC2 formats\
 📤 Write PLY, Compressed PLY, SOG, SPZ, GLB, CSV, HTML Viewer, LOD, Voxel and WebP image formats  
 📊 Generate statistical summaries for data analysis  
 🔗 Merge multiple splats  
@@ -86,7 +86,7 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 | `.csv` | ❌ | ✅ | Comma-separated values spreadsheet |
 | `.html` | ❌ | ✅ | HTML viewer app (single-page or unbundled) based on SOG |
 | `.voxel.json` | ❌ | ✅ | Sparse voxel octree for collision detection |
-| `lod-meta.json` | ❌ | ✅ | Streamed LOD data stored in SOG chunks |
+| `lod-meta.json` | ✅ | ✅ | Streamed LOD data stored in SOG chunks |
 | `.webp` | ❌ | ✅ | Lossless WebP image rendered from a camera view via GPU rasterizer |
 | `null` | ❌ | ✅ | Discard output (useful with `--stats` for analysis-only runs) |
 
@@ -184,12 +184,12 @@ Apply when writing `.html` outputs.
 > [!NOTE]
 > See the [SuperSplat Viewer Settings Schema](https://github.com/playcanvas/supersplat-viewer?tab=readme-ov-file#settings-schema) for details on how to pass data to the `--viewer-settings` option.
 
-## LCC / LCC2 Input Options
+## LOD Input Options
 
-Apply when reading `.lcc` and `.lcc2` files.
+Apply when reading `.lcc`, `.lcc2`, and `lod-meta.json` files.
 
 ```none
--L, --select-lod       <n,n,...>        Comma-separated LOD levels to read from LCC / LCC2 input
+-L, --select-lod       <n,n,...>        Comma-separated LOD levels to read from LCC / LCC2 / streamed SOG input
 ```
 
 ## LOD Output Options

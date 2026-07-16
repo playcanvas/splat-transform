@@ -11,11 +11,15 @@ import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { Column, DataTable, Transform, WebPCodec } from '../src/lib/index.js';
+import {
+    Column, DataTable, MemoryReadFileSystem, Transform, WebPCodec,
+    getInputFormat, readFile
+} from '../src/lib/index.js';
 import { dataTableToChunkSource, materializeToDataTable } from '../src/lib/compat/data-table.js';
 import { MemoryFileSystem } from '../src/lib/io/write/index.js';
 import { bakeTransform, mapSource, stackLods } from '../src/lib/ops/index.js';
 import { readPly } from '../src/lib/readers/read-ply.js';
+import { readLodEnvironmentSource } from '../src/lib/readers/read-lod.js';
 import { createChunkDataPool } from '../src/lib/chunk/index.js';
 import { positionsFromSlim, writeLodSource } from '../src/lib/writers/write-lod.js';
 import { version } from '../src/lib/version.js';
@@ -104,6 +108,12 @@ const writeScene = async (levelCounts, envRows) => {
     }, fs);
     const meta = JSON.parse(new TextDecoder().decode(fs.results.get('/scene/lod-meta.json')));
     return { fs, meta };
+};
+
+const asReadFileSystem = (writeFs) => {
+    const readFs = new MemoryReadFileSystem();
+    for (const [name, data] of writeFs.results) readFs.set(name, data);
+    return readFs;
 };
 
 describe('writeLodSource: lod-meta.json contract', function () {
@@ -238,6 +248,58 @@ describe('writeLodSource: lod-meta.json contract', function () {
             assert.ok(meta.tree.bound.min[axis] >= lo[axis] - 0.2, `root bound min[${name}] within splat extents of baked positions`);
             assert.ok(meta.tree.bound.max[axis] <= hi[axis] + 0.2, `root bound max[${name}] within splat extents of baked positions`);
         });
+    });
+});
+
+describe('readLodSource: streamed SOG input', function () {
+    it('detects lod-meta.json before a regular SOG meta.json', function () {
+        assert.strictEqual(getInputFormat('/scene/lod-meta.json'), 'lod');
+        assert.strictEqual(getInputFormat('/scene/meta.json'), 'sog');
+    });
+
+    it('reads all levels as a structural multi-LOD ChunkSource', async function () {
+        const { fs } = await writeScene([3, 2], 0);
+        const [source] = await readFile({
+            filename: '/scene/lod-meta.json',
+            inputFormat: 'lod',
+            options: { lodSelect: [] },
+            fileSystem: asReadFileSystem(fs)
+        });
+
+        assert.strictEqual(source.meta.numLods, 2);
+        assert.strictEqual(source.meta.numGaussians, 3);
+        assert.deepStrictEqual(source.meta.lodCounts, [3, 2]);
+        const table = await materializeToDataTable(source, createChunkDataPool());
+        assert.strictEqual(table.numRows, 5);
+        await source.close();
+    });
+
+    it('honors LOD selection', async function () {
+        const { fs } = await writeScene([3, 2], 0);
+        const [source] = await readFile({
+            filename: '/scene/lod-meta.json',
+            inputFormat: 'lod',
+            options: { lodSelect: [1] },
+            fileSystem: asReadFileSystem(fs)
+        });
+
+        assert.strictEqual(source.meta.numLods, 1);
+        assert.strictEqual(source.meta.numGaussians, 2);
+        assert.deepStrictEqual(source.meta.lodCounts, [2]);
+        await source.close();
+    });
+
+    it('opens the optional environment SOG', async function () {
+        const { fs } = await writeScene([3], 2);
+        const source = await readLodEnvironmentSource(
+            asReadFileSystem(fs),
+            '/scene/lod-meta.json',
+            createChunkDataPool()
+        );
+
+        assert.ok(source);
+        assert.strictEqual(source.meta.numGaussians, 2);
+        await source.close();
     });
 });
 
