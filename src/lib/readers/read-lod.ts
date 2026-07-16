@@ -57,6 +57,10 @@ const parseLodMeta = (text: string, filename: string): LodMeta => {
 const collectFilesByLod = (meta: LodMeta, filename: string): Map<number, Map<number, number>> => {
     const result = new Map<number, Map<number, number>>();
     const traverse = (node: LodNode): void => {
+        if (!node || typeof node !== 'object' || Array.isArray(node) ||
+            (node.children !== undefined && !Array.isArray(node.children))) {
+            throw new Error(`Invalid lod-meta.json tree: ${filename}`);
+        }
         for (const [key, ref] of Object.entries(node.lods ?? {})) {
             const lod = Number(key);
             if (!Number.isInteger(lod) || lod < 0 || lod >= meta.lodLevels ||

@@ -19,7 +19,7 @@ import { dataTableToChunkSource, materializeToDataTable } from '../src/lib/compa
 import { MemoryFileSystem } from '../src/lib/io/write/index.js';
 import { bakeTransform, mapSource, stackLods } from '../src/lib/ops/index.js';
 import { readPly } from '../src/lib/readers/read-ply.js';
-import { readLodEnvironmentSource } from '../src/lib/readers/read-lod.js';
+import { collectFilesByLod, readLodEnvironmentSource } from '../src/lib/readers/read-lod.js';
 import { createChunkDataPool } from '../src/lib/chunk/index.js';
 import { positionsFromSlim, writeLodSource } from '../src/lib/writers/write-lod.js';
 import { version } from '../src/lib/version.js';
@@ -255,6 +255,16 @@ describe('readLodSource: streamed SOG input', function () {
     it('detects lod-meta.json before a regular SOG meta.json', function () {
         assert.strictEqual(getInputFormat('/scene/lod-meta.json'), 'lod');
         assert.strictEqual(getInputFormat('/scene/meta.json'), 'sog');
+    });
+
+    it('rejects malformed tree children with a controlled error', function () {
+        for (const child of [null, 1]) {
+            const meta = { lodLevels: 1, counts: [0], filenames: [], tree: { children: [child] } };
+            assert.throws(
+                () => collectFilesByLod(meta, '/scene/lod-meta.json'),
+                { message: 'Invalid lod-meta.json tree: /scene/lod-meta.json' }
+            );
+        }
     });
 
     it('reads all levels as a structural multi-LOD ChunkSource', async function () {
