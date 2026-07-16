@@ -19,8 +19,8 @@ type ContainerSegment = {
 };
 
 /**
- * Present a container of lazily-decoded sub-files (LCC / LCC2: many SPZ/SOG
- * chunk files, LOD-grouped) as one **multi-LOD `ChunkSource`**, without ever
+ * Present a container of lazily-decoded sub-files (Streamed SOG / LCC / LCC2:
+ * many SOG/SPZ chunk files, LOD-grouped) as one **multi-LOD `ChunkSource`**, without ever
  * holding the whole scene resident.
  *
  * Each LOD's segments are stitched with {@link concatSource} (the proven

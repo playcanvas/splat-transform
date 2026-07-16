@@ -290,7 +290,7 @@ type WriteLodSourceOptions = {
     filename: string;
     /**
      * The scene as a structural multi-LOD source: LOD `i` is output detail level
-     * `i`. lcc/lcc2 expose this intrinsically; multi-PLY `--tag-lod` inputs are stacked
+     * `i`. Streamed SOG/lcc/lcc2 expose this intrinsically; multi-PLY `--tag-lod` inputs are stacked
      * by tag via {@link stackLods}. No per-gaussian lod tag — LOD is structural.
      */
     mainSource: ChunkSource;
