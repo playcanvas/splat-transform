@@ -284,7 +284,7 @@ class GpuDilation {
      */
     uploadSrc(src: SparseVoxelGrid): void {
         const types = src.types;
-        const keys = src.masks.keys;     // Int32Array; -1 sentinel reads as 0xFFFFFFFF when interpreted as u32
+        const keys = src.masks.keys;
         const lo = src.masks.lo;
         const hi = src.masks.hi;
 
@@ -296,7 +296,11 @@ class GpuDilation {
         }
         this.srcTypesBuffer.write(0, types, 0, types.length);
 
-        const masksBytes = keys.byteLength;
+        // BlockMaskMap stores keys as Float64 so it can represent the full u32
+        // block-index range. Pack values for the shader; converting -1 preserves
+        // the expected 0xFFFFFFFF empty-slot sentinel.
+        const keysU32 = Uint32Array.from(keys);
+        const masksBytes = keysU32.byteLength;
         if (this.srcKeysBuffer === null || this.srcMasksCapacity < masksBytes) {
             this.srcKeysBuffer?.destroy();
             this.srcLoBuffer?.destroy();
@@ -306,8 +310,6 @@ class GpuDilation {
             this.srcHiBuffer = new StorageBuffer(this.device, masksBytes, BUFFERUSAGE_COPY_DST);
             this.srcMasksCapacity = masksBytes;
         }
-        // Treat keys (Int32) as Uint32 — same byte pattern; -1 reads as 0xFFFFFFFF.
-        const keysU32 = new Uint32Array(keys.buffer, keys.byteOffset, keys.length);
         this.srcKeysBuffer.write(0, keysU32, 0, keys.length);
         this.srcLoBuffer.write(0, lo, 0, lo.length);
         this.srcHiBuffer.write(0, hi, 0, hi.length);
