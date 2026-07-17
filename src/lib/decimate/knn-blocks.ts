@@ -5,7 +5,8 @@ import { type BlockRange, type ResidentPositions } from './partition';
  * A block's local point set: owned gaussians first (in the block's sorted
  * owned order), then halo members from neighbouring blocks. `ids` maps local
  * index → global gaussian index; `positions` is interleaved xyz; `h` is the
- * halo radius the set was collected with.
+ * halo radius the set was collected with — `-Infinity` when no covering halo
+ * fits the cap (halo empty, every owned query takes the exact requery).
  */
 type BlockLocals = {
     ids: Uint32Array;
@@ -76,6 +77,8 @@ const collectBlock = (
     const nOwned = block.end - block.start;
     const maxHalo = Math.ceil(nOwned * haloCap);
 
+    // The shrink loop only asks whether the halo exceeds the cap — bail as
+    // soon as that is known rather than counting the whole scene.
     const countHalo = (h2: number): number => {
         let count = 0;
         for (let b2 = 0; b2 < blocks.length; b2++) {
@@ -84,7 +87,9 @@ const collectBlock = (
             if (aabbAabbDist2(block.aabb, other.aabb) > h2) continue;
             for (let i = other.start; i < other.end; i++) {
                 const g = order[i];
-                if (pointAabbDist2(pos.x[g], pos.y[g], pos.z[g], block.aabb) <= h2) count++;
+                if (pointAabbDist2(pos.x[g], pos.y[g], pos.z[g], block.aabb) <= h2) {
+                    if (++count > maxHalo) return count;
+                }
             }
         }
         return count;
@@ -96,10 +101,36 @@ const collectBlock = (
     // reduced h are then legitimately outside the covered region and boundary
     // queries fall through to the brute-force requery.
     let h = haloRadius(block, k, haloFactor);
+    let fits = false;
     for (let iter = 0; iter < 40 && h > 0; iter++) {
-        if (countHalo(h * h) <= maxHalo) break;
+        if (countHalo(h * h) <= maxHalo) {
+            fits = true;
+            break;
+        }
         h *= 0.7;
         if (h < 1e-12) h = 0;
+    }
+    if (!fits) {
+        if (countHalo(0) > maxHalo) {
+            // No h can fit the cap: other blocks' points sit INSIDE this
+            // block's AABB (e.g. an outlier-residual block enveloping the
+            // core), so the covering guarantee is unobtainable at any radius.
+            // Collect no halo and disable the guarantee (h = -Infinity):
+            // every owned query then takes the best-first requery, which is
+            // exact by construction.
+            const ids = new Uint32Array(nOwned);
+            const positions = new Float32Array(nOwned * 3);
+            for (let i = 0; i < nOwned; i++) {
+                const g = order[block.start + i];
+                ids[i] = g;
+                positions[i * 3] = pos.x[g];
+                positions[i * 3 + 1] = pos.y[g];
+                positions[i * 3 + 2] = pos.z[g];
+            }
+            return { ids, ownedCount: nOwned, positions, h: -Infinity };
+        }
+        // The shrink iterations ran out, but a zero-radius halo fits.
+        h = 0;
     }
     const h2 = h * h;
 
@@ -182,9 +213,10 @@ const kBestInsert = (bestIds: Uint32Array, bestD2: Float64Array, size: number, k
  * Exactness backstop for block KNN. A query's result is guaranteed correct
  * when its k-th neighbour distance fits inside the halo-covered region
  * (`d_k ≤ depth(q) + h`). Queries that fail — or that carry sentinel slots
- * despite the scene having ≥ k other points — are re-queried by brute force
- * against every block within the k-th distance, making the block KNN
- * globally exact.
+ * despite the scene having ≥ k other points — are re-queried best-first:
+ * blocks are visited in ascending point-to-AABB distance and the scan stops
+ * at the first block that can no longer improve on the k-th best so far.
+ * Same candidate set as a full scan, making the block KNN globally exact.
  *
  * Fixed entries are written into `nbGlobal`; the matching `nbLocal` slots
  * (when provided) are marked {@link KNN_FIXED} so callers resolve those
@@ -217,6 +249,8 @@ const verifyAndFixKnn = (
 
     const bestIds = new Uint32Array(k);
     const bestD2 = new Float64Array(k);
+    const blockD2 = new Float64Array(blocks.length);
+    const blockOrd = new Uint32Array(blocks.length);
 
     for (let qi = 0; qi < locals.ownedCount; qi++) {
         const g = locals.ids[qi];
@@ -245,13 +279,29 @@ const verifyAndFixKnn = (
         const needFix = (sentinels && N - 1 >= k) || Math.sqrt(dkSq) > depth + h;
         if (!needFix) continue;
 
-        // Brute re-query against every block within reach of the current
-        // k-th distance (everything, when sentinels made the bound unknown).
+        // Best-first re-query: blocks in ascending point-to-AABB distance
+        // (insertion sort — block counts are small), stopping at the first
+        // block beyond the unverified k-th distance (a valid upper bound on
+        // the true one; unknown when sentinels) or beyond the k-th best so
+        // far, which tightens as candidates land. Blocks the loop never
+        // reaches provably contain no improving candidate.
         const r2 = sentinels ? Infinity : dkSq;
-        let size = 0;
         for (let b2 = 0; b2 < blocks.length; b2++) {
+            const d2b = pointAabbDist2(qx, qy, qz, blocks[b2].aabb);
+            blockD2[b2] = d2b;
+            let at = b2;
+            while (at > 0 && blockD2[blockOrd[at - 1]] > d2b) {
+                blockOrd[at] = blockOrd[at - 1];
+                at--;
+            }
+            blockOrd[at] = b2;
+        }
+        let size = 0;
+        for (let t = 0; t < blocks.length; t++) {
+            const b2 = blockOrd[t];
+            const d2b = blockD2[b2];
+            if (d2b > r2 || (size === k && d2b >= bestD2[k - 1])) break;
             const other = blocks[b2];
-            if (r2 !== Infinity && pointAabbDist2(qx, qy, qz, other.aabb) > r2) continue;
             for (let i = other.start; i < other.end; i++) {
                 const cand = order[i];
                 if (cand === g) continue;

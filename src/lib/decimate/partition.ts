@@ -21,12 +21,50 @@ type BlockRange = {
     aabb: Float32Array;
 };
 
+/** Outlier fence: expand the sampled per-axis quantile interval this much. */
+const OUTLIER_FENCE_FACTOR = 4;
+
+/** Treat out-of-fence points as flyaways only while they are rare. */
+const OUTLIER_MAX_FRACTION = 0.01;
+
+/** Position sample cap for the fence quantiles. */
+const OUTLIER_SAMPLE_CAP = 1 << 20;
+
+// Per-axis fence [lo, hi] from strided-sample quantiles: mid ± factor × the
+// 0.1–99.9% half-spread. An axis with no spread stays unfenced (±Infinity).
+const outlierFence = (pos: ResidentPositions): { lo: number[]; hi: number[] } => {
+    const n = pos.x.length;
+    const stride = Math.max(1, Math.ceil(n / OUTLIER_SAMPLE_CAP));
+    const cols = [pos.x, pos.y, pos.z];
+    const lo = [-Infinity, -Infinity, -Infinity];
+    const hi = [Infinity, Infinity, Infinity];
+    const samp = new Float32Array(Math.ceil(n / stride) || 1);
+    for (let c = 0; c < 3; c++) {
+        let m = 0;
+        for (let i = 0; i < n; i += stride) samp[m++] = cols[c][i];
+        const s = samp.subarray(0, m).sort();
+        const qlo = s[Math.min(m - 1, Math.floor(0.001 * m))];
+        const qhi = s[Math.min(m - 1, Math.floor(0.999 * m))];
+        const half = (qhi - qlo) / 2;
+        if (!(half > 0)) continue;
+        const mid = (qlo + qhi) / 2;
+        lo[c] = mid - OUTLIER_FENCE_FACTOR * half;
+        hi[c] = mid + OUTLIER_FENCE_FACTOR * half;
+    }
+    return { lo, hi };
+};
+
 /**
  * KD-partition the resident positions into spatial blocks of at most
  * `blockSize` gaussians by recursive median splits on the largest AABB axis
- * (quickselect, in place on one index array). Blocks are an IO pattern only —
- * with globally exact KNN, block boundaries cannot affect the decimation
- * result.
+ * (quickselect, in place on one index array). Rare flyaway positions are set
+ * aside into trailing residual block(s) first, so core blocks keep tight
+ * AABBs — flyaways otherwise stretch AABBs scene-wide, which wrecks the
+ * density-based halo estimate and AABB-distance pruning downstream. With
+ * globally exact KNN, block boundaries cannot change which merges are
+ * possible or their costs — but they do set output row order, and selection
+ * tie-breaks between quantized-equal costs can resolve differently under a
+ * different partition.
  *
  * @param pos - Resident positions.
  * @param blockSize - Maximum gaussians per block.
@@ -72,7 +110,32 @@ const kdPartition = (pos: ResidentPositions, blockSize: number): { order: Uint32
         recurse(start, mid);
         recurse(mid, end);
     };
-    if (n > 0) recurse(0, n);
+
+    // Residual split: fence classification must stay rare — a scene that is
+    // mostly "outliers" is just sparse, and splitting it would recreate the
+    // stretched-AABB problem inside the residual.
+    let coreEnd = n;
+    if (n > 0) {
+        const { lo, hi } = outlierFence(pos);
+        let out = 0;
+        for (let i = 0; i < n; i++) {
+            if (cols[0][i] < lo[0] || cols[0][i] > hi[0] ||
+                cols[1][i] < lo[1] || cols[1][i] > hi[1] ||
+                cols[2][i] < lo[2] || cols[2][i] > hi[2]) out++;
+        }
+        if (out > 0 && out <= n * OUTLIER_MAX_FRACTION) {
+            coreEnd = n - out;
+            let c = 0, o = coreEnd;
+            for (let i = 0; i < n; i++) {
+                if (cols[0][i] < lo[0] || cols[0][i] > hi[0] ||
+                    cols[1][i] < lo[1] || cols[1][i] > hi[1] ||
+                    cols[2][i] < lo[2] || cols[2][i] > hi[2]) order[o++] = i;
+                else order[c++] = i;
+            }
+        }
+    }
+    if (coreEnd > 0) recurse(0, coreEnd);
+    if (coreEnd < n) recurse(coreEnd, n);
     return { order, blocks };
 };
 

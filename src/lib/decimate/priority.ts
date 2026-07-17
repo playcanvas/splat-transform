@@ -231,6 +231,7 @@ const runPriorityPass = async (
 
     let gpuKnn: GpuKnn | undefined;
     let gpuCost: GpuEdgeCost | undefined;
+    let gpuCostCapacity = maxLocalN;
 
     // 1-deep prefetch: the next block's halo collection + tree build runs
     // while the current block computes. GpuKnn executions share one set of
@@ -287,6 +288,17 @@ const runPriorityPass = async (
             }
             const extraGlobals = Uint32Array.from(extRow.keys()).sort();
             for (let i = 0; i < extraGlobals.length; i++) extRow.set(extraGlobals[i], nOwned + i);
+
+            // Verification-fixed externals are not bounded by the halo cap, so
+            // a pathological block's view can exceed the preallocated cost
+            // buffers — grow them to the actual view size when that happens
+            // (rare; costs one reallocation).
+            const viewN = nOwned + extraGlobals.length;
+            if (gpuCost && viewN > gpuCostCapacity) {
+                gpuCost.destroy();
+                gpuCostCapacity = Math.ceil(viewN * 1.1);
+                gpuCost = new GpuEdgeCost(device!, gpuCostCapacity, maxOwned * k, colorDim);
+            }
 
             const { view } = await gatherBlockView(ctx, bi, extraGlobals);
 

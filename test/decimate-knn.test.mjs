@@ -21,8 +21,16 @@ const mulberry = (seed) => {
 
 const scenes = {
     uniform: (n, r) => Float32Array.from({ length: n }, () => r() * 10),
-    clustered: (n, r) => Float32Array.from({ length: n }, (_, i) => (i % 7) + r() * 0.01)
+    clustered: (n, r) => Float32Array.from({ length: n }, (_, i) => (i % 7) + r() * 0.01),
+    // Bulk cluster + rare extreme flyaways: stretched block AABBs defeat the
+    // density-based halo estimate — the requery-heavy regime.
+    flyaway: (n, r) => Float32Array.from({ length: n }, () => (r() < 0.01 ? (r() - 0.5) * 5000 : r() * 10)),
+    // Integer-grid coordinates: many coincident points and exact distance ties.
+    coincident: (n, r) => Float32Array.from({ length: n }, () => Math.floor(r() * 12))
 };
+
+// Adversarial scenes are ALLOWED to requery heavily; the benign ones must not.
+const requeryCapped = new Set(['uniform', 'clustered']);
 
 describe('block KNN with halo + verification', () => {
     for (const [name, gen] of Object.entries(scenes)) {
@@ -34,6 +42,11 @@ describe('block KNN with halo + verification', () => {
             let totalFixed = 0;
             for (let bi = 0; bi < blocks.length; bi++) {
                 const locals = collectBlock(pos, order, blocks, bi, k, 2.5);
+                // Buffer-sizing contract: locals never exceed owned × (1 + haloCap).
+                assert.ok(
+                    locals.ids.length <= locals.ownedCount + Math.ceil(locals.ownedCount * 1),
+                    `${name} block ${bi}: halo exceeds the cap (${locals.ids.length} locals for ${locals.ownedCount} owned)`
+                );
                 const nbLocal = knnBlockCpu(locals, k);
                 const nbGlobal = toGlobalNeighbors(locals, nbLocal);
                 totalFixed += verifyAndFixKnn(pos, order, blocks, bi, locals, k, nbGlobal, nbLocal);
@@ -44,19 +57,85 @@ describe('block KNN with halo + verification', () => {
                         if (i !== g) dists.push(d2(g, i));
                     }
                     dists.sort((a, b) => a - b);
-                    const bruteMax = dists[k - 1];
+                    const got = [];
+                    const seen = new Set();
                     for (let s = 0; s < k; s++) {
                         const nb = nbGlobal[q * k + s];
                         assert.notStrictEqual(nb, 0xFFFFFFFF, `${name} block ${bi} q ${q} slot ${s} sentinel`);
                         assert.notStrictEqual(nb, g, 'self excluded');
-                        assert.ok(d2(g, nb) <= bruteMax + 1e-6, `${name} block ${bi} q ${q}: neighbor farther than true k-th`);
+                        assert.ok(!seen.has(nb), `${name} block ${bi} q ${q}: duplicate neighbour`);
+                        seen.add(nb);
+                        got.push(d2(g, nb));
                     }
+                    // Exact k-NN: the neighbour distance multiset must equal the
+                    // true k smallest (valid under ties, where ids may differ).
+                    got.sort((a, b) => a - b);
+                    assert.deepStrictEqual(got, dists.slice(0, k), `${name} block ${bi} q ${q}: not the exact k nearest`);
                 }
             }
             // sanity: verification exists but is not doing all the work
-            assert.ok(totalFixed < n * 0.5, `${name}: too many requeries (${totalFixed})`);
+            if (requeryCapped.has(name)) {
+                assert.ok(totalFixed < n * 0.5, `${name}: too many requeries (${totalFixed})`);
+            }
         });
     }
+
+    it('enveloping residual block (no covering halo) stays exact via forced requery', () => {
+        // Bulk grid + rare extreme flyaways: the residual block's AABB
+        // envelops the core, so no halo radius can satisfy the size cap —
+        // collectBlock must fall back to an empty halo (h = -Infinity) and
+        // verification must recover exactness for every residual query.
+        const k = 8;
+        const side = 22, nBulk = side * side * side; // 10648
+        const fly = [
+            [10000, 9000, -11000], [-12000, 10000, 9500], [11000, -9500, 12000], [-9000, -10000, -12000],
+            [15000, 14000, 13000], [-15000, 16000, -14000], [14000, -13000, 15000], [-16000, -15000, 14000]
+        ];
+        const n = nBulk + fly.length;
+        const pos = { x: new Float32Array(n), y: new Float32Array(n), z: new Float32Array(n) };
+        let i = 0;
+        for (let a = 0; a < side; a++) {
+            for (let b = 0; b < side; b++) {
+                for (let c = 0; c < side; c++, i++) {
+                    pos.x[i] = a; pos.y[i] = b; pos.z[i] = c;
+                }
+            }
+        }
+        fly.forEach(([fx, fy, fz], j) => {
+            pos.x[nBulk + j] = fx; pos.y[nBulk + j] = fy; pos.z[nBulk + j] = fz;
+        });
+        const { order, blocks } = kdPartition(pos, 1024);
+        const d2 = (a, b) => (pos.x[a] - pos.x[b]) ** 2 + (pos.y[a] - pos.y[b]) ** 2 + (pos.z[a] - pos.z[b]) ** 2;
+        let sawFallback = false;
+        for (let bi = 0; bi < blocks.length; bi++) {
+            const locals = collectBlock(pos, order, blocks, bi, k, 2.5);
+            assert.ok(
+                locals.ids.length <= locals.ownedCount + Math.ceil(locals.ownedCount * 1),
+                `block ${bi}: halo exceeds the cap`
+            );
+            if (locals.h === -Infinity) sawFallback = true;
+            const nbLocal = knnBlockCpu(locals, k);
+            const nbGlobal = toGlobalNeighbors(locals, nbLocal);
+            verifyAndFixKnn(pos, order, blocks, bi, locals, k, nbGlobal, nbLocal);
+            for (let q = 0; q < locals.ownedCount; q++) {
+                const g = locals.ids[q];
+                const dists = [];
+                for (let j = 0; j < n; j++) {
+                    if (j !== g) dists.push(d2(g, j));
+                }
+                dists.sort((a, b) => a - b);
+                const got = [];
+                for (let s = 0; s < k; s++) {
+                    const nb = nbGlobal[q * k + s];
+                    assert.notStrictEqual(nb, 0xFFFFFFFF, `block ${bi} q ${q} sentinel`);
+                    got.push(d2(g, nb));
+                }
+                got.sort((a, b) => a - b);
+                assert.deepStrictEqual(got, dists.slice(0, k), `block ${bi} q ${q}: not the exact k nearest`);
+            }
+        }
+        assert.ok(sawFallback, 'expected at least one no-covering-halo fallback block');
+    });
 
     it('tiny scene (n <= k) keeps sentinels', () => {
         const n = 4, k = 8;
