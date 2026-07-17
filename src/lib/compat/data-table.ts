@@ -39,12 +39,6 @@ const GEOMETRIC_COLS = [
 ] as const;
 const COLOR_DC_COLS = ['f_dc_0', 'f_dc_1', 'f_dc_2'] as const;
 
-const standardColumnSet = new Set<string>([
-    ...POSITION_COLS,
-    ...GEOMETRIC_COLS,
-    ...COLOR_DC_COLS
-]);
-
 /**
  * Enumerate the canonical column names a source exposes, in the same order
  * {@link materializeToDataTable} produces its columns — derived purely from
@@ -91,11 +85,15 @@ const detectShBands = (dataTable: DataTable): SHBands => {
     throw new Error(`dataTableToChunkSource: unrecognized f_rest_* count: ${count}`);
 };
 
-const detectExtras = (dataTable: DataTable): ExtraColumn[] => {
+const detectExtras = (
+    dataTable: DataTable,
+    standardColumns: ReadonlySet<string>,
+    hasColor: boolean
+): ExtraColumn[] => {
     const extras: ExtraColumn[] = [];
     for (const c of dataTable.columns) {
-        if (standardColumnSet.has(c.name)) continue;
-        if (/^f_rest_\d+$/.test(c.name)) continue;
+        if (standardColumns.has(c.name)) continue;
+        if (hasColor && /^f_rest_\d+$/.test(c.name)) continue;
         const type: 'float32' | 'uint32' = (
             c.dataType === 'float32' || c.dataType === 'float64'
         ) ? 'float32' : 'uint32';
@@ -171,12 +169,17 @@ const dataTableToChunkSource = (
     const count = indices ? indices.length : dataTable.numRows;
     const shBands = detectShBands(dataTable);
     const numRest = SH_REST_COUNTS[shBands];
-    const extras = detectExtras(dataTable);
     const transform: Transform = dataTable.transform;
 
     const hasPosition = POSITION_COLS.every(c => dataTable.hasColumn(c));
     const hasGeometric = GEOMETRIC_COLS.every(c => dataTable.hasColumn(c));
     const hasColor = COLOR_DC_COLS.every(c => dataTable.hasColumn(c));
+    const standardColumns = new Set<string>([
+        ...(hasPosition ? POSITION_COLS : []),
+        ...(hasGeometric ? GEOMETRIC_COLS : []),
+        ...(hasColor ? COLOR_DC_COLS : [])
+    ]);
+    const extras = detectExtras(dataTable, standardColumns, hasColor);
     const hasOther = extras.length > 0;
 
     const col = (name: string): Float32Array => dataTable.getColumnByName(name)!.data as Float32Array;

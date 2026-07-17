@@ -632,10 +632,15 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
         throw new Error(`readPly: unrecognized f_rest_* count ${restCount}`);
     }
 
-    // Non-standard columns become `other` extras (in file order).
-    const standard = new Set<string>(['x', 'y', 'z', ...GEOMETRIC_COLS, ...COLOR_DC_COLS]);
+    // Complete canonical layers use their fixed layouts. Properties from an
+    // incomplete layer remain as `other` extras instead of being discarded.
+    const standard = new Set<string>([
+        ...(hasPosition ? ['x', 'y', 'z'] : []),
+        ...(hasGeometric ? GEOMETRIC_COLS : []),
+        ...(hasColor ? COLOR_DC_COLS : [])
+    ]);
     const extras: ExtraColumn[] = properties
-    .filter(p => !standard.has(p.name) && !/^f_rest_\d+$/.test(p.name))
+    .filter(p => !standard.has(p.name) && !(hasColor && /^f_rest_\d+$/.test(p.name)))
     .map((p) => {
         const type: 'float32' | 'uint32' = p.type === 'float' || p.type === 'double' ? 'float32' : 'uint32';
         return { name: p.name, type };
