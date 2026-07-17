@@ -91,6 +91,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     } else {
         // BLOCK_MIXED → hash lookup. Same constant as CPU BlockMaskMap.
         var i = (blockIdx * FIBONACCI_HASH) & u.srcCapMinusOne;
+        var probes: u32 = 0u;
         loop {
             let k = srcKeys[i];
             if (k == blockIdx) {
@@ -98,9 +99,10 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
                 hi = srcHi[i];
                 break;
             }
-            if (k == 0xFFFFFFFFu) {
-                return;  // not found (shouldn't happen for MIXED)
+            if (k == 0xFFFFFFFFu || probes == u.srcCapMinusOne) {
+                return;  // not found or corrupt/full table
             }
+            probes = probes + 1u;
             i = (i + 1u) & u.srcCapMinusOne;
         }
     }
