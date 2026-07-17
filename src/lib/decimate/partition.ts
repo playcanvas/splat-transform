@@ -34,7 +34,7 @@ const OUTLIER_SAMPLE_CAP = 1 << 20;
 // 0.1–99.9% half-spread. An axis with no spread stays unfenced (±Infinity).
 const outlierFence = (pos: ResidentPositions): { lo: number[]; hi: number[] } => {
     const n = pos.x.length;
-    const stride = Math.max(1, Math.floor(n / OUTLIER_SAMPLE_CAP));
+    const stride = Math.max(1, Math.ceil(n / OUTLIER_SAMPLE_CAP));
     const cols = [pos.x, pos.y, pos.z];
     const lo = [-Infinity, -Infinity, -Infinity];
     const hi = [Infinity, Infinity, Infinity];
@@ -60,9 +60,11 @@ const outlierFence = (pos: ResidentPositions): { lo: number[]; hi: number[] } =>
  * (quickselect, in place on one index array). Rare flyaway positions are set
  * aside into trailing residual block(s) first, so core blocks keep tight
  * AABBs — flyaways otherwise stretch AABBs scene-wide, which wrecks the
- * density-based halo estimate and AABB-distance pruning downstream. Blocks
- * are an IO pattern only — with globally exact KNN, block boundaries cannot
- * affect the decimation result.
+ * density-based halo estimate and AABB-distance pruning downstream. With
+ * globally exact KNN, block boundaries cannot change which merges are
+ * possible or their costs — but they do set output row order, and selection
+ * tie-breaks between quantized-equal costs can resolve differently under a
+ * different partition.
  *
  * @param pos - Resident positions.
  * @param blockSize - Maximum gaussians per block.
