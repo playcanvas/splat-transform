@@ -44,6 +44,16 @@ describe('processDataTable', function () {
             const result = await processDataTable(dataTable, [{ kind: 'filterNaN' }]);
             assert.strictEqual(result.numRows, 2, 'Should remove NaN row');
         });
+
+        it('should remove rows with a zero-norm rotation quaternion', async function () {
+            const dataTable = createTestDataTable(4);
+            // createTestDataTable writes identity quaternions; zeroing rot_0
+            // makes row 2 all-zero (rot_1..3 are already 0)
+            dataTable.getColumnByName('rot_0').data[2] = 0;
+
+            const result = await processDataTable(dataTable, [{ kind: 'filterNaN' }]);
+            assert.strictEqual(result.numRows, 3, 'Zero-norm rotation row should be removed');
+        });
     });
 
     describe('filterByValue', function () {

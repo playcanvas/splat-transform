@@ -220,7 +220,7 @@ type ProcessOptions = {
  * - `translate` - Move splats by a Vec3 offset
  * - `rotate` - Rotate splats by Euler angles (degrees)
  * - `scale` - Uniformly scale splats
- * - `filterNaN` - Remove splats with NaN/Inf values
+ * - `filterNaN` - Remove splats with NaN/Inf values or a zero-norm rotation
  * - `filterByValue` - Keep splats matching a column condition
  * - `filterBands` - Remove spherical harmonic bands above a threshold
  * - `filterBox` - Keep splats within a bounding box
@@ -318,8 +318,15 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 const infOk = new Set(['opacity']);
                 const negInfOk = new Set(['scale_0', 'scale_1', 'scale_2']);
                 const columnNames = result.columnNames;
+                const hasRotation = ['rot_0', 'rot_1', 'rot_2', 'rot_3'].every(c => columnNames.includes(c));
 
                 const predicate = (row: any) => {
+                    // a zero-norm rotation quaternion cannot be normalized, so the
+                    // gaussian is unrenderable (zero-padded exporter rows otherwise
+                    // survive as visible alpha-0.5 splats at the origin)
+                    if (hasRotation && row.rot_0 === 0 && row.rot_1 === 0 && row.rot_2 === 0 && row.rot_3 === 0) {
+                        return false;
+                    }
                     for (const key of columnNames) {
                         const value = row[key];
                         if (!isFinite(value)) {

@@ -185,3 +185,29 @@ describe('CLI decimate (terminal PLY restriction)', () => {
         assert.strictEqual(written, Math.round(inputCount / 2), `50% of ${inputCount}`);
     });
 });
+
+describe('CLI filter-nan (zero-norm rotation)', () => {
+    it('drops all-zero rotation rows through the source path', async () => {
+        const { mkdtemp, readFile: readFileFs, rm, writeFile } = await import('node:fs/promises');
+        const { tmpdir } = await import('node:os');
+        const { join } = await import('node:path');
+        const { createTestDataTable, encodePlyBinary } = await import('./helpers/test-utils.mjs');
+
+        const dataTable = createTestDataTable(4);
+        // createTestDataTable writes identity quaternions; zeroing rot_0 makes
+        // row 2 all-zero (rot_1..3 are already 0) -- the zero-padded-PLY shape
+        dataTable.getColumnByName('rot_0').data[2] = 0;
+
+        const dir = await mkdtemp(join(tmpdir(), 'st-filter-nan-cli-'));
+        const inPath = join(dir, 'in.ply');
+        const outPath = join(dir, 'out.ply');
+        await writeFile(inPath, encodePlyBinary(dataTable));
+
+        const result = await runCli([inPath, '--filter-nan', outPath]);
+        assert.strictEqual(result.code, 0, `CLI failed:\n${result.stderr}\n${result.stdout}`);
+
+        const header = (await readFileFs(outPath)).subarray(0, 512).toString('latin1');
+        await rm(dir, { recursive: true, force: true });
+        assert.match(header, /element vertex 3\n/, 'zero-norm rotation row should be dropped');
+    });
+});
