@@ -11,69 +11,11 @@ type QuantizedColumns = {
     labels: { name: string, data: Uint8Array }[];
 };
 
-/**
- * Optimal 1D quantization using dynamic programming on a histogram.
- *
- * Pools all columns into a single 1D dataset, sorts the values, bins them
- * using a blend of uniform and quantile positioning, then uses DP to find k
- * centroids that minimize weighted sum-of-squared-errors (SSE).
- *
- * Bin positions are an adaptive blend of uniform (value-space) and
- * quantile (rank-space) positioning. The blend ratio is computed from
- * the data's IQR-to-range ratio: extreme outlier distributions (small
- * IQR relative to range) use near-pure quantile to give the dense
- * center adequate bins, while moderate-tail distributions reduce
- * quantile bias (but keep at least 50% quantile weighting).
- *
- * Bin weights use sub-linear density weighting: weight = count^alpha.
- * With alpha < 1, sparse tail regions earn meaningful influence on
- * centroid placement.
- *
- * @param columns - Named columns pooled into 1D.
- * @param k - Number of codebook entries (default 256).
- * @param alpha - Density weight exponent. 0 = uniform (each bin equal),
- * 0.5 = sqrt (balanced), 1.0 = standard MSE (dense regions dominate).
- * Default 0.5.
- * @returns Object with `centroids` (k Float32 values, sorted ascending) and
- * `labels` (same column layout as input, each holding Uint8Array indices
- * into the codebook).
- */
-const quantize1dColumns = (columns: { name: string, data: TypedArray }[], k = 256, alpha = 0.5): QuantizedColumns => {
-    const numColumns = columns.length;
-    const numRows = numColumns > 0 ? columns[0].data.length : 0;
-
-    // pool all columns into a flat 1D array
-    const N = numRows * numColumns;
-
-    if (N === 0) {
-        return {
-            centroids: new Float32Array(k),
-            labels: columns.map(c => ({ name: c.name, data: new Uint8Array(numRows) }))
-        };
-    }
-
-    const data = new Float32Array(N);
-    for (let i = 0; i < numColumns; ++i) {
-        data.set(columns[i].data, i * numRows);
-    }
-
-    // sort a copy for histogram binning (keep original for label assignment)
-    const sortedData = new Float32Array(data);
-    sortedData.sort();
-
+// The histogram + DP core over sorted finite values: returns up to kTarget
+// centroids, sorted ascending.
+const quantizeFinite = (sortedData: Float32Array, N: number, kTarget: number, alpha: number): Float32Array => {
     const vMin = sortedData[0];
     const vMax = sortedData[N - 1];
-
-    // handle degenerate case where all values are identical
-    if (vMax - vMin < 1e-20) {
-        const centroids = new Float32Array(k);
-        centroids.fill(vMin);
-
-        return {
-            centroids,
-            labels: columns.map(c => ({ name: c.name, data: new Uint8Array(numRows) }))
-        };
-    }
 
     // build histogram using blended uniform/quantile bin positions
     const H = Math.min(1024, N);
@@ -135,7 +77,7 @@ const quantize1dColumns = (columns: { name: string, data: TypedArray }[], k = 25
     };
 
     const nonEmpty = counts.reduce((n, c) => n + (c > 0 ? 1 : 0), 0);
-    const effectiveK = Math.min(k, nonEmpty);
+    const effectiveK = Math.min(kTarget, nonEmpty);
 
     // DP: dp[m][j] = min weighted SSE of quantizing bins 0..j into m centroids
     // Use two rows to save memory (only need previous row)
@@ -193,11 +135,135 @@ const quantize1dColumns = (columns: { name: string, data: TypedArray }[], k = 25
     // sort centroids (should already be sorted, but ensure)
     centroidValues.sort();
 
-    // pad to k entries if effectiveK < k (duplicate last centroid)
+    return centroidValues;
+};
+
+/**
+ * Optimal 1D quantization using dynamic programming on a histogram.
+ *
+ * Pools all columns into a single 1D dataset, sorts the values, bins them
+ * using a blend of uniform and quantile positioning, then uses DP to find k
+ * centroids that minimize weighted sum-of-squared-errors (SSE).
+ *
+ * Bin positions are an adaptive blend of uniform (value-space) and
+ * quantile (rank-space) positioning. The blend ratio is computed from
+ * the data's IQR-to-range ratio: extreme outlier distributions (small
+ * IQR relative to range) use near-pure quantile to give the dense
+ * center adequate bins, while moderate-tail distributions reduce
+ * quantile bias (but keep at least 50% quantile weighting).
+ *
+ * Bin weights use sub-linear density weighting: weight = count^alpha.
+ * With alpha < 1, sparse tail regions earn meaningful influence on
+ * centroid placement.
+ *
+ * Non-finite values: `±Infinity` is a valid pipeline value (`scale_*` may be
+ * `-Infinity` for flat splats, `opacity` `+Infinity` — see `filterNaN`), but a
+ * single one pooled into the histogram poisons vMin/vRange and NaN-cascades
+ * into an all-NaN codebook (serialized as JSON nulls). So the histogram/DP
+ * runs over the finite values only, and each infinity present earns a
+ * dedicated end centroid at a finite sentinel 20 units outside the finite
+ * range — JSON-safe, and far enough that log-scale consumers decode
+ * exp(-20) ≈ 2e-9x the nearest finite value, i.e. effectively flat. NaN
+ * contributes nothing to the codebook and labels arbitrarily (in range).
+ *
+ * @param columns - Named columns pooled into 1D.
+ * @param k - Number of codebook entries (default 256).
+ * @param alpha - Density weight exponent. 0 = uniform (each bin equal),
+ * 0.5 = sqrt (balanced), 1.0 = standard MSE (dense regions dominate).
+ * Default 0.5.
+ * @returns Object with `centroids` (k Float32 values, sorted ascending) and
+ * `labels` (same column layout as input, each holding Uint8Array indices
+ * into the codebook).
+ */
+const quantize1dColumns = (columns: { name: string, data: TypedArray }[], k = 256, alpha = 0.5): QuantizedColumns => {
+    const numColumns = columns.length;
+    const numRows = numColumns > 0 ? columns[0].data.length : 0;
+
+    // pool all columns into a flat 1D array
+    const N = numRows * numColumns;
+
+    if (N === 0) {
+        return {
+            centroids: new Float32Array(k),
+            labels: columns.map(c => ({ name: c.name, data: new Uint8Array(numRows) }))
+        };
+    }
+
+    const data = new Float32Array(N);
+    for (let i = 0; i < numColumns; ++i) {
+        data.set(columns[i].data, i * numRows);
+    }
+
+    // gather the finite values for histogram binning (keep original for label
+    // assignment), noting any infinities for the reserved end slots
+    const sortedData = new Float32Array(N);
+    let numFinite = 0;
+    let hasNegInf = false;
+    let hasPosInf = false;
+    for (let i = 0; i < N; ++i) {
+        const v = data[i];
+        if (isFinite(v)) {
+            sortedData[numFinite++] = v;
+        } else if (v === -Infinity) {
+            hasNegInf = true;
+        } else if (v === Infinity) {
+            hasPosInf = true;
+        }
+    }
+    const finite = sortedData.subarray(0, numFinite);
+    finite.sort();
+
+    const INF_MARGIN = 20;
+    const loSlots = hasNegInf ? 1 : 0;
+    const hiSlots = hasPosInf ? 1 : 0;
+    const negInfCentroid = (numFinite > 0 ? finite[0] : 0) - INF_MARGIN;
+    const posInfCentroid = (numFinite > 0 ? finite[numFinite - 1] : 0) + INF_MARGIN;
+
+    const vMin = finite[0];
+    const vMax = finite[numFinite - 1];
+
+    // handle degenerate case where all values are identical
+    if (loSlots === 0 && hiSlots === 0 && vMax - vMin < 1e-20) {
+        const centroids = new Float32Array(k);
+        centroids.fill(vMin);
+
+        return {
+            centroids,
+            labels: columns.map(c => ({ name: c.name, data: new Uint8Array(numRows) }))
+        };
+    }
+
+    // centroid budget for the finite values (end slots reserved for infinities)
+    const kFinite = Math.max(0, k - loSlots - hiSlots);
+
+    let centroidValues: Float32Array;
+
+    if (numFinite === 0 || kFinite === 0) {
+        // no finite values at all (±Infinity/NaN-only input): sentinels only
+        centroidValues = new Float32Array(0);
+    } else if (vMax - vMin < 1e-20) {
+        // all finite values identical, with infinities alongside (the all-finite
+        // case returned above): a single centroid represents them
+        centroidValues = Float32Array.of(vMin);
+    } else {
+        centroidValues = quantizeFinite(finite, numFinite, kFinite, alpha);
+    }
+
+    const effectiveK = centroidValues.length;
+
+    // compose the final codebook, ascending: [-Inf sentinel][finite centroids,
+    // padded with the last][+Inf sentinel]
     const finalCentroids = new Float32Array(k);
-    finalCentroids.set(centroidValues);
-    for (let i = effectiveK; i < k; ++i) {
-        finalCentroids[i] = centroidValues[effectiveK - 1];
+    finalCentroids.set(centroidValues, loSlots);
+    const padValue = effectiveK > 0 ? centroidValues[effectiveK - 1] : (hasNegInf ? negInfCentroid : posInfCentroid);
+    for (let i = loSlots + effectiveK; i < k - hiSlots; ++i) {
+        finalCentroids[i] = padValue;
+    }
+    if (loSlots) {
+        finalCentroids[0] = negInfCentroid;
+    }
+    if (hiSlots) {
+        finalCentroids[k - 1] = posInfCentroid;
     }
 
     // assign each data point to nearest centroid via binary search

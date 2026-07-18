@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { compareSummaries, computeStatsView } from './helpers/summary-compare.mjs';
 import { createTestDataTable, encodePlyBinary } from './helpers/test-utils.mjs';
 import { dataTableToChunkSource } from '../src/lib/compat/data-table.js';
+import { readFile as readRawFile } from '../src/lib/io/read/index.js';
 import {
     Transform, readSog,
     MemoryFileSystem, MemoryReadFileSystem, ZipReadFileSystem, WebPCodec
@@ -89,6 +90,50 @@ describe('writeSogSource: native SOG from a ChunkSource', () => {
 
         assert.strictEqual(decoded.numRows, dt.numRows);
         compareSummaries(await computeStatsView(decoded), expected, { tolerance: 0.5, allowExtraColumns: true });
+    });
+
+    it('flat splats (scale_2 = -Infinity, a valid filterNaN survivor) produce a finite codebook', async () => {
+        // Regression: one -Infinity pooled into the scales quantizer used to
+        // NaN-poison all 256 codebook entries (JSON nulls; readers decode
+        // log-scale 0 — unit-sized splats).
+        const dt = createTestDataTable(300);
+        dt.transform = Transform.PLY.clone();
+        const s2 = dt.getColumnByName('scale_2').data;
+        let numFlat = 0;
+        let finiteMin = Infinity;
+        for (let i = 0; i < s2.length; i++) {
+            if (i % 10 === 0) {
+                s2[i] = -Infinity;
+                numFlat++;
+            }
+        }
+        for (const name of ['scale_0', 'scale_1', 'scale_2']) {
+            for (const v of dt.getColumnByName(name).data) {
+                if (isFinite(v) && v < finiteMin) finiteMin = v;
+            }
+        }
+
+        const pool = createChunkDataPool();
+        const fs = new MemoryFileSystem();
+        await writeSogSource(dataTableToChunkSource(dt, pool.chunkSize), pool,
+            { filename: 'out.sog', bundle: true, iterations: 5, logging: 'silent' }, fs);
+
+        const rfs = new MemoryReadFileSystem();
+        rfs.set('out.sog', fs.results.get('out.sog'));
+        const zip = new ZipReadFileSystem(await rfs.createSource('out.sog'));
+        const meta = JSON.parse(new TextDecoder().decode(await readRawFile(zip, 'meta.json')));
+        assert.ok(meta.scales.codebook.every(v => typeof v === 'number' && isFinite(v)),
+            'scales codebook must contain only finite numbers');
+
+        // decode: exactly the flat splats come back below the finite range
+        const decoded = await readSog(zip, 'meta.json');
+        const out = decoded.getColumnByName('scale_2').data;
+        let decodedFlat = 0;
+        for (const v of out) {
+            assert.ok(isFinite(v), `decoded scale ${v} not finite`);
+            if (v <= finiteMin - 10) decodedFlat++;
+        }
+        assert.strictEqual(decodedFlat, numFlat);
     });
 });
 
