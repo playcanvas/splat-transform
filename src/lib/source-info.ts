@@ -161,6 +161,10 @@ const formatSourceStats = (meta: ChunkSourceMetadata, stats: SourceStats, format
             lines.push(`lod ${lod.lod}: ${lod.numGaussians} gaussians`);
         }
         lines.push(...statsTable(lod));
+        if (lod.fillRatio !== undefined) {
+            lines.push('');
+            lines.push(`fill ratio: ${lod.fillRatio} (~avg overdraw layers)`);
+        }
     }
     return lines.join('\n');
 };

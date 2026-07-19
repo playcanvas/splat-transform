@@ -795,7 +795,7 @@ ACTIONS (executed in order; can be repeated)
     -C, --filter-cluster   [res,op,min]     Keep only the connected cluster at --seed-pos. Default: 1.0,0.999,0.1
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
     -l, --tag-lod          <n>              Tag the Gaussians with LOD level n (n >= 0, or -1 for environment)
-        --stats            [text|json]      Print file info and per-column statistics to stdout. Default: text
+        --stats            [text|json]      Print file info, per-column statistics and the fill/overdraw ratio to stdout. Default: text
         --info             [text|json]      Print structural metadata (per-LOD counts, columns) to stdout. Default: text
     -m, --morton-order                      Reorder Gaussians by Morton code (Z-order curve)
 

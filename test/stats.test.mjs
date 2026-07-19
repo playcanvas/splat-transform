@@ -273,3 +273,37 @@ describe('computeStats edge cases', () => {
         assert.deepStrictEqual(json.stats[0].columns, ['x', 'y', 'z']);
     });
 });
+
+describe('fillRatio (overdraw metric)', () => {
+    it('reports a low ratio for a normal surface-like scene', async () => {
+        const dt = createTestDataTable(16); // 4x4 grid, spacing 1, linear scale 0.1
+        const stats = await computeStats(dt);
+        const ratio = stats.lods[0].fillRatio;
+        // 16 splats of footprint pi*0.01 spread over a ~3x3 planar grid
+        assert.ok(ratio > 0.05 && ratio < 0.5, `fillRatio ${ratio}`);
+    });
+
+    it('approximates the layer count for coincident splats', async () => {
+        const dt = createTestDataTable(100);
+        for (const name of ['x', 'z', 'scale_0', 'scale_1', 'scale_2']) {
+            dt.getColumnByName(name).data.fill(0); // all at origin, linear scale 1
+        }
+        const stats = await computeStats(dt);
+        // degenerate extents -> the cross-section floors at the median
+        // footprint (pi), so ratio = 100*pi / pi = the coincident layer count
+        assert.ok(Math.abs(stats.lods[0].fillRatio - 100) < 0.5, `fillRatio ${stats.lods[0].fillRatio}`);
+    });
+
+    it('a single splat is not flagged (ratio ~1)', async () => {
+        const dt = createTestDataTable(1);
+        const stats = await computeStats(dt);
+        assert.ok(Math.abs(stats.lods[0].fillRatio - 1) < 1e-6, `fillRatio ${stats.lods[0].fillRatio}`);
+    });
+
+    it('an infinite scale propagates to Infinity', async () => {
+        const dt = createTestDataTable(4);
+        dt.getColumnByName('scale_0').data[1] = Infinity;
+        const stats = await computeStats(dt);
+        assert.ok(Object.is(stats.lods[0].fillRatio, Infinity), 'fillRatio should be Infinity');
+    });
+});
