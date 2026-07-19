@@ -52,33 +52,6 @@ type LodStatsData = {
 };
 
 /**
- * Scene fill (overdraw) measurements for one LOD. The headline number is
- * `ratio` — total splat footprint area over the scene's robust cross-section —
- * which approximates the average number of splat layers a ray through the
- * scene crosses. Healthy surface scenes land in the ones-to-hundreds; scenes
- * that will overwhelm a GPU with fill (degenerate zero-padded exports,
- * garbage-scale data, or deliberately adversarial content) land orders of
- * magnitude higher, so a backend can gate publishes on this value.
- *
- * Extents are robust (p1-p99 per axis), so a handful of flyaway splats cannot
- * inflate the denominator and mask the fill. A `+Infinity` scale propagates to
- * `ratio: Infinity` (serialized as `null` in JSON) — such scenes should be
- * rejected outright.
- */
-type FillStats = {
-    /** Sum over splats of the 1-sigma ellipse area spanned by the two largest linear scales (world units squared). */
-    totalArea: number;
-    /** Median per-splat footprint area. */
-    medianArea: number;
-    /** Robust scene extents: p99 - p1 of x/y/z. */
-    extents: [number, number, number];
-    /** Mean face area of the robust extent box; floored at `medianArea` when the extents are degenerate (coincident splats). */
-    crossSection: number;
-    /** `totalArea / crossSection` — approximately the average overdraw layer count. */
-    ratio: number;
-};
-
-/**
  * Per-LOD column statistics: identity (`lod`, `numGaussians`), the column-name
  * axis (`columns`), and the aligned measurement arrays (`data`).
  * `JSON.stringify` of this is the stats JSON output shape (NaN fields — e.g.
@@ -93,8 +66,20 @@ type LodStats = {
     columns: string[];
     /** The column-aligned measurement arrays. */
     data: LodStatsData;
-    /** Fill/overdraw measurements; present when the source has position and geometric data. */
-    fill?: FillStats;
+    /**
+     * Fill (overdraw) ratio: total splat footprint area (1-sigma ellipse over
+     * the two largest linear scales, summed) divided by the scene's robust
+     * cross-section (mean face area of the p1-p99 extent box, floored at the
+     * median splat footprint when the extents are degenerate). Approximates
+     * the average number of splat layers a ray through the scene crosses:
+     * healthy scenes land in the ones-to-hundreds; scenes that will overwhelm
+     * a GPU with fill (zero-padded exports, garbage scales, deliberately
+     * adversarial content) land orders of magnitude higher, so backends can
+     * gate publishes on it. A `+Infinity` scale propagates to `Infinity`
+     * (serialized as `null` in JSON) — reject those outright. Present when the
+     * source has position and geometric data.
+     */
+    fillRatio?: number;
 };
 
 /**
@@ -386,29 +371,24 @@ const computeSourceStats = async (src: ChunkSource, pool: ChunkDataPool): Promis
 
         const results = accs.map(a => a.finalize());
 
-        let fill: FillStats | undefined;
+        let fillRatio: number | undefined;
         if (hasFill) {
+            // Robust extents (p1-p99 per axis) so flyaway splats can't inflate
+            // the cross-section and mask the fill.
             const axis = (name: string): StatsAccumulator => accs[plans.findIndex(p => p.name === name)];
-            const extents = ['x', 'y', 'z'].map((name) => {
+            const [dx, dy, dz] = ['x', 'y', 'z'].map((name) => {
                 const acc = axis(name);
                 return Math.max(0, acc.quantile(0.99) - acc.quantile(0.01));
-            }) as [number, number, number];
-            const medianArea = areaAcc.quantile(0.5); // unrounded (finalize() rounds for display)
-            let crossSection = (extents[0] * extents[1] + extents[1] * extents[2] + extents[2] * extents[0]) / 3;
+            });
+            let crossSection = (dx * dy + dy * dz + dz * dx) / 3;
             if (!(crossSection > 0)) {
                 // Degenerate extents (coincident splats, or a single splat):
                 // measure fill against the median splat footprint instead, so
                 // the ratio approximates the coincident layer count.
+                const medianArea = areaAcc.quantile(0.5);
                 crossSection = Number.isFinite(medianArea) ? medianArea : 0;
             }
-            const ratio = crossSection > 0 ? totalArea / crossSection : (totalArea > 0 ? Infinity : 0);
-            fill = {
-                totalArea: round(totalArea),
-                medianArea: round(medianArea),
-                extents: [round(extents[0]), round(extents[1]), round(extents[2])],
-                crossSection: round(crossSection),
-                ratio: round(ratio)
-            };
+            fillRatio = round(crossSection > 0 ? totalArea / crossSection : (totalArea > 0 ? Infinity : 0));
         }
 
         lods.push({
@@ -425,11 +405,11 @@ const computeSourceStats = async (src: ChunkSource, pool: ChunkDataPool): Promis
                 infCount: results.map(r => r.infCount),
                 histogram: results.map(r => r.histogram)
             },
-            ...(fill ? { fill } : {})
+            ...(fillRatio !== undefined ? { fillRatio } : {})
         });
     }
 
     return { lods };
 };
 
-export { computeSourceStats, type FillStats, type LodStats, type LodStatsData, type SourceStats };
+export { computeSourceStats, type LodStats, type LodStatsData, type SourceStats };

@@ -365,7 +365,7 @@ splat-transform input.ply --stats json null
 splat-transform input.ply --stats -s 0.5 --stats output.ply
 ```
 
-The output starts with the file info block (including the `gaussian` verdict — `false` for a readable container that isn't splat data, such as a plain point-cloud PLY), followed by min, max, median, mean, stdDev, nanCount, infCount and a histogram for each column, one table per LOD. The JSON form is the same info fields plus a columnar per-LOD `stats` array. The stats are computed in a single streaming pass; the median is approximated from a 1024-bin histogram (error within ~1/1000 of the column's range), all other fields are exact.
+The output starts with the file info block (including the `gaussian` verdict — `false` for a readable container that isn't splat data, such as a plain point-cloud PLY), followed by min, max, median, mean, stdDev, nanCount, infCount and a histogram for each column, one table per LOD. Each LOD also reports a `fillRatio` — total splat footprint area over the scene's robust (p1–p99) cross-section, approximately the average overdraw layer count: healthy scenes score in the ones-to-hundreds, while degenerate or adversarial scenes that would overwhelm a GPU with fill score orders of magnitude higher, making the value suitable for automated publish gating. A `+Infinity` scale propagates to an infinite ratio, which serializes as `null` in JSON — treat that as a reject. The JSON form is the same info fields plus a columnar per-LOD `stats` array. The stats are computed in a single streaming pass; the median is approximated from a 1024-bin histogram (error within ~1/1000 of the column's range), all other fields are exact.
 
 ### Generators (Beta)
 
