@@ -178,49 +178,32 @@ class StatsAccumulator {
     }
 
     // Grouped quantile from the fine histogram: locate the bin where the
-    // cumulative count reaches q*n and linearly interpolate within it. Result
-    // is clamped to the exact [min, max] (interpolation can otherwise drift
-    // past the true extremes by up to a bin width).
+    // cumulative count crosses q*n and linearly interpolate within it. A
+    // crossing exactly at a bin's end (the target count splits across a gap)
+    // averages with the next populated bin's start — at q=0.5 this mirrors the
+    // middle-pair averaging of an exact even-n median, and the same convention
+    // applies at every q. Results are clamped to the exact [min, max]
+    // (interpolation can otherwise drift past the true extremes by up to a bin
+    // width). The median is this at q=0.5.
     quantile(q: number): number {
         if (this.n === 0) return NaN;
         if (this.bins === null) return this.firstValue; // all values identical
+        const clamp = (v: number): number => Math.min(this.max, Math.max(this.min, v));
         const target = q * this.n;
         const width = (this.hi - this.lo) / FINE_BINS;
         let cum = 0;
         for (let b = 0; b < FINE_BINS; b++) {
             const c = this.bins[b];
             if (c === 0) continue;
-            if (cum + c >= target) {
-                const v = this.lo + (b + Math.min(1, (target - cum) / c)) * width;
-                return Math.min(this.max, Math.max(this.min, v));
-            }
-            cum += c;
-        }
-        return this.max;
-    }
-
-    // Grouped median: locate the fine bin where the cumulative count crosses
-    // n/2 and linearly interpolate within it. A crossing exactly at a bin's
-    // end (even n split across a gap) averages with the next populated bin's
-    // start, mirroring the middle-pair averaging of an exact even-n median.
-    private computeMedian(): number {
-        if (this.n === 0) return NaN;
-        if (this.bins === null) return this.firstValue; // all values identical
-        const target = this.n / 2;
-        const width = (this.hi - this.lo) / FINE_BINS;
-        let cum = 0;
-        for (let b = 0; b < FINE_BINS; b++) {
-            const c = this.bins[b];
-            if (c === 0) continue;
             if (cum + c > target) {
-                return this.lo + (b + (target - cum) / c) * width;
+                return clamp(this.lo + (b + (target - cum) / c) * width);
             }
             if (cum + c === target) {
                 const end = this.lo + (b + 1) * width;
                 for (let nb = b + 1; nb < FINE_BINS; nb++) {
-                    if (this.bins[nb] > 0) return (end + this.lo + nb * width) / 2;
+                    if (this.bins[nb] > 0) return clamp((end + this.lo + nb * width) / 2);
                 }
-                return end;
+                return clamp(end);
             }
             cum += c;
         }
@@ -255,7 +238,7 @@ class StatsAccumulator {
         return {
             min: empty ? NaN : round(this.min),
             max: empty ? NaN : round(this.max),
-            median: round(this.computeMedian()),
+            median: round(this.quantile(0.5)),
             mean: empty ? NaN : round(this.mean),
             stdDev: empty ? NaN : round(Math.sqrt(this.m2 / this.n)),
             nanCount: this.nanCount,
