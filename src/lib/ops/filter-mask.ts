@@ -94,7 +94,11 @@ const selectRows = async (
 /**
  * Remove gaussians containing NaN or Infinity. Mirrors `processDataTable`'s
  * `filterNaN`: any non-finite value drops the row, except `opacity` may be
- * `+Infinity` and `scale_*` may be `-Infinity`.
+ * `+Infinity` and `scale_*` may be `-Infinity`. Rows whose rotation quaternion
+ * is all-zero are also dropped: a zero-norm quaternion cannot be normalized,
+ * so the gaussian is unrenderable (seen in zero-padded exporter output, where
+ * whole rows of zeros otherwise survive as visible alpha-0.5 splats at the
+ * origin).
  * @param src - The source to filter (LOD 0).
  * @param pool - Pool for the temporary read buffers.
  * @returns Ascending indices of the surviving gaussians.
@@ -121,6 +125,9 @@ const filterNaNRows = (src: ChunkSource, pool: ChunkDataPool): Promise<Uint32Arr
                 const o = r * 8;
                 if (!isFinite(geoF[o]) || !isFinite(geoF[o + 1]) || !isFinite(geoF[o + 2]) || !isFinite(geoF[o + 3])) {
                     return false; // rotation
+                }
+                if (geoF[o] === 0 && geoF[o + 1] === 0 && geoF[o + 2] === 0 && geoF[o + 3] === 0) {
+                    return false; // zero-norm rotation: unnormalizable, unrenderable
                 }
                 for (let e = 4; e <= 6; e++) {
                     const v = geoF[o + e];
