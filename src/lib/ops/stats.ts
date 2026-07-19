@@ -52,6 +52,33 @@ type LodStatsData = {
 };
 
 /**
+ * Scene fill (overdraw) measurements for one LOD. The headline number is
+ * `ratio` — total splat footprint area over the scene's robust cross-section —
+ * which approximates the average number of splat layers a ray through the
+ * scene crosses. Healthy surface scenes land in the ones-to-hundreds; scenes
+ * that will overwhelm a GPU with fill (degenerate zero-padded exports,
+ * garbage-scale data, or deliberately adversarial content) land orders of
+ * magnitude higher, so a backend can gate publishes on this value.
+ *
+ * Extents are robust (p1-p99 per axis), so a handful of flyaway splats cannot
+ * inflate the denominator and mask the fill. A `+Infinity` scale propagates to
+ * `ratio: Infinity` (serialized as `null` in JSON) — such scenes should be
+ * rejected outright.
+ */
+type FillStats = {
+    /** Sum over splats of the 1-sigma ellipse area spanned by the two largest linear scales (world units squared). */
+    totalArea: number;
+    /** Median per-splat footprint area. */
+    medianArea: number;
+    /** Robust scene extents: p99 - p1 of x/y/z. */
+    extents: [number, number, number];
+    /** Mean face area of the robust extent box; floored at `medianArea` when the extents are degenerate (coincident splats). */
+    crossSection: number;
+    /** `totalArea / crossSection` — approximately the average overdraw layer count. */
+    ratio: number;
+};
+
+/**
  * Per-LOD column statistics: identity (`lod`, `numGaussians`), the column-name
  * axis (`columns`), and the aligned measurement arrays (`data`).
  * `JSON.stringify` of this is the stats JSON output shape (NaN fields — e.g.
@@ -66,6 +93,8 @@ type LodStats = {
     columns: string[];
     /** The column-aligned measurement arrays. */
     data: LodStatsData;
+    /** Fill/overdraw measurements; present when the source has position and geometric data. */
+    fill?: FillStats;
 };
 
 /**
@@ -161,6 +190,28 @@ class StatsAccumulator {
     private insert(v: number, count: number): void {
         const bin = Math.min(FINE_BINS - 1, Math.floor((v - this.lo) * FINE_BINS / (this.hi - this.lo)));
         this.bins![bin] += count;
+    }
+
+    // Grouped quantile from the fine histogram: locate the bin where the
+    // cumulative count reaches q*n and linearly interpolate within it. Result
+    // is clamped to the exact [min, max] (interpolation can otherwise drift
+    // past the true extremes by up to a bin width).
+    quantile(q: number): number {
+        if (this.n === 0) return NaN;
+        if (this.bins === null) return this.firstValue; // all values identical
+        const target = q * this.n;
+        const width = (this.hi - this.lo) / FINE_BINS;
+        let cum = 0;
+        for (let b = 0; b < FINE_BINS; b++) {
+            const c = this.bins[b];
+            if (c === 0) continue;
+            if (cum + c >= target) {
+                const v = this.lo + (b + Math.min(1, (target - cum) / c)) * width;
+                return Math.min(this.max, Math.max(this.min, v));
+            }
+            cum += c;
+        }
+        return this.max;
     }
 
     // Grouped median: locate the fine bin where the cumulative count crosses
@@ -274,10 +325,18 @@ const computeSourceStats = async (src: ChunkSource, pool: ChunkDataPool): Promis
     const layers = [...new Set(plans.map(p => p.layer))];
     const lods: LodStats[] = [];
 
+    const hasFill = meta.availableLayers.has('position') && meta.availableLayers.has('geometric');
+
     for (let lod = 0; lod < meta.numLods; lod++) {
         const accs = plans.map(() => new StatsAccumulator());
         const lodCount = meta.lodCounts[lod];
         const numChunks = meta.numChunks[lod] ?? 0;
+
+        // Per-splat footprint areas stream through their own accumulator (for
+        // the median floor); the total is an explicit sum so +Infinity areas
+        // propagate into it rather than being counted out.
+        const areaAcc = new StatsAccumulator();
+        let totalArea = 0;
 
         for (let c = 0; c < numChunks; c++) {
             const count = Math.min(meta.chunkSize, lodCount - c * meta.chunkSize);
@@ -303,10 +362,55 @@ const computeSourceStats = async (src: ChunkSource, pool: ChunkDataPool): Promis
                 }
             }
 
+            if (hasFill) {
+                const geo = new Float32Array(buffers.geometric!);
+                const stride32 = meta.layouts.geometric!.stride >>> 2;
+                for (let r = 0; r < count; r++) {
+                    const o = r * stride32;
+                    const s0 = Math.exp(geo[o + 4]);
+                    const s1 = Math.exp(geo[o + 5]);
+                    const s2 = Math.exp(geo[o + 6]);
+                    // 1-sigma ellipse area over the two largest linear scales.
+                    // The smallest may be 0 (a -Infinity flat-splat scale), so
+                    // pick the top two explicitly rather than dividing it out.
+                    const lo = Math.min(s0, Math.min(s1, s2));
+                    const top2 = s0 === lo ? s1 * s2 : (s1 === lo ? s0 * s2 : s0 * s1);
+                    const area = Math.PI * top2;
+                    areaAcc.add(area);
+                    if (!Number.isNaN(area)) totalArea += area;
+                }
+            }
+
             for (const cd of acquired) cd.release();
         }
 
         const results = accs.map(a => a.finalize());
+
+        let fill: FillStats | undefined;
+        if (hasFill) {
+            const axis = (name: string): StatsAccumulator => accs[plans.findIndex(p => p.name === name)];
+            const extents = ['x', 'y', 'z'].map((name) => {
+                const acc = axis(name);
+                return Math.max(0, acc.quantile(0.99) - acc.quantile(0.01));
+            }) as [number, number, number];
+            const medianArea = areaAcc.quantile(0.5); // unrounded (finalize() rounds for display)
+            let crossSection = (extents[0] * extents[1] + extents[1] * extents[2] + extents[2] * extents[0]) / 3;
+            if (!(crossSection > 0)) {
+                // Degenerate extents (coincident splats, or a single splat):
+                // measure fill against the median splat footprint instead, so
+                // the ratio approximates the coincident layer count.
+                crossSection = Number.isFinite(medianArea) ? medianArea : 0;
+            }
+            const ratio = crossSection > 0 ? totalArea / crossSection : (totalArea > 0 ? Infinity : 0);
+            fill = {
+                totalArea: round(totalArea),
+                medianArea: round(medianArea),
+                extents: [round(extents[0]), round(extents[1]), round(extents[2])],
+                crossSection: round(crossSection),
+                ratio: round(ratio)
+            };
+        }
+
         lods.push({
             lod,
             numGaussians: lodCount,
@@ -320,11 +424,12 @@ const computeSourceStats = async (src: ChunkSource, pool: ChunkDataPool): Promis
                 nanCount: results.map(r => r.nanCount),
                 infCount: results.map(r => r.infCount),
                 histogram: results.map(r => r.histogram)
-            }
+            },
+            ...(fill ? { fill } : {})
         });
     }
 
     return { lods };
 };
 
-export { computeSourceStats, type LodStats, type LodStatsData, type SourceStats };
+export { computeSourceStats, type FillStats, type LodStats, type LodStatsData, type SourceStats };

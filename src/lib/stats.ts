@@ -36,4 +36,4 @@ const computeStats = async (input: ChunkSource | DataTable, pool?: ChunkDataPool
 };
 
 export { computeStats };
-export type { LodStats, LodStatsData, SourceStats } from './ops';
+export type { FillStats, LodStats, LodStatsData, SourceStats } from './ops';

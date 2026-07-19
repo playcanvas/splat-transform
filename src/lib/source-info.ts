@@ -161,6 +161,11 @@ const formatSourceStats = (meta: ChunkSourceMetadata, stats: SourceStats, format
             lines.push(`lod ${lod.lod}: ${lod.numGaussians} gaussians`);
         }
         lines.push(...statsTable(lod));
+        if (lod.fill) {
+            const f = lod.fill;
+            lines.push('');
+            lines.push(`fill: ratio=${f.ratio} (~avg overdraw layers) totalArea=${f.totalArea} medianArea=${f.medianArea} extents=${f.extents.join(' x ')} crossSection=${f.crossSection}`);
+        }
     }
     return lines.join('\n');
 };
