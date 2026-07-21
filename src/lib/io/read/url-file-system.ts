@@ -277,21 +277,16 @@ class UrlReadFileSystem implements ReadFileSystem {
         // Probe to check if Range requests are supported
         const { rangeSupported, size: probeSize } = await probeRangeSupport(url);
 
-        if (!rangeSupported) {
-            // Fall back to downloading the entire file into memory
+        if (!rangeSupported || probeSize === undefined) {
+            // Range reads require the resource's decoded byte size for seeking.
+            // If Content-Range is unavailable (commonly because CORS does not
+            // expose it), a HEAD Content-Length may describe a compressed
+            // representation and cannot be used safely.
             return await this.createMemorySource(url, progress);
         }
 
         // Range is supported - use streaming approach
-        // If we got size from probe, use it; otherwise try HEAD request
-        let size = probeSize;
-        if (size === undefined) {
-            const headResponse = await fetch(url, { method: 'HEAD' });
-            if (headResponse.ok) {
-                const contentLength = headResponse.headers.get('Content-Length');
-                size = contentLength ? parseInt(contentLength, 10) : undefined;
-            }
-        }
+        const size = probeSize;
 
         // Report initial progress
         if (progress) {
