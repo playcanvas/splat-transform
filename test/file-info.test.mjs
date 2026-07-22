@@ -4,8 +4,8 @@
  *
  *  - columnNamesFromMeta reproduces materializeToDataTable's canonical column
  *    order from `meta` alone (per SH-band count, extras, and partial layer sets).
- *  - readFileInfo reports counts/columns/shBands without decoding gaussian data;
- *    a truncated file is rejected by the reader's size guard (throws).
+ *  - readFileInfo reports format/counts/layers/extra-columns/shBands without
+ *    decoding gaussian data; a truncated file is rejected by the size guard.
  *  - the `info` action passes the source through unchanged (meta-only).
  */
 
@@ -92,8 +92,7 @@ describe('readFileInfo', () => {
         assert.deepStrictEqual(info.lodCounts, [50]);
         assert.strictEqual(info.shBands, 1);
         assert.deepStrictEqual(info.layers, ['position', 'geometric', 'color']);
-        assert.deepStrictEqual(info.columns.slice(0, STANDARD.length), STANDARD);
-        assert.strictEqual(info.columns.length, STANDARD.length + 9); // + 9 f_rest for 1 band
+        assert.deepStrictEqual(info.extraColumns, []); // all standard columns, nothing extra
     });
 
     it('reports gaussian: false for a non-splat (point cloud) PLY', async () => {
@@ -111,7 +110,7 @@ describe('readFileInfo', () => {
         });
         assert.strictEqual(info.gaussian, false);
         assert.deepStrictEqual(info.layers, ['position', 'other']);
-        assert.deepStrictEqual(info.columns, ['x', 'y', 'z', 'red', 'green', 'blue']);
+        assert.deepStrictEqual(info.extraColumns.map(e => e.name), ['red', 'green', 'blue']);
     });
 
     it('rejects a truncated PLY via the reader size guard', async () => {
@@ -133,11 +132,11 @@ describe('readFileInfo', () => {
         assert.strictEqual(info.gaussian, true);
         assert.strictEqual(info.numGaussians, 4);
         assert.strictEqual(info.shBands, 0);
-        assert.deepStrictEqual(info.columns, STANDARD);
+        assert.deepStrictEqual(info.extraColumns, []);
 
         const [full] = await readFile({ filename: 'minimal.splat', inputFormat: 'splat', options, params: [], fileSystem });
         assert.strictEqual(info.numGaussians, full.meta.numGaussians);
-        assert.deepStrictEqual(info.columns, columnNamesFromMeta(full.meta));
+        assert.deepStrictEqual(info.extraColumns, [...full.meta.extraColumns]);
         await full.close();
     });
 
@@ -147,7 +146,7 @@ describe('readFileInfo', () => {
         const info = await readFileInfo({ filename: 'minimal.spz', inputFormat: 'spz', options, params: [], fileSystem });
         assert.strictEqual(info.format, 'spz');
         assert.ok(info.numGaussians > 0);
-        assert.ok(info.columns.includes('x') && info.columns.includes('opacity'));
+        assert.ok(info.layers.includes('position') && info.layers.includes('geometric'));
     });
 });
 
@@ -182,6 +181,7 @@ describe('info process action', () => {
         assert.match(outputs[0], /gaussians: 20/);
         assert.match(outputs[0], /sh bands: 1/);
         assert.match(outputs[0], /layers: position, geometric, color/);
+        assert.match(outputs[0], /\nextra columns: \(none\)$/); // sentinel when there are no extras
     });
 
     it('emits exact counts, never abbreviated', async () => {
@@ -205,7 +205,32 @@ describe('info process action', () => {
         assert.deepStrictEqual(info.lodCounts, [20]);
         assert.strictEqual(info.shBands, 1);
         assert.deepStrictEqual(info.layers, ['position', 'geometric', 'color']);
-        assert.deepStrictEqual(info.columns, columnNamesFromMeta(src.meta));
+        assert.deepStrictEqual(info.extraColumns, src.meta.extraColumns.map(e => ({ name: e.name, type: e.type })));
+    });
+
+    it('lists only extra (other-layer) columns, with their type', async () => {
+        const pool = createChunkDataPool();
+        const base = createTestDataTable(6);
+        const dt = new DataTable([...base.columns, new Column('my_extra', new Float32Array(6))]);
+        const src = dataTableToChunkSource(dt);
+
+        const text = (await captureOutput(() => processSource(src, [{ kind: 'info' }], pool)))[0];
+        assert.match(text, /extra columns: my_extra \(float32\)/);
+
+        const json = JSON.parse((await captureOutput(() => processSource(src, [{ kind: 'info', format: 'json' }], pool)))[0]);
+        assert.deepStrictEqual(json.extraColumns, [{ name: 'my_extra', type: 'float32' }]);
+        assert.ok(!('columns' in json), 'no legacy full-column list');
+    });
+
+    it('reports the input format when one is provided', async () => {
+        const pool = createChunkDataPool();
+        const src = dataTableToChunkSource(createTestDataTable(10));
+
+        const text = (await captureOutput(() => processSource(src, [{ kind: 'info' }], pool, { sourceFormat: 'ply' })))[0];
+        assert.match(text, /^format: ply\n/);
+
+        const json = JSON.parse((await captureOutput(() => processSource(src, [{ kind: 'info', format: 'json' }], pool, { sourceFormat: 'ply' })))[0]);
+        assert.strictEqual(json.format, 'ply');
     });
 
     it('reports gaussian: false for a non-splat source', async () => {

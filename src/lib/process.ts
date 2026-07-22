@@ -5,6 +5,7 @@ import { dataTableToChunkSource, materializeToDataTable } from './compat/data-ta
 import { Column, DataTable, sortMortonOrder, convertToSpace, getSHBands } from './data-table';
 import { decimateSource } from './decimate';
 import { computeSourceStats } from './ops';
+import { type InputFormat } from './read';
 import { formatSourceInfo, formatSourceStats } from './source-info';
 import type { DeviceCreator } from './types';
 import { fmtCount, type Group, logger, Transform } from './utils';
@@ -211,6 +212,8 @@ type FilterCluster = {
 type ProcessOptions = {
     /** Function to create a GPU device (required for filterFloaters, filterCluster). */
     createDevice?: DeviceCreator;
+    /** Input format reported by the `info`/`stats` actions; omitted when unset. */
+    sourceFormat?: InputFormat;
 };
 
 /**
@@ -488,13 +491,13 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 // stats pass; raw/unbaked values, exactly as the table holds them.
                 const src = dataTableToChunkSource(result);
                 const stats = await computeSourceStats(src, createChunkDataPool());
-                logger.output(formatSourceStats(src.meta, stats, processAction.format));
+                logger.output(formatSourceStats(src.meta, stats, processAction.format, options?.sourceFormat));
                 await src.close();
                 break;
             }
             case 'info': {
                 const src = dataTableToChunkSource(result);
-                logger.output(formatSourceInfo(src.meta, processAction.format));
+                logger.output(formatSourceInfo(src.meta, processAction.format, options?.sourceFormat));
                 await src.close();
                 break;
             }

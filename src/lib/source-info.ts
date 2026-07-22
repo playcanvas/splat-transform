@@ -1,6 +1,6 @@
 import { type ChunkSourceMetadata, hasGaussianLayers, orderedLayers } from './chunk';
-import { columnNamesFromMeta } from './compat/data-table';
 import { type LodStats, type SourceStats } from './ops';
+import { type InputFormat } from './read';
 import { forwardTransforms } from './value-transforms';
 
 /**
@@ -22,52 +22,60 @@ const stringifyCompact = (value: unknown): string => {
 
 /**
  * Build the info object — the JSON form of a source's structural metadata and
- * the shared head of the stats JSON output.
+ * the shared head of the stats JSON output. `extraColumns` lists only the
+ * non-standard (`other`-layer) columns; the standard columns are fully implied
+ * by `layers` + `shBands`.
  * @param meta - The source metadata.
+ * @param format - Detected input format; included only when provided.
  * @returns The info fields.
  */
-const buildSourceInfo = (meta: ChunkSourceMetadata) => ({
+const buildSourceInfo = (meta: ChunkSourceMetadata, format?: InputFormat) => ({
+    ...(format ? { format } : {}),
     gaussian: hasGaussianLayers(meta.availableLayers),
     numGaussians: meta.numGaussians,
     numLods: meta.numLods,
     lodCounts: [...meta.lodCounts],
     shBands: meta.shBands,
     layers: orderedLayers(meta.availableLayers),
-    columns: columnNamesFromMeta(meta)
+    extraColumns: meta.extraColumns.map(e => ({ name: e.name, type: e.type }))
 });
 
 /**
  * The info text lines — the text form of {@link buildSourceInfo}, mirroring
  * its fields one-to-one with exact (unabbreviated) counts.
  * @param meta - The source metadata.
+ * @param format - Detected input format; emitted only when provided.
  * @returns One `key: value` line per field.
  */
-const sourceInfoLines = (meta: ChunkSourceMetadata): string[] => {
+const sourceInfoLines = (meta: ChunkSourceMetadata, format?: InputFormat): string[] => {
     return [
+        ...(format ? [`format: ${format}`] : []),
         `gaussian: ${hasGaussianLayers(meta.availableLayers) ? 'yes' : 'no'}`,
         `gaussians: ${meta.numGaussians}`,
         `lods: ${meta.numLods}`,
         `lod counts: ${meta.lodCounts.join(', ')}`,
         `sh bands: ${meta.shBands}`,
         `layers: ${orderedLayers(meta.availableLayers).join(', ')}`,
-        `columns: ${columnNamesFromMeta(meta).join(', ')}`
+        `extra columns: ${meta.extraColumns.length > 0 ? meta.extraColumns.map(e => `${e.name} (${e.type})`).join(', ') : '(none)'}`
     ];
 };
 
 /**
- * Render a source's structural metadata for the `info` action — the gaussian
- * verdict ({@link hasGaussianLayers}: `false` for e.g. a plain point-cloud PLY),
- * per-LOD counts, SH bands, available layers, and the canonical column list,
- * all from `meta` (no data read).
+ * Render a source's structural metadata for the `info` action — the detected
+ * input format (when known), the gaussian verdict ({@link hasGaussianLayers}:
+ * `false` for e.g. a plain point-cloud PLY), per-LOD counts, SH bands, available
+ * layers, and the extra (non-standard `other`-layer) columns, all from `meta`
+ * (no data read).
  * @param meta - The source metadata.
  * @param format - Output format. Default: 'text'
+ * @param sourceFormat - Detected input format; reported when provided.
  * @returns A text or JSON block for `logger.output`.
  */
-const formatSourceInfo = (meta: ChunkSourceMetadata, format: OutputFormat = 'text'): string => {
+const formatSourceInfo = (meta: ChunkSourceMetadata, format: OutputFormat = 'text', sourceFormat?: InputFormat): string => {
     if (format === 'json') {
-        return stringifyCompact(buildSourceInfo(meta));
+        return stringifyCompact(buildSourceInfo(meta, sourceFormat));
     }
-    return sourceInfoLines(meta).join('\n');
+    return sourceInfoLines(meta, sourceFormat).join('\n');
 };
 
 // Display transform: raw values map to user-friendly space for output
@@ -144,17 +152,18 @@ const statsTable = (lod: LodStats): string[] => {
  * @param meta - The source metadata.
  * @param stats - The computed per-LOD statistics.
  * @param format - Output format. Default: 'text'
+ * @param sourceFormat - Detected input format; reported when provided.
  * @returns A text or JSON block for `logger.output`.
  */
-const formatSourceStats = (meta: ChunkSourceMetadata, stats: SourceStats, format: OutputFormat = 'text'): string => {
+const formatSourceStats = (meta: ChunkSourceMetadata, stats: SourceStats, format: OutputFormat = 'text', sourceFormat?: InputFormat): string => {
     if (format === 'json') {
         return stringifyCompact({
-            ...buildSourceInfo(meta),
+            ...buildSourceInfo(meta, sourceFormat),
             stats: stats.lods.map(displayLodStats)
         });
     }
 
-    const lines = sourceInfoLines(meta);
+    const lines = sourceInfoLines(meta, sourceFormat);
     for (const lod of stats.lods) {
         lines.push('');
         if (stats.lods.length > 1) {

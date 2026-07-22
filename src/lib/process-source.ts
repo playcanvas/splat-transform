@@ -43,12 +43,14 @@ const SOURCE_ACTION_KINDS: ReadonlySet<ProcessAction['kind']> = new Set([
  * @param source - The input source.
  * @param actions - Actions to apply in order.
  * @param pool - Pool for the filter passes' temporary read buffers.
+ * @param options - Process options; `sourceFormat` is reported by `info`/`stats`.
  * @returns The processed source (a view chain over `source`).
  */
 const processSource = async (
     source: ChunkSource,
     actions: ProcessAction[],
-    pool: ChunkDataPool
+    pool: ChunkDataPool,
+    options?: ProcessOptions
 ): Promise<ChunkSource> => {
     let src = source;
 
@@ -96,12 +98,12 @@ const processSource = async (
                 // source's current, unbaked values — matching processDataTable
                 // for every ordering except a transform-baking filterByValue
                 // immediately followed by stats (a rare case).
-                logger.output(formatSourceStats(src.meta, await computeSourceStats(src, pool), action.format));
+                logger.output(formatSourceStats(src.meta, await computeSourceStats(src, pool), action.format, options?.sourceFormat));
                 break;
             case 'info':
                 // Structural metadata only (meta-level) — no materialization; the
                 // source passes through unchanged.
-                logger.output(formatSourceInfo(src.meta, action.format));
+                logger.output(formatSourceInfo(src.meta, action.format, options?.sourceFormat));
                 break;
             case 'param':
                 break; // generator params: no-op here, as in processDataTable
@@ -145,7 +147,7 @@ const processSourceBridged = async (
         }
         const run = actions.slice(i, j);
         if (chunkNative) {
-            src = await processSource(src, run, pool);
+            src = await processSource(src, run, pool, options);
         } else {
             // DataTable island: materialize the current (streaming) source, apply
             // the run on the table, and re-bridge back to a source to keep going.
