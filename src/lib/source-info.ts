@@ -56,15 +56,16 @@ const sourceInfoLines = (meta: ChunkSourceMetadata, format?: InputFormat): strin
         `lod counts: ${meta.lodCounts.join(', ')}`,
         `sh bands: ${meta.shBands}`,
         `layers: ${orderedLayers(meta.availableLayers).join(', ')}`,
-        `extra columns: ${meta.extraColumns.map(e => `${e.name} (${e.type})`).join(', ')}`
+        `extra columns: ${meta.extraColumns.length > 0 ? meta.extraColumns.map(e => `${e.name} (${e.type})`).join(', ') : '(none)'}`
     ];
 };
 
 /**
- * Render a source's structural metadata for the `info` action — the gaussian
- * verdict ({@link hasGaussianLayers}: `false` for e.g. a plain point-cloud PLY),
- * per-LOD counts, SH bands, available layers, and the canonical column list,
- * all from `meta` (no data read).
+ * Render a source's structural metadata for the `info` action — the detected
+ * input format (when known), the gaussian verdict ({@link hasGaussianLayers}:
+ * `false` for e.g. a plain point-cloud PLY), per-LOD counts, SH bands, available
+ * layers, and the extra (non-standard `other`-layer) columns, all from `meta`
+ * (no data read).
  * @param meta - The source metadata.
  * @param format - Output format. Default: 'text'
  * @param sourceFormat - Detected input format; reported when provided.

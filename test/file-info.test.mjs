@@ -181,6 +181,7 @@ describe('info process action', () => {
         assert.match(outputs[0], /gaussians: 20/);
         assert.match(outputs[0], /sh bands: 1/);
         assert.match(outputs[0], /layers: position, geometric, color/);
+        assert.match(outputs[0], /\nextra columns: \(none\)$/); // sentinel when there are no extras
     });
 
     it('emits exact counts, never abbreviated', async () => {
