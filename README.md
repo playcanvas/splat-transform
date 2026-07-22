@@ -36,17 +36,18 @@ For library usage, install as a dependency:
 npm install @playcanvas/splat-transform
 ```
 
-For running on a backend with Docker (including GPU/Vulkan setup), see the [Docker Backend Guide](https://developer.playcanvas.com/user-manual/splat-transform/docker/).
+For running on a backend with Docker (including GPU/Vulkan setup), see the [Docker Backend](https://developer.playcanvas.com/user-manual/splat-transform/docker/) guide.
 
 > [!TIP]
 > For one-off conversions without installing anything, try [SuperSplat Convert](https://superspl.at/convert) — a browser-based frontend to splat-transform. See the [Convert page docs](https://developer.playcanvas.com/user-manual/supersplat/convert/) for details.
 
 ## Guides
 
-- [Streamed SOG Guide](https://developer.playcanvas.com/user-manual/splat-transform/#generating-lod-format) — build a multi-LOD streamed SOG from a single PLY.
-- [LOD Streaming Guide](https://developer.playcanvas.com/user-manual/gaussian-splatting/building/lod-streaming/) — load and render streamed SOG output in a PlayCanvas app.
-- [Collision Mesh Guide](https://developer.playcanvas.com/user-manual/splat-transform/collision/) — generate voxel/collision data from a splat scene.
-- [Docker Backend Guide](https://developer.playcanvas.com/user-manual/splat-transform/docker/) — run splat-transform on a backend (incl. GPU/Vulkan setup).
+- [Generating Streamed SOG](https://developer.playcanvas.com/user-manual/splat-transform/streamed-sog/) — build a multi-LOD Streamed SOG from a single PLY.
+- [LOD Streaming](https://developer.playcanvas.com/user-manual/gaussian-splatting/building/lod-streaming/) — load and render Streamed SOG output in a PlayCanvas app.
+- [Collision Mesh Generation](https://developer.playcanvas.com/user-manual/splat-transform/collision/) — generate voxel/collision data from a splat scene.
+- [Docker Backend](https://developer.playcanvas.com/user-manual/splat-transform/docker/) — run splat-transform on a backend (incl. GPU/Vulkan setup).
+- [Library Usage](https://developer.playcanvas.com/user-manual/splat-transform/library/) — drive splat-transform programmatically from Node.js or the browser.
 
 ## Format Specifications
 
@@ -133,7 +134,11 @@ Actions execute in the order specified and can be repeated. Any action may appea
 -m, --morton-order                      Reorder Gaussians by Morton code (Z-order curve)
 ```
 
-## General Options
+## CLI Options
+
+These options configure a run as a whole rather than operating on splat data — most groups apply only when reading or writing a specific format.
+
+### General Options
 
 ```none
 -h, --help                              Show this help and exit
@@ -145,7 +150,7 @@ Actions execute in the order specified and can be repeated. Any action may appea
 -w, --overwrite                         Overwrite output file if it exists
 ```
 
-## GPU Options
+### GPU Options
 
 Used by SOG compression and GPU voxelization (`--filter-cluster`, `--filter-floaters`, `.voxel.json` output).
 
@@ -156,7 +161,7 @@ Used by SOG compression and GPU voxelization (`--filter-cluster`, `--filter-floa
                                           GPU-only features like --filter-cluster)
 ```
 
-## SOG Compression Options
+### SOG Compression Options
 
 Apply when writing `.sog`, `meta.json`, `lod-meta.json`, or `.html` outputs.
 
@@ -165,7 +170,7 @@ Apply when writing `.sog`, `meta.json`, `lod-meta.json`, or `.html` outputs.
     --max-workers      <n>              Worker threads for SOG encoding (0 = inline/serial). Default: 4
 ```
 
-## SPZ Output Options
+### SPZ Output Options
 
 Apply when writing `.spz` outputs.
 
@@ -173,7 +178,7 @@ Apply when writing `.spz` outputs.
     --spz-version      <3|4>            The SPZ format version to write. Default: 4
 ```
 
-## HTML Viewer Output Options
+### HTML Viewer Output Options
 
 Apply when writing `.html` outputs.
 
@@ -185,7 +190,7 @@ Apply when writing `.html` outputs.
 > [!NOTE]
 > See the [SuperSplat Viewer Settings Schema](https://github.com/playcanvas/supersplat-viewer?tab=readme-ov-file#settings-schema) for details on how to pass data to the `--viewer-settings` option.
 
-## LOD Input Options
+### LOD Input Options
 
 Apply when reading `lod-meta.json`, `.lcc`, and `.lcc2` files.
 
@@ -193,7 +198,7 @@ Apply when reading `lod-meta.json`, `.lcc`, and `.lcc2` files.
 -L, --select-lod       <n,n,...>        Comma-separated LOD levels to read from streamed SOG / LCC / LCC2 input
 ```
 
-## LOD Output Options
+### LOD Output Options
 
 Apply when writing `lod-meta.json` (multi-LOD streaming SOG bundle).
 
@@ -202,11 +207,11 @@ Apply when writing `lod-meta.json` (multi-LOD streaming SOG bundle).
     --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
 ```
 
-See [Generating Streamed SOG](https://developer.playcanvas.com/user-manual/splat-transform/#generating-lod-format) for an end-to-end walkthrough.
+See [Generating Streamed SOG](https://developer.playcanvas.com/user-manual/splat-transform/streamed-sog/) for an end-to-end walkthrough.
 
-## Voxel Output Options
+### Voxel Output Options
 
-Apply when writing `.voxel.json` (sparse voxel octree for collision detection). See the [Collision Mesh Guide](https://developer.playcanvas.com/user-manual/splat-transform/collision/) for a deep dive on each step and tuning.
+Apply when writing `.voxel.json` (sparse voxel octree for collision detection). See the [Collision Mesh](https://developer.playcanvas.com/user-manual/splat-transform/collision/) guide for a deep dive on each step and tuning.
 
 ```none
     --voxel-size       <n>              Voxel size for .voxel.json. Default: 0.05
@@ -229,7 +234,7 @@ Apply when writing `.voxel.json` (sparse voxel octree for collision detection). 
     --collision-mesh   [smooth|faces]   Generate collision mesh (.collision.glb). Default: smooth
 ```
 
-## Image Output Options
+### Image Output Options
 
 Apply when writing `.webp` (lossless WebP rendered via GPU rasterizer).
 
@@ -379,7 +384,7 @@ splat-transform gen-grid.mjs -p width=10,height=10,scale=10,color=0.1 scenes/gri
 
 The voxel format stores sparse voxel octree data for collision detection. It consists of two files: `.voxel.json` (metadata) and `.voxel.bin` (binary octree data). Pass `--collision-mesh` to also emit a `.collision.glb` mesh derived from the voxel grid.
 
-For a step-by-step walkthrough of each option (with illustrations), see the [Collision Mesh Guide](https://developer.playcanvas.com/user-manual/splat-transform/collision/).
+For a step-by-step walkthrough of each option (with illustrations), see the [Collision Mesh](https://developer.playcanvas.com/user-manual/splat-transform/collision/) guide.
 
 #### Recommended pipeline
 
@@ -500,7 +505,10 @@ splat-transform --help
 
 ## Library Usage
 
-SplatTransform exposes a programmatic API for reading, processing, and writing Gaussian splat data. Scenes flow through lazy, chunked `ChunkSource`s, so resident memory is bounded by chunk size rather than scene size — the same pipeline the CLI uses to process scenes of hundreds of millions of gaussians.
+SplatTransform exposes a programmatic API for reading, processing, and writing Gaussian splat data. Scenes flow through lazy, chunked `ChunkSource`s, so resident memory is bounded by chunk size rather than scene size — the same pipeline the CLI uses to process scenes of hundreds of millions of Gaussians.
+
+> [!NOTE]
+> This section is also available as the [Library Usage](https://developer.playcanvas.com/user-manual/splat-transform/library/) guide on the developer site. The full TypeDoc reference for every export lives at [api.playcanvas.com/splat-transform](https://api.playcanvas.com/splat-transform/).
 
 ### Basic Import
 
