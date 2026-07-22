@@ -16,7 +16,7 @@ import { describe, it } from 'node:test';
 import { computeStatsView } from './helpers/summary-compare.mjs';
 import { createTestDataTable } from './helpers/test-utils.mjs';
 import { createChunkDataPool, createInMemoryChunkSource } from '../src/lib/chunk/index.js';
-import { dataTableToChunkSource } from '../src/lib/compat/data-table.js';
+import { columnNamesFromMeta, dataTableToChunkSource } from '../src/lib/compat/data-table.js';
 import { Column, DataTable, Transform, computeStats, logger, processDataTable } from '../src/lib/index.js';
 import { processSource } from '../src/lib/process-source.js';
 import { forwardTransforms } from '../src/lib/value-transforms.js';
@@ -93,9 +93,9 @@ describe('stats process action', () => {
         assert.strictEqual(lods.length, 1);
         assert.strictEqual(lods[0].lod, 0);
         assert.strictEqual(lods[0].numGaussians, 20);
-        assert.deepStrictEqual(lods[0].columns, info.columns);
+        assert.deepStrictEqual(lods[0].columns, columnNamesFromMeta(src.meta));
         for (const field of ['min', 'max', 'median', 'mean', 'stdDev', 'nanCount', 'infCount', 'histogram']) {
-            assert.strictEqual(lods[0].data[field].length, info.columns.length, `${field} length`);
+            assert.strictEqual(lods[0].data[field].length, lods[0].columns.length, `${field} length`);
         }
         for (const counts of lods[0].data.histogram) {
             assert.strictEqual(counts.length, 16);

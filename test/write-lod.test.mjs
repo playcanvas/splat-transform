@@ -284,6 +284,46 @@ describe('readLodSource: streamed SOG input', function () {
         await source.close();
     });
 
+    it('reads a pre-v1 manifest (no version/count/counts), deriving counts from the tree', async function () {
+        const { fs, meta } = await writeScene([3, 2], 0);
+
+        // Simulate an older published manifest: drop the fields #261 introduced.
+        delete meta.version;
+        delete meta.count;
+        delete meta.counts;
+        fs.results.set('/scene/lod-meta.json', new TextEncoder().encode(JSON.stringify(meta)));
+
+        const [source] = await readFile({
+            filename: '/scene/lod-meta.json',
+            inputFormat: 'lod',
+            options: { lodSelect: [] },
+            fileSystem: asReadFileSystem(fs)
+        });
+
+        assert.strictEqual(source.meta.numLods, 2);
+        assert.strictEqual(source.meta.numGaussians, 3);
+        assert.deepStrictEqual(source.meta.lodCounts, [3, 2]);
+        const table = await materializeToDataTable(source, createChunkDataPool());
+        assert.strictEqual(table.numRows, 5);
+        await source.close();
+    });
+
+    it('still rejects an unsupported (non-1) version', async function () {
+        const { fs, meta } = await writeScene([3], 0);
+        meta.version = 2;
+        fs.results.set('/scene/lod-meta.json', new TextEncoder().encode(JSON.stringify(meta)));
+
+        await assert.rejects(
+            readFile({
+                filename: '/scene/lod-meta.json',
+                inputFormat: 'lod',
+                options: { lodSelect: [] },
+                fileSystem: asReadFileSystem(fs)
+            }),
+            { message: 'Unsupported lod-meta.json version: 2' }
+        );
+    });
+
     it('honors LOD selection', async function () {
         const { fs } = await writeScene([3, 2], 0);
         const [source] = await readFile({

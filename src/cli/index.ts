@@ -796,7 +796,7 @@ ACTIONS (executed in order; can be repeated)
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
     -l, --tag-lod          <n>              Tag the Gaussians with LOD level n (n >= 0, or -1 for environment)
         --stats            [text|json]      Print file info, per-column statistics and the fill/overdraw ratio to stdout. Default: text
-        --info             [text|json]      Print structural metadata (per-LOD counts, columns) to stdout. Default: text
+        --info             [text|json]      Print structural metadata (format, per-LOD counts, extra columns) to stdout. Default: text
     -m, --morton-order                      Reorder Gaussians by Morton code (Z-order curve)
 
 GENERAL
@@ -1107,7 +1107,11 @@ const main = async () => {
             return cachedDevice;
         };
 
-        const processOptions = deviceCreator ? { createDevice: deviceCreator } : undefined;
+        // A single input has an unambiguous format for --info/--stats to report;
+        // with multiple (combined) inputs the format is omitted.
+        const soleInputFormat = inputArgs.length === 1 ?
+            getInputFormat(resolveInput(inputArgs[0].filename).classifyName) : undefined;
+        const processOptions = { createDevice: deviceCreator, sourceFormat: soleInputFormat };
 
         // declare phase total: one Read phase per input + one Write phase
         const phaseTotal = inputArgs.length + (isNullOutput ? 0 : 1);

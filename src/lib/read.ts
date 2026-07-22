@@ -1,5 +1,5 @@
-import { type ChunkLayer, type ChunkSource, type ChunkSourceMetadata, type SHBands, createChunkDataPool, hasGaussianLayers, orderedLayers } from './chunk';
-import { columnNamesFromMeta, dataTableToChunkSource } from './compat/data-table';
+import { type ChunkLayer, type ChunkSource, type ChunkSourceMetadata, type ExtraColumn, type SHBands, createChunkDataPool, hasGaussianLayers, orderedLayers } from './chunk';
+import { dataTableToChunkSource } from './compat/data-table';
 import { ReadFileSystem, ZipReadFileSystem } from './io/read';
 import { readKsplat, readMjs, readPly, readSogSource, readSplat, readSpz, statSogSource } from './readers';
 import { readLccSource } from './readers/read-lcc';
@@ -212,8 +212,12 @@ type FileInfo = {
     shBands: SHBands;
     /** Layers the file exposes, in canonical order. */
     layers: ChunkLayer[];
-    /** Canonical column names the file exposes. */
-    columns: string[];
+    /**
+     * Extra (non-standard `other`-layer) columns, with their storage type. The
+     * standard columns are fully implied by `layers` + `shBands`; only these
+     * carry additional information.
+     */
+    extraColumns: ExtraColumn[];
 };
 
 // The subset of ChunkSourceMetadata a FileInfo is built from — satisfied by a
@@ -229,7 +233,7 @@ const buildFileInfo = (format: InputFormat, meta: MetaSummary): FileInfo => ({
     lodCounts: [...meta.lodCounts],
     shBands: meta.shBands,
     layers: orderedLayers(meta.availableLayers),
-    columns: columnNamesFromMeta(meta)
+    extraColumns: [...meta.extraColumns]
 });
 
 /**

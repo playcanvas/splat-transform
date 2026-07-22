@@ -16,9 +16,9 @@ type LodNode = {
 };
 
 type LodMeta = {
-    version: number;
-    count: number;
-    counts: number[];
+    version?: number;
+    count?: number;
+    counts?: number[];
     lodLevels: number;
     environment?: string;
     filenames: string[];
@@ -34,14 +34,18 @@ const parseLodMeta = (text: string, filename: string): LodMeta => {
         throw new Error(`Failed to parse lod-meta.json: ${filename}: ${reason}`);
     }
 
-    if (meta.version !== 1) {
+    // Accept pre-versioning manifests (no `version`) alongside v1: the LOD
+    // writer only began stamping `version`/`count`/`counts` in #261, so older
+    // published assets omit them (mirrors read-sog's legacy V1 fallback).
+    if (meta.version !== undefined && meta.version !== 1) {
         throw new Error(`Unsupported lod-meta.json version: ${meta.version}`);
     }
     if (!Number.isInteger(meta.lodLevels) || meta.lodLevels <= 0) {
         throw new Error(`Invalid lod-meta.json lodLevels: ${filename}`);
     }
-    if (!Array.isArray(meta.counts) || meta.counts.length !== meta.lodLevels ||
-        meta.counts.some(count => !Number.isInteger(count) || count < 0)) {
+    if (meta.counts !== undefined &&
+        (!Array.isArray(meta.counts) || meta.counts.length !== meta.lodLevels ||
+        meta.counts.some(count => !Number.isInteger(count) || count < 0))) {
         throw new Error(`Invalid lod-meta.json counts: ${filename}`);
     }
     if (!Array.isArray(meta.filenames) || meta.filenames.some(name => typeof name !== 'string')) {
@@ -80,12 +84,16 @@ const collectFilesByLod = (meta: LodMeta, filename: string): Map<number, Map<num
     };
     traverse(meta.tree);
 
-    for (let lod = 0; lod < meta.lodLevels; lod++) {
-        const count = [...(result.get(lod)?.values() ?? [])].reduce((sum, value) => sum + value, 0);
-        if (count !== meta.counts[lod]) {
-            throw new Error(
-                `lod-meta.json LOD ${lod} count mismatch: expected ${meta.counts[lod]}, found ${count}`
-            );
+    // Pre-v1 manifests omit `counts`; the per-LOD totals are then taken from the
+    // tree alone (and each SOG unit's real count is still checked at decode time).
+    if (meta.counts !== undefined) {
+        for (let lod = 0; lod < meta.lodLevels; lod++) {
+            const count = [...(result.get(lod)?.values() ?? [])].reduce((sum, value) => sum + value, 0);
+            if (count !== meta.counts[lod]) {
+                throw new Error(
+                    `lod-meta.json LOD ${lod} count mismatch: expected ${meta.counts[lod]}, found ${count}`
+                );
+            }
         }
     }
 

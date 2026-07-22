@@ -129,7 +129,7 @@ Actions execute in the order specified and can be repeated. Any action may appea
 -p, --params           <key=val,...>    Pass parameters to .mjs generator script
 -l, --tag-lod          <n>              Tag the Gaussians with LOD level n (n >= 0, or -1 for environment)
     --stats            [text|json]      Print file info, per-column statistics and the fill/overdraw ratio to stdout. Default: text
-    --info             [text|json]      Print structural metadata (per-LOD counts, columns) to stdout. Default: text
+    --info             [text|json]      Print structural metadata (format, per-LOD counts, extra columns) to stdout. Default: text
 -m, --morton-order                      Reorder Gaussians by Morton code (Z-order curve)
 ```
 
