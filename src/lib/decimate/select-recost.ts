@@ -138,14 +138,15 @@ const selectMergesRecosted = (inputs: RecostInputs): SelectionResult => {
         const mass = SC[o + 11];
         W[i] = mass;
         mx[i] = SC[o]; my[i] = SC[o + 1]; mz[i] = SC[o + 2];
-        // Cache Σ carries EPS on its diagonal; moments accumulate Σ without it
-        // (production mergeGroup member math).
-        M2[i6] = mass * (SC[o + 3] - EPS_COV);
+        // The cache Σ is unregularized (buildCostCache uses raw variances), so
+        // it feeds the moments directly — matching mergeGroup's member math.
+        // EPS_COV enters once, on the merged covariance in evalMerge.
+        M2[i6] = mass * SC[o + 3];
         M2[i6 + 1] = mass * SC[o + 4];
         M2[i6 + 2] = mass * SC[o + 5];
-        M2[i6 + 3] = mass * (SC[o + 6] - EPS_COV);
+        M2[i6 + 3] = mass * SC[o + 6];
         M2[i6 + 4] = mass * SC[o + 7];
-        M2[i6 + 5] = mass * (SC[o + 8] - EPS_COV);
+        M2[i6 + 5] = mass * SC[o + 8];
         baseW[i3] = mass * SC[o + 12];
         baseW[i3 + 1] = mass * SC[o + 13];
         baseW[i3 + 2] = mass * SC[o + 14];

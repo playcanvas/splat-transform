@@ -165,6 +165,10 @@ const decimateSource = async (
     let positions: ResidentPositions | null = null;
     // Cleanup for the CURRENT generation's input (previous spill / RAM source).
     let disposeCurrentInput: (() => Promise<void>) | null = null;
+    // Resident footprint of the current generation's input (non-zero when the
+    // previous generation was materialized in RAM) — counted by the re-costed
+    // selection gate so the budget covers everything actually resident.
+    let residentInputBytes = 0;
 
     const totalGenerations = Math.max(1, Math.ceil(Math.log2(inputMeta.numGaussians / targetCount)));
 
@@ -218,7 +222,7 @@ const decimateSource = async (
         // selection otherwise. Gated per generation, so large scenes regain
         // re-costing as soon as the cascade shrinks under the budget.
         const k = Math.min(KNN_K, Math.max(1, N - 1));
-        const baseBytes = N * (12 + K * 8 + K * 4 + 4) + 3 * 2 ** 30;
+        const baseBytes = residentInputBytes + N * (12 + K * 8 + K * 4 + 4) + 3 * 2 ** 30;
         const recost = baseBytes + N * RECOST_BYTES_PER_GAUSSIAN(k) <= budget;
         const cacheOut = recost ? new Float32Array(N * CACHE_STRIDE) : undefined;
         const neighborsOut = recost ? new Uint32Array(N * k) : undefined;
@@ -322,7 +326,9 @@ const decimateSource = async (
 
         if (estBytes <= budget / 4) {
             nextSrc = await compact(producer, pool);
+            residentInputBytes = estBytes;
         } else {
+            residentInputBytes = 0;
             if (!opts.spill) {
                 throw new Error(
                     `decimation intermediate generation needs ${fmtBytes(estBytes)}, over the in-memory budget — ` +

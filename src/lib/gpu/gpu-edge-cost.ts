@@ -175,10 +175,12 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         2.0 * ai * am * bim * cIM -
         2.0 * aj * am * bjm * cJM;
 
-    // Clamp float-noise negatives but preserve NaN/Inf (degenerate input → the
-    // host fails loud on no finite merges), then add the scale-free colour
-    // dissimilarity term: |Δbase|² = bni + bnj − 2·(bi·bj).
-    costs[bid] = select(E, 0.0, E < 0.0) + COLOR_WEIGHT * (bni + bnj - 2.0 * bij);
+    // Clamp float-noise negatives on both squared norms (the colour distance
+    // uses separately-rounded norms and can round slightly negative) but
+    // preserve NaN/Inf (degenerate input → the host fails loud on no finite
+    // merges). |Δbase|² = bni + bnj − 2·(bi·bj).
+    let dc2 = bni + bnj - 2.0 * bij;
+    costs[bid] = select(E, 0.0, E < 0.0) + COLOR_WEIGHT * select(dc2, 0.0, dc2 < 0.0);
 }
 `;
 

@@ -251,10 +251,12 @@ const computeEdgeCostView = (
         2 * ai * am * bim * cIM -
         2 * aj * am * bjm * cJM;
 
-    // Clamp float-noise negatives (E is a squared norm ≥ 0) but preserve
-    // NaN/Inf from degenerate inputs so the caller can fail loud.
-    // |Δbase|² = |b_i|² + |b_j|² − 2·b_i·b_j — no extra loads needed.
-    return (E < 0 ? 0 : E) + COLOR_WEIGHT * (bni + bnj - 2 * bij);
+    // Clamp float-noise negatives (both terms are squared norms ≥ 0; the
+    // colour distance uses separately-rounded f32 norms so it too can round
+    // slightly negative) but preserve NaN/Inf from degenerate inputs so the
+    // caller can fail loud. |Δbase|² = |b_i|² + |b_j|² − 2·b_i·b_j.
+    const dc2 = bni + bnj - 2 * bij;
+    return (E < 0 ? 0 : E) + COLOR_WEIGHT * (dc2 < 0 ? 0 : dc2);
 };
 
 export { buildCostCache, computeEdgeCostView, COLOR_WEIGHT, type CostCache };
