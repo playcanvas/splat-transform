@@ -1,19 +1,18 @@
 /**
  * Priority pass tests (CPU path): the resident best-K candidates must match
- * brute-force legacy edge costs computed over exact global KNN.
+ * brute-force edge costs computed over exact global KNN.
  */
 
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
 
-import { legacyEdgeCost } from './fixtures/legacy-decimate-math.mjs';
 import { makeSyntheticSource } from './helpers/synthetic-source.mjs';
-import { makeGaussianSamples } from '../src/lib/decimate/moment-match.js';
+import { buildCostCache, computeEdgeCostView } from '../src/lib/decimate/edge-cost-cpu.js';
 import { kdPartition } from '../src/lib/decimate/partition.js';
 import { runPriorityPass } from '../src/lib/decimate/priority.js';
 
 describe('priority pass (CPU)', () => {
-    it('best-K candidates match brute-force legacy costs over exact KNN', async () => {
+    it('best-K candidates match brute-force costs over exact KNN', async () => {
         const n = 1500, k = 16, K = 4;
         const { source, pool, view, pos } = await makeSyntheticSource(n, 1, 5, { chunkSize: 256 });
         const { order, blocks } = kdPartition(pos, 400);
@@ -23,14 +22,14 @@ describe('priority pass (CPU)', () => {
         };
         await runPriorityPass({ source, pool, pos, order, blocks, K, k }, cand);
 
-        const Z = makeGaussianSamples(1, 0);
+        const cache = buildCostCache(view);
         const d2 = (a, b) => (pos.x[a] - pos.x[b]) ** 2 + (pos.y[a] - pos.y[b]) ** 2 + (pos.z[a] - pos.z[b]) ** 2;
         for (let i = 0; i < n; i += 97) {
             const knn = Array.from({ length: n }, (_, j) => j)
                 .filter(j => j !== i)
                 .sort((a, b) => d2(i, a) - d2(i, b))
                 .slice(0, k);
-            const refCosts = knn.map(j => legacyEdgeCost(view, i, j, Z)).sort((a, b) => a - b);
+            const refCosts = knn.map(j => computeEdgeCostView(view, cache, i, j)).sort((a, b) => a - b);
             const got = [];
             for (let s = 0; s < K; s++) {
                 if (cand.idx[i * K + s] !== 0xFFFFFFFF) got.push(cand.cost[i * K + s]);

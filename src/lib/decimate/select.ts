@@ -1,19 +1,28 @@
 /**
- * Global merge selection over the resident candidate arrays: bucketed greedy
- * disjoint matching in cost order, plus chain closure that attaches
- * still-unmatched gaussians to a candidate's group (≤3, relief cap 4) so a
- * 50% target completes in one generation instead of a mop-up pass.
+ * Global merge selection over the resident candidate arrays.
  *
- * Bucket walk ≈ exact cost-sorted greedy up to 1/SELECT_BUCKETS-of-range
- * quantization — the selection-semantics match with the legacy algorithm.
+ * PROTOTYPE — cost-ordered agglomeration (replaces the 50%-matching + chain
+ * closure). Candidate edges are walked cheapest-first and unioned (union-find,
+ * capped at {@link MAX_GROUP} members) until the generation's target removal
+ * count is reached. Because a single-linkage cluster can absorb many members,
+ * cheap (redundant) regions collapse deeply while expensive (large / distinct)
+ * gaussians stay as singletons — so removal follows local error instead of a
+ * uniform 50% everywhere. Combined with the L2 field cost, large distant
+ * gaussians (sky) survive far longer than tiny detail.
+ *
+ * Cost ordering is log-scaled bucketed (the L2 cost spans many orders of
+ * magnitude); ties within a bucket resolve in arbitrary order.
  *
  * Engine-free; pure resident-array computation, no IO.
  */
 
 import { type CandidateArrays } from './priority';
 
-/** Cost-histogram buckets for the ordered greedy walk. */
-const SELECT_BUCKETS = 1024;
+/** Log-scaled cost buckets for the ordered agglomeration walk. */
+const COST_BUCKETS = 4096;
+
+/** Max gaussians merged into one group in a single generation. */
+const MAX_GROUP = 4;
 
 const NO_CANDIDATE = 0xFFFFFFFF;
 
@@ -49,106 +58,104 @@ type SelectionResult = {
 const selectMerges = (cand: CandidateArrays, N: number, K: number, mergesNeeded: number): SelectionResult => {
     const E = N * K;
 
-    // Pass 1: finite cost range.
-    let lo = Infinity, hi = -Infinity;
+    // Finite candidate range (costs are ≥ 0; log-scale the positive ones so
+    // cost ordering keeps resolution across the metric's huge dynamic range).
+    let hi = 0, loPos = Infinity, anyFinite = false;
     for (let e = 0; e < E; e++) {
+        if (cand.idx[e] === NO_CANDIDATE) continue;
         const c = cand.cost[e];
-        if (Number.isFinite(c)) {
-            if (c < lo) lo = c;
-            if (c > hi) hi = c;
+        if (!Number.isFinite(c)) continue;
+        anyFinite = true;
+        if (c > hi) hi = c;
+        if (c > 0 && c < loPos) loPos = c;
+    }
+    const useLog = anyFinite && Number.isFinite(loPos) && loPos < hi;
+    const logLo = useLog ? Math.log(loPos) : 0;
+    const logSpan = useLog ? Math.log(hi) - logLo : 1;
+    const bucketOf = (c: number): number => {
+        if (!(c > 0) || !useLog) return 0;
+        const b = 1 + Math.floor(((Math.log(c) - logLo) / logSpan) * (COST_BUCKETS - 2));
+        return b < 0 ? 0 : (b >= COST_BUCKETS ? COST_BUCKETS - 1 : b);
+    };
+
+    // Counting sort of finite candidate edges by bucket (cheapest first).
+    const counts = new Uint32Array(COST_BUCKETS + 1);
+    for (let e = 0; e < E; e++) {
+        if (cand.idx[e] === NO_CANDIDATE) continue;
+        const c = cand.cost[e];
+        if (Number.isFinite(c)) counts[bucketOf(c) + 1]++;
+    }
+    for (let b = 0; b < COST_BUCKETS; b++) counts[b + 1] += counts[b];
+    const orderE = new Uint32Array(counts[COST_BUCKETS]);
+    const cursor = counts.slice(0, COST_BUCKETS);
+    for (let e = 0; e < E; e++) {
+        if (cand.idx[e] === NO_CANDIDATE) continue;
+        const c = cand.cost[e];
+        if (Number.isFinite(c)) orderE[cursor[bucketOf(c)]++] = e;
+    }
+
+    // Union-find (union by size + path halving).
+    const parent = new Uint32Array(N);
+    for (let i = 0; i < N; i++) parent[i] = i;
+    const size = new Uint32Array(N).fill(1);
+    const find = (x: number): number => {
+        while (parent[x] !== x) {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
         }
-    }
-    const span = hi > lo ? hi - lo : 1;
-    const bucketOf = (c: number) => Math.min(SELECT_BUCKETS - 1, Math.floor(((c - lo) / span) * SELECT_BUCKETS));
+        return x;
+    };
 
-    // Counting sort of finite candidate entries by bucket.
-    const counts = new Uint32Array(SELECT_BUCKETS + 1);
-    for (let e = 0; e < E; e++) {
-        if (Number.isFinite(cand.cost[e])) counts[bucketOf(cand.cost[e]) + 1]++;
-    }
-    for (let b = 0; b < SELECT_BUCKETS; b++) counts[b + 1] += counts[b];
-    const orderE = new Uint32Array(counts[SELECT_BUCKETS]);
-    const cursor = counts.slice(0, SELECT_BUCKETS);
-    for (let e = 0; e < E; e++) {
-        if (Number.isFinite(cand.cost[e])) orderE[cursor[bucketOf(cand.cost[e])]++] = e;
-    }
-
-    const memberGroup = new Int32Array(N).fill(-1);
-
-    // Primary greedy: pair free endpoints, cheapest bucket first.
-    const maxPairs = Math.max(0, mergesNeeded);
-    const pairA = new Uint32Array(maxPairs);
-    const pairB = new Uint32Array(maxPairs);
-    let pairs = 0;
+    // Cost-ordered agglomeration: union cheapest edges first, capping group
+    // size, until the target removal count is reached.
     let removed = 0;
     for (let t = 0; t < orderE.length && removed < mergesNeeded; t++) {
         const e = orderE[t];
         const j = cand.idx[e];
         if (j === NO_CANDIDATE) continue;
         const i = (e / K) | 0;
-        if (memberGroup[i] !== -1 || memberGroup[j] !== -1) continue;
-        memberGroup[i] = pairs;
-        memberGroup[j] = pairs;
-        pairA[pairs] = i;
-        pairB[pairs] = j;
-        pairs++;
+        let ri = find(i), rj = find(j);
+        if (ri === rj) continue;
+        if (size[ri] + size[rj] > MAX_GROUP) continue;
+        if (size[ri] < size[rj]) {
+            const tmp = ri; ri = rj; rj = tmp;
+        }
+        parent[rj] = ri;
+        size[ri] += size[rj];
         removed++;
     }
 
-    // Chain closure: attach unmatched gaussians to a candidate's group,
-    // cheapest first, cap 3 — then a relief walk at cap 4. After the primary
-    // walk every free gaussian's candidates are all matched (else the pair
-    // would have been taken), so closure can almost always attach.
-    const groupSize = new Uint32Array(pairs).fill(2);
-    const joinMember = new Uint32Array(Math.max(0, mergesNeeded - removed));
-    const joinGroup = new Uint32Array(joinMember.length);
-    let joins = 0;
-    for (const cap of [3, 4]) {
-        if (removed >= mergesNeeded) break;
-        for (let t = 0; t < orderE.length && removed < mergesNeeded; t++) {
-            const e = orderE[t];
-            const j = cand.idx[e];
-            if (j === NO_CANDIDATE) continue;
-            const i = (e / K) | 0;
-            if (memberGroup[i] !== -1) continue;
-            const g = memberGroup[j];
-            if (g === -1 || groupSize[g] >= cap) continue;
-            memberGroup[i] = g;
-            groupSize[g]++;
-            joinMember[joins] = i;
-            joinGroup[joins] = g;
-            joins++;
-            removed++;
+    // Assemble CSR groups from the forest (roots with size > 1).
+    const memberGroup = new Int32Array(N).fill(-1);
+    const rootGroup = new Int32Array(N).fill(-1);
+    let G = 0;
+    for (let i = 0; i < N; i++) {
+        const r = find(i);
+        if (size[r] > 1) {
+            if (rootGroup[r] < 0) rootGroup[r] = G++;
+            memberGroup[i] = rootGroup[r];
         }
     }
 
-    // CSR assembly.
-    const G = pairs;
     const groupOffsets = new Uint32Array(G + 1);
-    for (let g = 0; g < G; g++) groupOffsets[g + 1] = groupOffsets[g] + groupSize[g];
+    for (let i = 0; i < N; i++) {
+        const g = memberGroup[i];
+        if (g >= 0) groupOffsets[g + 1]++;
+    }
+    for (let g = 0; g < G; g++) groupOffsets[g + 1] += groupOffsets[g];
     const groupMembers = new Uint32Array(groupOffsets[G]);
-    const fill = new Uint32Array(G);
-    for (let g = 0; g < G; g++) {
-        const o = groupOffsets[g];
-        groupMembers[o] = pairA[g];
-        groupMembers[o + 1] = pairB[g];
-        fill[g] = 2;
+    const fill = groupOffsets.slice(0, G);
+    for (let i = 0; i < N; i++) {
+        const g = memberGroup[i];
+        if (g >= 0) groupMembers[fill[g]++] = i;
     }
-    for (let t = 0; t < joins; t++) {
-        const g = joinGroup[t];
-        groupMembers[groupOffsets[g] + fill[g]] = joinMember[t];
-        fill[g]++;
-    }
+
+    // Members were appended in ascending id order, so each group's first slot
+    // is its minimum id.
     const groupMin = new Uint32Array(G);
-    for (let g = 0; g < G; g++) {
-        let min = groupMembers[groupOffsets[g]];
-        for (let m = groupOffsets[g] + 1; m < groupOffsets[g + 1]; m++) {
-            if (groupMembers[m] < min) min = groupMembers[m];
-        }
-        groupMin[g] = min;
-    }
+    for (let g = 0; g < G; g++) groupMin[g] = groupMembers[groupOffsets[g]];
 
     return { groupOffsets, groupMembers, memberGroup, groupMin, mergedGroups: G, removed };
 };
 
-export { selectMerges, SELECT_BUCKETS, type SelectionResult };
+export { selectMerges, MAX_GROUP, type SelectionResult };

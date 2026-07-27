@@ -6,13 +6,14 @@ import { mergeStream } from './merge-stream';
 import { kdPartition, coherenceRuns, type ResidentPositions } from './partition';
 import { runPriorityPass, HALO_CAP, type CandidateArrays } from './priority';
 import { selectMerges } from './select';
+import { selectMergesRecosted, CACHE_STRIDE } from './select-recost';
 import {
     compact,
     type ChunkDataPool,
     type ChunkSource,
     type ChunkSourceMetadata
 } from '../chunk';
-import { APP_CHUNK } from '../gpu/gpu-edge-cost';
+import { SPLAT_STRIDE } from '../gpu/gpu-edge-cost';
 import { type ReadFileSystem } from '../io/read';
 import { type FileSystem } from '../io/write';
 import { bakeTransform } from '../ops';
@@ -30,8 +31,14 @@ const BLOCK_SIZE = 1 << 21;
 /** Same no-grind stall semantics as legacy: a shortfall generation must remove at least this fraction. */
 const MIN_ITERATION_PROGRESS = 0.05;
 
-/** Default resident-memory budget steering the candidate-K policy. */
-const DEFAULT_MEMORY_BUDGET = 24 * 2 ** 30;
+/** Default resident-memory budget steering the candidate-K and re-costed-selection policies. */
+const DEFAULT_MEMORY_BUDGET = 48 * 2 ** 30;
+
+// Per-gaussian residency of re-costed selection beyond the base state: splat
+// cache (16 f32) + neighbour ids (k u32) + f64 cluster moments/colour/error +
+// union-find/chains/heap. Conservative round-up; used by the per-generation
+// gate that falls back to one-shot selectMerges when over budget.
+const RECOST_BYTES_PER_GAUSSIAN = (k: number) => CACHE_STRIDE * 4 + k * 4 + 200;
 
 /** Coherence heuristic: gap (rows) merged into one run / runs-per-block considered scattered. */
 const COHERENCE_GAP_ROWS = 64;
@@ -59,7 +66,7 @@ type DecimateOptions = {
     createDevice?: DeviceCreator;
     /** Spill destination for over-budget intermediate generations. */
     spill?: DecimateSpill;
-    /** Resident-memory budget driving the candidate-K policy (default 24 GiB). */
+    /** Resident-memory budget driving the candidate-K and re-costed-selection policies (default 48 GiB). */
     memoryBudgetBytes?: number;
 };
 
@@ -177,7 +184,7 @@ const decimateSource = async (
         const bindingLimit = (device as unknown as { limits?: { maxStorageBufferBindingSize?: number } } | undefined)
         ?.limits?.maxStorageBufferBindingSize;
         if (typeof bindingLimit === 'number') {
-            const largestBinding = (bs: number) => bs * (1 + HALO_CAP) * Math.max(Math.min(APP_CHUNK, colorDim) * 4, 36);
+            const largestBinding = (bs: number) => bs * (1 + HALO_CAP) * SPLAT_STRIDE * 4;
             while (blockSize > (1 << 16) && largestBinding(blockSize) > bindingLimit) {
                 blockSize >>= 1;
             }
@@ -206,9 +213,19 @@ const decimateSource = async (
             cost: new Float32Array(N * K).fill(Infinity)
         };
 
+        // Re-costed selection (exact within-generation greedy) when its
+        // resident state fits the budget alongside the base state; one-shot
+        // selection otherwise. Gated per generation, so large scenes regain
+        // re-costing as soon as the cascade shrinks under the budget.
+        const k = Math.min(KNN_K, Math.max(1, N - 1));
+        const baseBytes = N * (12 + K * 8 + K * 4 + 4) + 3 * 2 ** 30;
+        const recost = baseBytes + N * RECOST_BYTES_PER_GAUSSIAN(k) <= budget;
+        const cacheOut = recost ? new Float32Array(N * CACHE_STRIDE) : undefined;
+        const neighborsOut = recost ? new Uint32Array(N * k) : undefined;
+
         const priorityBar = logger.bar('computing merge priorities', N);
         await runPriorityPass(
-            { source: src, pool, pos: positions, order, blocks, device, K, k: Math.min(KNN_K, Math.max(1, N - 1)) },
+            { source: src, pool, pos: positions, order, blocks, device, K, k, cacheOut, neighborsOut },
             cand,
             n => priorityBar.tick(n)
         );
@@ -216,8 +233,10 @@ const decimateSource = async (
 
         const generationTarget = Math.max(targetCount, N - Math.floor(N / 2));
         const needed = N - generationTarget;
-        const selectSub = logger.group('Selecting merges');
-        const selection = selectMerges(cand, N, K, needed);
+        const selectSub = logger.group(recost ? 'Selecting merges (re-costed)' : 'Selecting merges');
+        const selection = cacheOut ?
+            selectMergesRecosted({ cand, K, splatCache: cacheOut, neighbors: neighborsOut!, D: k, N, mergesNeeded: needed }) :
+            selectMerges(cand, N, K, needed);
         selectSub.end();
 
         if (selection.removed === 0) {

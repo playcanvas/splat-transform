@@ -203,16 +203,19 @@ describe('decimate - merge quality invariants', () => {
         );
     });
 
-    it('should fail loud (throw) when the scene is too degenerate to decimate', async () => {
-        // Every splat coincident at the origin: identical queries tie-break to
-        // the same KNN hub set, so candidate lists collapse and the matching
-        // starves — same pathology and same fail-loud stall guard as legacy.
+    it('should decimate a fully-coincident scene (re-costed selection)', async () => {
+        // Every splat coincident at the origin: the legacy one-shot matching
+        // starved on the collapsed KNN hub set and failed loud. Re-costed
+        // selection derives candidates from the full neighbour graph as
+        // clusters form, so coincident scenes now merge cleanly (coincident
+        // merges are exactly lossless under the field-L2 cost).
         const testData = createGaussianTestData({ count: 600 });
-        await assert.rejects(
-            () => processDataTable(testData, decimate(300)),
-            /too degenerate to merge further/,
-            'should throw when coincident splats starve the matching'
-        );
+        const result = await processDataTable(testData, decimate(300));
+        assert.strictEqual(result.numRows, 300);
+        const op = result.getColumnByName('opacity').data;
+        for (let i = 0; i < 300; i++) {
+            assert.ok(Number.isFinite(op[i]), `row ${i} opacity finite`);
+        }
     });
 
     it('should throw when gaussian columns are missing (legacy silently pruned)', async () => {

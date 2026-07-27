@@ -3,10 +3,10 @@ import { type GraphicsDevice } from 'playcanvas';
 import { buildCostCache, computeEdgeCostView } from './edge-cost-cpu';
 import { collectBlock, verifyAndFixKnn, toGlobalNeighbors, KNN_FIXED, type BlockLocals } from './knn-blocks';
 import { KNN_SENTINEL } from './knn-core';
-import { createMergeScratch, makeGaussianSamples, sigmoid, ellipsoidArea, type SplatView } from './moment-match';
+import { type SplatView } from './moment-match';
 import { type BlockRange, type ResidentPositions } from './partition';
 import { type ChunkData, type ChunkDataPool, type ChunkSource } from '../chunk';
-import { APP_CHUNK, GpuEdgeCost, type EdgeCostCache } from '../gpu/gpu-edge-cost';
+import { GpuEdgeCost, SPLAT_STRIDE, type EdgeCostCache } from '../gpu/gpu-edge-cost';
 import { GpuKnn } from '../gpu/gpu-knn';
 import { WorkerQueue } from '../workers';
 
@@ -39,6 +39,14 @@ type PriorityContext = {
     K: number;
     /** Neighbours per query (16). */
     k: number;
+    /**
+     * Optional resident splat-cache output for re-costed selection
+     * (SPLAT_STRIDE floats per gaussian, packGpuCache row layout), filled for
+     * every owned gaussian.
+     */
+    cacheOut?: Float32Array;
+    /** Optional resident neighbour-id output (k per gaussian, KNN_SENTINEL padded). */
+    neighborsOut?: Uint32Array;
 };
 
 /**
@@ -148,62 +156,26 @@ const indexOfSorted = (sorted: Uint32Array, g: number): number => {
     return -1;
 };
 
-// Pack the block view into the GpuEdgeCost cache layout (legacy packing:
-// posScalars 8-wide, rotR from normalized quats, appearance in ≤APP_CHUNK
-// column chunks with live-width strides).
+// Pack the per-splat cache for the GPU kernel: build the CPU cache once and
+// interleave it into the kernel's SPLAT_STRIDE-wide layout (mean from the view,
+// the rest from the cache), so the GPU reads byte-identical per-splat inputs.
 const packGpuCache = (view: SplatView): EdgeCostCache => {
-    const { pos, geo, color, colorDim } = view;
-    const n = geo.length / 8;
-    const posScalars = new Float32Array(n * 8);
-    const rotR = new Float32Array(n * 9);
-    const rot = new Float32Array(9);
-
+    const { pos } = view;
+    const c = buildCostCache(view);
+    const n = view.geo.length / 8;
+    const d = new Float32Array(n * SPLAT_STRIDE);
     for (let i = 0; i < n; i++) {
-        const i8 = i * 8;
-        const o = i * 8;
-        const linAlpha = sigmoid(geo[i8 + 7]);
-        const sx = Math.max(Math.exp(geo[i8 + 4]), 1e-12);
-        const sy = Math.max(Math.exp(geo[i8 + 5]), 1e-12);
-        const sz = Math.max(Math.exp(geo[i8 + 6]), 1e-12);
-        const vx = sx * sx + 1e-8;
-        const vy = sy * sy + 1e-8;
-        const vz = sz * sz + 1e-8;
-        posScalars[o] = pos[i * 3];
-        posScalars[o + 1] = pos[i * 3 + 1];
-        posScalars[o + 2] = pos[i * 3 + 2];
-        posScalars[o + 3] = linAlpha * ellipsoidArea(sx, sy, sz) + 1e-12;
-        posScalars[o + 4] = Math.log(Math.max(vx, 1e-30)) + Math.log(Math.max(vy, 1e-30)) + Math.log(Math.max(vz, 1e-30));
-        posScalars[o + 5] = vx;
-        posScalars[o + 6] = vy;
-        posScalars[o + 7] = vz;
-
-        let qw = geo[i8], qx = geo[i8 + 1], qy = geo[i8 + 2], qz = geo[i8 + 3];
-        const invq = 1 / Math.max(Math.hypot(qw, qx, qy, qz), 1e-12);
-        qw *= invq; qx *= invq; qy *= invq; qz *= invq;
-        const xx = qx * qx, yy = qy * qy, zz = qz * qz;
-        const wx = qw * qx, wy = qw * qy, wz = qw * qz;
-        const xy = qx * qy, xz = qx * qz, yz = qy * qz;
-        rot[0] = 1 - 2 * (yy + zz); rot[1] = 2 * (xy - wz); rot[2] = 2 * (xz + wy);
-        rot[3] = 2 * (xy + wz); rot[4] = 1 - 2 * (xx + zz); rot[5] = 2 * (yz - wx);
-        rot[6] = 2 * (xz - wy); rot[7] = 2 * (yz + wx); rot[8] = 1 - 2 * (xx + yy);
-        rotR.set(rot, i * 9);
+        const o = i * SPLAT_STRIDE, i6 = i * 6, i3 = i * 3;
+        d[o] = pos[i3]; d[o + 1] = pos[i3 + 1]; d[o + 2] = pos[i3 + 2];
+        d[o + 3] = c.sig[i6]; d[o + 4] = c.sig[i6 + 1]; d[o + 5] = c.sig[i6 + 2];
+        d[o + 6] = c.sig[i6 + 3]; d[o + 7] = c.sig[i6 + 4]; d[o + 8] = c.sig[i6 + 5];
+        d[o + 9] = c.sqrtDet[i];
+        d[o + 10] = c.alpha[i];
+        d[o + 11] = c.mass[i];
+        d[o + 12] = c.base[i3]; d[o + 13] = c.base[i3 + 1]; d[o + 14] = c.base[i3 + 2];
+        d[o + 15] = c.baseN2[i];
     }
-
-    const numChunks = Math.ceil(colorDim / APP_CHUNK);
-    const appChunks: Float32Array[] = [];
-    for (let ch = 0; ch < numChunks; ch++) {
-        const kStart = ch * APP_CHUNK;
-        const width = Math.min(APP_CHUNK, colorDim - kStart);
-        const chunk = new Float32Array(n * width);
-        for (let s = 0; s < n; s++) {
-            const dst = s * width;
-            const src = s * colorDim + kStart;
-            for (let kk = 0; kk < width; kk++) chunk[dst + kk] = color[src + kk];
-        }
-        appChunks.push(chunk);
-    }
-
-    return { posScalars, rotR, appChunks, numAppCols: colorDim, numSplats: n };
+    return { splatData: d, numSplats: n };
 };
 
 /**
@@ -221,9 +193,6 @@ const runPriorityPass = async (
     tick?: (n: number) => void
 ): Promise<void> => {
     const { pos, order, blocks, device, K, k } = ctx;
-    const Z = makeGaussianSamples(1, 0);
-    const z = new Float32Array([Z[0][0], Z[0][1], Z[0][2]]);
-    const colorDim = ctx.source.meta.layouts.color!.stride >> 2;
 
     let maxOwned = 0;
     for (const b of blocks) maxOwned = Math.max(maxOwned, b.end - b.start);
@@ -258,7 +227,7 @@ const runPriorityPass = async (
     try {
         if (device) {
             gpuKnn = new GpuKnn(device, maxLocalN, k);
-            gpuCost = new GpuEdgeCost(device, maxLocalN, maxOwned * k, colorDim);
+            gpuCost = new GpuEdgeCost(device, maxLocalN, maxOwned * k);
         }
 
         let next: Prepared | null = blocks.length > 0 ? prepare(0) : null;
@@ -297,7 +266,7 @@ const runPriorityPass = async (
             if (gpuCost && viewN > gpuCostCapacity) {
                 gpuCost.destroy();
                 gpuCostCapacity = Math.ceil(viewN * 1.1);
-                gpuCost = new GpuEdgeCost(device!, gpuCostCapacity, maxOwned * k, colorDim);
+                gpuCost = new GpuEdgeCost(device!, gpuCostCapacity, maxOwned * k);
             }
 
             const { view } = await gatherBlockView(ctx, bi, extraGlobals);
@@ -330,13 +299,45 @@ const runPriorityPass = async (
             edgeOf[nOwned] = e;
 
             const costs = new Float32Array(e);
+            const packed = device ? packGpuCache(view) : undefined;
+            const cpuCache = device ? undefined : buildCostCache(view);
             if (device) {
-                await gpuCost!.execute(packGpuCache(view), edgeI.subarray(0, e), edgeJ.subarray(0, e), z, costs);
+                await gpuCost!.execute(packed!, edgeI.subarray(0, e), edgeJ.subarray(0, e), costs);
             } else {
-                const cache = buildCostCache(view);
-                const scratch = createMergeScratch();
                 for (let i = 0; i < e; i++) {
-                    costs[i] = computeEdgeCostView(view, cache, edgeI[i], edgeJ[i], Z, scratch);
+                    costs[i] = computeEdgeCostView(view, cpuCache!, edgeI[i], edgeJ[i]);
+                }
+            }
+
+            // Persist owned rows for re-costed selection: the packed splat
+            // cache (identical layout on both paths) and the global neighbour
+            // ids (sentinel-padded).
+            if (ctx.cacheOut) {
+                const CO = ctx.cacheOut;
+                if (packed) {
+                    for (let qi = 0; qi < nOwned; qi++) {
+                        CO.set(packed.splatData.subarray(qi * SPLAT_STRIDE, (qi + 1) * SPLAT_STRIDE), owned[qi] * SPLAT_STRIDE);
+                    }
+                } else {
+                    const c = cpuCache!;
+                    for (let qi = 0; qi < nOwned; qi++) {
+                        const o = owned[qi] * SPLAT_STRIDE;
+                        const q6 = qi * 6, q3 = qi * 3;
+                        CO[o] = view.pos[q3]; CO[o + 1] = view.pos[q3 + 1]; CO[o + 2] = view.pos[q3 + 2];
+                        CO[o + 3] = c.sig[q6]; CO[o + 4] = c.sig[q6 + 1]; CO[o + 5] = c.sig[q6 + 2];
+                        CO[o + 6] = c.sig[q6 + 3]; CO[o + 7] = c.sig[q6 + 4]; CO[o + 8] = c.sig[q6 + 5];
+                        CO[o + 9] = c.sqrtDet[qi];
+                        CO[o + 10] = c.alpha[qi];
+                        CO[o + 11] = c.mass[qi];
+                        CO[o + 12] = c.base[q3]; CO[o + 13] = c.base[q3 + 1]; CO[o + 14] = c.base[q3 + 2];
+                        CO[o + 15] = c.baseN2[qi];
+                    }
+                }
+            }
+            if (ctx.neighborsOut) {
+                const NO = ctx.neighborsOut;
+                for (let qi = 0; qi < nOwned; qi++) {
+                    NO.set(nbGlobal.subarray(qi * k, (qi + 1) * k), owned[qi] * k);
                 }
             }
 
