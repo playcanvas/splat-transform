@@ -1,4 +1,5 @@
 import { lstat, mkdir, readFile as pathReadFile, unlink } from 'node:fs/promises';
+import { totalmem } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import process, { exit } from 'node:process';
 import { parseArgs } from 'node:util';
@@ -66,6 +67,8 @@ interface CliOptions extends LibOptions {
     listGpus: boolean;
     deviceIdx: number;  // -1 = auto, -2 = CPU, 0+ = GPU index
     scratchDir: string | undefined;  // decimation spill location (default: output directory)
+    decimateMode: 'quality' | 'legacy';
+    memoryBudgetBytes: number;  // decimation residency policy ceiling (not an allocation)
 }
 
 const fileExists = async (filename: string) => {
@@ -188,6 +191,8 @@ const cliOptionsConfig = {
     'filter-box': { type: 'string', short: 'B', multiple: true },
     'filter-sphere': { type: 'string', short: 'S', multiple: true },
     'decimate': { type: 'string', short: 'd', multiple: true },
+    'decimate-mode': { type: 'string', default: 'quality' },
+    'memory-budget': { type: 'string' },
     'filter-cluster': { type: 'string', short: 'C', multiple: true },
     'filter-floaters': { type: 'string', short: 'F', multiple: true },
     params: { type: 'string', short: 'p', multiple: true },
@@ -517,6 +522,18 @@ const parseArguments = async () => {
         listGpus: v['list-gpus'],
         deviceIdx,
         scratchDir: v['scratch-dir'],
+        decimateMode: (() => {
+            const m = v['decimate-mode'];
+            if (m !== 'quality' && m !== 'legacy') {
+                throw new Error(`Invalid --decimate-mode: ${m}. Must be 'quality' or 'legacy'.`);
+            }
+            return m;
+        })(),
+        // Residency policy ceiling for decimation (not an upfront allocation):
+        // default to half the machine's RAM, capped at 48 GiB.
+        memoryBudgetBytes: v['memory-budget'] !== undefined ?
+            Math.max(1, parseNumber(v['memory-budget'])) * 2 ** 30 :
+            Math.min(48 * 2 ** 30, Math.floor(totalmem() / 2)),
         lodSelect: v['select-lod'].split(',').filter(v => !!v).map(parseInteger),
         viewerSettingsJson: viewerSettingsPath && await readJsonFile(viewerSettingsPath),
         unbundled: v.unbundled,
@@ -788,6 +805,13 @@ ACTIONS (executed in order; can be repeated)
     -V, --filter-value     <name,cmp,value> Keep Gaussians where <name> <cmp> <value>;
                                               cmp ∈ {lt,lte,gt,gte,eq,neq}
     -d, --decimate         <n|n%>           Simplify to n (or n%) Gaussians via merge-based decimation.
+        --decimate-mode    <quality|legacy> quality (default): field-L2 cost + re-costed selection — best on
+                                            mixed-scale scenes (large gains on skies/distant structure).
+                                            legacy: pre-3.2 pipeline — faster, lower memory, and still slightly
+                                            better on scenes of uniformly-sized Gaussians (single objects).
+        --memory-budget    <GiB>            Decimation residency policy ceiling (not an upfront allocation);
+                                            re-costed selection falls back to one-shot selection above it.
+                                            Default: min(48, half of system RAM).
                                               Must be the final action, and the output must be .ply
         --scratch-dir      <path>           Directory for decimation spill files (deep targets on huge
                                               scenes). Default: the output file's directory
@@ -1246,6 +1270,8 @@ const main = async () => {
                 combined = await decimateSource(combined, pool, {
                     targetCount: keepCount,
                     createDevice: deviceCreator,
+                    mode: options.decimateMode,
+                    memoryBudgetBytes: options.memoryBudgetBytes,
                     spill: {
                         writeFs: new NodeFileSystem(),
                         readFs: new NodeReadFileSystem(),

@@ -5,7 +5,9 @@ import { createBlockProducerSource } from './block-producer';
 import { mergeStream } from './merge-stream';
 import { kdPartition, coherenceRuns, type ResidentPositions } from './partition';
 import { runPriorityPass, HALO_CAP, type CandidateArrays } from './priority';
+import { runPriorityPassLegacy } from './priority-legacy';
 import { selectMerges } from './select';
+import { selectMergesLegacy } from './select-legacy';
 import { selectMergesRecosted, CACHE_STRIDE } from './select-recost';
 import {
     compact,
@@ -38,7 +40,7 @@ const DEFAULT_MEMORY_BUDGET = 48 * 2 ** 30;
 // cache (16 f32) + neighbour ids (k u32) + f64 cluster moments/colour/error +
 // union-find/chains/heap. Conservative round-up; used by the per-generation
 // gate that falls back to one-shot selectMerges when over budget.
-const RECOST_BYTES_PER_GAUSSIAN = (k: number) => CACHE_STRIDE * 4 + k * 4 + 200;
+const RECOST_BYTES_PER_GAUSSIAN = (k: number) => CACHE_STRIDE * 4 + k * 4 + 256;
 
 /** Coherence heuristic: gap (rows) merged into one run / runs-per-block considered scattered. */
 const COHERENCE_GAP_ROWS = 64;
@@ -68,6 +70,15 @@ type DecimateOptions = {
     spill?: DecimateSpill;
     /** Resident-memory budget driving the candidate-K and re-costed-selection policies (default 48 GiB). */
     memoryBudgetBytes?: number;
+    /**
+     * Decimation algorithm. `'quality'` (default): field-L2 cost with the
+     * scale-free colour term and re-costed selection — the quality-study
+     * winner (large gains on mixed-scale scenes, e.g. skies). `'legacy'`: the
+     * pre-study pipeline (KL-style cost with full-SH colour term, uniform
+     * matching) — faster, lower memory, and still measurably better on scenes
+     * of uniformly-sized gaussians (single objects, uniform texture).
+     */
+    mode?: 'quality' | 'legacy';
 };
 
 // Candidate-K policy: keep 4 when the resident estimate fits the budget,
@@ -211,36 +222,55 @@ const decimateSource = async (
             }
         }
 
+        // Re-costed selection (exact within-generation greedy) when its
+        // resident state fits the budget alongside the base state; one-shot
+        // selection otherwise. Gated per generation, so large scenes regain
+        // re-costing as soon as the cascade shrinks under the budget. Legacy
+        // mode uses the pre-study pipeline throughout (no re-costing state).
+        const legacy = opts.mode === 'legacy';
         const K = chooseK(N, budget);
+        const k = Math.min(KNN_K, Math.max(1, N - 1));
+        const baseBytes = residentInputBytes + N * (12 + K * 8 + K * 4 + 4) + 3 * 2 ** 30;
+        const recost = !legacy && baseBytes + N * RECOST_BYTES_PER_GAUSSIAN(k) <= budget;
+
+        // The splat cache and neighbour graph feed refresh rounds; shared
+        // memory lets those rounds run on the worker pool.
+        const sharedOk = recost && typeof SharedArrayBuffer !== 'undefined';
         const cand: CandidateArrays = {
             idx: new Uint32Array(N * K).fill(0xFFFFFFFF),
             cost: new Float32Array(N * K).fill(Infinity)
         };
-
-        // Re-costed selection (exact within-generation greedy) when its
-        // resident state fits the budget alongside the base state; one-shot
-        // selection otherwise. Gated per generation, so large scenes regain
-        // re-costing as soon as the cascade shrinks under the budget.
-        const k = Math.min(KNN_K, Math.max(1, N - 1));
-        const baseBytes = residentInputBytes + N * (12 + K * 8 + K * 4 + 4) + 3 * 2 ** 30;
-        const recost = baseBytes + N * RECOST_BYTES_PER_GAUSSIAN(k) <= budget;
-        const cacheOut = recost ? new Float32Array(N * CACHE_STRIDE) : undefined;
-        const neighborsOut = recost ? new Uint32Array(N * k) : undefined;
+        const cacheOut = recost ?
+            new Float32Array(sharedOk ? new SharedArrayBuffer(N * CACHE_STRIDE * 4) : new ArrayBuffer(N * CACHE_STRIDE * 4)) :
+            undefined;
+        const neighborsOut = recost ?
+            new Uint32Array(sharedOk ? new SharedArrayBuffer(N * k * 4) : new ArrayBuffer(N * k * 4)) :
+            undefined;
 
         const priorityBar = logger.bar('computing merge priorities', N);
-        await runPriorityPass(
-            { source: src, pool, pos: positions, order, blocks, device, K, k, cacheOut, neighborsOut },
-            cand,
-            n => priorityBar.tick(n)
-        );
+        if (legacy) {
+            await runPriorityPassLegacy(
+                { source: src, pool, pos: positions, order, blocks, device, K, k },
+                cand,
+                n => priorityBar.tick(n)
+            );
+        } else {
+            await runPriorityPass(
+                { source: src, pool, pos: positions, order, blocks, device, K, k, cacheOut, neighborsOut },
+                cand,
+                n => priorityBar.tick(n)
+            );
+        }
         priorityBar.end();
 
         const generationTarget = Math.max(targetCount, N - Math.floor(N / 2));
         const needed = N - generationTarget;
         const selectSub = logger.group(recost ? 'Selecting merges (re-costed)' : 'Selecting merges');
-        const selection = cacheOut ?
-            selectMergesRecosted({ cand, K, splatCache: cacheOut, neighbors: neighborsOut!, D: k, N, mergesNeeded: needed }) :
-            selectMerges(cand, N, K, needed);
+        const selection = legacy ?
+            selectMergesLegacy(cand, N, K, needed) :
+            cacheOut ?
+                await selectMergesRecosted({ cand, K, splatCache: cacheOut, neighbors: neighborsOut!, D: k, N, mergesNeeded: needed }) :
+                selectMerges(cand, N, K, needed);
         selectSub.end();
 
         if (selection.removed === 0) {
