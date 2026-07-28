@@ -176,8 +176,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
  * candidate-rejection path is a single compare. Same O(N log N) total work
  * as the CPU KD-tree the kernel mirrors, just parallelised across queries.
  *
- * The flattened tree is built by the caller (`KdTree.flatten`, typically
- * off-thread via the `flattenKdTree` worker task) — this class only uploads
+ * The flat tree is built by the caller (`buildFlatKdTree`, typically
+ * off-thread via the worker task of the same name) — this class only uploads
  * and traverses it.
  *
  * Memory footprint: ~24 N bytes for the flattened tree (3 floats + 3
@@ -185,8 +185,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
  */
 class GpuKnn {
     /**
-     * @param tree - Prebuilt flattened KD-tree over the `n` local points
-     * (see `KdTree.flatten`; node splat ids are LOCAL indices).
+     * @param tree - Prebuilt flat KD-tree over the `n` local points
+     * (see `buildFlatKdTree`; node splat ids are LOCAL indices).
      * @param positions - Interleaved xyz for all `n` local points; queries
      * are the first `queryCount` of them (owned-first ordering).
      * @param n - Total local point count (tree size).
@@ -268,11 +268,6 @@ class GpuKnn {
         compute.setParameter('nodeChildren', nChildrenBuf);
         compute.setParameter('outIndices', outBuf);
 
-        // Pack scratches reused across execute() calls — avoids allocating
-        // O(N) every call when the decimator runs KNN per block.
-        let nodePosPacked = new Float32Array(0);
-        let nodeChildrenPacked = new Uint32Array(0);
-
         this.execute = async (
             tree: FlatKdTree,
             positions: Float32Array,
@@ -293,26 +288,10 @@ class GpuKnn {
                 throw new Error(`GpuKnn: outNeighbours length ${outNeighbours.length} must be queryCount*k = ${queryCount * k}`);
             }
 
-            // Pack node positions xyz-interleaved.
-            if (nodePosPacked.length < n * 3) nodePosPacked = new Float32Array(n * 3);
-            const nodeX = tree.nodeX, nodeY = tree.nodeY, nodeZ = tree.nodeZ;
-            for (let i = 0; i < n; i++) {
-                nodePosPacked[i * 3 + 0] = nodeX[i];
-                nodePosPacked[i * 3 + 1] = nodeY[i];
-                nodePosPacked[i * 3 + 2] = nodeZ[i];
-            }
-            // Pack node children (left, right) pairs.
-            if (nodeChildrenPacked.length < n * 2) nodeChildrenPacked = new Uint32Array(n * 2);
-            const nodeLeft = tree.nodeLeft, nodeRight = tree.nodeRight;
-            for (let i = 0; i < n; i++) {
-                nodeChildrenPacked[i * 2 + 0] = nodeLeft[i];
-                nodeChildrenPacked[i * 2 + 1] = nodeRight[i];
-            }
-
             positionsBuf.write(0, positions, 0, n * 3);
             nSplatIdxBuf.write(0, tree.nodeSplatIdx, 0, n);
-            nPositionsBuf.write(0, nodePosPacked, 0, n * 3);
-            nChildrenBuf.write(0, nodeChildrenPacked, 0, n * 2);
+            nPositionsBuf.write(0, tree.nodePositions, 0, n * 3);
+            nChildrenBuf.write(0, tree.nodeChildren, 0, n * 2);
             compute.setParameter('rootIdx', tree.rootIdx);
 
             const numBatches = Math.ceil(queryCount / queriesPerBatch);

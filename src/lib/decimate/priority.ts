@@ -212,7 +212,7 @@ const runPriorityPass = async (
         const locals = collectBlock(pos, order, blocks, bi, k, HALO_FACTOR, HALO_CAP);
         const copy = locals.positions.slice();
         if (device) {
-            const treePromise = WorkerQueue.run('flattenKdTree', { positions: copy }, [copy.buffer as ArrayBuffer]);
+            const treePromise = WorkerQueue.run('buildFlatKdTree', { positions: copy }, [copy.buffer as ArrayBuffer]);
             const out = new Uint32Array(locals.ownedCount * k);
             const run = Promise.all([treePromise, gpuKnnQueue]).then(([flat]) => {
                 return gpuKnn!.execute(flat, locals.positions, locals.ids.length, locals.ownedCount, out);

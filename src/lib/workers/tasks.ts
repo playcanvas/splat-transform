@@ -2,7 +2,7 @@ import type { TypedArray } from '../data-table/data-table';
 import { knnQueryBlock } from '../decimate/knn-core';
 import { mergeGroup, createMergeScratch, splatMass } from '../decimate/moment-match';
 import { bestEdgeFor, bestOut, type RecostState } from '../decimate/recost-core';
-import { KdTree, type FlatKdTree } from '../spatial/kd-tree';
+import { buildFlatKdTree, type FlatKdTree } from '../spatial/kd-tree';
 import { quantize1dColumns, type QuantizedColumns } from '../spatial/quantize-1d-core';
 import { WebPCodec } from '../utils/webp-codec';
 
@@ -40,9 +40,9 @@ const taskHandlers = {
         return { result: webp, transfer: [webp.buffer as ArrayBuffer] };
     },
 
-    // Build + flatten a KD-tree over interleaved local positions (decimation
-    // GPU path: the flattened arrays upload straight into GpuKnn).
-    flattenKdTree: (args: { positions: Float32Array }): TaskOutput<FlatKdTree> => {
+    // Build a flat KD-tree over interleaved local positions (decimation GPU
+    // path: the flat arrays upload straight into GpuKnn).
+    buildFlatKdTree: (args: { positions: Float32Array }): TaskOutput<FlatKdTree> => {
         const n = args.positions.length / 3;
         const x = new Float32Array(n);
         const y = new Float32Array(n);
@@ -52,12 +52,11 @@ const taskHandlers = {
             y[i] = args.positions[i * 3 + 1];
             z[i] = args.positions[i * 3 + 2];
         }
-        const flat = new KdTree([x, y, z]).flatten();
+        const flat = buildFlatKdTree(x, y, z);
         return {
             result: flat,
             transfer: [
-                flat.nodeSplatIdx.buffer, flat.nodeX.buffer, flat.nodeY.buffer,
-                flat.nodeZ.buffer, flat.nodeLeft.buffer, flat.nodeRight.buffer
+                flat.nodeSplatIdx.buffer, flat.nodePositions.buffer, flat.nodeChildren.buffer
             ] as ArrayBuffer[]
         };
     },
