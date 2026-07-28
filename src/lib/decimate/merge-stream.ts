@@ -1,4 +1,4 @@
-import { type ChunkPayload } from './block-producer';
+import { type DestBuffers } from './block-producer';
 import { type ResidentPositions } from './partition';
 import { gatherBlockView, indexOfSorted, type PriorityContext } from './priority';
 import { type SelectionResult } from './select';
@@ -15,22 +15,28 @@ type MergeStreamContext = Pick<PriorityContext, 'source' | 'pool' | 'pos' | 'ord
  * The merge stream (heavy read 2): walk blocks in partition order, gather
  * geometric/color/(other) for owned rows + out-of-block group members,
  * moment-match groups in workers, pass survivors through, and emit output
- * rows in block order as chunk payloads of `chunkSize` rows (last partial).
+ * rows in block order directly into the consumer's chunk buffers.
+ *
+ * Protocol: the caller primes the generator (first `next()`), then passes
+ * each chunk's destination views via `next(dest)`; the generator fills
+ * exactly one chunk (`chunkSize` rows, last partial) and yields the row
+ * count. Rows write straight into the destination — no intermediate copy of
+ * the output bytes exists. Layers absent from a destination are skipped.
  *
  * A group is emitted exactly once, at its minimum member's position; other
  * members are consumed silently. Positions are never gathered — survivor
  * positions and merged means come from the resident arrays / the merge.
  *
  * @param ctx - The stream context.
- * @param chunkSize - Output rows per payload.
+ * @param chunkSize - Output rows per chunk.
  * @param tick - Optional progress callback (owned gaussians processed).
- * @yields One {@link ChunkPayload} per output chunk, in order.
+ * @yields The filled row count for each completed chunk.
  */
 async function *mergeStream(
     ctx: MergeStreamContext,
     chunkSize: number,
     tick?: (n: number) => void
-): AsyncGenerator<ChunkPayload> {
+): AsyncGenerator<number, void, DestBuffers> {
     const { source, pos, order, blocks, selection, nextPositions } = ctx;
     const { memberGroup, groupMin, groupOffsets, groupMembers } = selection;
     const { layouts, availableLayers } = source.meta;
@@ -39,25 +45,9 @@ async function *mergeStream(
     const hasOther = availableLayers.has('other') && (layouts.other?.stride ?? 0) > 0;
     const otherDim = hasOther ? layouts.other!.stride >> 2 : 0;
 
-    // Rolling output buffers (reused across payloads: the consumer copies
-    // before pulling the next chunk).
-    const outPos = new Float32Array(chunkSize * 3);
-    const outGeo = new Float32Array(chunkSize * 8);
-    const outColor = new Float32Array(chunkSize * colorDim);
-    const outOther = hasOther ? new Uint32Array(chunkSize * otherDim) : undefined;
     let rows = 0;
     let emitted = 0;
-
-    const payload = (): ChunkPayload => {
-        const p: ChunkPayload = {
-            count: rows,
-            position: outPos.subarray(0, rows * 3),
-            geometric: outGeo.subarray(0, rows * 8),
-            color: outColor.subarray(0, rows * colorDim)
-        };
-        if (outOther) p.other = outOther.subarray(0, rows * otherDim);
-        return p;
-    };
+    let dest = yield 0;   // priming handshake: the first real chunk's views
 
     for (let bi = 0; bi < blocks.length; bi++) {
         const block = blocks[bi];
@@ -65,21 +55,28 @@ async function *mergeStream(
         const nOwned = owned.length;
 
         // This block's emitted groups (min member owned here), in owned order,
-        // and the out-of-block members they pull in.
+        // and the out-of-block members they pull in — count, collect, sort,
+        // dedup (members are unique across groups by construction).
         const blockGroups: number[] = [];
-        const extSet = new Map<number, number>();
+        let extCount = 0;
         for (let i = 0; i < nOwned; i++) {
             const g = owned[i];
             const mg = memberGroup[g];
             if (mg === -1 || groupMin[mg] !== g) continue;
             blockGroups.push(mg);
             for (let m = groupOffsets[mg]; m < groupOffsets[mg + 1]; m++) {
-                const member = groupMembers[m];
-                if (indexOfSorted(owned, member) < 0 && !extSet.has(member)) extSet.set(member, 0);
+                if (indexOfSorted(owned, groupMembers[m]) < 0) extCount++;
             }
         }
-        const extraGlobals = Uint32Array.from(extSet.keys()).sort();
-        for (let i = 0; i < extraGlobals.length; i++) extSet.set(extraGlobals[i], nOwned + i);
+        const extraGlobals = new Uint32Array(extCount);
+        extCount = 0;
+        for (const mg of blockGroups) {
+            for (let m = groupOffsets[mg]; m < groupOffsets[mg + 1]; m++) {
+                const member = groupMembers[m];
+                if (indexOfSorted(owned, member) < 0) extraGlobals[extCount++] = member;
+            }
+        }
+        extraGlobals.sort();
 
         const { view, other } = await gatherBlockView(ctx, bi, extraGlobals, hasOther);
 
@@ -103,7 +100,7 @@ async function *mergeStream(
                 for (let m = groupOffsets[mg]; m < groupOffsets[mg + 1]; m++) {
                     const member = groupMembers[m];
                     const oi = indexOfSorted(owned, member);
-                    const row = oi >= 0 ? oi : extSet.get(member)!;
+                    const row = oi >= 0 ? oi : nOwned + indexOfSorted(extraGlobals, member);
                     mPos[mi * 3] = view.pos[row * 3];
                     mPos[mi * 3 + 1] = view.pos[row * 3 + 1];
                     mPos[mi * 3 + 2] = view.pos[row * 3 + 2];
@@ -130,39 +127,46 @@ async function *mergeStream(
             mergedOther = merged.other;
         }
 
-        // Emit rows in owned order.
+        // Emit rows in owned order, straight into the destination views.
         let nextMerged = 0;
         for (let i = 0; i < nOwned; i++) {
             const g = owned[i];
             const mg = memberGroup[g];
             if (mg !== -1 && groupMin[mg] !== g) continue;   // consumed member
 
+            let px: number, py: number, pz: number;
             if (mg === -1) {
                 // Survivor pass-through: position from resident arrays,
                 // geometric/color/other block-copied from the view.
-                outPos[rows * 3] = pos.x[g];
-                outPos[rows * 3 + 1] = pos.y[g];
-                outPos[rows * 3 + 2] = pos.z[g];
-                outGeo.set(view.geo.subarray(i * 8, i * 8 + 8), rows * 8);
-                outColor.set(view.color.subarray(i * colorDim, (i + 1) * colorDim), rows * colorDim);
-                if (outOther) outOther.set(other!.subarray(i * otherDim, (i + 1) * otherDim), rows * otherDim);
+                px = pos.x[g];
+                py = pos.y[g];
+                pz = pos.z[g];
+                if (dest.geometric) dest.geometric.set(view.geo.subarray(i * 8, i * 8 + 8), rows * 8);
+                if (dest.color) dest.color.set(view.color.subarray(i * colorDim, (i + 1) * colorDim), rows * colorDim);
+                if (dest.other) dest.other.set(other!.subarray(i * otherDim, (i + 1) * otherDim), rows * otherDim);
             } else {
                 const mi = nextMerged++;
-                outPos.set(mergedPos!.subarray(mi * 3, mi * 3 + 3), rows * 3);
-                outGeo.set(mergedGeo!.subarray(mi * 8, mi * 8 + 8), rows * 8);
-                outColor.set(mergedColor!.subarray(mi * colorDim, (mi + 1) * colorDim), rows * colorDim);
-                if (outOther) outOther.set(mergedOther!.subarray(mi * otherDim, (mi + 1) * otherDim), rows * otherDim);
+                px = mergedPos![mi * 3];
+                py = mergedPos![mi * 3 + 1];
+                pz = mergedPos![mi * 3 + 2];
+                if (dest.geometric) dest.geometric.set(mergedGeo!.subarray(mi * 8, mi * 8 + 8), rows * 8);
+                if (dest.color) dest.color.set(mergedColor!.subarray(mi * colorDim, (mi + 1) * colorDim), rows * colorDim);
+                if (dest.other) dest.other.set(mergedOther!.subarray(mi * otherDim, (mi + 1) * otherDim), rows * otherDim);
             }
-
+            if (dest.position) {
+                dest.position[rows * 3] = px;
+                dest.position[rows * 3 + 1] = py;
+                dest.position[rows * 3 + 2] = pz;
+            }
             if (nextPositions) {
-                nextPositions.x[emitted] = outPos[rows * 3];
-                nextPositions.y[emitted] = outPos[rows * 3 + 1];
-                nextPositions.z[emitted] = outPos[rows * 3 + 2];
+                nextPositions.x[emitted] = px;
+                nextPositions.y[emitted] = py;
+                nextPositions.z[emitted] = pz;
             }
             rows++;
             emitted++;
             if (rows === chunkSize) {
-                yield payload();
+                dest = yield rows;
                 rows = 0;
             }
         }
@@ -170,8 +174,7 @@ async function *mergeStream(
     }
 
     if (rows > 0) {
-        yield payload();
-        rows = 0;
+        yield rows;
     }
 }
 
