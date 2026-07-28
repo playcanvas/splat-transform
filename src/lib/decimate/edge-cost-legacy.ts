@@ -21,6 +21,16 @@ import {
     type SplatView,
     type MergeScratch
 } from './moment-match';
+import { type EdgeCostCacheLegacy } from '../gpu/gpu-edge-cost-legacy';
+
+/**
+ * Appearance columns per storage chunk of the legacy GPU kernel. The kernel
+ * exposes three appearance bindings (appA/appB/appC), so the layout holds up
+ * to 3·APP_CHUNK columns; at 16 the widest chunk reaches the ~2 GB
+ * per-binding limit around ~33.5M splats. The kernel imports this same
+ * constant, so its strides and the host packing can't drift.
+ */
+export const APP_CHUNK = 16;
 
 /**
  * Per-splat derived quantities for the cost function (legacy
@@ -199,4 +209,62 @@ const computeEdgeCostViewLegacy = (
     return geoCost + cSh;
 };
 
-export { buildCostCacheLegacy, computeEdgeCostViewLegacy, type LegacyCostCache };
+// Pack the block view into the GpuEdgeCostLegacy cache layout (legacy packing:
+// posScalars 8-wide, rotR from normalized quats, appearance in ≤APP_CHUNK
+// column chunks with live-width strides).
+const packGpuCacheLegacy = (view: SplatView): EdgeCostCacheLegacy => {
+    const { pos, geo, color, colorDim } = view;
+    const n = geo.length / 8;
+    const posScalars = new Float32Array(n * 8);
+    const rotR = new Float32Array(n * 9);
+    const rot = new Float32Array(9);
+
+    for (let i = 0; i < n; i++) {
+        const i8 = i * 8;
+        const o = i * 8;
+        const linAlpha = sigmoid(geo[i8 + 7]);
+        const sx = Math.max(Math.exp(geo[i8 + 4]), 1e-12);
+        const sy = Math.max(Math.exp(geo[i8 + 5]), 1e-12);
+        const sz = Math.max(Math.exp(geo[i8 + 6]), 1e-12);
+        const vx = sx * sx + 1e-8;
+        const vy = sy * sy + 1e-8;
+        const vz = sz * sz + 1e-8;
+        posScalars[o] = pos[i * 3];
+        posScalars[o + 1] = pos[i * 3 + 1];
+        posScalars[o + 2] = pos[i * 3 + 2];
+        posScalars[o + 3] = linAlpha * ellipsoidArea(sx, sy, sz) + 1e-12;
+        posScalars[o + 4] = Math.log(Math.max(vx, 1e-30)) + Math.log(Math.max(vy, 1e-30)) + Math.log(Math.max(vz, 1e-30));
+        posScalars[o + 5] = vx;
+        posScalars[o + 6] = vy;
+        posScalars[o + 7] = vz;
+
+        let qw = geo[i8], qx = geo[i8 + 1], qy = geo[i8 + 2], qz = geo[i8 + 3];
+        const invq = 1 / Math.max(Math.hypot(qw, qx, qy, qz), 1e-12);
+        qw *= invq; qx *= invq; qy *= invq; qz *= invq;
+        const xx = qx * qx, yy = qy * qy, zz = qz * qz;
+        const wx = qw * qx, wy = qw * qy, wz = qw * qz;
+        const xy = qx * qy, xz = qx * qz, yz = qy * qz;
+        rot[0] = 1 - 2 * (yy + zz); rot[1] = 2 * (xy - wz); rot[2] = 2 * (xz + wy);
+        rot[3] = 2 * (xy + wz); rot[4] = 1 - 2 * (xx + zz); rot[5] = 2 * (yz - wx);
+        rot[6] = 2 * (xz - wy); rot[7] = 2 * (yz + wx); rot[8] = 1 - 2 * (xx + yy);
+        rotR.set(rot, i * 9);
+    }
+
+    const numChunks = Math.ceil(colorDim / APP_CHUNK);
+    const appChunks: Float32Array[] = [];
+    for (let ch = 0; ch < numChunks; ch++) {
+        const kStart = ch * APP_CHUNK;
+        const width = Math.min(APP_CHUNK, colorDim - kStart);
+        const chunk = new Float32Array(n * width);
+        for (let s = 0; s < n; s++) {
+            const dst = s * width;
+            const src = s * colorDim + kStart;
+            for (let kk = 0; kk < width; kk++) chunk[dst + kk] = color[src + kk];
+        }
+        appChunks.push(chunk);
+    }
+
+    return { posScalars, rotR, appChunks, numAppCols: colorDim, numSplats: n };
+};
+
+export { buildCostCacheLegacy, computeEdgeCostViewLegacy, packGpuCacheLegacy, type LegacyCostCache };

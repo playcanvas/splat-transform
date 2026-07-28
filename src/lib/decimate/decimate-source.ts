@@ -2,10 +2,11 @@ import { join } from 'pathe';
 import { type GraphicsDevice } from 'playcanvas';
 
 import { createBlockProducerSource } from './block-producer';
+import { buildCostCacheLegacy, computeEdgeCostViewLegacy, packGpuCacheLegacy } from './edge-cost-legacy';
 import { mergeStream } from './merge-stream';
+import { createMergeScratch, makeGaussianSamples } from './moment-match';
 import { kdPartition, coherenceRuns, type ResidentPositions } from './partition';
-import { runPriorityPass, VIEW_GROW, type CandidateArrays } from './priority';
-import { runPriorityPassLegacy } from './priority-legacy';
+import { runPriorityPass, VIEW_GROW, type CandidateArrays, type CostStrategy } from './priority';
 import { selectMerges } from './select';
 import { selectMergesLegacy } from './select-legacy';
 import { selectMergesRecosted, CACHE_STRIDE } from './select-recost';
@@ -16,6 +17,7 @@ import {
     type ChunkSourceMetadata
 } from '../chunk';
 import { SPLAT_STRIDE } from '../gpu/gpu-edge-cost';
+import { GpuEdgeCostLegacy } from '../gpu/gpu-edge-cost-legacy';
 import { type ReadFileSystem } from '../io/read';
 import { type FileSystem } from '../io/write';
 import { bakeTransform } from '../ops';
@@ -88,6 +90,26 @@ type DecimateOptions = {
 const chooseK = (n: number, budget: number): number => {
     const estimate = (K: number) => n * (12 + K * 8 + K * 4 + 4) + 3 * 2 ** 30;
     return estimate(4) <= budget ? 4 : 2;
+};
+
+// The pre-study KL-style cost kernel (--decimate-mode legacy): full-SH colour
+// L2, single-Monte-Carlo geometric term, its own GPU cache/kernel layouts.
+const createLegacyStrategy = (colorDim: number): CostStrategy => {
+    const Z = makeGaussianSamples(1, 0);
+    const z = new Float32Array([Z[0][0], Z[0][1], Z[0][2]]);
+    const scratch = createMergeScratch();
+    return {
+        cacheForGpu: false,
+        buildCache: view => buildCostCacheLegacy(view),
+        createGpu(device, capacity, k) {
+            const gpu = new GpuEdgeCostLegacy(device, capacity, k, colorDim);
+            return {
+                execute: (view, _cache, nbRows, outCosts) => gpu.execute(packGpuCacheLegacy(view), nbRows, z, outCosts),
+                destroy: () => gpu.destroy()
+            };
+        },
+        cpuEdge: (view, cache, i, j) => computeEdgeCostViewLegacy(view, cache as ReturnType<typeof buildCostCacheLegacy>, i, j, Z, scratch)
+    };
 };
 
 // Read the position layer sequentially into resident columns (generation 1
@@ -247,10 +269,11 @@ const decimateSource = async (
 
         const priorityBar = logger.bar('computing merge priorities', N);
         if (legacy) {
-            await runPriorityPassLegacy(
+            await runPriorityPass(
                 { source: src, pool, pos: positions, order, blocks, device, K, k },
                 cand!,
-                n => priorityBar.tick(n)
+                n => priorityBar.tick(n),
+                createLegacyStrategy(src.meta.layouts.color!.stride >> 2)
             );
         } else {
             await runPriorityPass(
