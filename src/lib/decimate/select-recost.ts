@@ -46,7 +46,7 @@ type RecostInputs = {
     K: number;
     /**
      * Resident per-splat cache, {@link CACHE_STRIDE} floats per splat
-     * (packGpuCache row layout), persisted by the priority pass.
+     * (buildSplatCache row layout), persisted by the priority pass.
      * SharedArrayBuffer-backed for the parallel path.
      */
     splatCache: Float32Array;

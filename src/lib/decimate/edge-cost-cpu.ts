@@ -39,6 +39,13 @@ import {
 const C0 = 0.28209479177387814;
 
 /**
+ * Floats per splat in the interleaved cost cache (see {@link buildSplatCache}
+ * for the layout). Single source of truth — the GPU kernels and the re-costed
+ * selection state share this exact layout.
+ */
+const CACHE_STRIDE = 16;
+
+/**
  * Scale-free colour dissimilarity weight. Unlike the field-L2's own colour
  * sensitivity (which vanishes ∝σ³ for faint splats), this term keeps
  * light-vs-dark pairing selective at any scale — without it, fine texture
@@ -56,29 +63,28 @@ const PI_1_5 = Math.PI ** 1.5;
 const TWO_PI_1_5 = (2 * Math.PI) ** 1.5;
 
 /**
- * Per-splat derived quantities for the L2 field cost. `sig` holds each
- * covariance's 6 unique components [xx, xy, xz, yy, yz, zz]; `sqrtDet` is
- * √|Σ| = sx·sy·sz; `alpha` is the linear opacity; `base` is the 3-channel base
- * colour; `baseN2` is |base|²; `mass` is the area·α merge weight.
+ * Build the per-splat cost cache: {@link CACHE_STRIDE} interleaved floats per
+ * splat, written into `out` (reusable scratch; only the leading n·16 floats
+ * are touched). Layout per row:
+ *
+ *   [0..2]   mean xyz
+ *   [3..8]   covariance Σ (xx, xy, xz, yy, yz, zz) — unregularized
+ *   [9]      sqrtDet = √|Σ| = sx·sy·sz
+ *   [10]     alpha (linear opacity)
+ *   [11]     mass (area·α merge weight)
+ *   [12..14] base colour (0.5 + C0·f_dc per channel)
+ *   [15]     |base|²
+ *
+ * This exact buffer uploads to the GPU kernels and persists per-gaussian for
+ * the re-costed selection, so CPU and GPU read identical per-splat inputs.
+ *
+ * @param view - Splat columns (only the first 3 colour components are read).
+ * @param out - Destination, at least n·{@link CACHE_STRIDE} floats.
+ * @returns The splat count n.
  */
-type CostCache = {
-    sig: Float32Array;
-    sqrtDet: Float32Array;
-    alpha: Float32Array;
-    base: Float32Array;
-    baseN2: Float32Array;
-    mass: Float32Array;
-};
-
-const buildCostCache = (view: SplatView): CostCache => {
-    const { geo, color, colorDim } = view;
+const buildSplatCache = (view: SplatView, out: Float32Array): number => {
+    const { pos, geo, color, colorDim } = view;
     const n = geo.length / 8;
-    const sig = new Float32Array(n * 6);
-    const sqrtDet = new Float32Array(n);
-    const alpha = new Float32Array(n);
-    const base = new Float32Array(n * 3);
-    const baseN2 = new Float32Array(n);
-    const mass = new Float32Array(n);
     const R = new Float32Array(9);
     const S = new Float32Array(9);
 
@@ -97,23 +103,23 @@ const buildCostCache = (view: SplatView): CostCache => {
         quatToRotmat(qw, qx, qy, qz, R, 0);
         sigmaFromRotVar(R, 0, sx * sx, sy * sy, sz * sz, S, 0);
 
-        const i6 = 6 * i;
-        sig[i6] = S[0]; sig[i6 + 1] = S[1]; sig[i6 + 2] = S[2];
-        sig[i6 + 3] = S[4]; sig[i6 + 4] = S[5]; sig[i6 + 5] = S[8];
-
-        sqrtDet[i] = sx * sy * sz;
-        alpha[i] = a;
-        mass[i] = a * ellipsoidArea(sx, sy, sz) + 1e-30;
-
+        const o = i * CACHE_STRIDE;
         const i3 = 3 * i;
+        out[o] = pos[i3]; out[o + 1] = pos[i3 + 1]; out[o + 2] = pos[i3 + 2];
+        out[o + 3] = S[0]; out[o + 4] = S[1]; out[o + 5] = S[2];
+        out[o + 6] = S[4]; out[o + 7] = S[5]; out[o + 8] = S[8];
+        out[o + 9] = sx * sy * sz;
+        out[o + 10] = a;
+        out[o + 11] = a * ellipsoidArea(sx, sy, sz) + 1e-30;
+
         const br = 0.5 + C0 * color[i * colorDim];
         const bg = 0.5 + C0 * color[i * colorDim + 1];
         const bb = 0.5 + C0 * color[i * colorDim + 2];
-        base[i3] = br; base[i3 + 1] = bg; base[i3 + 2] = bb;
-        baseN2[i] = br * br + bg * bg + bb * bb;
+        out[o + 12] = br; out[o + 13] = bg; out[o + 14] = bb;
+        out[o + 15] = br * br + bg * bg + bb * bb;
     }
 
-    return { sig, sqrtDet, alpha, base, baseN2, mass };
+    return n;
 };
 
 // dᵀ(A)⁻¹d and √|A| for a symmetric 3×3 A = [xx,xy,xz,yy,yz,zz]; returns the
@@ -138,30 +144,24 @@ const crossG = (
 };
 
 /**
- * L2 field-error cost of merging splats `i` and `j` of the view.
+ * L2 field-error cost of merging splats `i` and `j`.
  *
- * @param view - Splat columns.
- * @param cache - Per-splat cache from {@link buildCostCache}.
- * @param i - First splat (view row).
- * @param j - Second splat (view row).
+ * @param cache - Per-splat cache from {@link buildSplatCache}.
+ * @param i - First splat (cache row).
+ * @param j - Second splat (cache row).
  * @returns The edge cost (≥ 0).
  */
-const computeEdgeCostView = (
-    view: SplatView,
-    cache: CostCache,
+const computeEdgeCost = (
+    cache: Float32Array,
     i: number,
     j: number
 ): number => {
-    const { pos } = view;
-    const { sig, sqrtDet, alpha, base, baseN2, mass } = cache;
+    const io = i * CACHE_STRIDE, jo = j * CACHE_STRIDE;
 
-    const i3 = 3 * i, j3 = 3 * j;
-    const i6 = 6 * i, j6 = 6 * j;
+    const mux = cache[io], muy = cache[io + 1], muz = cache[io + 2];
+    const mvx = cache[jo], mvy = cache[jo + 1], mvz = cache[jo + 2];
 
-    const mux = pos[i3], muy = pos[i3 + 1], muz = pos[i3 + 2];
-    const mvx = pos[j3], mvy = pos[j3 + 1], mvz = pos[j3 + 2];
-
-    const mi = mass[i], mj = mass[j];
+    const mi = cache[io + 11], mj = cache[jo + 11];
     const W = mi + mj;
     const pi = W > 0 ? mi / W : 0.5;
     const pj = 1 - pi;
@@ -175,12 +175,12 @@ const computeEdgeCostView = (
     const djx = mvx - mmx, djy = mvy - mmy, djz = mvz - mmz;
 
     // Merged covariance: Σ pₖ(δₖδₖᵀ + Σₖ) + EPS_COV·I  (law of total variance).
-    const sxx = pi * (dix * dix + sig[i6]) + pj * (djx * djx + sig[j6]) + EPS_COV;
-    const sxy = pi * (dix * diy + sig[i6 + 1]) + pj * (djx * djy + sig[j6 + 1]);
-    const sxz = pi * (dix * diz + sig[i6 + 2]) + pj * (djx * djz + sig[j6 + 2]);
-    const syy = pi * (diy * diy + sig[i6 + 3]) + pj * (djy * djy + sig[j6 + 3]) + EPS_COV;
-    const syz = pi * (diy * diz + sig[i6 + 4]) + pj * (djy * djz + sig[j6 + 4]);
-    const szz = pi * (diz * diz + sig[i6 + 5]) + pj * (djz * djz + sig[j6 + 5]) + EPS_COV;
+    const sxx = pi * (dix * dix + cache[io + 3]) + pj * (djx * djx + cache[jo + 3]) + EPS_COV;
+    const sxy = pi * (dix * diy + cache[io + 4]) + pj * (djx * djy + cache[jo + 4]);
+    const sxz = pi * (dix * diz + cache[io + 5]) + pj * (djx * djz + cache[jo + 5]);
+    const syy = pi * (diy * diy + cache[io + 6]) + pj * (djy * djy + cache[jo + 6]) + EPS_COV;
+    const syz = pi * (diy * diz + cache[io + 7]) + pj * (djy * djz + cache[jo + 7]);
+    const szz = pi * (diz * diz + cache[io + 8]) + pj * (djz * djz + cache[jo + 8]) + EPS_COV;
 
     const detm = Math.max(
         sxx * (syy * szz - syz * syz) - sxy * (sxy * szz - syz * sxz) + sxz * (sxy * syz - syy * sxz),
@@ -215,17 +215,17 @@ const computeEdgeCostView = (
     const alphaM = Math.min(1, W / Math.max(ellipsoidArea(s0, s1, s2), 1e-30));
 
     // Base colours and their dots (merged colour = mass-weighted average).
-    const bir = base[i3], big = base[i3 + 1], bib = base[i3 + 2];
-    const bjr = base[j3], bjg = base[j3 + 1], bjb = base[j3 + 2];
+    const bir = cache[io + 12], big = cache[io + 13], bib = cache[io + 14];
+    const bjr = cache[jo + 12], bjg = cache[jo + 13], bjb = cache[jo + 14];
     const bij = bir * bjr + big * bjg + bib * bjb;   // base_i · base_j
-    const bni = baseN2[i];                            // base_i · base_i
-    const bnj = baseN2[j];                            // base_j · base_j
+    const bni = cache[io + 15];                       // base_i · base_i
+    const bnj = cache[jo + 15];                       // base_j · base_j
     const bim = pi * bni + pj * bij;                  // base_i · base_m
     const bjm = pi * bij + pj * bnj;                  // base_j · base_m
     const bnm = pi * pi * bni + 2 * pi * pj * bij + pj * pj * bnj; // base_m · base_m
 
-    const ai = alpha[i], aj = alpha[j], am = alphaM;
-    const sdi = sqrtDet[i], sdj = sqrtDet[j];
+    const ai = cache[io + 10], aj = cache[jo + 10], am = alphaM;
+    const sdi = cache[io + 9], sdj = cache[jo + 9];
 
     // Self terms ⟨G,G⟩ = π^{3/2}·√|Σ|.
     const selfI = ai * ai * bni * PI_1_5 * sdi;
@@ -234,16 +234,16 @@ const computeEdgeCostView = (
 
     // Cross terms (amplitude dot × Gaussian overlap).
     const cIJ = crossG(sdi, sdj,
-        sig[i6] + sig[j6], sig[i6 + 1] + sig[j6 + 1], sig[i6 + 2] + sig[j6 + 2],
-        sig[i6 + 3] + sig[j6 + 3], sig[i6 + 4] + sig[j6 + 4], sig[i6 + 5] + sig[j6 + 5],
+        cache[io + 3] + cache[jo + 3], cache[io + 4] + cache[jo + 4], cache[io + 5] + cache[jo + 5],
+        cache[io + 6] + cache[jo + 6], cache[io + 7] + cache[jo + 7], cache[io + 8] + cache[jo + 8],
         mux - mvx, muy - mvy, muz - mvz);
     const cIM = crossG(sdi, sqrtDetM,
-        sig[i6] + sxx, sig[i6 + 1] + sxy, sig[i6 + 2] + sxz,
-        sig[i6 + 3] + syy, sig[i6 + 4] + syz, sig[i6 + 5] + szz,
+        cache[io + 3] + sxx, cache[io + 4] + sxy, cache[io + 5] + sxz,
+        cache[io + 6] + syy, cache[io + 7] + syz, cache[io + 8] + szz,
         dix, diy, diz);
     const cJM = crossG(sdj, sqrtDetM,
-        sig[j6] + sxx, sig[j6 + 1] + sxy, sig[j6 + 2] + sxz,
-        sig[j6 + 3] + syy, sig[j6 + 4] + syz, sig[j6 + 5] + szz,
+        cache[jo + 3] + sxx, cache[jo + 4] + sxy, cache[jo + 5] + sxz,
+        cache[jo + 6] + syy, cache[jo + 7] + syz, cache[jo + 8] + szz,
         djx, djy, djz);
 
     const E = selfI + selfJ + selfM +
@@ -259,4 +259,4 @@ const computeEdgeCostView = (
     return (E < 0 ? 0 : E) + COLOR_WEIGHT * (dc2 < 0 ? 0 : dc2);
 };
 
-export { buildCostCache, computeEdgeCostView, COLOR_WEIGHT, type CostCache };
+export { buildSplatCache, computeEdgeCost, CACHE_STRIDE, COLOR_WEIGHT };

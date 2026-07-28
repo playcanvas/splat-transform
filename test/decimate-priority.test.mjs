@@ -7,7 +7,7 @@ import assert from 'node:assert';
 import { describe, it } from 'node:test';
 
 import { makeSyntheticSource } from './helpers/synthetic-source.mjs';
-import { buildCostCache, computeEdgeCostView } from '../src/lib/decimate/edge-cost-cpu.js';
+import { buildSplatCache, computeEdgeCost, CACHE_STRIDE } from '../src/lib/decimate/edge-cost-cpu.js';
 import { kdPartition } from '../src/lib/decimate/partition.js';
 import { runPriorityPass } from '../src/lib/decimate/priority.js';
 
@@ -22,14 +22,15 @@ describe('priority pass (CPU)', () => {
         };
         await runPriorityPass({ source, pool, pos, order, blocks, K, k }, cand);
 
-        const cache = buildCostCache(view);
+        const cache = new Float32Array(n * CACHE_STRIDE);
+        buildSplatCache(view, cache);
         const d2 = (a, b) => (pos.x[a] - pos.x[b]) ** 2 + (pos.y[a] - pos.y[b]) ** 2 + (pos.z[a] - pos.z[b]) ** 2;
         for (let i = 0; i < n; i += 97) {
             const knn = Array.from({ length: n }, (_, j) => j)
                 .filter(j => j !== i)
                 .sort((a, b) => d2(i, a) - d2(i, b))
                 .slice(0, k);
-            const refCosts = knn.map(j => computeEdgeCostView(view, cache, i, j)).sort((a, b) => a - b);
+            const refCosts = knn.map(j => computeEdgeCost(cache, i, j)).sort((a, b) => a - b);
             const got = [];
             for (let s = 0; s < K; s++) {
                 if (cand.idx[i * K + s] !== 0xFFFFFFFF) got.push(cand.cost[i * K + s]);

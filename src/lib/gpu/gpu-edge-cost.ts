@@ -15,32 +15,39 @@ import {
     UniformFormat
 } from 'playcanvas';
 
-/** Per-splat interleaved stride in the `splat` storage buffer (see EdgeCostCache). */
-export const SPLAT_STRIDE = 16;
+import { CACHE_STRIDE } from '../decimate/edge-cost-cpu';
+
+/** Per-splat interleaved stride in the `splat` storage buffer (= the CPU cost-cache layout). */
+export const SPLAT_STRIDE = CACHE_STRIDE;
 
 /**
- * WGSL kernel: per-edge L2 field-error cost (mirrors `computeEdgeCostView` in
+ * WGSL kernel: per-slot L2 field-error cost (mirrors `computeEdgeCost` in
  * `decimate/edge-cost-cpu.ts`).
  *
- * Each thread = one edge (i, j). It reads the per-splat cache for both
- * endpoints, moment-matches the merged Gaussian m (mean, covariance, opacity),
- * and evaluates
+ * Dense-slot edge model: slot s belongs to owned row qi = s / K and holds a
+ * view-local neighbour row (or the 0xFFFFFFFF sentinel for an empty slot,
+ * whose cost output is never read — the reduction skips sentinel slots by
+ * id). Each thread = one slot.
+ * It reads the per-splat cache for both endpoints, moment-matches the merged
+ * Gaussian m (mean, covariance, opacity), and evaluates
  *   E = ‖αᵢcᵢGᵢ + αⱼcⱼGⱼ − αₘcₘGₘ‖²
  * in closed form via Gaussian–Gaussian L2 products ⟨G_a,G_b⟩. No Monte-Carlo
  * sampling and no appearance loop — the amplitude is α × base colour, so only
  * the packed base colour (3) and covariance (6) per splat are needed.
  *
+ * @param k - Compile-time K, neighbour slots per owned row.
  * @returns WGSL source.
  */
-const edgeCostWgsl = () => /* wgsl */`
+const edgeCostWgsl = (k: number) => /* wgsl */`
 struct Uniforms {
-    edgeCount: u32,
+    slotBase: u32,
+    slotCount: u32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
-// Edge list for the current dispatch batch (host uploads each batch to offset 0).
-@group(0) @binding(1) var<storage, read> edgesI: array<u32>;
-@group(0) @binding(2) var<storage, read> edgesJ: array<u32>;
+// Neighbour rows for the current dispatch batch (host uploads each batch to
+// offset 0): view-local row per slot, 0xFFFFFFFF for empty slots.
+@group(0) @binding(1) var<storage, read> nbRow: array<u32>;
 // Per-splat cache, interleaved ${SPLAT_STRIDE}-wide:
 //   [0..2]   mean xyz
 //   [3..8]   covariance Σ (xx, xy, xz, yy, yz, zz)
@@ -49,9 +56,12 @@ struct Uniforms {
 //   [11]     mass (area·α merge weight)
 //   [12..14] base colour (r, g, b)
 //   [15]     |base|²
-@group(0) @binding(3) var<storage, read> splat: array<f32>;
-// Output: cost per edge.
-@group(0) @binding(4) var<storage, read_write> costs: array<f32>;
+@group(0) @binding(2) var<storage, read> splat: array<f32>;
+// Output: cost per slot.
+@group(0) @binding(3) var<storage, read_write> costs: array<f32>;
+
+const K: u32 = ${k}u;
+const SENTINEL: u32 = 0xFFFFFFFFu;
 
 const EPS_COV: f32 = 1e-8;
 const PI_1_5: f32 = 5.5683279968317084;       // π^{3/2}
@@ -89,10 +99,18 @@ fn crossG(sdA: f32, sdB: f32, m: array<f32, 6>, d: vec3f) -> f32 {
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
     let bid = gid.x;
-    if (bid >= uniforms.edgeCount) { return; }
+    if (bid >= uniforms.slotCount) { return; }
 
-    let io = edgesI[bid] * ${SPLAT_STRIDE}u;
-    let jo = edgesJ[bid] * ${SPLAT_STRIDE}u;
+    // Empty slot: the reduction skips sentinel slots by id, so the cost value
+    // is never read (WGSL cannot materialize an f32 infinity to park here).
+    let row = nbRow[bid];
+    if (row == SENTINEL) {
+        costs[bid] = 0.0;
+        return;
+    }
+
+    let io = ((uniforms.slotBase + bid) / K) * ${SPLAT_STRIDE}u;
+    let jo = row * ${SPLAT_STRIDE}u;
 
     let mui = vec3f(splat[io + 0u], splat[io + 1u], splat[io + 2u]);
     let si = array<f32, 6>(splat[io + 3u], splat[io + 4u], splat[io + 5u], splat[io + 6u], splat[io + 7u], splat[io + 8u]);
@@ -185,30 +203,18 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 `;
 
 /**
- * Per-splat cache for the edge-cost kernel: a single interleaved buffer of
- * {@link SPLAT_STRIDE} floats per splat (mean, covariance, √det, alpha, mass,
- * base colour, |base|²), built by `packGpuCache` from the CPU `buildCostCache`
- * so the GPU reads identical per-splat inputs.
- */
-interface EdgeCostCache {
-    /** Interleaved per-splat cache, length {@link SPLAT_STRIDE}·N. */
-    splatData: Float32Array;
-    /** Number of splats. */
-    numSplats: number;
-}
-
-/**
  * GPU edge-cost evaluator.
  *
- * Each compute thread evaluates the L2 field-error cost for one edge (i, j),
- * mirroring the CPU `computeEdgeCostView` in `decimate/edge-cost-cpu.ts`.
- * Output is `costs[e] = cost for edge e`.
+ * Each compute thread evaluates the L2 field-error cost for one dense slot
+ * (owned row qi = slot / K vs its slot's neighbour row), mirroring the CPU
+ * `computeEdgeCost` in `decimate/edge-cost-cpu.ts`. Empty (sentinel) slots
+ * cost +Inf. Output is `costs[s] = cost for slot s`.
  */
 class GpuEdgeCost {
     execute: (
-        cache: EdgeCostCache,
-        edgeI: Uint32Array,
-        edgeJ: Uint32Array,
+        splatData: Float32Array,
+        numSplats: number,
+        nbRows: Uint32Array,
         outCosts: Float32Array
     ) => Promise<void>;
     destroy: () => void;
@@ -216,16 +222,18 @@ class GpuEdgeCost {
     /**
      * @param device - PlayCanvas GraphicsDevice (WebGPU).
      * @param maxN - Maximum number of splats.
-     * @param maxE - Maximum number of edges in a single dispatch.
+     * @param k - Neighbour slots per owned row.
      */
-    constructor(device: GraphicsDevice, maxN: number, maxE: number) {
+    constructor(device: GraphicsDevice, maxN: number, k: number) {
         const workgroupSize = 64;
-        const edgesPerBatch = 1024 * workgroupSize;  // 65,536
+        // Slots per dispatch: bounded by the 65,535 workgroups-per-dimension
+        // limit. One blocking readback per ~4.2M slots (a 2M-row block costs
+        // 8 round trips, not 512 as with 65,536-edge batches).
+        const slotsPerBatch = 65535 * workgroupSize;  // 4,194,240
 
         const bindGroupFormat = new BindGroupFormat(device, [
             new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
-            new BindStorageBufferFormat('edgesI', SHADERSTAGE_COMPUTE, true),
-            new BindStorageBufferFormat('edgesJ', SHADERSTAGE_COMPUTE, true),
+            new BindStorageBufferFormat('nbRow', SHADERSTAGE_COMPUTE, true),
             new BindStorageBufferFormat('splat', SHADERSTAGE_COMPUTE, true),
             new BindStorageBufferFormat('costs', SHADERSTAGE_COMPUTE)
         ]);
@@ -233,11 +241,12 @@ class GpuEdgeCost {
         const shader = new Shader(device, {
             name: 'compute-edge-cost',
             shaderLanguage: SHADERLANGUAGE_WGSL,
-            cshader: edgeCostWgsl(),
+            cshader: edgeCostWgsl(k),
             // @ts-ignore
             computeUniformBufferFormats: {
                 uniforms: new UniformBufferFormat(device, [
-                    new UniformFormat('edgeCount', UNIFORMTYPE_UINT)
+                    new UniformFormat('slotBase', UNIFORMTYPE_UINT),
+                    new UniformFormat('slotCount', UNIFORMTYPE_UINT)
                 ])
             },
             // @ts-ignore
@@ -259,66 +268,63 @@ class GpuEdgeCost {
 
         const splatBuf = new StorageBuffer(device, maxN * SPLAT_STRIDE * 4, BUFFERUSAGE_COPY_DST);
 
-        // Two parallel u32 edge buffers, sized to a single dispatch batch (not
-        // the full N·k edge list): execute uploads each batch's slice before its
-        // dispatch, keeping these off the ~2 GB per-binding limit.
-        const edgesIBuf = new StorageBuffer(device, edgesPerBatch * 4, BUFFERUSAGE_COPY_DST);
-        const edgesJBuf = new StorageBuffer(device, edgesPerBatch * 4, BUFFERUSAGE_COPY_DST);
+        // Neighbour-row buffer sized to a single dispatch batch (not the full
+        // N·k slot list): execute uploads each batch's slice before its
+        // dispatch, keeping it off the ~2 GB per-binding limit.
+        const nbRowBuf = new StorageBuffer(device, slotsPerBatch * 4, BUFFERUSAGE_COPY_DST);
 
         const outBuf = new StorageBuffer(
             device,
-            edgesPerBatch * 4,
+            slotsPerBatch * 4,
             BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST
         );
-        const outScratch = new Float32Array(edgesPerBatch);
+        const outScratch = new Float32Array(slotsPerBatch);
 
         const compute = new Compute(device, shader, 'compute-edge-cost');
-        compute.setParameter('edgesI', edgesIBuf);
-        compute.setParameter('edgesJ', edgesJBuf);
+        compute.setParameter('nbRow', nbRowBuf);
         compute.setParameter('splat', splatBuf);
         compute.setParameter('costs', outBuf);
 
         this.execute = async (
-            cache: EdgeCostCache,
-            edgeI: Uint32Array,
-            edgeJ: Uint32Array,
+            splatData: Float32Array,
+            numSplats: number,
+            nbRows: Uint32Array,
             outCosts: Float32Array
         ) => {
-            const n = cache.numSplats;
-            const e = edgeI.length;
+            const n = numSplats;
+            const s = nbRows.length;
 
             if (n > maxN) throw new Error(`GpuEdgeCost: N=${n} exceeds maxN=${maxN}`);
-            if (e > maxE) throw new Error(`GpuEdgeCost: E=${e} exceeds maxE=${maxE}`);
-            if (edgeJ.length !== e || outCosts.length !== e) {
-                throw new Error('GpuEdgeCost: edgeI / edgeJ / outCosts must have same length');
+            if (outCosts.length !== s) {
+                throw new Error('GpuEdgeCost: nbRows / outCosts must have same length');
             }
+            if (s % k !== 0) throw new Error(`GpuEdgeCost: slot count ${s} must be a multiple of k=${k}`);
 
-            splatBuf.write(0, cache.splatData, 0, n * SPLAT_STRIDE);
+            splatBuf.write(0, splatData, 0, n * SPLAT_STRIDE);
 
-            const numBatches = Math.ceil(e / edgesPerBatch);
+            const numBatches = Math.ceil(s / slotsPerBatch);
             for (let batch = 0; batch < numBatches; batch++) {
-                const edgeOffset = batch * edgesPerBatch;
-                const edgeCount = Math.min(edgesPerBatch, e - edgeOffset);
-                const groups = Math.ceil(edgeCount / workgroupSize);
+                const slotBase = batch * slotsPerBatch;
+                const slotCount = Math.min(slotsPerBatch, s - slotBase);
+                const groups = Math.ceil(slotCount / workgroupSize);
 
-                edgesIBuf.write(0, edgeI, edgeOffset, edgeCount);
-                edgesJBuf.write(0, edgeJ, edgeOffset, edgeCount);
+                nbRowBuf.write(0, nbRows, slotBase, slotCount);
 
-                compute.setParameter('edgeCount', edgeCount);
+                compute.setParameter('slotBase', slotBase);
+                compute.setParameter('slotCount', slotCount);
 
                 compute.setupDispatch(groups);
                 device.computeDispatch([compute], `edge-cost-dispatch-${batch}`);
 
-                const readBytes = edgeCount * 4;
+                const readBytes = slotCount * 4;
                 await outBuf.read(0, readBytes, outScratch, true);
-                outCosts.set(outScratch.subarray(0, edgeCount), edgeOffset);
+                outCosts.set(outScratch.subarray(0, slotCount), slotBase);
             }
         };
 
         this.destroy = () => {
             splatBuf.destroy();
-            edgesIBuf.destroy();
-            edgesJBuf.destroy();
+            nbRowBuf.destroy();
             outBuf.destroy();
             shader.destroy();
             bindGroupFormat.destroy();
@@ -326,4 +332,4 @@ class GpuEdgeCost {
     }
 }
 
-export { GpuEdgeCost, type EdgeCostCache };
+export { GpuEdgeCost };

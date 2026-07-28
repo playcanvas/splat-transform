@@ -11,11 +11,10 @@
  * Engine-free; no allocation in the hot paths beyond small local scratch.
  */
 
-import { COLOR_WEIGHT } from './edge-cost-cpu';
+import { CACHE_STRIDE, COLOR_WEIGHT } from './edge-cost-cpu';
 import { EPS_COV, ellipsoidArea } from './moment-match';
 
-/** Floats per splat in the resident cache (packGpuCache layout). */
-export const CACHE_STRIDE = 16;
+export { CACHE_STRIDE };
 
 const NO_CANDIDATE = 0xFFFFFFFF;
 const NIL = 0xFFFFFFFF;

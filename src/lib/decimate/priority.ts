@@ -1,12 +1,12 @@
 import { type GraphicsDevice } from 'playcanvas';
 
-import { buildCostCache, computeEdgeCostView } from './edge-cost-cpu';
+import { buildSplatCache, computeEdgeCost, CACHE_STRIDE } from './edge-cost-cpu';
 import { collectBlock, verifyAndFixKnn, toGlobalNeighbors, KNN_FIXED, type BlockLocals } from './knn-blocks';
 import { KNN_SENTINEL } from './knn-core';
 import { type SplatView } from './moment-match';
 import { type BlockRange, type ResidentPositions } from './partition';
 import { type ChunkData, type ChunkDataPool, type ChunkSource } from '../chunk';
-import { GpuEdgeCost, SPLAT_STRIDE, type EdgeCostCache } from '../gpu/gpu-edge-cost';
+import { GpuEdgeCost } from '../gpu/gpu-edge-cost';
 import { GpuKnn } from '../gpu/gpu-knn';
 import { WorkerQueue } from '../workers';
 
@@ -41,8 +41,8 @@ type PriorityContext = {
     k: number;
     /**
      * Optional resident splat-cache output for re-costed selection
-     * (SPLAT_STRIDE floats per gaussian, packGpuCache row layout), filled for
-     * every owned gaussian.
+     * (CACHE_STRIDE floats per gaussian, buildSplatCache row layout), filled
+     * for every owned gaussian.
      */
     cacheOut?: Float32Array;
     /** Optional resident neighbour-id output (k per gaussian, KNN_SENTINEL padded). */
@@ -72,13 +72,18 @@ type BlockView = {
  * @param blockIdx - Which block.
  * @param extraGlobals - Sorted out-of-block rows to append after the owned rows.
  * @param includeOther - Also gather the `other` layer (merge pass only).
+ * @param colorComponents - Colour components to copy per row (default: all).
+ * The quality cost reads only DC, so its pass gathers 3 — at SH band 3 that
+ * is 16× less colour RAM and copy traffic per block. The read itself still
+ * decodes whole rows (row-interleaved sources); only the view copy narrows.
  * @returns The gathered block view.
  */
 const gatherBlockView = async (
     ctx: Pick<PriorityContext, 'source' | 'pool' | 'pos' | 'order' | 'blocks'>,
     blockIdx: number,
     extraGlobals: Uint32Array,
-    includeOther = false
+    includeOther = false,
+    colorComponents?: number
 ): Promise<BlockView> => {
     const { source, pool, pos, order, blocks } = ctx;
     const block = blocks[blockIdx];
@@ -88,14 +93,15 @@ const gatherBlockView = async (
     const { layouts, availableLayers } = source.meta;
 
     const colorDim = layouts.color!.stride >> 2;
+    const viewColorDim = Math.min(colorComponents ?? colorDim, colorDim);
     const wantOther = includeOther && availableLayers.has('other') && (layouts.other?.stride ?? 0) > 0;
     const otherDim = wantOther ? layouts.other!.stride >> 2 : 0;
 
     const view: SplatView = {
         pos: new Float32Array(n * 3),
         geo: new Float32Array(n * 8),
-        color: new Float32Array(n * colorDim),
-        colorDim
+        color: new Float32Array(n * viewColorDim),
+        colorDim: viewColorDim
     };
     const other = wantOther ? new Uint32Array(n * otherDim) : undefined;
 
@@ -115,7 +121,15 @@ const gatherBlockView = async (
                 other: othCd
             });
             view.geo.set(new Float32Array(geoCd.data, 0, count * 8), (rowBase + off) * 8);
-            view.color.set(new Float32Array(colCd.data, 0, count * colorDim), (rowBase + off) * colorDim);
+            const colSrc = new Float32Array(colCd.data, 0, count * colorDim);
+            if (viewColorDim === colorDim) {
+                view.color.set(colSrc, (rowBase + off) * colorDim);
+            } else {
+                for (let r = 0; r < count; r++) {
+                    const src = r * colorDim, dst = (rowBase + off + r) * viewColorDim;
+                    for (let c = 0; c < viewColorDim; c++) view.color[dst + c] = colSrc[src + c];
+                }
+            }
             if (othCd) other!.set(new Uint32Array(othCd.data, 0, count * otherDim), (rowBase + off) * otherDim);
             geoCd.release();
             colCd.release();
@@ -154,28 +168,6 @@ const indexOfSorted = (sorted: Uint32Array, g: number): number => {
         else hi = mid - 1;
     }
     return -1;
-};
-
-// Pack the per-splat cache for the GPU kernel: build the CPU cache once and
-// interleave it into the kernel's SPLAT_STRIDE-wide layout (mean from the view,
-// the rest from the cache), so the GPU reads byte-identical per-splat inputs.
-const packGpuCache = (view: SplatView): EdgeCostCache => {
-    const { pos } = view;
-    const c = buildCostCache(view);
-    const n = view.geo.length / 8;
-    const d = new Float32Array(n * SPLAT_STRIDE);
-    for (let i = 0; i < n; i++) {
-        const o = i * SPLAT_STRIDE, i6 = i * 6, i3 = i * 3;
-        d[o] = pos[i3]; d[o + 1] = pos[i3 + 1]; d[o + 2] = pos[i3 + 2];
-        d[o + 3] = c.sig[i6]; d[o + 4] = c.sig[i6 + 1]; d[o + 5] = c.sig[i6 + 2];
-        d[o + 6] = c.sig[i6 + 3]; d[o + 7] = c.sig[i6 + 4]; d[o + 8] = c.sig[i6 + 5];
-        d[o + 9] = c.sqrtDet[i];
-        d[o + 10] = c.alpha[i];
-        d[o + 11] = c.mass[i];
-        d[o + 12] = c.base[i3]; d[o + 13] = c.base[i3 + 1]; d[o + 14] = c.base[i3 + 2];
-        d[o + 15] = c.baseN2[i];
-    }
-    return { splatData: d, numSplats: n };
 };
 
 /**
@@ -227,7 +219,7 @@ const runPriorityPass = async (
     try {
         if (device) {
             gpuKnn = new GpuKnn(device, maxLocalN, k);
-            gpuCost = new GpuEdgeCost(device, maxLocalN, maxOwned * k);
+            gpuCost = new GpuEdgeCost(device, maxLocalN, k);
         }
 
         let next: Prepared | null = blocks.length > 0 ? prepare(0) : null;
@@ -242,21 +234,32 @@ const runPriorityPass = async (
             const nbGlobal = toGlobalNeighbors(locals, nbLocal);
             verifyAndFixKnn(pos, order, blocks, bi, locals, k, nbGlobal, nbLocal);
 
+            const slots = nOwned * k;
+
             // Externals: referenced rows outside the owned range (halo members
-            // and verification-fixed neighbours), sorted for the gather.
-            const extRow = new Map<number, number>();
-            for (let s = 0; s < nOwned * k; s++) {
+            // and verification-fixed neighbours) — count, collect, sort, dedup.
+            let extCount = 0;
+            for (let s = 0; s < slots; s++) {
+                const l = nbLocal[s];
+                if (l === KNN_SENTINEL || l < nOwned) continue;
+                if (l === KNN_FIXED && indexOfSorted(owned, nbGlobal[s]) >= 0) continue;
+                extCount++;
+            }
+            const extSorted = new Uint32Array(extCount);
+            extCount = 0;
+            for (let s = 0; s < slots; s++) {
                 const l = nbLocal[s];
                 if (l === KNN_SENTINEL || l < nOwned) continue;
                 const g = nbGlobal[s];
-                if (l !== KNN_FIXED) {
-                    if (!extRow.has(g)) extRow.set(g, 0);
-                } else if (indexOfSorted(owned, g) < 0 && !extRow.has(g)) {
-                    extRow.set(g, 0);
-                }
+                if (l === KNN_FIXED && indexOfSorted(owned, g) >= 0) continue;
+                extSorted[extCount++] = g;
             }
-            const extraGlobals = Uint32Array.from(extRow.keys()).sort();
-            for (let i = 0; i < extraGlobals.length; i++) extRow.set(extraGlobals[i], nOwned + i);
+            extSorted.sort();
+            let uniq = 0;
+            for (let i = 0; i < extCount; i++) {
+                if (i === 0 || extSorted[i] !== extSorted[i - 1]) extSorted[uniq++] = extSorted[i];
+            }
+            const extraGlobals = extSorted.subarray(0, uniq);
 
             // Verification-fixed externals are not bounded by the halo cap, so
             // a pathological block's view can exceed the preallocated cost
@@ -266,72 +269,49 @@ const runPriorityPass = async (
             if (gpuCost && viewN > gpuCostCapacity) {
                 gpuCost.destroy();
                 gpuCostCapacity = Math.ceil(viewN * 1.1);
-                gpuCost = new GpuEdgeCost(device!, gpuCostCapacity, maxOwned * k);
+                gpuCost = new GpuEdgeCost(device!, gpuCostCapacity, k);
             }
 
-            const { view } = await gatherBlockView(ctx, bi, extraGlobals);
+            const { view } = await gatherBlockView(ctx, bi, extraGlobals, false, 3);
 
-            // Edge lists in owned-major order (view-local endpoints).
-            const edgeI = new Uint32Array(nOwned * k);
-            const edgeJ = new Uint32Array(nOwned * k);
-            const edgeNb = new Uint32Array(nOwned * k);   // global neighbour per edge
-            const edgeOf = new Uint32Array(nOwned + 1);   // CSR into the edge list per owned row
-            let e = 0;
-            for (let qi = 0; qi < nOwned; qi++) {
-                edgeOf[qi] = e;
-                for (let s = 0; s < k; s++) {
-                    const l = nbLocal[qi * k + s];
-                    if (l === KNN_SENTINEL) continue;
-                    const g = nbGlobal[qi * k + s];
-                    let row: number;
-                    if (l !== KNN_FIXED) {
-                        row = l < nOwned ? l : extRow.get(g)!;
-                    } else {
-                        const oi = indexOfSorted(owned, g);
-                        row = oi >= 0 ? oi : extRow.get(g)!;
-                    }
-                    edgeI[e] = qi;
-                    edgeJ[e] = row;
-                    edgeNb[e] = g;
-                    e++;
+            // Per-splat cost cache, built once for the GPU upload, the CPU
+            // path, and the re-costed selection's resident copy alike.
+            const cache = new Float32Array(viewN * CACHE_STRIDE);
+            buildSplatCache(view, cache);
+
+            // Translate neighbour slots in place: local/global → view rows
+            // (dense-slot edge model; sentinel slots stay sentinel).
+            for (let s = 0; s < slots; s++) {
+                const l = nbLocal[s];
+                if (l === KNN_SENTINEL || l < nOwned) continue;
+                const g = nbGlobal[s];
+                if (l === KNN_FIXED) {
+                    const oi = indexOfSorted(owned, g);
+                    nbLocal[s] = oi >= 0 ? oi : nOwned + indexOfSorted(extraGlobals, g);
+                } else {
+                    nbLocal[s] = nOwned + indexOfSorted(extraGlobals, g);
                 }
             }
-            edgeOf[nOwned] = e;
 
-            const costs = new Float32Array(e);
-            const packed = device ? packGpuCache(view) : undefined;
-            const cpuCache = device ? undefined : buildCostCache(view);
+            const blockCosts = new Float32Array(slots);
             if (device) {
-                await gpuCost!.execute(packed!, edgeI.subarray(0, e), edgeJ.subarray(0, e), costs);
+                await gpuCost!.execute(cache, viewN, nbLocal, blockCosts);
             } else {
-                for (let i = 0; i < e; i++) {
-                    costs[i] = computeEdgeCostView(view, cpuCache!, edgeI[i], edgeJ[i]);
+                for (let s = 0; s < slots; s++) {
+                    const row = nbLocal[s];
+                    blockCosts[s] = row === KNN_SENTINEL ?
+                        0 :
+                        computeEdgeCost(cache, (s / k) | 0, row);
                 }
             }
 
-            // Persist owned rows for re-costed selection: the packed splat
-            // cache (identical layout on both paths) and the global neighbour
-            // ids (sentinel-padded).
+            // Persist owned rows for re-costed selection: the splat cache
+            // (identical layout on both paths) and the global neighbour ids
+            // (sentinel-padded).
             if (ctx.cacheOut) {
                 const CO = ctx.cacheOut;
-                if (packed) {
-                    for (let qi = 0; qi < nOwned; qi++) {
-                        CO.set(packed.splatData.subarray(qi * SPLAT_STRIDE, (qi + 1) * SPLAT_STRIDE), owned[qi] * SPLAT_STRIDE);
-                    }
-                } else {
-                    const c = cpuCache!;
-                    for (let qi = 0; qi < nOwned; qi++) {
-                        const o = owned[qi] * SPLAT_STRIDE;
-                        const q6 = qi * 6, q3 = qi * 3;
-                        CO[o] = view.pos[q3]; CO[o + 1] = view.pos[q3 + 1]; CO[o + 2] = view.pos[q3 + 2];
-                        CO[o + 3] = c.sig[q6]; CO[o + 4] = c.sig[q6 + 1]; CO[o + 5] = c.sig[q6 + 2];
-                        CO[o + 6] = c.sig[q6 + 3]; CO[o + 7] = c.sig[q6 + 4]; CO[o + 8] = c.sig[q6 + 5];
-                        CO[o + 9] = c.sqrtDet[qi];
-                        CO[o + 10] = c.alpha[qi];
-                        CO[o + 11] = c.mass[qi];
-                        CO[o + 12] = c.base[q3]; CO[o + 13] = c.base[q3 + 1]; CO[o + 14] = c.base[q3 + 2];
-                        CO[o + 15] = c.baseN2[qi];
-                    }
+                for (let qi = 0; qi < nOwned; qi++) {
+                    CO.set(cache.subarray(qi * CACHE_STRIDE, (qi + 1) * CACHE_STRIDE), owned[qi] * CACHE_STRIDE);
                 }
             }
             if (ctx.neighborsOut) {
@@ -341,13 +321,17 @@ const runPriorityPass = async (
                 }
             }
 
-            // Reduce to best K candidates per owned gaussian (ascending by cost).
+            // Reduce to best K candidates per owned gaussian (ascending by
+            // cost; sentinel slots are skipped by id — their cost values are
+            // never read).
             const bestIdx = new Uint32Array(K);
             const bestCost = new Float64Array(K);
             for (let qi = 0; qi < nOwned; qi++) {
                 let size = 0;
-                for (let s = edgeOf[qi]; s < edgeOf[qi + 1]; s++) {
-                    const c = costs[s];
+                const base = qi * k;
+                for (let s = 0; s < k; s++) {
+                    if (nbLocal[base + s] === KNN_SENTINEL) continue;
+                    const c = blockCosts[base + s];
                     if (!Number.isFinite(c)) continue;
                     if (size === K && c >= bestCost[K - 1]) continue;
                     let at = size < K ? size : K - 1;
@@ -357,7 +341,7 @@ const runPriorityPass = async (
                         at--;
                     }
                     bestCost[at] = c;
-                    bestIdx[at] = edgeNb[s];
+                    bestIdx[at] = nbGlobal[base + s];
                     size = Math.min(size + 1, K);
                 }
                 const g = owned[qi];
@@ -378,7 +362,6 @@ const runPriorityPass = async (
 export {
     runPriorityPass,
     gatherBlockView,
-    packGpuCache,
     indexOfSorted,
     HALO_FACTOR,
     HALO_CAP,

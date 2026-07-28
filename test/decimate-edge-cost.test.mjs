@@ -8,7 +8,7 @@
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
 
-import { buildCostCache, computeEdgeCostView } from '../src/lib/decimate/edge-cost-cpu.js';
+import { buildSplatCache, computeEdgeCost, CACHE_STRIDE } from '../src/lib/decimate/edge-cost-cpu.js';
 
 // Build a minimal SplatView from per-splat specs (identity quaternion; only the
 // DC colour is set, higher SH left zero). colorDim = 3 (DC only).
@@ -34,7 +34,11 @@ const makeView = (splats) => {
     return { pos, geo, color, colorDim };
 };
 
-const cost = (view, i, j) => computeEdgeCostView(view, buildCostCache(view), i, j);
+const cost = (view, i, j) => {
+    const cache = new Float32Array((view.geo.length / 8) * CACHE_STRIDE);
+    buildSplatCache(view, cache);
+    return computeEdgeCost(cache, i, j);
+};
 
 describe('field-L2 edge cost', () => {
     it('merging identical coincident splats is (near-)lossless', () => {
