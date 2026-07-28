@@ -16,6 +16,7 @@ import {
 } from 'playcanvas';
 
 import { CACHE_STRIDE } from '../decimate/edge-cost-cpu';
+import { gaussianL2Wgsl } from './shaders/chunks/gaussian-l2';
 
 /** Per-splat interleaved stride in the `splat` storage buffer (= the CPU cost-cache layout). */
 export const SPLAT_STRIDE = CACHE_STRIDE;
@@ -62,23 +63,7 @@ struct Uniforms {
 
 const K: u32 = ${k}u;
 const SENTINEL: u32 = 0xFFFFFFFFu;
-
-const EPS_COV: f32 = 1e-8;
-const PI_1_5: f32 = 5.5683279968317084;       // π^{3/2}
-const TWO_PI_1_5: f32 = 15.749609945722419;   // (2π)^{3/2}
-const TWO_PI_3: f32 = 2.0943951023931953;      // 2π/3
-const ELLIP_P: f32 = 1.6075;
-// Scale-free DC colour dissimilarity weight (4π·1e-6 in base-colour space —
-// see COLOR_WEIGHT in decimate/edge-cost-cpu.ts, mirrored here).
-const COLOR_WEIGHT: f32 = 1.2566370614359172e-5;
-
-// Knud Thomsen ellipsoid surface area (matches CPU ellipsoidArea).
-fn ellipsoidArea(sx: f32, sy: f32, sz: f32) -> f32 {
-    let a = pow(sx * sy, ELLIP_P);
-    let b = pow(sx * sz, ELLIP_P);
-    let c = pow(sy * sz, ELLIP_P);
-    return 4.0 * 3.141592653589793 * pow((a + b + c) / 3.0, 1.0 / ELLIP_P);
-}
+${gaussianL2Wgsl}
 
 // Gaussian cross-product ⟨G_a,G_b⟩ for symmetric M = Σ_a+Σ_b (6: xx,xy,xz,yy,yz,zz)
 // and mean offset d, scaled by √|Σ_a|·√|Σ_b| (passed as sdA·sdB).
@@ -148,27 +133,10 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
     // Merged opacity: mass-conserving, capped — needs merged scales (eigenvalues
     // of Σ_m, Smith's closed form for a symmetric 3×3).
-    let q = (sm[0] + sm[3] + sm[5]) / 3.0;
-    let p1 = sm[1] * sm[1] + sm[2] * sm[2] + sm[4] * sm[4];
-    var e0: f32; var e1: f32; var e2: f32;
-    if (p1 <= 1e-30) {
-        e0 = sm[0]; e1 = sm[3]; e2 = sm[5];
-    } else {
-        let p2 = (sm[0] - q) * (sm[0] - q) + (sm[3] - q) * (sm[3] - q) + (sm[5] - q) * (sm[5] - q) + 2.0 * p1;
-        let p = sqrt(p2 / 6.0);
-        let ip = 1.0 / p;
-        let b00 = (sm[0] - q) * ip; let b11 = (sm[3] - q) * ip; let b22 = (sm[5] - q) * ip;
-        let b01 = sm[1] * ip; let b02 = sm[2] * ip; let b12 = sm[4] * ip;
-        let detB = b00 * (b11 * b22 - b12 * b12) - b01 * (b01 * b22 - b12 * b02) + b02 * (b01 * b12 - b11 * b02);
-        let r = clamp(detB * 0.5, -1.0, 1.0);
-        let phi = acos(r) / 3.0;
-        e0 = q + 2.0 * p * cos(phi);
-        e2 = q + 2.0 * p * cos(phi + TWO_PI_3);
-        e1 = 3.0 * q - e0 - e2;
-    }
-    let s0 = sqrt(max(e0, 1e-18));
-    let s1 = sqrt(max(e1, 1e-18));
-    let s2 = sqrt(max(e2, 1e-18));
+    let e = eig3(sm);
+    let s0 = sqrt(max(e.x, 1e-18));
+    let s1 = sqrt(max(e.y, 1e-18));
+    let s2 = sqrt(max(e.z, 1e-18));
     let am = min(1.0, W / max(ellipsoidArea(s0, s1, s2), 1e-30));
 
     // Base-colour dots (merged colour = mass-weighted average).

@@ -1,20 +1,12 @@
 import {
     BUFFERUSAGE_COPY_DST,
     BUFFERUSAGE_COPY_SRC,
-    SHADERLANGUAGE_WGSL,
-    SHADERSTAGE_COMPUTE,
-    UNIFORMTYPE_UINT,
-    BindGroupFormat,
-    BindStorageBufferFormat,
-    BindUniformBufferFormat,
-    Compute,
     FloatPacking,
-    Shader,
     StorageBuffer,
-    UniformBufferFormat,
-    UniformFormat,
     GraphicsDevice
 } from 'playcanvas';
+
+import { makeKernel, type Kernel } from './compute-kernel';
 
 /**
  * Flash-kmeans (arXiv 2603.09229) adapted to WebGPU: a fully GPU-resident
@@ -390,45 +382,6 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     }
 }
 `;
-
-type Kernel = {
-    compute: Compute;
-    destroy: () => void;
-};
-
-// shader + bind group format + compute boilerplate shared by all kernels
-const makeKernel = (
-    device: GraphicsDevice,
-    name: string,
-    source: string,
-    uniformNames: string[],
-    storageBindings: [string, boolean][]    // [name, readOnly]
-): Kernel => {
-    const bindGroupFormat = new BindGroupFormat(device, [
-        new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
-        ...storageBindings.map(([bname, readOnly]) => new BindStorageBufferFormat(bname, SHADERSTAGE_COMPUTE, readOnly))
-    ]);
-
-    const shader = new Shader(device, {
-        name,
-        shaderLanguage: SHADERLANGUAGE_WGSL,
-        cshader: source,
-        // @ts-ignore
-        computeUniformBufferFormats: {
-            uniforms: new UniformBufferFormat(device, uniformNames.map(u => new UniformFormat(u, UNIFORMTYPE_UINT)))
-        },
-        // @ts-ignore
-        computeBindGroupFormat: bindGroupFormat
-    });
-
-    return {
-        compute: new Compute(device, shader, name),
-        destroy: () => {
-            shader.destroy();
-            bindGroupFormat.destroy();
-        }
-    };
-};
 
 class GpuKmeans {
     /**
