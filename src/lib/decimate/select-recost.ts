@@ -26,14 +26,24 @@
  * gaussian starts queued, so the first refresh evaluates each singleton's
  * best edge over its neighbour rows — no candidate arrays are consumed.
  *
+ * With a device, refreshes run on the GPU ({@link GpuRecost}): the CPU
+ * drains commits into a log, the GPU replays it against its own structure
+ * copy and bulk-evaluates the queued roots, and the CPU pushes the returned
+ * (partner, cost) pairs with validation tokens from its own mirrors. Waves
+ * are serial by construction (each drain consumes the previous refresh's
+ * entries), so there is nothing to double-buffer. Without a device — or
+ * when the buffers don't fit the adapter's binding limits — the refresh
+ * loop runs inline with the same eval in f64.
+ *
  * decimate-source gates this path by memory budget and falls back to
  * {@link selectMerges} when over.
- *
- * Engine-free; single-threaded, pure resident-array computation, no IO.
  */
+
+import { type GraphicsDevice } from 'playcanvas';
 
 import { bestEdgeFor, bestOut, CACHE_STRIDE, type RecostState } from './recost-core';
 import { MAX_GROUP, type SelectionResult } from './select';
+import { GpuRecost, COMMIT_LOG_STRIDE } from '../gpu/gpu-recost';
 
 const NIL = 0xFFFFFFFF;
 
@@ -57,7 +67,14 @@ type RecostInputs = {
     N: number;
     /** Target removal count for this generation. */
     mergesNeeded: number;
+    /** Optional GPU device: bulk refreshes run on the wave engine when the buffers fit. */
+    device?: GraphicsDevice;
 };
+
+// Max merges committed between refreshes. LOAD-BEARING: an unbounded drain
+// runs up the cost curve before cheap continuation merges re-enter (measured
+// −9.5 dB); refreshing more often is quality-safe, less often is not.
+const WAVE = 4096;
 
 /**
  * Select merges with within-generation re-costing (round-batched).
@@ -65,8 +82,8 @@ type RecostInputs = {
  * @param inputs - See {@link RecostInputs}.
  * @returns The selection (same contract as {@link selectMerges}).
  */
-const selectMergesRecosted = (inputs: RecostInputs): SelectionResult => {
-    const { splatCache: SC, neighbors, D, N, mergesNeeded } = inputs;
+const selectMergesRecosted = async (inputs: RecostInputs): Promise<SelectionResult> => {
+    const { splatCache: SC, neighbors, D, N, mergesNeeded, device } = inputs;
 
     // ---- Cluster structure (indexed by union-find root) — integers only.
     const parent = new Uint32Array(N);
@@ -192,51 +209,87 @@ const selectMergesRecosted = (inputs: RecostInputs): SelectionResult => {
     }
     pendingCount = N;
 
+    // ---- GPU wave engine when the buffers fit (its workgroup shape needs
+    // the production k·MAX_GROUP); inline refresh otherwise.
+    const gpu = device && D * MAX_GROUP === 64 && GpuRecost.fits(device, N, D, WAVE) ?
+        new GpuRecost(device, N, D, MAX_GROUP, WAVE) :
+        undefined;
+    const commitLog = gpu ? new Uint32Array(WAVE * COMMIT_LOG_STRIDE) : undefined;
+    const outBest = gpu ? new Uint32Array(N * 2) : undefined;
+    const outCost = gpu ? new Float32Array(outBest!.buffer) : undefined;
+
     // ---- Round loop. Each round commits at most WAVE merges before the
     // bulk refresh, so refreshed edges (notably cheap continuation merges in
     // redundant regions — the concentration behaviour the quality depends on)
     // re-enter the heap at most one wave late. An unbounded drain would spend
     // the budget up the cost curve before any refresh returns.
-    const WAVE = 4096;
     let removed = 0;
-    while (removed < mergesNeeded) {
-        // Drain: commit still-valid entries, up to the wave budget.
-        let wave = 0;
-        while (removed < mergesNeeded && wave < WAVE && heapPop()) {
-            const a = popOut.a;
-            if (parent[a] !== a || popOut.seq !== lastSeq[a]) continue;
-            const b = popOut.b;
-            if (parent[b] !== b || version[b] !== popOut.vb || size[a] + size[b] > MAX_GROUP) {
-                queueRefresh(a);
-                continue;
+    try {
+        gpu?.init(SC, neighbors);
+
+        while (removed < mergesNeeded) {
+            // Drain: commit still-valid entries, up to the wave budget.
+            let wave = 0;
+            while (removed < mergesNeeded && wave < WAVE && heapPop()) {
+                const a = popOut.a;
+                if (parent[a] !== a || popOut.seq !== lastSeq[a]) continue;
+                const b = popOut.b;
+                if (parent[b] !== b || version[b] !== popOut.vb || size[a] + size[b] > MAX_GROUP) {
+                    queueRefresh(a);
+                    continue;
+                }
+
+                // Commit: pure structure — splice the member chains, re-parent,
+                // bump the version so stale partner entries invalidate. The GPU
+                // replays the same splice from the log (values pre-resolved so
+                // the replay does no reads).
+                const keep = size[a] >= size[b] ? a : b;
+                const lose = keep === a ? b : a;
+                if (commitLog) {
+                    const o = wave * COMMIT_LOG_STRIDE;
+                    commitLog[o] = lose;
+                    commitLog[o + 1] = keep;
+                    commitLog[o + 2] = mTail[keep];
+                    commitLog[o + 3] = mHead[lose];
+                    commitLog[o + 4] = size[keep] + size[lose];
+                }
+                mNext[mTail[keep]] = mHead[lose];
+                mTail[keep] = mTail[lose];
+                parent[lose] = keep;
+                size[keep] += size[lose];
+                version[keep]++;
+                removed++;
+                wave++;
+
+                queueRefresh(keep);
             }
+            if (removed >= mergesNeeded) break;
+            if (pendingCount === 0 && heapSize === 0) break;
 
-            // Commit: pure structure — splice the member chains, re-parent,
-            // bump the version so stale partner entries invalidate.
-            const keep = size[a] >= size[b] ? a : b;
-            const lose = keep === a ? b : a;
-            mNext[mTail[keep]] = mHead[lose];
-            mTail[keep] = mTail[lose];
-            parent[lose] = keep;
-            size[keep] += size[lose];
-            version[keep]++;
-            removed++;
-            wave++;
-
-            queueRefresh(keep);
-        }
-        if (removed >= mergesNeeded) break;
-        if (pendingCount === 0 && heapSize === 0) break;
-
-        // Refresh queued clusters' best edges.
-        for (let p = 0; p < pendingCount; p++) {
-            const root = pending[p];
-            if (bestEdgeFor(st, root)) {
-                heapPush(bestOut.cost, root, bestOut.partner, lastSeq[root], bestOut.vb);
+            // Refresh queued clusters' best edges.
+            if (gpu && pendingCount > 0) {
+                await gpu.wave(commitLog!, wave, pending, pendingCount, outBest!);
+                for (let p = 0; p < pendingCount; p++) {
+                    const partner = outBest![p * 2];
+                    if (partner === NIL) continue;
+                    const cost = outCost![p * 2 + 1];
+                    if (Number.isNaN(cost)) continue;
+                    const root = pending[p];
+                    heapPush(cost, root, partner, lastSeq[root], version[partner]);
+                }
+            } else {
+                for (let p = 0; p < pendingCount; p++) {
+                    const root = pending[p];
+                    if (bestEdgeFor(st, root)) {
+                        heapPush(bestOut.cost, root, bestOut.partner, lastSeq[root], bestOut.vb);
+                    }
+                }
             }
+            pendingCount = 0;
+            round++;
         }
-        pendingCount = 0;
-        round++;
+    } finally {
+        gpu?.destroy();
     }
 
     // ---- CSR assembly (identical contract to selectMerges).

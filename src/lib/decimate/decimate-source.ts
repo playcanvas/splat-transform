@@ -267,7 +267,7 @@ const decimateSource = async (
         const selection = legacy ?
             selectMergesLegacy(cand!, N, K, needed) :
             cacheOut ?
-                selectMergesRecosted({ splatCache: cacheOut, neighbors: neighborsOut!, D: k, N, mergesNeeded: needed }) :
+                await selectMergesRecosted({ splatCache: cacheOut, neighbors: neighborsOut!, D: k, N, mergesNeeded: needed, device }) :
                 selectMerges(cand!, N, K, needed);
         selectSub.end();
 

@@ -175,12 +175,12 @@ describe('stateless re-costed eval', () => {
 });
 
 describe('selectMergesRecosted', () => {
-    it('hits the target with a well-formed capped CSR', () => {
+    it('hits the target with a well-formed capped CSR', async () => {
         const n = 256, k = 8;
         const cache = makeCache(n, 99);
         const neighbors = bruteNeighbors(cache, n, k);
         const needed = n >> 1;
-        const sel = selectMergesRecosted({ splatCache: cache, neighbors, D: k, N: n, mergesNeeded: needed });
+        const sel = await selectMergesRecosted({ splatCache: cache, neighbors, D: k, N: n, mergesNeeded: needed });
 
         assert.strictEqual(sel.removed, needed);
         assert.strictEqual(sel.groupOffsets[sel.mergedGroups], sel.groupMembers.length);
@@ -201,7 +201,7 @@ describe('selectMergesRecosted', () => {
         assert.strictEqual(members - sel.mergedGroups, needed);
     });
 
-    it('concentrates coincident splats into full groups (refresh continuation)', () => {
+    it('concentrates coincident splats into full groups (refresh continuation)', async () => {
         const n = 64, k = 16;
         // All splats identical and coincident.
         const pos = new Float32Array(n * 3).fill(0.5);
@@ -226,7 +226,7 @@ describe('selectMergesRecosted', () => {
             }
         }
         const needed = n - (n / MAX_GROUP);   // 48: reachable only by filling groups to the cap
-        const sel = selectMergesRecosted({ splatCache: cache, neighbors, D: k, N: n, mergesNeeded: needed });
+        const sel = await selectMergesRecosted({ splatCache: cache, neighbors, D: k, N: n, mergesNeeded: needed });
 
         // Disjoint pairing alone tops out at n/2 = 32 removals; anything well
         // beyond that requires continuation merges via refresh re-entry (the
