@@ -1,14 +1,28 @@
 /**
- * Re-costed selection evaluation kernel, shared between the main thread and
- * worker threads (bulk refresh rounds). Operates on a plain view-of-state
- * object whose arrays may be backed by SharedArrayBuffers; workers treat the
- * state as read-only (find() does no path compression here).
+ * Re-costed selection evaluation kernel — stateless over members.
  *
  * Cost definition matches the pairwise kernel: exact field-L2 of the merged
  * cluster vs its generation-input members (splat cache rows) plus the
- * scale-free DC colour term — see select-recost.ts for the orchestration.
+ * scale-free DC colour term. Because groups are capped at MAX_GROUP original
+ * members, a cluster's moments (W, mean, M2, colour sums) are recomputed on
+ * the fly from its ≤ maxGroup immutable cache rows — no per-root float state
+ * is stored anywhere, and commits are pure integer structure updates.
  *
- * Engine-free; no allocation in the hot paths beyond small local scratch.
+ * The marginal cost ΔE = E(A∪B) − E(A) − E(B) is evaluated in the cancelled
+ * form (the within-cluster pairwise sums Sself drop out identically):
+ *
+ *   ΔE = 2·scross(A,B) − 2·memfm(A∪B) + selfM(A∪B)
+ *      + (|A|≥2 ? 2·memfm(A) − selfM(A) : self_A)
+ *      + (|B|≥2 ? 2·memfm(B) − selfM(B) : self_B)
+ *
+ * where memfm(C) = Σ_{k∈C} ⟨f_k, f_C⟩, selfM(C) = ⟨f_C, f_C⟩, scross(A,B) =
+ * Σ_{a∈A,b∈B} ⟨f_a, f_b⟩, and self_x is a singleton's self product (its
+ * E is exactly 0 by convention — the merged Gaussian of one splat is itself).
+ * Beyond deleting all per-root aggregates, the cancelled form is also
+ * better-conditioned: the mutually-cancelling Sself magnitudes never enter.
+ *
+ * Engine-free; single-threaded (module-scope scratch, no allocation in the
+ * hot paths).
  */
 
 import { CACHE_STRIDE, COLOR_WEIGHT } from './edge-cost-cpu';
@@ -26,8 +40,9 @@ const PI_1_5 = Math.PI ** 1.5;
 const TWO_PI_1_5 = (2 * Math.PI) ** 1.5;
 
 /**
- * The resident selection state (allocated by select-recost, possibly on
- * SharedArrayBuffers so bulk refreshes can run on worker threads).
+ * The resident selection state (allocated by select-recost). Only integer
+ * structure — the union-find, the member chains, and the immutable per-splat
+ * cache/neighbour inputs from the priority pass.
  */
 type RecostState = {
     /** Per-splat cache, {@link CACHE_STRIDE} floats per generation-input splat. */
@@ -40,22 +55,16 @@ type RecostState = {
     N: number;
     /** Max original members per group. */
     maxGroup: number;
-    // Union-find + cluster state (indexed by root).
+    // Union-find + cluster structure (indexed by root).
     parent: Uint32Array;
     size: Uint32Array;
-    W: Float64Array;
-    mx: Float64Array; my: Float64Array; mz: Float64Array;
-    M2: Float64Array;
-    baseW: Float64Array;
-    Sself: Float64Array;
-    Err: Float64Array;
     version: Uint32Array;
     mHead: Uint32Array;
     mNext: Uint32Array;
 };
 
 /**
- * Read-only find (no path compression — safe on shared state in workers).
+ * Read-only find (no path compression).
  *
  * @param parent - Union-find parent array.
  * @param x - Element to resolve.
@@ -110,27 +119,238 @@ const eig3 = (m0: number, m1: number, m2: number, m3: number, m4: number, m5: nu
     eigOut[0] = e0; eigOut[1] = 3 * q - e0 - e2; eigOut[2] = e2;
 };
 
-let gatherBuf = new Uint32Array(1 << 12);
-const gatherMembers = (st: RecostState, root: number): number => {
-    const { mHead, mNext } = st;
-    let cnt = 0;
-    for (let m = mHead[root]; m !== NIL; m = mNext[m]) {
-        if (cnt === gatherBuf.length) {
-            const g = new Uint32Array(gatherBuf.length * 2);
-            g.set(gatherBuf); gatherBuf = g;
-        }
-        gatherBuf[cnt++] = m;
-    }
-    return cnt;
+/**
+ * A cluster's moments composed from its member cache rows: raw mass-scaled
+ * aggregates (the parallel-axis form the old per-root state stored) plus the
+ * finished merged-Gaussian quantities the field terms need.
+ */
+type Comp = {
+    // Raw aggregates.
+    W: number;
+    mx: number; my: number; mz: number;   // mass-weighted mean
+    M2: Float64Array;                      // Σ mass·(Σₖ + δδᵀ), 6 comps
+    bw0: number; bw1: number; bw2: number; // Σ mass·base
+    // Finished merged Gaussian (valid after finishComp).
+    sm: Float64Array;                      // M2/W + EPS_COV·I, 6 comps
+    sd: number;                            // √|Σ_C|
+    alpha: number;                         // min(1, W / area)
+    bc0: number; bc1: number; bc2: number; // mean base colour (bw/W)
+    bn2: number;                           // |mean base|²
+    selfM: number;                         // ⟨f_C, f_C⟩
 };
 
-/** Outputs of {@link evalMergeCore} beyond the cost (reused object). */
-const evalOut = { E: 0, Scross: 0 };
+const makeComp = (): Comp => ({
+    W: 0,
+    mx: 0,
+    my: 0,
+    mz: 0,
+    M2: new Float64Array(6),
+    bw0: 0,
+    bw1: 0,
+    bw2: 0,
+    sm: new Float64Array(6),
+    sd: 0,
+    alpha: 0,
+    bc0: 0,
+    bc1: 0,
+    bc2: 0,
+    bn2: 0,
+    selfM: 0
+});
+
+// Module-scope scratch — single-threaded by design.
+const compA = makeComp();
+const compB = makeComp();
+const compAB = makeComp();
+
+// Compose raw aggregates from member cache rows (two passes: mean, then
+// central second moments — algebraically identical to the parallel-axis
+// accumulation the formation tree would produce).
+const composeRaw = (SC: Float32Array, members: Uint32Array, count: number, out: Comp): void => {
+    let W = 0, sx = 0, sy = 0, sz = 0, b0 = 0, b1 = 0, b2 = 0;
+    for (let t = 0; t < count; t++) {
+        const o = members[t] * CACHE_STRIDE;
+        const m = SC[o + 11];
+        W += m;
+        sx += m * SC[o]; sy += m * SC[o + 1]; sz += m * SC[o + 2];
+        b0 += m * SC[o + 12]; b1 += m * SC[o + 13]; b2 += m * SC[o + 14];
+    }
+    const iw = 1 / W;
+    const mx = sx * iw, my = sy * iw, mz = sz * iw;
+    const M2 = out.M2;
+    M2.fill(0);
+    for (let t = 0; t < count; t++) {
+        const o = members[t] * CACHE_STRIDE;
+        const m = SC[o + 11];
+        const dx = SC[o] - mx, dy = SC[o + 1] - my, dz = SC[o + 2] - mz;
+        M2[0] += m * (SC[o + 3] + dx * dx);
+        M2[1] += m * (SC[o + 4] + dx * dy);
+        M2[2] += m * (SC[o + 5] + dx * dz);
+        M2[3] += m * (SC[o + 6] + dy * dy);
+        M2[4] += m * (SC[o + 7] + dy * dz);
+        M2[5] += m * (SC[o + 8] + dz * dz);
+    }
+    out.W = W; out.mx = mx; out.my = my; out.mz = mz;
+    out.bw0 = b0; out.bw1 = b1; out.bw2 = b2;
+};
+
+// Compose A∪B's raw aggregates from A's and B's (parallel-axis identity —
+// the exact arithmetic the merged-covariance step has always used).
+const composeUnion = (a: Comp, b: Comp, out: Comp): void => {
+    const WA = a.W, WB = b.W, WC = WA + WB;
+    const iw = 1 / WC;
+    const mcx = (WA * a.mx + WB * b.mx) * iw;
+    const mcy = (WA * a.my + WB * b.my) * iw;
+    const mcz = (WA * a.mz + WB * b.mz) * iw;
+    const dax = a.mx - mcx, day = a.my - mcy, daz = a.mz - mcz;
+    const dbx = b.mx - mcx, dby = b.my - mcy, dbz = b.mz - mcz;
+    const MA = a.M2, MB = b.M2, MC = out.M2;
+    MC[0] = MA[0] + MB[0] + WA * dax * dax + WB * dbx * dbx;
+    MC[1] = MA[1] + MB[1] + WA * dax * day + WB * dbx * dby;
+    MC[2] = MA[2] + MB[2] + WA * dax * daz + WB * dbx * dbz;
+    MC[3] = MA[3] + MB[3] + WA * day * day + WB * dby * dby;
+    MC[4] = MA[4] + MB[4] + WA * day * daz + WB * dby * dbz;
+    MC[5] = MA[5] + MB[5] + WA * daz * daz + WB * dbz * dbz;
+    out.W = WC; out.mx = mcx; out.my = mcy; out.mz = mcz;
+    out.bw0 = a.bw0 + b.bw0; out.bw1 = a.bw1 + b.bw1; out.bw2 = a.bw2 + b.bw2;
+};
+
+// Derive the merged Gaussian's field quantities from the raw aggregates.
+const finishComp = (c: Comp): void => {
+    const iw = 1 / c.W;
+    const sm = c.sm;
+    sm[0] = c.M2[0] * iw + EPS_COV;
+    sm[1] = c.M2[1] * iw;
+    sm[2] = c.M2[2] * iw;
+    sm[3] = c.M2[3] * iw + EPS_COV;
+    sm[4] = c.M2[4] * iw;
+    sm[5] = c.M2[5] * iw + EPS_COV;
+
+    const detm = Math.max(
+        sm[0] * (sm[3] * sm[5] - sm[4] * sm[4]) - sm[1] * (sm[1] * sm[5] - sm[4] * sm[2]) + sm[2] * (sm[1] * sm[4] - sm[3] * sm[2]),
+        1e-60
+    );
+    c.sd = Math.sqrt(detm);
+
+    eig3(sm[0], sm[1], sm[2], sm[3], sm[4], sm[5]);
+    const s0 = Math.sqrt(Math.max(eigOut[0], 1e-18));
+    const s1 = Math.sqrt(Math.max(eigOut[1], 1e-18));
+    const s2 = Math.sqrt(Math.max(eigOut[2], 1e-18));
+    c.alpha = Math.min(1, c.W / Math.max(ellipsoidArea(s0, s1, s2), 1e-30));
+
+    c.bc0 = c.bw0 * iw; c.bc1 = c.bw1 * iw; c.bc2 = c.bw2 * iw;
+    c.bn2 = c.bc0 * c.bc0 + c.bc1 * c.bc1 + c.bc2 * c.bc2;
+    c.selfM = c.alpha * c.alpha * c.bn2 * PI_1_5 * c.sd;
+};
+
+// memfm(C over `members`) = Σ ⟨f_k, f_C⟩ for the finished cluster `c`.
+const memfm = (SC: Float32Array, members: Uint32Array, count: number, c: Comp): number => {
+    const sm = c.sm;
+    let acc = 0;
+    for (let t = 0; t < count; t++) {
+        const o = members[t] * CACHE_STRIDE;
+        const wgt = SC[o + 10] * c.alpha *
+            (SC[o + 12] * c.bc0 + SC[o + 13] * c.bc1 + SC[o + 14] * c.bc2);
+        if (wgt === 0) continue;
+        acc += wgt * crossG(SC[o + 9] * c.sd,
+            SC[o + 3] + sm[0], SC[o + 4] + sm[1], SC[o + 5] + sm[2],
+            SC[o + 6] + sm[3], SC[o + 7] + sm[4], SC[o + 8] + sm[5],
+            SC[o] - c.mx, SC[o + 1] - c.my, SC[o + 2] - c.mz);
+    }
+    return acc;
+};
+
+// A singleton's self product ⟨f, f⟩ (its cluster error is exactly 0).
+const selfRow = (SC: Float32Array, row: number): number => {
+    const o = row * CACHE_STRIDE;
+    return SC[o + 10] * SC[o + 10] * SC[o + 15] * PI_1_5 * SC[o + 9];
+};
+
+// Member buffers (grow-only; production maxGroup is 4).
+let aBuf: Uint32Array = new Uint32Array(1 << 12);
+let bBuf: Uint32Array = new Uint32Array(1 << 12);
+const gatherChain = (st: RecostState, root: number, into: Uint32Array): { buf: Uint32Array, count: number } => {
+    const { mHead, mNext } = st;
+    let buf = into;
+    let cnt = 0;
+    for (let m = mHead[root]; m !== NIL; m = mNext[m]) {
+        if (cnt === buf.length) {
+            const g = new Uint32Array(buf.length * 2);
+            g.set(buf); buf = g;
+        }
+        buf[cnt++] = m;
+    }
+    return { buf, count: cnt };
+};
+
+// One side's term of the cancelled cost form, given the side's raw
+// aggregates (finishes `c` when the side is a real cluster).
+const sideTerm = (SC: Float32Array, members: Uint32Array, count: number, c: Comp): number => {
+    if (count < 2) return selfRow(SC, members[0]);
+    finishComp(c);
+    return 2 * memfm(SC, members, count, c) - c.selfM;
+};
+
+// scross(A,B) = Σ_{a∈A,b∈B} ⟨f_a, f_b⟩ with distance culling.
+const scrossPairs = (
+    SC: Float32Array,
+    aMembers: Uint32Array, na: number,
+    bMembers: Uint32Array, nb: number
+): number => {
+    let acc = 0;
+    for (let u = 0; u < nb; u++) {
+        const ob = bMembers[u] * CACHE_STRIDE;
+        const bxp = SC[ob], byp = SC[ob + 1], bzp = SC[ob + 2];
+        const trb = SC[ob + 3] + SC[ob + 6] + SC[ob + 8];
+        const alb = SC[ob + 10], sdb = SC[ob + 9];
+        const cb0 = SC[ob + 12], cb1 = SC[ob + 13], cb2 = SC[ob + 14];
+        for (let t = 0; t < na; t++) {
+            const oa = aMembers[t] * CACHE_STRIDE;
+            const dx = SC[oa] - bxp, dy = SC[oa + 1] - byp, dz = SC[oa + 2] - bzp;
+            const d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 > CULL_QUAD * (SC[oa + 3] + SC[oa + 6] + SC[oa + 8] + trb)) continue;
+            const wgt = SC[oa + 10] * alb *
+                (SC[oa + 12] * cb0 + SC[oa + 13] * cb1 + SC[oa + 14] * cb2);
+            if (wgt === 0) continue;
+            acc += wgt * crossG(SC[oa + 9] * sdb,
+                SC[oa + 3] + SC[ob + 3], SC[oa + 4] + SC[ob + 4], SC[oa + 5] + SC[ob + 5],
+                SC[oa + 6] + SC[ob + 6], SC[oa + 7] + SC[ob + 7], SC[oa + 8] + SC[ob + 8],
+                dx, dy, dz);
+        }
+    }
+    return acc;
+};
+
+// Evaluate ΔE for A (context already composed in compA/aBuf, side term
+// `aTerm`) against cluster B, in the cancelled form.
+const evalAgainst = (st: RecostState, na: number, aTerm: number, B: number): number => {
+    const { SC } = st;
+    const b = gatherChain(st, B, bBuf);
+    bBuf = b.buf;
+    const nb = b.count;
+    composeRaw(SC, bBuf, nb, compB);
+    const bTerm = sideTerm(SC, bBuf, nb, compB);
+
+    composeUnion(compA, compB, compAB);
+    finishComp(compAB);
+
+    const memfmAB = memfm(SC, aBuf, na, compAB) + memfm(SC, bBuf, nb, compAB);
+    const scross = scrossPairs(SC, aBuf, na, bBuf, nb);
+
+    // Scale-free DC colour term between the clusters' mean base colours.
+    const iwA = 1 / compA.W, iwB = 1 / compB.W;
+    const d0 = compA.bw0 * iwA - compB.bw0 * iwB;
+    const d1 = compA.bw1 * iwA - compB.bw1 * iwB;
+    const d2c = compA.bw2 * iwA - compB.bw2 * iwB;
+
+    return (2 * scross - 2 * memfmAB + compAB.selfM + aTerm + bTerm) +
+        COLOR_WEIGHT * (d0 * d0 + d1 * d1 + d2c * d2c);
+};
 
 /**
  * Marginal cost ΔE of merging clusters A and B (exact field-L2 vs the
- * generation-input members) plus the scale-free colour term. Fills
- * {@link evalOut} with E(A∪B) and Scross(A,B).
+ * generation-input members) plus the scale-free colour term — recomputed
+ * statelessly from the members' cache rows.
  *
  * @param st - Selection state.
  * @param A - First cluster root.
@@ -138,143 +358,76 @@ const evalOut = { E: 0, Scross: 0 };
  * @returns The merge cost.
  */
 const evalMergeCore = (st: RecostState, A: number, B: number): number => {
-    const { SC, W, mx, my, mz, M2, baseW, Sself, Err, mHead, mNext } = st;
-    const WA = W[A], WB = W[B], WC = WA + WB;
-    const iw = 1 / WC;
-    const mcx = (WA * mx[A] + WB * mx[B]) * iw;
-    const mcy = (WA * my[A] + WB * my[B]) * iw;
-    const mcz = (WA * mz[A] + WB * mz[B]) * iw;
-    const dax = mx[A] - mcx, day = my[A] - mcy, daz = mz[A] - mcz;
-    const dbx = mx[B] - mcx, dby = my[B] - mcy, dbz = mz[B] - mcz;
-    const a6 = A * 6, b6 = B * 6;
-
-    const sm0 = (M2[a6] + M2[b6] + WA * dax * dax + WB * dbx * dbx) * iw + EPS_COV;
-    const sm1 = (M2[a6 + 1] + M2[b6 + 1] + WA * dax * day + WB * dbx * dby) * iw;
-    const sm2 = (M2[a6 + 2] + M2[b6 + 2] + WA * dax * daz + WB * dbx * dbz) * iw;
-    const sm3 = (M2[a6 + 3] + M2[b6 + 3] + WA * day * day + WB * dby * dby) * iw + EPS_COV;
-    const sm4 = (M2[a6 + 4] + M2[b6 + 4] + WA * day * daz + WB * dby * dbz) * iw;
-    const sm5 = (M2[a6 + 5] + M2[b6 + 5] + WA * daz * daz + WB * dbz * dbz) * iw + EPS_COV;
-
-    const detm = Math.max(
-        sm0 * (sm3 * sm5 - sm4 * sm4) - sm1 * (sm1 * sm5 - sm4 * sm2) + sm2 * (sm1 * sm4 - sm3 * sm2),
-        1e-60
-    );
-    const sdC = Math.sqrt(detm);
-
-    eig3(sm0, sm1, sm2, sm3, sm4, sm5);
-    const s0 = Math.sqrt(Math.max(eigOut[0], 1e-18));
-    const s1 = Math.sqrt(Math.max(eigOut[1], 1e-18));
-    const s2 = Math.sqrt(Math.max(eigOut[2], 1e-18));
-    const alphaC = Math.min(1, WC / Math.max(ellipsoidArea(s0, s1, s2), 1e-30));
-
-    const a3 = A * 3, b3 = B * 3;
-    const bc0 = (baseW[a3] + baseW[b3]) * iw;
-    const bc1 = (baseW[a3 + 1] + baseW[b3 + 1]) * iw;
-    const bc2 = (baseW[a3 + 2] + baseW[b3 + 2]) * iw;
-    const bn2C = bc0 * bc0 + bc1 * bc1 + bc2 * bc2;
-
-    const selfM = alphaC * alphaC * bn2C * PI_1_5 * sdC;
-
-    // ⟨Σ member fields, f_m⟩ over both chains.
-    let memfm = 0;
-    for (let pass = 0; pass < 2; pass++) {
-        for (let m = pass === 0 ? mHead[A] : mHead[B]; m !== NIL; m = mNext[m]) {
-            const o = m * CACHE_STRIDE;
-            const wgt = SC[o + 10] * alphaC *
-                (SC[o + 12] * bc0 + SC[o + 13] * bc1 + SC[o + 14] * bc2);
-            if (wgt === 0) continue;
-            memfm += wgt * crossG(SC[o + 9] * sdC,
-                SC[o + 3] + sm0, SC[o + 4] + sm1, SC[o + 5] + sm2,
-                SC[o + 6] + sm3, SC[o + 7] + sm4, SC[o + 8] + sm5,
-                SC[o] - mcx, SC[o + 1] - mcy, SC[o + 2] - mcz);
-        }
-    }
-
-    // Scross(A,B) = Σ_{a∈A,b∈B}⟨f_a,f_b⟩ with distance culling.
-    const na = gatherMembers(st, A);
-    let scross = 0;
-    for (let b = mHead[B]; b !== NIL; b = mNext[b]) {
-        const ob = b * CACHE_STRIDE;
-        const bxp = SC[ob], byp = SC[ob + 1], bzp = SC[ob + 2];
-        const trb = SC[ob + 3] + SC[ob + 6] + SC[ob + 8];
-        const alb = SC[ob + 10], sdb = SC[ob + 9];
-        const cb0 = SC[ob + 12], cb1 = SC[ob + 13], cb2 = SC[ob + 14];
-        for (let t = 0; t < na; t++) {
-            const a = gatherBuf[t];
-            const oa = a * CACHE_STRIDE;
-            const dx = SC[oa] - bxp, dy = SC[oa + 1] - byp, dz = SC[oa + 2] - bzp;
-            const d2 = dx * dx + dy * dy + dz * dz;
-            if (d2 > CULL_QUAD * (SC[oa + 3] + SC[oa + 6] + SC[oa + 8] + trb)) continue;
-            const wgt = SC[oa + 10] * alb *
-                (SC[oa + 12] * cb0 + SC[oa + 13] * cb1 + SC[oa + 14] * cb2);
-            if (wgt === 0) continue;
-            scross += wgt * crossG(SC[oa + 9] * sdb,
-                SC[oa + 3] + SC[ob + 3], SC[oa + 4] + SC[ob + 4], SC[oa + 5] + SC[ob + 5],
-                SC[oa + 6] + SC[ob + 6], SC[oa + 7] + SC[ob + 7], SC[oa + 8] + SC[ob + 8],
-                dx, dy, dz);
-        }
-    }
-
-    const E = Sself[A] + Sself[B] + 2 * scross - 2 * memfm + selfM;
-    evalOut.E = E;
-    evalOut.Scross = scross;
-
-    const iwA = 1 / W[A], iwB = 1 / W[B];
-    const d0 = baseW[a3] * iwA - baseW[b3] * iwB;
-    const d1 = baseW[a3 + 1] * iwA - baseW[b3 + 1] * iwB;
-    const d2c = baseW[a3 + 2] * iwA - baseW[b3 + 2] * iwB;
-    return (E - Err[A] - Err[B]) + COLOR_WEIGHT * (d0 * d0 + d1 * d1 + d2c * d2c);
+    const a = gatherChain(st, A, aBuf);
+    aBuf = a.buf;
+    const na = a.count;
+    composeRaw(st.SC, aBuf, na, compA);
+    const aTerm = sideTerm(st.SC, aBuf, na, compA);
+    return evalAgainst(st, na, aTerm, B);
 };
 
 /** Result of {@link bestEdgeFor} (reused object). */
-const bestOut = { partner: -1, vb: 0, cost: 0, E: 0, S: 0 };
+const bestOut = { partner: -1, vb: 0, cost: 0 };
+
+const candScratch = new Uint32Array(256);
 
 /**
  * Compute the cheapest legal merge for `root`: candidates are the live
  * clusters owning any member's candidate ids, deduplicated linearly (pools
- * are small), respecting the group cap.
+ * are small), respecting the group cap. The root's composition and side
+ * term are hoisted — computed once, reused for every candidate.
  *
  * @param st - Selection state.
  * @param root - Cluster root to refresh.
  * @returns True when a legal candidate exists (result in {@link bestOut}).
  */
-const candScratch = new Uint32Array(256);
-
 const bestEdgeFor = (st: RecostState, root: number): boolean => {
-    const { cands, D, parent, size, version, mHead, mNext, maxGroup } = st;
+    const { SC, cands, D, parent, size, version, maxGroup } = st;
+    if (maxGroup * D > candScratch.length) {
+        throw new Error(`recost: candidate pool bound ${maxGroup * D} exceeds scratch (${candScratch.length})`);
+    }
     const sz = size[root];
-    // Derive + dedup candidates (linear scan — pools are ≤ a few dozen).
+
+    const a = gatherChain(st, root, aBuf);
+    aBuf = a.buf;
+    const na = a.count;
+
+    // Derive + dedup candidates (linear scan — pools are ≤ maxGroup·D).
     let cnt = 0;
     const cbuf = candScratch;
-    for (let m = mHead[root]; m !== NIL; m = mNext[m]) {
-        const base = m * D;
+    for (let t = 0; t < na; t++) {
+        const base = aBuf[t] * D;
         for (let s = 0; s < D; s++) {
             const nb = cands[base + s];
             if (nb === NO_CANDIDATE) continue;
             const r = findRO(parent, nb);
             if (r === root) continue;
             let seen = false;
-            for (let t = 0; t < cnt; t++) {
-                if (cbuf[t] === r) {
+            for (let u = 0; u < cnt; u++) {
+                if (cbuf[u] === r) {
                     seen = true; break;
                 }
             }
-            if (seen) continue;
-            if (cnt < cbuf.length) cbuf[cnt++] = r;
+            if (!seen) cbuf[cnt++] = r;
         }
     }
-    let bc = Infinity, bp = -1, bv = 0, bE = 0, bS = 0;
+    if (cnt === 0) return false;
+
+    composeRaw(SC, aBuf, na, compA);
+    const aTerm = sideTerm(SC, aBuf, na, compA);
+
+    let bc = Infinity, bp = -1, bv = 0;
     for (let t = 0; t < cnt; t++) {
         const c = cbuf[t];
         if (sz + size[c] > maxGroup) continue;
-        const d = evalMergeCore(st, root, c);
+        const d = evalAgainst(st, na, aTerm, c);
         if (d < bc) {
-            bc = d; bp = c; bv = version[c]; bE = evalOut.E; bS = evalOut.Scross;
+            bc = d; bp = c; bv = version[c];
         }
     }
     if (bp < 0) return false;
-    bestOut.partner = bp; bestOut.vb = bv; bestOut.cost = bc; bestOut.E = bE; bestOut.S = bS;
+    bestOut.partner = bp; bestOut.vb = bv; bestOut.cost = bc;
     return true;
 };
 
-export { evalMergeCore, bestEdgeFor, findRO, evalOut, bestOut, NO_CANDIDATE, type RecostState };
+export { evalMergeCore, bestEdgeFor, bestOut, NO_CANDIDATE, type RecostState };

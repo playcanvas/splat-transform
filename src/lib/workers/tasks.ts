@@ -1,7 +1,6 @@
 import type { TypedArray } from '../data-table/data-table';
 import { knnQueryBlock } from '../decimate/knn-core';
 import { mergeGroup, createMergeScratch, splatMass } from '../decimate/moment-match';
-import { bestEdgeFor, bestOut, type RecostState } from '../decimate/recost-core';
 import { buildFlatKdTree, type FlatKdTree } from '../spatial/kd-tree';
 import { quantize1dColumns, type QuantizedColumns } from '../spatial/quantize-1d-core';
 import { WebPCodec } from '../utils/webp-codec';
@@ -66,57 +65,6 @@ const taskHandlers = {
     knnBlock: (args: { positions: Float32Array, ownedCount: number, k: number }): TaskOutput<Uint32Array> => {
         const result = knnQueryBlock(args.positions, args.ownedCount, args.k);
         return { result, transfer: [result.buffer as ArrayBuffer] };
-    },
-
-    // Re-costed selection bulk refresh: best merge edge for each queued
-    // cluster root, evaluated against SharedArrayBuffer-backed state that the
-    // host freezes for the duration of the round (read-only here). Packed
-    // result: 6 f64 per root — [root, partner|-1, partnerVersion, cost, E, Scross].
-    recostBestEdges: (args: {
-        sc: Float32Array, cands: Uint32Array, d: number, n: number, maxGroup: number,
-        parent: Uint32Array, size: Uint32Array,
-        w: Float64Array, mx: Float64Array, my: Float64Array, mz: Float64Array,
-        m2: Float64Array, baseW: Float64Array, sself: Float64Array, err: Float64Array,
-        version: Uint32Array, mHead: Uint32Array, mNext: Uint32Array,
-        roots: Uint32Array
-    }): TaskOutput<Float64Array> => {
-        const st: RecostState = {
-            SC: args.sc,
-            cands: args.cands,
-            D: args.d,
-            N: args.n,
-            maxGroup: args.maxGroup,
-            parent: args.parent,
-            size: args.size,
-            W: args.w,
-            mx: args.mx,
-            my: args.my,
-            mz: args.mz,
-            M2: args.m2,
-            baseW: args.baseW,
-            Sself: args.sself,
-            Err: args.err,
-            version: args.version,
-            mHead: args.mHead,
-            mNext: args.mNext
-        };
-        const roots = args.roots;
-        const out = new Float64Array(roots.length * 6);
-        for (let i = 0; i < roots.length; i++) {
-            const root = roots[i];
-            const o = i * 6;
-            out[o] = root;
-            if (bestEdgeFor(st, root)) {
-                out[o + 1] = bestOut.partner;
-                out[o + 2] = bestOut.vb;
-                out[o + 3] = bestOut.cost;
-                out[o + 4] = bestOut.E;
-                out[o + 5] = bestOut.S;
-            } else {
-                out[o + 1] = -1;
-            }
-        }
-        return { result: out, transfer: [out.buffer as ArrayBuffer] };
     },
 
     // Decimation merge stream: n-ary moment match of packed member-major

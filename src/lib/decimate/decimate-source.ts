@@ -233,19 +233,12 @@ const decimateSource = async (
         const baseBytes = residentInputBytes + N * (12 + K * 8 + K * 4 + 4) + 3 * 2 ** 30;
         const recost = !legacy && baseBytes + N * RECOST_BYTES_PER_GAUSSIAN(k) <= budget;
 
-        // The splat cache and neighbour graph feed refresh rounds; shared
-        // memory lets those rounds run on the worker pool.
-        const sharedOk = recost && typeof SharedArrayBuffer !== 'undefined';
         const cand: CandidateArrays = {
             idx: new Uint32Array(N * K).fill(0xFFFFFFFF),
             cost: new Float32Array(N * K).fill(Infinity)
         };
-        const cacheOut = recost ?
-            new Float32Array(sharedOk ? new SharedArrayBuffer(N * CACHE_STRIDE * 4) : new ArrayBuffer(N * CACHE_STRIDE * 4)) :
-            undefined;
-        const neighborsOut = recost ?
-            new Uint32Array(sharedOk ? new SharedArrayBuffer(N * k * 4) : new ArrayBuffer(N * k * 4)) :
-            undefined;
+        const cacheOut = recost ? new Float32Array(N * CACHE_STRIDE) : undefined;
+        const neighborsOut = recost ? new Uint32Array(N * k) : undefined;
 
         const priorityBar = logger.bar('computing merge priorities', N);
         if (legacy) {
@@ -269,7 +262,7 @@ const decimateSource = async (
         const selection = legacy ?
             selectMergesLegacy(cand, N, K, needed) :
             cacheOut ?
-                await selectMergesRecosted({ cand, K, splatCache: cacheOut, neighbors: neighborsOut!, D: k, N, mergesNeeded: needed }) :
+                selectMergesRecosted({ cand, K, splatCache: cacheOut, neighbors: neighborsOut!, D: k, N, mergesNeeded: needed }) :
                 selectMerges(cand, N, K, needed);
         selectSub.end();
 
