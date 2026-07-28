@@ -175,13 +175,19 @@ const indexOfSorted = (sorted: Uint32Array, g: number): number => {
  * for each owned gaussian's k neighbours, reduction to the best K candidates
  * — written into the resident candidate arrays.
  *
+ * Without `cand` (re-costed selection seeds itself from the neighbour graph)
+ * the pass only persists the splat cache + neighbour ids: no externals, no
+ * edge costs, no top-K — the gather narrows to owned rows and the GPU cost
+ * kernel is never constructed.
+ *
  * @param ctx - The pass context.
- * @param cand - Preallocated candidate arrays (`N*K`), filled per block.
+ * @param cand - Candidate arrays (`N*K`) to fill, or undefined to skip all
+ * cost work (cacheOut/neighborsOut persistence only).
  * @param tick - Optional progress callback (owned gaussians completed).
  */
 const runPriorityPass = async (
     ctx: PriorityContext,
-    cand: CandidateArrays,
+    cand: CandidateArrays | undefined,
     tick?: (n: number) => void
 ): Promise<void> => {
     const { pos, order, blocks, device, K, k } = ctx;
@@ -219,7 +225,7 @@ const runPriorityPass = async (
     try {
         if (device) {
             gpuKnn = new GpuKnn(device, maxLocalN, k);
-            gpuCost = new GpuEdgeCost(device, maxLocalN, k);
+            if (cand) gpuCost = new GpuEdgeCost(device, maxLocalN, k);
         }
 
         let next: Prepared | null = blocks.length > 0 ? prepare(0) : null;
@@ -238,28 +244,33 @@ const runPriorityPass = async (
 
             // Externals: referenced rows outside the owned range (halo members
             // and verification-fixed neighbours) — count, collect, sort, dedup.
-            let extCount = 0;
-            for (let s = 0; s < slots; s++) {
-                const l = nbLocal[s];
-                if (l === KNN_SENTINEL || l < nOwned) continue;
-                if (l === KNN_FIXED && indexOfSorted(owned, nbGlobal[s]) >= 0) continue;
-                extCount++;
+            // Only cost evaluation needs them; the persisted cache covers owned
+            // rows only (every gaussian is owned by exactly one block).
+            let extraGlobals = new Uint32Array(0);
+            if (cand) {
+                let extCount = 0;
+                for (let s = 0; s < slots; s++) {
+                    const l = nbLocal[s];
+                    if (l === KNN_SENTINEL || l < nOwned) continue;
+                    if (l === KNN_FIXED && indexOfSorted(owned, nbGlobal[s]) >= 0) continue;
+                    extCount++;
+                }
+                const extSorted = new Uint32Array(extCount);
+                extCount = 0;
+                for (let s = 0; s < slots; s++) {
+                    const l = nbLocal[s];
+                    if (l === KNN_SENTINEL || l < nOwned) continue;
+                    const g = nbGlobal[s];
+                    if (l === KNN_FIXED && indexOfSorted(owned, g) >= 0) continue;
+                    extSorted[extCount++] = g;
+                }
+                extSorted.sort();
+                let uniq = 0;
+                for (let i = 0; i < extCount; i++) {
+                    if (i === 0 || extSorted[i] !== extSorted[i - 1]) extSorted[uniq++] = extSorted[i];
+                }
+                extraGlobals = extSorted.subarray(0, uniq);
             }
-            const extSorted = new Uint32Array(extCount);
-            extCount = 0;
-            for (let s = 0; s < slots; s++) {
-                const l = nbLocal[s];
-                if (l === KNN_SENTINEL || l < nOwned) continue;
-                const g = nbGlobal[s];
-                if (l === KNN_FIXED && indexOfSorted(owned, g) >= 0) continue;
-                extSorted[extCount++] = g;
-            }
-            extSorted.sort();
-            let uniq = 0;
-            for (let i = 0; i < extCount; i++) {
-                if (i === 0 || extSorted[i] !== extSorted[i - 1]) extSorted[uniq++] = extSorted[i];
-            }
-            const extraGlobals = extSorted.subarray(0, uniq);
 
             // Verification-fixed externals are not bounded by the halo cap, so
             // a pathological block's view can exceed the preallocated cost
@@ -279,29 +290,61 @@ const runPriorityPass = async (
             const cache = new Float32Array(viewN * CACHE_STRIDE);
             buildSplatCache(view, cache);
 
-            // Translate neighbour slots in place: local/global → view rows
-            // (dense-slot edge model; sentinel slots stay sentinel).
-            for (let s = 0; s < slots; s++) {
-                const l = nbLocal[s];
-                if (l === KNN_SENTINEL || l < nOwned) continue;
-                const g = nbGlobal[s];
-                if (l === KNN_FIXED) {
-                    const oi = indexOfSorted(owned, g);
-                    nbLocal[s] = oi >= 0 ? oi : nOwned + indexOfSorted(extraGlobals, g);
-                } else {
-                    nbLocal[s] = nOwned + indexOfSorted(extraGlobals, g);
-                }
-            }
-
-            const blockCosts = new Float32Array(slots);
-            if (device) {
-                await gpuCost!.execute(cache, viewN, nbLocal, blockCosts);
-            } else {
+            if (cand) {
+                // Translate neighbour slots in place: local/global → view rows
+                // (dense-slot edge model; sentinel slots stay sentinel).
                 for (let s = 0; s < slots; s++) {
-                    const row = nbLocal[s];
-                    blockCosts[s] = row === KNN_SENTINEL ?
-                        0 :
-                        computeEdgeCost(cache, (s / k) | 0, row);
+                    const l = nbLocal[s];
+                    if (l === KNN_SENTINEL || l < nOwned) continue;
+                    const g = nbGlobal[s];
+                    if (l === KNN_FIXED) {
+                        const oi = indexOfSorted(owned, g);
+                        nbLocal[s] = oi >= 0 ? oi : nOwned + indexOfSorted(extraGlobals, g);
+                    } else {
+                        nbLocal[s] = nOwned + indexOfSorted(extraGlobals, g);
+                    }
+                }
+
+                const blockCosts = new Float32Array(slots);
+                if (device) {
+                    await gpuCost!.execute(cache, viewN, nbLocal, blockCosts);
+                } else {
+                    for (let s = 0; s < slots; s++) {
+                        const row = nbLocal[s];
+                        blockCosts[s] = row === KNN_SENTINEL ?
+                            0 :
+                            computeEdgeCost(cache, (s / k) | 0, row);
+                    }
+                }
+
+                // Reduce to best K candidates per owned gaussian (ascending by
+                // cost; sentinel slots are skipped by id — their cost values
+                // are never read).
+                const bestIdx = new Uint32Array(K);
+                const bestCost = new Float64Array(K);
+                for (let qi = 0; qi < nOwned; qi++) {
+                    let size = 0;
+                    const base = qi * k;
+                    for (let s = 0; s < k; s++) {
+                        if (nbLocal[base + s] === KNN_SENTINEL) continue;
+                        const c = blockCosts[base + s];
+                        if (!Number.isFinite(c)) continue;
+                        if (size === K && c >= bestCost[K - 1]) continue;
+                        let at = size < K ? size : K - 1;
+                        while (at > 0 && bestCost[at - 1] > c) {
+                            bestCost[at] = bestCost[at - 1];
+                            bestIdx[at] = bestIdx[at - 1];
+                            at--;
+                        }
+                        bestCost[at] = c;
+                        bestIdx[at] = nbGlobal[base + s];
+                        size = Math.min(size + 1, K);
+                    }
+                    const g = owned[qi];
+                    for (let s = 0; s < K; s++) {
+                        cand.idx[g * K + s] = s < size ? bestIdx[s] : 0xFFFFFFFF;
+                        cand.cost[g * K + s] = s < size ? bestCost[s] : Infinity;
+                    }
                 }
             }
 
@@ -318,36 +361,6 @@ const runPriorityPass = async (
                 const NO = ctx.neighborsOut;
                 for (let qi = 0; qi < nOwned; qi++) {
                     NO.set(nbGlobal.subarray(qi * k, (qi + 1) * k), owned[qi] * k);
-                }
-            }
-
-            // Reduce to best K candidates per owned gaussian (ascending by
-            // cost; sentinel slots are skipped by id — their cost values are
-            // never read).
-            const bestIdx = new Uint32Array(K);
-            const bestCost = new Float64Array(K);
-            for (let qi = 0; qi < nOwned; qi++) {
-                let size = 0;
-                const base = qi * k;
-                for (let s = 0; s < k; s++) {
-                    if (nbLocal[base + s] === KNN_SENTINEL) continue;
-                    const c = blockCosts[base + s];
-                    if (!Number.isFinite(c)) continue;
-                    if (size === K && c >= bestCost[K - 1]) continue;
-                    let at = size < K ? size : K - 1;
-                    while (at > 0 && bestCost[at - 1] > c) {
-                        bestCost[at] = bestCost[at - 1];
-                        bestIdx[at] = bestIdx[at - 1];
-                        at--;
-                    }
-                    bestCost[at] = c;
-                    bestIdx[at] = nbGlobal[base + s];
-                    size = Math.min(size + 1, K);
-                }
-                const g = owned[qi];
-                for (let s = 0; s < K; s++) {
-                    cand.idx[g * K + s] = s < size ? bestIdx[s] : 0xFFFFFFFF;
-                    cand.cost[g * K + s] = s < size ? bestCost[s] : Infinity;
                 }
             }
 

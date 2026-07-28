@@ -22,9 +22,9 @@
  * cluster moments are recomputed from the ≤ MAX_GROUP member cache rows on
  * every evaluation, so this module keeps no per-root float state at all —
  * a commit is a chain splice plus union-find/size/version updates, and the
- * heap carries only (cost, a, b, seq, versionB). Seeds come from the
- * priority pass's candidate arrays; refresh candidate pools come from the
- * persisted neighbour graph.
+ * heap carries only (cost, a, b, seq, versionB). Seeding is wave 0: every
+ * gaussian starts queued, so the first refresh evaluates each singleton's
+ * best edge over its neighbour rows — no candidate arrays are consumed.
  *
  * decimate-source gates this path by memory budget and falls back to
  * {@link selectMerges} when over.
@@ -32,18 +32,13 @@
  * Engine-free; single-threaded, pure resident-array computation, no IO.
  */
 
-import { type CandidateArrays } from './priority';
-import { bestEdgeFor, bestOut, NO_CANDIDATE, CACHE_STRIDE, type RecostState } from './recost-core';
+import { bestEdgeFor, bestOut, CACHE_STRIDE, type RecostState } from './recost-core';
 import { MAX_GROUP, type SelectionResult } from './select';
 
 const NIL = 0xFFFFFFFF;
 
 /** Inputs for {@link selectMergesRecosted}. */
 type RecostInputs = {
-    /** Per-gaussian best-K candidates from the priority pass (seed costs include the colour term). */
-    cand: CandidateArrays;
-    /** Candidates per gaussian. */
-    K: number;
     /**
      * Resident per-splat cache, {@link CACHE_STRIDE} floats per splat
      * (buildSplatCache row layout), persisted by the priority pass.
@@ -71,7 +66,7 @@ type RecostInputs = {
  * @returns The selection (same contract as {@link selectMerges}).
  */
 const selectMergesRecosted = (inputs: RecostInputs): SelectionResult => {
-    const { cand, K, splatCache: SC, neighbors, D, N, mergesNeeded } = inputs;
+    const { splatCache: SC, neighbors, D, N, mergesNeeded } = inputs;
 
     // ---- Cluster structure (indexed by union-find root) — integers only.
     const parent = new Uint32Array(N);
@@ -175,7 +170,7 @@ const selectMergesRecosted = (inputs: RecostInputs): SelectionResult => {
     // Refresh queue: clusters whose best edge must be re-evaluated. Queuing
     // bumps lastSeq so stale heap entries for the cluster discard on pop;
     // queuedRound dedupes within a round.
-    let pending = new Uint32Array(1 << 16);
+    const pending = new Uint32Array(N);
     let pendingCount = 0;
     const queuedRound = new Uint32Array(N);
     let round = 1;
@@ -183,22 +178,19 @@ const selectMergesRecosted = (inputs: RecostInputs): SelectionResult => {
         lastSeq[root] = ++seqCounter;
         if (queuedRound[root] === round) return;
         queuedRound[root] = round;
-        if (pendingCount === pending.length) {
-            const g = new Uint32Array(pending.length * 2);
-            g.set(pending); pending = g;
-        }
         pending[pendingCount++] = root;
     };
 
-    // Seed: the priority pass's cheapest candidate per gaussian.
+    // Seed = wave 0: every gaussian starts queued, so the first refresh
+    // evaluates each singleton's best edge over its neighbour rows (identical
+    // work to a per-edge cost pass + argmin, and the same eval as every later
+    // refresh). The first drain is a no-op on the empty heap.
     for (let i = 0; i < N; i++) {
-        const j = cand.idx[i * K];
-        const c = cand.cost[i * K];
         lastSeq[i] = ++seqCounter;
-        if (j !== NO_CANDIDATE && Number.isFinite(c)) {
-            heapPush(c, i, j, lastSeq[i], version[j]);
-        }
+        queuedRound[i] = round;
+        pending[i] = i;
     }
+    pendingCount = N;
 
     // ---- Round loop. Each round commits at most WAVE merges before the
     // bulk refresh, so refreshed edges (notably cheap continuation merges in

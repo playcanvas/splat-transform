@@ -175,35 +175,12 @@ describe('stateless re-costed eval', () => {
 });
 
 describe('selectMergesRecosted', () => {
-    // Build seeds the way decimate-source does: best candidate per splat.
-    const makeSeeds = (cache, neighbors, n, k, K) => {
-        const cand = {
-            idx: new Uint32Array(n * K).fill(NIL),
-            cost: new Float32Array(n * K).fill(Infinity)
-        };
-        for (let i = 0; i < n; i++) {
-            let bc = Infinity, bj = NIL;
-            for (let s = 0; s < k; s++) {
-                const j = neighbors[i * k + s];
-                if (j === NIL) continue;
-                const cst = computeEdgeCost(cache, i, j);
-                if (cst < bc) {
-                    bc = cst; bj = j;
-                }
-            }
-            cand.idx[i * K] = bj;
-            cand.cost[i * K] = bc;
-        }
-        return cand;
-    };
-
     it('hits the target with a well-formed capped CSR', () => {
-        const n = 256, k = 8, K = 4;
+        const n = 256, k = 8;
         const cache = makeCache(n, 99);
         const neighbors = bruteNeighbors(cache, n, k);
-        const cand = makeSeeds(cache, neighbors, n, k, K);
         const needed = n >> 1;
-        const sel = selectMergesRecosted({ cand, K, splatCache: cache, neighbors, D: k, N: n, mergesNeeded: needed });
+        const sel = selectMergesRecosted({ splatCache: cache, neighbors, D: k, N: n, mergesNeeded: needed });
 
         assert.strictEqual(sel.removed, needed);
         assert.strictEqual(sel.groupOffsets[sel.mergedGroups], sel.groupMembers.length);
@@ -225,7 +202,7 @@ describe('selectMergesRecosted', () => {
     });
 
     it('concentrates coincident splats into full groups (refresh continuation)', () => {
-        const n = 64, k = 16, K = 4;
+        const n = 64, k = 16;
         // All splats identical and coincident.
         const pos = new Float32Array(n * 3).fill(0.5);
         const geo = new Float32Array(n * 8);
@@ -248,9 +225,8 @@ describe('selectMergesRecosted', () => {
                 neighbors[i * k + s] = (i + (s & 1 ? n - off : off)) % n;
             }
         }
-        const cand = makeSeeds(cache, neighbors, n, k, K);
         const needed = n - (n / MAX_GROUP);   // 48: reachable only by filling groups to the cap
-        const sel = selectMergesRecosted({ cand, K, splatCache: cache, neighbors, D: k, N: n, mergesNeeded: needed });
+        const sel = selectMergesRecosted({ splatCache: cache, neighbors, D: k, N: n, mergesNeeded: needed });
 
         // Disjoint pairing alone tops out at n/2 = 32 removals; anything well
         // beyond that requires continuation merges via refresh re-entry (the

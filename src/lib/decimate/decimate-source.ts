@@ -37,10 +37,11 @@ const MIN_ITERATION_PROGRESS = 0.05;
 const DEFAULT_MEMORY_BUDGET = 48 * 2 ** 30;
 
 // Per-gaussian residency of re-costed selection beyond the base state: splat
-// cache (16 f32) + neighbour ids (k u32) + f64 cluster moments/colour/error +
-// union-find/chains/heap. Conservative round-up; used by the per-generation
-// gate that falls back to one-shot selectMerges when over budget.
-const RECOST_BYTES_PER_GAUSSIAN = (k: number) => CACHE_STRIDE * 4 + k * 4 + 256;
+// cache (16 f32) + neighbour ids (k u32) + integer structure (union-find,
+// chains, seq/round bookkeeping: 8×u32) + heap (5 arrays × 1.25N ≈ 25 B).
+// Conservative round-up; used by the per-generation gate that falls back to
+// one-shot selectMerges when over budget.
+const RECOST_BYTES_PER_GAUSSIAN = (k: number) => CACHE_STRIDE * 4 + k * 4 + 80;
 
 /** Coherence heuristic: gap (rows) merged into one run / runs-per-block considered scattered. */
 const COHERENCE_GAP_ROWS = 64;
@@ -233,10 +234,14 @@ const decimateSource = async (
         const baseBytes = residentInputBytes + N * (12 + K * 8 + K * 4 + 4) + 3 * 2 ** 30;
         const recost = !legacy && baseBytes + N * RECOST_BYTES_PER_GAUSSIAN(k) <= budget;
 
-        const cand: CandidateArrays = {
-            idx: new Uint32Array(N * K).fill(0xFFFFFFFF),
-            cost: new Float32Array(N * K).fill(Infinity)
-        };
+        // Re-costed selection seeds itself from the neighbour graph (wave 0),
+        // so candidate arrays exist only for the one-shot/legacy selections.
+        const cand: CandidateArrays | undefined = recost ?
+            undefined :
+            {
+                idx: new Uint32Array(N * K).fill(0xFFFFFFFF),
+                cost: new Float32Array(N * K).fill(Infinity)
+            };
         const cacheOut = recost ? new Float32Array(N * CACHE_STRIDE) : undefined;
         const neighborsOut = recost ? new Uint32Array(N * k) : undefined;
 
@@ -244,7 +249,7 @@ const decimateSource = async (
         if (legacy) {
             await runPriorityPassLegacy(
                 { source: src, pool, pos: positions, order, blocks, device, K, k },
-                cand,
+                cand!,
                 n => priorityBar.tick(n)
             );
         } else {
@@ -260,10 +265,10 @@ const decimateSource = async (
         const needed = N - generationTarget;
         const selectSub = logger.group(recost ? 'Selecting merges (re-costed)' : 'Selecting merges');
         const selection = legacy ?
-            selectMergesLegacy(cand, N, K, needed) :
+            selectMergesLegacy(cand!, N, K, needed) :
             cacheOut ?
-                selectMergesRecosted({ cand, K, splatCache: cacheOut, neighbors: neighborsOut!, D: k, N, mergesNeeded: needed }) :
-                selectMerges(cand, N, K, needed);
+                selectMergesRecosted({ splatCache: cacheOut, neighbors: neighborsOut!, D: k, N, mergesNeeded: needed }) :
+                selectMerges(cand!, N, K, needed);
         selectSub.end();
 
         if (selection.removed === 0) {
