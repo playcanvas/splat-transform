@@ -4,7 +4,7 @@ import { type GraphicsDevice } from 'playcanvas';
 import { createBlockProducerSource } from './block-producer';
 import { mergeStream } from './merge-stream';
 import { kdPartition, coherenceRuns, type ResidentPositions } from './partition';
-import { runPriorityPass, HALO_CAP, type CandidateArrays } from './priority';
+import { runPriorityPass, VIEW_GROW, type CandidateArrays } from './priority';
 import { runPriorityPassLegacy } from './priority-legacy';
 import { selectMerges } from './select';
 import { selectMergesLegacy } from './select-legacy';
@@ -200,7 +200,7 @@ const decimateSource = async (
         const bindingLimit = (device as unknown as { limits?: { maxStorageBufferBindingSize?: number } } | undefined)
         ?.limits?.maxStorageBufferBindingSize;
         if (typeof bindingLimit === 'number') {
-            const largestBinding = (bs: number) => bs * (1 + HALO_CAP) * SPLAT_STRIDE * 4;
+            const largestBinding = (bs: number) => Math.ceil(bs * VIEW_GROW) * SPLAT_STRIDE * 4;
             while (blockSize > (1 << 16) && largestBinding(blockSize) > bindingLimit) {
                 blockSize >>= 1;
             }

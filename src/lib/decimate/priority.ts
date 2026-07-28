@@ -1,8 +1,7 @@
 import { type GraphicsDevice } from 'playcanvas';
 
 import { buildSplatCache, computeEdgeCost, CACHE_STRIDE } from './edge-cost-cpu';
-import { collectBlock, verifyAndFixKnn, toGlobalNeighbors, KNN_FIXED, type BlockLocals } from './knn-blocks';
-import { KNN_SENTINEL } from './knn-core';
+import { KNN_SENTINEL, type ForestPart } from './knn-core';
 import { type SplatView } from './moment-match';
 import { type BlockRange, type ResidentPositions } from './partition';
 import { type ChunkData, type ChunkDataPool, type ChunkSource } from '../chunk';
@@ -10,11 +9,17 @@ import { GpuEdgeCost } from '../gpu/gpu-edge-cost';
 import { GpuKnn } from '../gpu/gpu-knn';
 import { WorkerQueue } from '../workers';
 
-/** Halo radius multiplier on the density-estimated k-NN radius. */
-const HALO_FACTOR = 2.5;
+/**
+ * Max points per forest part. Parts build in parallel on the worker pool
+ * (the build is each generation's serial prefix — smaller parts spread it
+ * across the pool) and their trees must fit the GPU binding limits; query
+ * cost is ~part-count-independent (the carried bound prunes distant parts
+ * at their root).
+ */
+const PART_SIZE_MAX = 1 << 22;
 
-/** Halo size cap as a multiple of a block's owned count (buffer-sizing bound). */
-const HALO_CAP = 1;
+/** Initial per-block view capacity multiplier (externals beyond it grow the cost buffers on demand). */
+const VIEW_GROW = 1.25;
 
 /**
  * Per-gaussian best-K merge candidates, the resident output of the priority
@@ -171,6 +176,100 @@ const indexOfSorted = (sorted: Uint32Array, g: number): number => {
 };
 
 /**
+ * Build the generation's KNN forest: consecutive kdPartition blocks grouped
+ * to {@link PART_SIZE_MAX} points per part, each part's flat tree built on
+ * the worker pool with node splat ids remapped to global. With `shared` the
+ * arrays land on SharedArrayBuffers so the CPU query tasks read them without
+ * copies.
+ *
+ * @param pos - Resident position columns.
+ * @param order - Partition order (block-contiguous global ids).
+ * @param blocks - Partition blocks.
+ * @param shared - Allocate the flat arrays on shared memory.
+ * @returns The forest parts and each block's home part index (queries
+ * traverse their home part first so every other part culls on its AABB).
+ */
+const buildForest = async (
+    pos: ResidentPositions,
+    order: Uint32Array,
+    blocks: BlockRange[],
+    shared: boolean
+): Promise<{ parts: ForestPart[], blockPart: Uint32Array }> => {
+    const jobs: Promise<ForestPart>[] = [];
+    const blockPart = new Uint32Array(blocks.length);
+    let bi = 0;
+    while (bi < blocks.length) {
+        const startRow = blocks[bi].start;
+        let endRow = blocks[bi].end;
+        blockPart[bi] = jobs.length;
+        bi++;
+        while (bi < blocks.length && blocks[bi].end - startRow <= PART_SIZE_MAX) {
+            endRow = blocks[bi].end;
+            blockPart[bi] = jobs.length;
+            bi++;
+        }
+        const cnt = endRow - startRow;
+        const x = new Float32Array(cnt);
+        const y = new Float32Array(cnt);
+        const z = new Float32Array(cnt);
+        const ids = new Uint32Array(cnt);
+        for (let i = 0; i < cnt; i++) {
+            const g = order[startRow + i];
+            ids[i] = g;
+            x[i] = pos.x[g];
+            y[i] = pos.y[g];
+            z[i] = pos.z[g];
+        }
+        jobs.push(WorkerQueue.run('buildKdForestPart', { x, y, z, ids, shared }, [
+            x.buffer as ArrayBuffer, y.buffer as ArrayBuffer, z.buffer as ArrayBuffer, ids.buffer as ArrayBuffer
+        ]));
+    }
+    return { parts: await Promise.all(jobs), blockPart };
+};
+
+/**
+ * Canonically order each neighbour row by (distance², id) ascending with
+ * sentinels last, so all downstream tie-breaking is deterministic and
+ * identical across the GPU and CPU KNN paths.
+ *
+ * @param pos - Resident position columns.
+ * @param owned - The block's owned global ids (row order).
+ * @param nb - Neighbour rows (`owned.length * k` global ids), sorted in place.
+ * @param k - Neighbours per row.
+ */
+const sortNeighborRows = (
+    pos: ResidentPositions,
+    owned: Uint32Array,
+    nb: Uint32Array,
+    k: number
+): void => {
+    const d = new Float64Array(k);
+    const id = new Uint32Array(k);
+    for (let q = 0; q < owned.length; q++) {
+        const g = owned[q];
+        const qx = pos.x[g], qy = pos.y[g], qz = pos.z[g];
+        const base = q * k;
+        let m = 0;
+        for (let s = 0; s < k; s++) {
+            const j = nb[base + s];
+            if (j === KNN_SENTINEL) continue;
+            const dx = pos.x[j] - qx, dy = pos.y[j] - qy, dz = pos.z[j] - qz;
+            const dist = dx * dx + dy * dy + dz * dz;
+            let at = m;
+            while (at > 0 && (d[at - 1] > dist || (d[at - 1] === dist && id[at - 1] > j))) {
+                d[at] = d[at - 1];
+                id[at] = id[at - 1];
+                at--;
+            }
+            d[at] = dist;
+            id[at] = j;
+            m++;
+        }
+        for (let s = 0; s < k; s++) nb[base + s] = s < m ? id[s] : KNN_SENTINEL;
+    }
+};
+
+/**
  * The priority pass (heavy read 1): per block — exact global KNN, edge costs
  * for each owned gaussian's k neighbours, reduction to the best K candidates
  * — written into the resident candidate arrays.
@@ -194,74 +293,101 @@ const runPriorityPass = async (
 
     let maxOwned = 0;
     for (const b of blocks) maxOwned = Math.max(maxOwned, b.end - b.start);
-    const maxLocalN = maxOwned * (1 + HALO_CAP);
 
     let gpuKnn: GpuKnn | undefined;
     let gpuCost: GpuEdgeCost | undefined;
-    let gpuCostCapacity = maxLocalN;
+    let gpuCostCapacity = Math.ceil(maxOwned * VIEW_GROW);
 
-    // 1-deep prefetch: the next block's halo collection + tree build runs
-    // while the current block computes. GpuKnn executions share one set of
-    // buffers, so they are serialized through `gpuKnnQueue` — the prefetched
-    // block's KNN starts only after the current block's has finished.
+    // The forest is built once per generation (its trees are exact and
+    // global, so block boundaries are invisible to the results); blocks stay
+    // the query/IO batching unit. Shared arrays feed the CPU query tasks.
+    const { parts: forest, blockPart } = await buildForest(pos, order, blocks, !device && !WorkerQueue.isInline);
+
+    // 1-deep prefetch: the next block's KNN runs while the current block
+    // gathers and costs. GpuKnn executions share one set of buffers, so they
+    // are serialized through `gpuKnnQueue` — the prefetched block's KNN
+    // starts only after the current block's has finished.
     let gpuKnnQueue: Promise<unknown> = Promise.resolve();
-    type Prepared = { locals: BlockLocals; nb: Promise<Uint32Array> };
-    const prepare = (bi: number): Prepared => {
-        const locals = collectBlock(pos, order, blocks, bi, k, HALO_FACTOR, HALO_CAP);
-        const copy = locals.positions.slice();
-        if (device) {
-            const treePromise = WorkerQueue.run('buildFlatKdTree', { positions: copy }, [copy.buffer as ArrayBuffer]);
-            const out = new Uint32Array(locals.ownedCount * k);
-            const run = Promise.all([treePromise, gpuKnnQueue]).then(([flat]) => {
-                return gpuKnn!.execute(flat, locals.positions, locals.ids.length, locals.ownedCount, out);
-            });
-            gpuKnnQueue = run.catch(() => { /* surfaced by the awaiting block */ });
-            return { locals, nb: run.then(() => out) };
+    const prepare = (bi: number): Promise<Uint32Array> => {
+        const owned = order.subarray(blocks[bi].start, blocks[bi].end);
+        const nOwned = owned.length;
+        const home = blockPart[bi];
+        const queryPos = new Float32Array(nOwned * 3);
+        for (let i = 0; i < nOwned; i++) {
+            const g = owned[i];
+            queryPos[i * 3] = pos.x[g];
+            queryPos[i * 3 + 1] = pos.y[g];
+            queryPos[i * 3 + 2] = pos.z[g];
         }
-        const nb = WorkerQueue.run('knnBlock', { positions: copy, ownedCount: locals.ownedCount, k }, [copy.buffer as ArrayBuffer]);
-        return { locals, nb };
+        if (device) {
+            const out = new Uint32Array(nOwned * k);
+            const run = gpuKnnQueue.then(() => gpuKnn!.execute(queryPos, owned, nOwned, out, home));
+            gpuKnnQueue = run.catch(() => { /* surfaced by the awaiting block */ });
+            return run.then(() => out);
+        }
+        // CPU path: split the block's queries across the worker pool (extra
+        // slices just queue when the pool is smaller). Home part first, so
+        // the other parts cull on their AABBs.
+        const ordered = [forest[home], ...forest.filter((_, i) => i !== home)];
+        const per = Math.ceil(nOwned / 4);
+        const jobs: Promise<Uint32Array>[] = [];
+        for (let off = 0; off < nOwned; off += per) {
+            const cnt = Math.min(per, nOwned - off);
+            const qp = queryPos.slice(off * 3, (off + cnt) * 3);
+            const qi = owned.slice(off, off + cnt);
+            jobs.push(WorkerQueue.run('knnForest', { parts: ordered, queryPos: qp, queryIds: qi, k }, [
+                qp.buffer as ArrayBuffer, qi.buffer as ArrayBuffer
+            ]));
+        }
+        return Promise.all(jobs).then((outs) => {
+            const out = new Uint32Array(nOwned * k);
+            let at = 0;
+            for (const o of outs) {
+                out.set(o, at);
+                at += o.length;
+            }
+            return out;
+        });
     };
 
     try {
         if (device) {
-            gpuKnn = new GpuKnn(device, maxLocalN, k);
-            if (cand) gpuCost = new GpuEdgeCost(device, maxLocalN, k);
+            gpuKnn = new GpuKnn(device, forest, k);
+            if (cand) gpuCost = new GpuEdgeCost(device, gpuCostCapacity, k);
         }
 
-        let next: Prepared | null = blocks.length > 0 ? prepare(0) : null;
+        let next: Promise<Uint32Array> | null = blocks.length > 0 ? prepare(0) : null;
 
         for (let bi = 0; bi < blocks.length; bi++) {
-            const { locals, nb: nbPromise } = next!;
+            const nbPromise = next!;
             next = bi + 1 < blocks.length ? prepare(bi + 1) : null;
 
-            const nOwned = locals.ownedCount;
             const owned = order.subarray(blocks[bi].start, blocks[bi].end);
-            const nbLocal = await nbPromise;
-            const nbGlobal = toGlobalNeighbors(locals, nbLocal);
-            verifyAndFixKnn(pos, order, blocks, bi, locals, k, nbGlobal, nbLocal);
+            const nOwned = owned.length;
+            // Global neighbour ids, canonically (d², id)-ordered per row so
+            // downstream tie-breaking is deterministic across KNN paths.
+            const nb = await nbPromise;
+            sortNeighborRows(pos, owned, nb, k);
 
             const slots = nOwned * k;
 
-            // Externals: referenced rows outside the owned range (halo members
-            // and verification-fixed neighbours) — count, collect, sort, dedup.
-            // Only cost evaluation needs them; the persisted cache covers owned
-            // rows only (every gaussian is owned by exactly one block).
+            // Externals: referenced ids outside the owned range — count,
+            // collect, sort, dedup. Only cost evaluation needs them; the
+            // persisted cache covers owned rows only (every gaussian is owned
+            // by exactly one block).
             let extraGlobals = new Uint32Array(0);
             if (cand) {
                 let extCount = 0;
                 for (let s = 0; s < slots; s++) {
-                    const l = nbLocal[s];
-                    if (l === KNN_SENTINEL || l < nOwned) continue;
-                    if (l === KNN_FIXED && indexOfSorted(owned, nbGlobal[s]) >= 0) continue;
+                    const g = nb[s];
+                    if (g === KNN_SENTINEL || indexOfSorted(owned, g) >= 0) continue;
                     extCount++;
                 }
                 const extSorted = new Uint32Array(extCount);
                 extCount = 0;
                 for (let s = 0; s < slots; s++) {
-                    const l = nbLocal[s];
-                    if (l === KNN_SENTINEL || l < nOwned) continue;
-                    const g = nbGlobal[s];
-                    if (l === KNN_FIXED && indexOfSorted(owned, g) >= 0) continue;
+                    const g = nb[s];
+                    if (g === KNN_SENTINEL || indexOfSorted(owned, g) >= 0) continue;
                     extSorted[extCount++] = g;
                 }
                 extSorted.sort();
@@ -272,10 +398,10 @@ const runPriorityPass = async (
                 extraGlobals = extSorted.subarray(0, uniq);
             }
 
-            // Verification-fixed externals are not bounded by the halo cap, so
-            // a pathological block's view can exceed the preallocated cost
-            // buffers — grow them to the actual view size when that happens
-            // (rare; costs one reallocation).
+            // Cross-block neighbours aren't bounded by the initial capacity
+            // estimate, so a pathological block's view can exceed the
+            // preallocated cost buffers — grow them to the actual view size
+            // when that happens (rare; costs one reallocation).
             const viewN = nOwned + extraGlobals.length;
             if (gpuCost && viewN > gpuCostCapacity) {
                 gpuCost.destroy();
@@ -291,26 +417,26 @@ const runPriorityPass = async (
             buildSplatCache(view, cache);
 
             if (cand) {
-                // Translate neighbour slots in place: local/global → view rows
-                // (dense-slot edge model; sentinel slots stay sentinel).
+                // Translate neighbour slots: global ids → view rows
+                // (dense-slot edge model; sentinel slots stay sentinel). `nb`
+                // keeps the global ids for the candidate output.
+                const nbRow = new Uint32Array(slots);
                 for (let s = 0; s < slots; s++) {
-                    const l = nbLocal[s];
-                    if (l === KNN_SENTINEL || l < nOwned) continue;
-                    const g = nbGlobal[s];
-                    if (l === KNN_FIXED) {
-                        const oi = indexOfSorted(owned, g);
-                        nbLocal[s] = oi >= 0 ? oi : nOwned + indexOfSorted(extraGlobals, g);
-                    } else {
-                        nbLocal[s] = nOwned + indexOfSorted(extraGlobals, g);
+                    const g = nb[s];
+                    if (g === KNN_SENTINEL) {
+                        nbRow[s] = KNN_SENTINEL;
+                        continue;
                     }
+                    const oi = indexOfSorted(owned, g);
+                    nbRow[s] = oi >= 0 ? oi : nOwned + indexOfSorted(extraGlobals, g);
                 }
 
                 const blockCosts = new Float32Array(slots);
                 if (device) {
-                    await gpuCost!.execute(cache, viewN, nbLocal, blockCosts);
+                    await gpuCost!.execute(cache, viewN, nbRow, blockCosts);
                 } else {
                     for (let s = 0; s < slots; s++) {
-                        const row = nbLocal[s];
+                        const row = nbRow[s];
                         blockCosts[s] = row === KNN_SENTINEL ?
                             0 :
                             computeEdgeCost(cache, (s / k) | 0, row);
@@ -326,7 +452,7 @@ const runPriorityPass = async (
                     let size = 0;
                     const base = qi * k;
                     for (let s = 0; s < k; s++) {
-                        if (nbLocal[base + s] === KNN_SENTINEL) continue;
+                        if (nb[base + s] === KNN_SENTINEL) continue;
                         const c = blockCosts[base + s];
                         if (!Number.isFinite(c)) continue;
                         if (size === K && c >= bestCost[K - 1]) continue;
@@ -337,7 +463,7 @@ const runPriorityPass = async (
                             at--;
                         }
                         bestCost[at] = c;
-                        bestIdx[at] = nbGlobal[base + s];
+                        bestIdx[at] = nb[base + s];
                         size = Math.min(size + 1, K);
                     }
                     const g = owned[qi];
@@ -360,7 +486,7 @@ const runPriorityPass = async (
             if (ctx.neighborsOut) {
                 const NO = ctx.neighborsOut;
                 for (let qi = 0; qi < nOwned; qi++) {
-                    NO.set(nbGlobal.subarray(qi * k, (qi + 1) * k), owned[qi] * k);
+                    NO.set(nb.subarray(qi * k, (qi + 1) * k), owned[qi] * k);
                 }
             }
 
@@ -374,10 +500,11 @@ const runPriorityPass = async (
 
 export {
     runPriorityPass,
+    buildForest,
     gatherBlockView,
+    sortNeighborRows,
     indexOfSorted,
-    HALO_FACTOR,
-    HALO_CAP,
+    VIEW_GROW,
     type CandidateArrays,
     type PriorityContext,
     type BlockView
