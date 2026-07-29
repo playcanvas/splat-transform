@@ -38,7 +38,13 @@ const MAX_DIM = 65535;
 
 // Shared structure access for the replay/refresh kernels: parentMeta[i] =
 // (parent, size-at-root); chain[i] = (head-at-root, next).
-const refreshWgsl = (k: number, maxGroup: number, splitN: number) => /* wgsl */`
+const refreshWgsl = (
+    k: number,
+    maxGroup: number,
+    splitN: number,
+    coreCount: number,
+    partitioned: boolean
+) => /* wgsl */`
 struct Uniforms {
     pendingCount: u32,
 }
@@ -53,12 +59,14 @@ struct Uniforms {
 @group(0) @binding(5) var<storage, read> parentMeta: array<vec2u>;
 @group(0) @binding(6) var<storage, read> chain: array<vec2u>;
 @group(0) @binding(7) var<storage, read> pending: array<u32>;
-// Per queued root: (best partner or 0xFFFFFFFF, bitcast<u32>(cost)).
-@group(0) @binding(8) var<storage, read_write> outBest: array<vec2u>;
+// Per queued root: the global path writes (partner, cost); block-local mode
+// additionally writes its best immutable-halo (partner, cost).
+@group(0) @binding(8) var<storage, read_write> outBest: array<${partitioned ? 'vec4u' : 'vec2u'}>;
 
 const K: u32 = ${k}u;
 const MAXG: u32 = ${maxGroup}u;
 const SPLIT: u32 = ${splitN}u;
+const CORE_COUNT: u32 = ${coreCount}u;
 const NONE: u32 = 0xFFFFFFFFu;
 const NIL: u32 = 0xFFFFFFFFu;
 const F32_MAX: f32 = 3.4028234663852886e+38;
@@ -262,6 +270,8 @@ var<workgroup> wgRawBw: vec3f;
 var<workgroup> wgATerm: f32;
 var<workgroup> redCost: array<f32, ${WG}>;
 var<workgroup> redPartner: array<u32, ${WG}>;
+var<workgroup> redHaloCost: array<f32, ${WG}>;
+var<workgroup> redHaloPartner: array<u32, ${WG}>;
 
 @compute @workgroup_size(${WG})
 fn main(@builtin(workgroup_id) wgid: vec3u, @builtin(local_invocation_id) lid3: vec3u) {
@@ -276,7 +286,9 @@ fn main(@builtin(workgroup_id) wgid: vec3u, @builtin(local_invocation_id) lid3: 
             let root = pending[pIdx];
             if (parentMeta[root].x != root) {
                 // Stale queued root (absorbed since queuing) — no result.
-                outBest[pIdx] = vec2u(NONE, 0u);
+                outBest[pIdx] = ${partitioned ?
+        'vec4u(NONE, bitcast<u32>(F32_MAX), NONE, bitcast<u32>(F32_MAX))' :
+        'vec2u(NONE, bitcast<u32>(F32_MAX))'};
                 wgAbort = 1u;
             } else {
                 wgAbort = 0u;
@@ -309,6 +321,8 @@ fn main(@builtin(workgroup_id) wgid: vec3u, @builtin(local_invocation_id) lid3: 
     // only shift tie order.
     var cost = F32_MAX;
     var partner = NONE;
+    var haloCost = F32_MAX;
+    var haloPartner = NONE;
     let mIdx = lid / K;
     let slot = lid % K;
     if (!aborted && mIdx < wgCount) {
@@ -342,8 +356,13 @@ fn main(@builtin(workgroup_id) wgid: vec3u, @builtin(local_invocation_id) lid3: 
                 // NaN loses every comparison → stays unselected (fail-loud:
                 // an all-NaN scene produces no pushes and the caller throws).
                 if (c < F32_MAX) {
-                    cost = c;
-                    partner = r;
+                    if (r < CORE_COUNT) {
+                        cost = c;
+                        partner = r;
+                    } else {
+                        haloCost = c;
+                        haloPartner = r;
+                    }
                 }
             }
         }
@@ -353,6 +372,8 @@ fn main(@builtin(workgroup_id) wgid: vec3u, @builtin(local_invocation_id) lid3: 
     // lane scheduling.
     redCost[lid] = cost;
     redPartner[lid] = partner;
+    redHaloCost[lid] = haloCost;
+    redHaloPartner[lid] = haloPartner;
     workgroupBarrier();
     for (var s = ${WG >> 1}u; s > 0u; s >>= 1u) {
         if (lid < s) {
@@ -362,13 +383,23 @@ fn main(@builtin(workgroup_id) wgid: vec3u, @builtin(local_invocation_id) lid3: 
                 redCost[lid] = c2;
                 redPartner[lid] = p2;
             }
+            let hc2 = redHaloCost[lid + s];
+            let hp2 = redHaloPartner[lid + s];
+            if (hc2 < redHaloCost[lid] || (hc2 == redHaloCost[lid] && hp2 < redHaloPartner[lid])) {
+                redHaloCost[lid] = hc2;
+                redHaloPartner[lid] = hp2;
+            }
         }
         workgroupBarrier();
     }
     if (lid == 0u && !aborted) {
         var p = redPartner[0];
         if (redCost[0] == F32_MAX) { p = NONE; }
-        outBest[pIdx] = vec2u(p, bitcast<u32>(redCost[0]));
+        var hp = redHaloPartner[0];
+        if (redHaloCost[0] == F32_MAX) { hp = NONE; }
+        outBest[pIdx] = ${partitioned ?
+        'vec4u(p, bitcast<u32>(redCost[0]), hp, bitcast<u32>(redHaloCost[0]))' :
+        'vec2u(p, bitcast<u32>(redCost[0]))'};
     }
 }
 `;
@@ -455,10 +486,19 @@ class GpuRecost {
      * @param n - Generation splat count.
      * @param k - Neighbours per splat.
      * @param wave - Max commits per wave.
+     * @param coreCount - Mutable leading rows when sizing block-local output.
+     * @param allowSmall - Permit small GPU-local blocks that the global path prefers to evaluate inline.
      * @returns True when all bindings fit.
      */
-    static fits(device: GraphicsDevice, n: number, k: number, wave: number): boolean {
-        if (n < 1024) return false;   // inline is instant below this
+    static fits(
+        device: GraphicsDevice,
+        n: number,
+        k: number,
+        wave: number,
+        coreCount = n,
+        allowSmall = false
+    ): boolean {
+        if (n < 1024 && !allowSmall) return false;   // inline is instant below this on the global path
         const limits = (device as any).limits;
         const maxBinding = Math.min(
             typeof limits?.maxStorageBufferBindingSize === 'number' ? limits.maxStorageBufferBindingSize : 128 * 2 ** 20,
@@ -467,7 +507,8 @@ class GpuRecost {
         const splitN = Math.ceil(n / 2);
         return splitN * 16 * 4 <= maxBinding &&      // cacheA/B
             splitN * k * 4 <= maxBinding &&           // nbA/B
-            n * 8 <= maxBinding &&                    // parentMeta/chain/outBest
+            n * (coreCount < n ? 16 : 8) <= maxBinding && // outBest
+            n * 8 <= maxBinding &&                    // parentMeta/chain
             wave * COMMIT_LOG_STRIDE * 4 <= maxBinding;
     }
 
@@ -477,12 +518,15 @@ class GpuRecost {
      * @param k - Neighbours per splat (the refresh workgroup is k·maxGroup lanes).
      * @param maxGroup - Group size cap.
      * @param wave - Max commits per wave (commit log capacity).
+     * @param coreCount - Mutable leading rows; remaining rows are immutable halo.
      */
-    constructor(device: GraphicsDevice, n: number, k: number, maxGroup: number, wave: number) {
+    constructor(device: GraphicsDevice, n: number, k: number, maxGroup: number, wave: number, coreCount = n) {
         if (k * maxGroup !== WG) {
             throw new Error(`GpuRecost: k·maxGroup must be ${WG} (got ${k}·${maxGroup})`);
         }
         const splitN = Math.ceil(n / 2);
+        const partitioned = coreCount < n;
+        const outputStride = partitioned ? 16 : 8;
 
         const cacheABuf = new StorageBuffer(device, splitN * 16 * 4, BUFFERUSAGE_COPY_DST);
         const cacheBBuf = new StorageBuffer(device, Math.max(n - splitN, 1) * 16 * 4, BUFFERUSAGE_COPY_DST);
@@ -491,7 +535,7 @@ class GpuRecost {
         const parentMetaBuf = new StorageBuffer(device, n * 8, BUFFERUSAGE_COPY_DST);
         const chainBuf = new StorageBuffer(device, n * 8, BUFFERUSAGE_COPY_DST);
         const pendingBuf = new StorageBuffer(device, n * 4, BUFFERUSAGE_COPY_DST);
-        const outBestBuf = new StorageBuffer(device, n * 8, BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST);
+        const outBestBuf = new StorageBuffer(device, n * outputStride, BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST);
         const commitLogBuf = new StorageBuffer(device, wave * COMMIT_LOG_STRIDE * 4, BUFFERUSAGE_COPY_DST);
 
         const initKernel = makeKernel(device, 'recost-init', initWgsl(), ['count'], [
@@ -510,16 +554,22 @@ class GpuRecost {
         replayKernel.compute.setParameter('parentMeta', parentMetaBuf);
         replayKernel.compute.setParameter('chain', chainBuf);
 
-        const refreshKernel = makeKernel(device, 'recost-refresh', refreshWgsl(k, maxGroup, splitN), ['pendingCount'], [
-            ['cacheA', true],
-            ['cacheB', true],
-            ['nbA', true],
-            ['nbB', true],
-            ['parentMeta', true],
-            ['chain', true],
-            ['pending', true],
-            ['outBest', false]
-        ]);
+        const refreshKernel = makeKernel(
+            device,
+            'recost-refresh',
+            refreshWgsl(k, maxGroup, splitN, coreCount, partitioned),
+            ['pendingCount'],
+            [
+                ['cacheA', true],
+                ['cacheB', true],
+                ['nbA', true],
+                ['nbB', true],
+                ['parentMeta', true],
+                ['chain', true],
+                ['pending', true],
+                ['outBest', false]
+            ]
+        );
         refreshKernel.compute.setParameter('cacheA', cacheABuf);
         refreshKernel.compute.setParameter('cacheB', cacheBBuf);
         refreshKernel.compute.setParameter('nbA', nbABuf);
@@ -574,7 +624,7 @@ class GpuRecost {
             device.computeDispatch(computes, 'recost-wave');
 
             // Blocking readback — also the wave's submit boundary.
-            await outBestBuf.read(0, pendingCount * 8, outBest, true);
+            await outBestBuf.read(0, pendingCount * outputStride, outBest, true);
         };
 
         this.destroy = () => {

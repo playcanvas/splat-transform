@@ -14,7 +14,13 @@ import assert from 'node:assert';
 import { after, before, describe, it } from 'node:test';
 
 import { buildSplatCache, CACHE_STRIDE } from '../src/lib/decimate/edge-cost-cpu.js';
-import { bestEdgeFor, bestOut } from '../src/lib/decimate/recost-core.js';
+import {
+    bestEdgeFor,
+    bestEdgesForPartition,
+    bestOut,
+    partitionBestOut
+} from '../src/lib/decimate/recost-core.js';
+import { planBlockMerges } from '../src/lib/decimate/block-plan.js';
 import { MAX_GROUP } from '../src/lib/decimate/select.js';
 import { selectMergesRecosted } from '../src/lib/decimate/select-recost.js';
 import { GpuRecost, COMMIT_LOG_STRIDE } from '../src/lib/gpu/gpu-recost.js';
@@ -126,6 +132,25 @@ const compareRefresh = (state, roots, out) => {
 };
 
 describe('GpuRecost refresh parity', () => {
+    it('accepts a tiny residual core-plus-halo block in required-GPU mode', async (t) => {
+        if (!device) return t.skip('no WebGPU adapter available');
+
+        const n = 42;
+        const coreCount = 21;
+        const cache = makeCache(n, 2468);
+        const neighbors = bruteNeighbors(cache, n, K);
+        const plan = await planBlockMerges({
+            splatCache: cache,
+            neighbors,
+            D: K,
+            coreCount,
+            totalCount: n,
+            device,
+            requireGpu: true
+        });
+        assert.ok(Array.from(plan.pairs).every(row => row < coreCount));
+    });
+
     it('wave-0 singleton and post-commit cluster costs match CPU within 1e-3', async (t) => {
         if (!device) return t.skip('no WebGPU adapter available');
 
@@ -188,6 +213,42 @@ describe('GpuRecost refresh parity', () => {
             const w1 = compareRefresh(state, roots, out2);
             assert.ok(w1.compared > roots.length * 0.5, `post-commit compared ${w1.compared}`);
             assert.ok(w1.ok / w1.compared >= 0.99, `post-commit parity ${w1.ok}/${w1.compared}`);
+        } finally {
+            gpu.destroy();
+        }
+    });
+
+    it('returns independent best core and immutable-halo candidates', async (t) => {
+        if (!device) return t.skip('no WebGPU adapter available');
+
+        const n = 2048;
+        const coreCount = 2000;
+        const cache = makeCache(n, 4321);
+        const neighbors = bruteNeighbors(cache, n, K);
+        for (let i = 0; i < coreCount; i++) neighbors[i * K + K - 1] = coreCount + (i % (n - coreCount));
+        neighbors.fill(NIL, coreCount * K);
+        const state = makeState(cache, neighbors, n);
+        const pending = Uint32Array.from({ length: 128 }, (_, i) => i * 7);
+        const out = new Uint32Array(pending.length * 4);
+        const costs = new Float32Array(out.buffer);
+
+        const gpu = new GpuRecost(device, n, K, MAX_GROUP, 4096, coreCount);
+        try {
+            gpu.init(cache, neighbors);
+            await gpu.wave(new Uint32Array(0), 0, pending, pending.length, out);
+            for (let p = 0; p < pending.length; p++) {
+                const root = pending[p];
+                assert.ok(bestEdgesForPartition(state.st, root, coreCount));
+                assert.strictEqual(out[p * 4], partitionBestOut.corePartner);
+                assert.strictEqual(out[p * 4 + 2], partitionBestOut.haloPartner);
+                for (const [gpuCost, cpuCost] of [
+                    [costs[p * 4 + 1], partitionBestOut.coreCost],
+                    [costs[p * 4 + 3], partitionBestOut.haloCost]
+                ]) {
+                    const rel = Math.abs(gpuCost - cpuCost) / Math.max(1e-12, Math.abs(cpuCost));
+                    assert.ok(rel < 1e-3, `root ${root} partitioned cost parity ${rel}`);
+                }
+            }
         } finally {
             gpu.destroy();
         }

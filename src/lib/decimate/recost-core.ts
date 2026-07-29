@@ -368,6 +368,13 @@ const evalMergeCore = (st: RecostState, A: number, B: number): number => {
 
 /** Result of {@link bestEdgeFor} (reused object). */
 const bestOut = { partner: -1, vb: 0, cost: 0 };
+const partitionBestOut = {
+    corePartner: -1,
+    coreVersion: 0,
+    coreCost: Infinity,
+    haloPartner: -1,
+    haloCost: Infinity
+};
 
 const candScratch = new Uint32Array(256);
 
@@ -379,10 +386,16 @@ const candScratch = new Uint32Array(256);
  *
  * @param st - Selection state.
  * @param root - Cluster root to refresh.
+ * @param coreCount - Rows below this boundary are mutable core candidates.
  * @returns True when a legal candidate exists (result in {@link bestOut}).
  */
-const bestEdgeFor = (st: RecostState, root: number): boolean => {
+const bestEdgesForPartition = (st: RecostState, root: number, coreCount: number): boolean => {
     const { SC, cands, D, parent, size, version, maxGroup } = st;
+    partitionBestOut.corePartner = -1;
+    partitionBestOut.coreVersion = 0;
+    partitionBestOut.coreCost = Infinity;
+    partitionBestOut.haloPartner = -1;
+    partitionBestOut.haloCost = Infinity;
     if (maxGroup * D > candScratch.length) {
         throw new Error(`recost: candidate pool bound ${maxGroup * D} exceeds scratch (${candScratch.length})`);
     }
@@ -417,17 +430,41 @@ const bestEdgeFor = (st: RecostState, root: number): boolean => {
     const aTerm = sideTerm(SC, aBuf, na, compA);
 
     let bc = Infinity, bp = -1, bv = 0;
+    let hc = Infinity, hp = -1;
     for (let t = 0; t < cnt; t++) {
         const c = cbuf[t];
         if (sz + size[c] > maxGroup) continue;
         const d = evalAgainst(st, na, aTerm, c);
-        if (d < bc) {
-            bc = d; bp = c; bv = version[c];
+        if (c < coreCount) {
+            if (d < bc || (d === bc && c < bp)) {
+                bc = d; bp = c; bv = version[c];
+            }
+        } else if (d < hc || (d === hc && c < hp)) {
+            hc = d; hp = c;
         }
     }
-    if (bp < 0) return false;
-    bestOut.partner = bp; bestOut.vb = bv; bestOut.cost = bc;
+    partitionBestOut.corePartner = bp;
+    partitionBestOut.coreVersion = bv;
+    partitionBestOut.coreCost = bc;
+    partitionBestOut.haloPartner = hp;
+    partitionBestOut.haloCost = hc;
+    return bp >= 0 || hp >= 0;
+};
+
+const bestEdgeFor = (st: RecostState, root: number): boolean => {
+    if (!bestEdgesForPartition(st, root, st.N) || partitionBestOut.corePartner < 0) return false;
+    bestOut.partner = partitionBestOut.corePartner;
+    bestOut.vb = partitionBestOut.coreVersion;
+    bestOut.cost = partitionBestOut.coreCost;
     return true;
 };
 
-export { evalMergeCore, bestEdgeFor, bestOut, NO_CANDIDATE, type RecostState };
+export {
+    evalMergeCore,
+    bestEdgeFor,
+    bestEdgesForPartition,
+    bestOut,
+    partitionBestOut,
+    NO_CANDIDATE,
+    type RecostState
+};

@@ -5,7 +5,7 @@
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
 
-import { kdPartition, coherenceRuns } from '../src/lib/decimate/partition.js';
+import { buildBlockHalo, kdPartition, coherenceRuns } from '../src/lib/decimate/partition.js';
 
 const grid = (n) => {
     const x = new Float32Array(n * n * n), y = new Float32Array(n * n * n), z = new Float32Array(n * n * n);
@@ -56,6 +56,62 @@ describe('kdPartition', () => {
         assert.strictEqual(blocks.reduce((a, b) => a + (b.end - b.start), 0), n);
     });
 
+    it('jitters split planes deterministically between generations while preserving the leaf cap', () => {
+        const pos = grid(16);
+        const a = kdPartition(pos, 300, 1);
+        const again = kdPartition(pos, 300, 1);
+        const b = kdPartition(pos, 300, 2);
+        assert.deepStrictEqual(Array.from(a.order), Array.from(again.order), 'same generation is deterministic');
+        assert.notDeepStrictEqual(
+            a.blocks.map(block => block.end - block.start),
+            b.blocks.map(block => block.end - block.start),
+            'generation changes split quantiles'
+        );
+        assert.ok(a.blocks.every(block => block.end - block.start <= 300));
+        assert.ok(b.blocks.every(block => block.end - block.start <= 300));
+    });
+
+    it('builds sorted bounded halos without duplicating core ownership', () => {
+        const pos = grid(16);
+        const partition = kdPartition(pos, 300, 1);
+        let foundCapped = false;
+        for (let bi = 0; bi < partition.blocks.length; bi++) {
+            const block = partition.blocks[bi];
+            const core = new Set(partition.order.subarray(block.start, block.end));
+            const halo = buildBlockHalo(pos, partition, bi, 10);
+            assert.ok(halo.rows.length <= Math.min(10, core.size));
+            for (let i = 0; i < halo.rows.length; i++) {
+                assert.ok(!core.has(halo.rows[i]), 'halo row is not core-owned');
+                if (i > 0) assert.ok(halo.rows[i] > halo.rows[i - 1], 'halo rows sorted and unique');
+            }
+            foundCapped ||= halo.capped;
+        }
+        assert.ok(foundCapped, 'dense boundary halos exercise the cap');
+    });
+
+    it('moves a coincident boundary pair into one interior core on the next jitter pattern', () => {
+        const n = 256;
+        const pos = { x: new Float32Array(n), y: new Float32Array(n), z: new Float32Array(n) };
+        const assignments = [1, 2].map((generation) => {
+            const partition = kdPartition(pos, 64, generation);
+            const owner = new Int32Array(n);
+            partition.blocks.forEach((block, bi) => {
+                for (let i = block.start; i < block.end; i++) owner[partition.order[i]] = bi;
+            });
+            return owner;
+        });
+        let pair = null;
+        for (let a = 0; a < n && !pair; a++) {
+            for (let b = a + 1; b < n; b++) {
+                if (assignments[0][a] !== assignments[0][b] && assignments[1][a] === assignments[1][b]) {
+                    pair = [a, b];
+                    break;
+                }
+            }
+        }
+        assert.ok(pair, 'a coincident pair crosses the first boundary and becomes interior after jitter');
+    });
+
     it('rare flyaways land in residual blocks; core blocks stay tight', () => {
         const g = grid(22); // 10648 bulk points in [0,21]^3
         const nBulk = g.x.length;
@@ -79,6 +135,7 @@ describe('kdPartition', () => {
                 if (i > b.start) assert.ok(order[i] > order[i - 1], 'owned range sorted ascending');
             }
             assert.ok(!(hasBulk && hasFly), 'flyaways segregated from the bulk');
+            assert.strictEqual(b.residual, hasFly);
             if (hasBulk) {
                 const ext = Math.max(b.aabb[3] - b.aabb[0], b.aabb[4] - b.aabb[1], b.aabb[5] - b.aabb[2]);
                 assert.ok(ext <= 21 + 1e-6, `core block stretched by flyaways (extent ${ext})`);
