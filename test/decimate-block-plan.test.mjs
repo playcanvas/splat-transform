@@ -114,6 +114,9 @@ describe('block-local merge planning', () => {
         });
         assert.strictEqual(interior.costs.length, 1);
         assert.deepStrictEqual(Array.from(interior.pairs), [0, 1]);
+        assert.ok(interior.diagnostics.waves > 0);
+        assert.ok(interior.diagnostics.refreshes >= interior.costs.length);
+        assert.ok(interior.diagnostics.heapPops >= interior.costs.length);
     });
 
     it('dynamically freezes and unfreezes through reverse-candidate invalidation', async () => {
@@ -127,6 +130,8 @@ describe('block-local merge planning', () => {
         });
         assert.ok(plan.frozen > 0, 'halo minimum freezes at least one root');
         assert.ok(plan.unfrozen > 0, 'changed referenced core makes a frozen root eligible again');
+        assert.ok(plan.diagnostics.reverseInvalidations > 0);
+        assert.ok(plan.diagnostics.staleHeapPops <= plan.diagnostics.heapPops);
     });
 
     it('lets halo rows affect eligibility but never merges, removes, or duplicates them', async () => {

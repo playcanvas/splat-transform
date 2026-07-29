@@ -387,6 +387,12 @@ const decimateSource = async (
                 let cappedHalos = 0;
                 let frozen = 0;
                 let unfrozen = 0;
+                let planned = 0;
+                let waves = 0;
+                let refreshes = 0;
+                let reverseInvalidations = 0;
+                let heapPops = 0;
+                let staleHeapPops = 0;
                 let knnMs = 0;
                 let refreshMs = 0;
                 let allocationMs = 0;
@@ -427,6 +433,12 @@ const decimateSource = async (
                         refreshMs += Date.now() - refreshStarted;
                         frozen += plan.frozen;
                         unfrozen += plan.unfrozen;
+                        planned += plan.costs.length;
+                        waves += plan.diagnostics!.waves;
+                        refreshes += plan.diagnostics!.refreshes;
+                        reverseInvalidations += plan.diagnostics!.reverseInvalidations;
+                        heapPops += plan.diagnostics!.heapPops;
+                        staleHeapPops += plan.diagnostics!.staleHeapPops;
                         storedPlans[bi] = await storeBlockPlan(opts.spill, generation, bi, plan);
                         planBar.tick(prepared.ownedCount);
                     }
@@ -455,6 +467,11 @@ const decimateSource = async (
                 logger.info(
                     `local merge stats: ${fmtCount(cappedHalos)} capped halo${cappedHalos === 1 ? '' : 's'}, ` +
                 `${fmtCount(frozen)} freezes, ${fmtCount(unfrozen)} unfreezes, ${fmtCount(removed!)} removals`
+                );
+                logger.info(
+                    `local planner work: ${fmtCount(planned)} planned, ${fmtCount(waves)} waves, ` +
+                `${fmtCount(refreshes)} refreshes, ${fmtCount(reverseInvalidations)} reverse invalidations, ` +
+                `${fmtCount(heapPops)} heap pops (${fmtCount(staleHeapPops)} stale)`
                 );
                 logger.info(
                     `local timings: KNN/gather ${(knnMs / 1000).toFixed(2)}s, ` +
