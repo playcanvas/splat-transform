@@ -68,7 +68,6 @@ interface CliOptions extends LibOptions {
     listGpus: boolean;
     deviceIdx: number;  // -1 = auto, -2 = CPU, 0+ = GPU index
     scratchDir: string | undefined;  // decimation spill location (default: output directory)
-    decimateUniform: boolean;  // --decimate-uniform: the frozen pre-3.2 decimator
     memoryBudgetBytes: number;  // decimation residency policy ceiling (not an allocation, not user-facing)
 }
 
@@ -126,6 +125,13 @@ const resolveInput = (arg: string): ResolvedInput => {
 // grouping tag (consumed while assembling the LOD writer's level stack —
 // never dispatched as a data operation).
 type CliAction = ProcessAction | { kind: 'lod'; value: number };
+
+// `--decimate` and `--decimate-uniform` both produce a decimate action, so
+// which decimator to run rides on the action itself rather than on global
+// options — that way it always describes the action actually executed, with no
+// dependence on flag ordering or on the "exactly one decimate action" check.
+// The extra field is stripped before actions reach the library.
+type CliDecimate = Extract<ProcessAction, { kind: 'decimate' }> & { uniform: boolean };
 
 // Strip the CLI-only lod tags, narrowing back to dispatchable actions.
 const stripLodTags = (actions: CliAction[]): ProcessAction[] => {
@@ -522,7 +528,6 @@ const parseArguments = async () => {
         listGpus: v['list-gpus'],
         deviceIdx,
         scratchDir: v['scratch-dir'],
-        decimateUniform: false,
         // Residency policy ceiling for decimation (not an upfront allocation).
         // Half the machine's RAM, capped at 48 GiB — derived here because the
         // library is node-free and cannot read os.totalmem() itself.
@@ -699,7 +704,6 @@ const parseArguments = async () => {
                     break;
                 case 'decimate':
                 case 'decimate-uniform': {
-                    if (t.name === 'decimate-uniform') options.decimateUniform = true;
                     const value = t.value.trim();
                     let count: number | null = null;
                     let percent: number | null = null;
@@ -718,11 +722,13 @@ const parseArguments = async () => {
                         }
                     }
 
-                    current.processActions.push({
+                    const decimate: CliDecimate = {
                         kind: 'decimate',
                         count,
-                        percent
-                    });
+                        percent,
+                        uniform: t.name === 'decimate-uniform'
+                    };
+                    current.processActions.push(decimate);
                     break;
                 }
                 case 'filter-cluster': {
@@ -1176,7 +1182,7 @@ const main = async () => {
             }
         }
         const decimateAction = decimateIdx.length === 1 ?
-            singleSceneActions[decimateIdx[0]] as Extract<ProcessAction, { kind: 'decimate' }> :
+            singleSceneActions[decimateIdx[0]] as CliDecimate :
             null;
 
         if (
@@ -1265,7 +1271,7 @@ const main = async () => {
                     scratchDir: options.scratchDir ?? dirname(outputFilename),
                     remove: (path: string) => unlink(path)
                 };
-                combined = options.decimateUniform ?
+                combined = decimateAction.uniform ?
                     await decimateSourceUniform(combined, pool, {
                         targetCount: keepCount,
                         createDevice: deviceCreator,
