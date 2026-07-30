@@ -5,7 +5,7 @@
  *  - PLY / compressed-PLY / SOG / SPZ outputs carry the tag (PLY always in
  *    Brush's spelling, whichever form it was read from);
  *  - a 2DGS PLY (no scale_2) reads with a full geometric layer and writes back
- *    without the column;
+ *    without the column, and is only inferred from an otherwise-complete record;
  *  - mixed inputs collapse to `default` rather than mistagging;
  *  - untagged scenes are unchanged (no comment, no meta key).
  */
@@ -178,6 +178,19 @@ describe('2dgs scenes', () => {
         assert.strictEqual(source.meta.model, '2dgs');
     });
 
+    // Two scales alone don't make a 2DGS scene — a point cloud missing rotation
+    // or opacity has no geometric layer to tag, so it must stay untagged rather
+    // than claiming a model it can't honour.
+    it('does not infer 2dgs from an incomplete geometric record', async () => {
+        const table = createTestDataTable(8);
+        const keep = ['x', 'y', 'z', 'scale_0', 'scale_1', 'f_dc_0', 'f_dc_1', 'f_dc_2'];
+        const partial = new DataTable(table.columns.filter(c => keep.includes(c.name)), table.transform);
+
+        const { source } = await openPly(partial);
+        assert.strictEqual(source.meta.model, 'default');
+        assert.ok(!source.meta.availableLayers.has('geometric'), 'no geometric layer');
+    });
+
     it('drops scale_2 again on PLY output, keeping the tag', async () => {
         const { source, pool } = await openPly(make2dgsTable(16));
         const header = plyHeaderText((await writeChunked(source, pool, 'out.ply', 'ply')).get('out.ply'));
@@ -208,6 +221,28 @@ describe('2dgs scenes', () => {
             }
             // re-reading the output re-materializes the column
             assert.strictEqual(table.getColumnByName('scale_2').data[0], -Infinity);
+        }
+    });
+
+    // SPZ can't hold the tag, so the flat axis has to survive as data. Its
+    // quantized log-scale range saturates, which is what turns the synthesized
+    // -Infinity into an encodable value — the writer does no clamping of its own,
+    // so this guards against a future encoder emitting garbage for it.
+    it('encodes the flat axis to SPZ as a finite minimal scale', async () => {
+        const { source, pool } = await openPly(make2dgsTable(16));
+        const bytes = (await writeChunked(source, pool, 'out.spz', 'spz')).get('out.spz');
+
+        const rfs = new MemoryReadFileSystem();
+        rfs.set('in.spz', bytes);
+        const { readSpz } = await import('../src/lib/readers/read-spz.js');
+        const pool2 = createChunkDataPool();
+        const table = await materializeToDataTable(await readSpz(await rfs.createSource('in.spz'), pool2), pool2);
+
+        const scale2 = table.getColumnByName('scale_2').data;
+        const scale1 = table.getColumnByName('scale_1').data;
+        for (let i = 0; i < 16; i++) {
+            assert.ok(Number.isFinite(scale2[i]), `row ${i} scale_2 is finite (got ${scale2[i]})`);
+            assert.ok(scale2[i] < scale1[i], `row ${i} scale_2 is the flattest axis`);
         }
     });
 

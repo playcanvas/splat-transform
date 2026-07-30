@@ -54,6 +54,8 @@ type PlyData = {
 const GEOMETRIC_COLS = ['rot_0', 'rot_1', 'rot_2', 'rot_3', 'scale_0', 'scale_1', 'scale_2', 'opacity'];
 const COLOR_DC_COLS = ['f_dc_0', 'f_dc_1', 'f_dc_2'];
 const SCALE_2_WORD = GEOMETRIC_COLS.indexOf('scale_2');
+// The geometric columns a 2DGS record carries (everything but the third scale).
+const GEOMETRIC_COLS_2DGS = GEOMETRIC_COLS.filter(c => c !== 'scale_2');
 
 // Brush's `SplatRenderMode: <mode>` (brush-serde export.rs/import.rs) — the wire
 // form we also write, see `splatModelComment` in the writers.
@@ -674,8 +676,10 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
     // only. Structural evidence outranks any header comment: the missing column
     // is materialized as -Infinity log scale (linear 0 — a zero-thickness
     // surfel) so the rest of the pipeline sees an ordinary geometric layer.
-    const is2dgs = !has('scale_2') && ['scale_0', 'scale_1'].every(has);
-    const geometricCols = is2dgs ? GEOMETRIC_COLS.filter(c => c !== 'scale_2') : GEOMETRIC_COLS;
+    // Only a file that is otherwise a complete gaussian record qualifies — a
+    // point cloud that happens to carry two scales is not a 2DGS scene.
+    const is2dgs = !has('scale_2') && GEOMETRIC_COLS_2DGS.every(has);
+    const geometricCols = is2dgs ? GEOMETRIC_COLS_2DGS : GEOMETRIC_COLS;
     const hasGeometric = geometricCols.every(has);
     const model = is2dgs ? '2dgs' : splatModelFromComments(header.comments);
 

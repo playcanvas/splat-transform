@@ -42,9 +42,6 @@ type CreateSpzModule = () => Promise<SpzModule>;
 
 const SPZ_SH_COMPONENTS = [0, 9, 24, 45, 72] as const;
 
-// Log-scale floor for SPZ output, matching the compressed-PLY writer's clamp.
-const MIN_LOG_SCALE = -20;
-
 let spzModulePromise: Promise<SpzModule> | null = null;
 
 // `@adobe/spz`'s GaussianCloud uses PLY-native conventions for scales/colors/alphas:
@@ -203,10 +200,7 @@ const dataTableToGaussianCloud = (dataTable: DataTable, model: SplatModel = 'def
 
         scales[i3] = scale0[i];
         scales[i3 + 1] = scale1[i];
-        // 2DGS carries -Infinity here; the SPZ encoder quantizes log scales, so
-        // floor it at the smallest value the format resolves rather than feeding
-        // it an infinity. SPZ has no 2DGS flag, so the axis is merely tiny.
-        scales[i3 + 2] = Math.max(scale2[i], MIN_LOG_SCALE);
+        scales[i3 + 2] = scale2[i];
 
         colors[i3] = color0[i];
         colors[i3 + 1] = color1[i];

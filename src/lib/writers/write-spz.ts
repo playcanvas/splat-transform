@@ -25,9 +25,11 @@ const writeSpz = async (options: WriteSpzOptions, fs: FileSystem) => {
     const { filename, dataTable, model = 'default', version = 4 } = options;
     const writingGroup = logger.group('Writing');
 
-    // SPZ's header has an antialiased bit but no 2DGS state.
+    // SPZ's header has an antialiased bit but no 2DGS state. The third scale
+    // still encodes: SPZ's quantized log-scale range saturates at its floor, so
+    // the flat axis survives as the smallest scale the format can express.
     if (model === '2dgs') {
-        logger.warn('spz cannot represent a 2dgs scene; writing it as ordinary gaussians with a near-zero third scale');
+        logger.warn('spz cannot represent a 2dgs scene; writing it as ordinary gaussians with a minimal third scale');
     }
 
     const spz = await getSpzModule();
