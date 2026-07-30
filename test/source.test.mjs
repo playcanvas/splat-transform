@@ -71,6 +71,24 @@ describe('ChunkSource data model', () => {
             assertTablesEqual(out, dt, 'partial round-trip');
         });
 
+        it('preserves columns from an incomplete canonical layer as extras', async () => {
+            const dt = createTestDataTable(5);
+            dt.removeColumn('scale_2');
+            const chunkSize = 2;
+
+            const src = dataTableToChunkSource(dt, chunkSize);
+            assert.ok(!src.meta.availableLayers.has('geometric'));
+            assert.ok(src.meta.availableLayers.has('other'));
+            assert.deepStrictEqual(
+                src.meta.extraColumns.map(column => column.name),
+                ['scale_0', 'scale_1', 'opacity', 'rot_0', 'rot_1', 'rot_2', 'rot_3']
+            );
+
+            const pool = createChunkDataPool({ chunkSize });
+            const out = await materializeToDataTable(src, pool);
+            assertTablesEqual(out, dt, 'incomplete canonical layer round-trip');
+        });
+
         it('compact() materializes a source identically', async () => {
             const dt = createTestDataTable(7, { includeSH: true, shBands: 1 });
             const chunkSize = 3; // -> chunks of 3, 3, 1

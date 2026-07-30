@@ -28,6 +28,7 @@ import {
 import { mapSource } from '../src/lib/ops/index.js';
 import { decodePlyToDataTable, readPly } from '../src/lib/readers/read-ply.js';
 import { createChunkDataPool } from '../src/lib/chunk/index.js';
+import { materializeToDataTable } from '../src/lib/compat/data-table.js';
 import { writePlyStreaming } from '../src/lib/writers/write-ply-streaming.js';
 
 const SH_COEFFS = [0, 3, 8, 15];
@@ -157,6 +158,27 @@ describe('streaming PLY pipeline (chunked read -> transform -> streaming write)'
         for (const name of dt.columnNames) {
             assert.deepStrictEqual(out.getColumnByName(name).data, dt.getColumnByName(name).data, `column '${name}' value mismatch`);
         }
+    });
+
+    it('preserves 2DGS geometric properties when scale_2 is absent', async () => {
+        const dt = makeCanonicalDataTable(5);
+        dt.removeColumn('scale_2');
+        const pool = createChunkDataPool({ chunkSize: 2 });
+
+        const src = await readPly(await sourceFromBytes(encodePlyBinary(dt)), pool);
+        assert.ok(!src.meta.availableLayers.has('geometric'));
+        assert.ok(src.meta.availableLayers.has('other'));
+        assert.deepStrictEqual(
+            src.meta.extraColumns.map(column => column.name),
+            ['rot_0', 'rot_1', 'rot_2', 'rot_3', 'scale_0', 'scale_1', 'opacity']
+        );
+
+        const out = await materializeToDataTable(src, pool);
+        assert.deepStrictEqual([...out.columnNames].sort(), [...dt.columnNames].sort());
+        for (const name of dt.columnNames) {
+            assert.deepStrictEqual(out.getColumnByName(name).data, dt.getColumnByName(name).data, `column '${name}' value mismatch`);
+        }
+        await src.close();
     });
 
     it('streams from disk with a bounded, scene-size-independent memory footprint', async () => {
