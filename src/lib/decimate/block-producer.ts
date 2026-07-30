@@ -1,39 +1,37 @@
-import { type ChunkData, type ChunkLayer, type ChunkSource, type ChunkSourceMetadata, type ReadRequest } from '../chunk';
+import { type ChunkData, type ChunkSource, type ChunkSourceMetadata, type ReadRequest } from '../chunk';
 
 /**
- * One output chunk of the merge stream. The views hold exactly `count`
- * records at the layer strides and alias the generator's rolling scratch —
- * valid only until the generator's next `next()`; the consumer's read copies
- * them out (yielding views instead of slices avoids a full extra copy of
- * every output byte).
+ * One output chunk's destination views for the merge stream — typed windows
+ * over the consumer's {@link ChunkData} buffers, sized to the chunk's exact
+ * row count. Layers the consumer didn't request are absent and skipped.
  */
-type ChunkPayload = {
-    count: number;
-    position: Float32Array;
-    geometric: Float32Array;
-    color: Float32Array;
+type DestBuffers = {
+    position?: Float32Array;
+    geometric?: Float32Array;
+    color?: Float32Array;
     other?: Uint32Array;
 };
 
 /**
- * A single-sequential-pass {@link ChunkSource} over an async generator of
- * chunk payloads — how the decimation merge stream feeds the PLY writer
- * (or `compact` / `writePlyStreaming` for intermediate generations) without
- * ever materializing the output.
+ * A single-sequential-pass {@link ChunkSource} over the merge-stream
+ * generator — how decimation feeds the PLY writer (or `compact` /
+ * `writePlyStreaming` for intermediate generations) without ever
+ * materializing the output. The generator fills the consumer's chunk
+ * buffers directly (no intermediate copy of the output bytes).
  *
  * Contract: chunk reads must arrive in order (0, 1, 2, …), each at most
  * once; gather reads are not supported. Anything else throws — decimate
  * output supports exactly one sequential pass.
  *
  * @param meta - Exact output metadata (counts are known before streaming).
- * @param produce - Factory for the payload generator (invoked lazily on first read).
+ * @param produce - Factory for the merge-stream generator (invoked lazily on first read).
  * @returns The stream-once source.
  */
 const createBlockProducerSource = (
     meta: ChunkSourceMetadata,
-    produce: () => AsyncGenerator<ChunkPayload>
+    produce: () => AsyncGenerator<number, void, DestBuffers>
 ): ChunkSource => {
-    let generator: AsyncGenerator<ChunkPayload> | null = null;
+    let generator: AsyncGenerator<number, void, DestBuffers> | null = null;
     let nextChunk = 0;
     let done = false;
 
@@ -52,31 +50,32 @@ const createBlockProducerSource = (
         if (done) {
             throw new Error('decimate output exhausted');
         }
-        generator ??= produce();
-        const { value, done: exhausted } = await generator.next();
-        if (exhausted || !value) {
+        if (!generator) {
+            generator = produce();
+            await generator.next();   // prime: run to the first dest handshake
+        }
+
+        const expected = Math.min(meta.chunkSize, meta.numGaussians - request.chunkIndex * meta.chunkSize);
+        const view = <T extends Float32Array | Uint32Array>(
+            cd: ChunkData | undefined,
+            ctor: new (b: ArrayBuffer, o: number, n: number) => T,
+            perRow: number
+        ): T | undefined => (cd ? new ctor(cd.data, 0, expected * perRow) : undefined);
+        const dest: DestBuffers = {
+            position: view(request.position, Float32Array, 3),
+            geometric: view(request.geometric, Float32Array, 8),
+            color: view(request.color, Float32Array, (meta.layouts.color?.stride ?? 0) >> 2),
+            other: view(request.other, Uint32Array, (meta.layouts.other?.stride ?? 0) >> 2)
+        };
+
+        const { value, done: exhausted } = await generator.next(dest);
+        if (exhausted || value === undefined) {
             done = true;
             throw new Error(`decimate output ended early at chunk ${request.chunkIndex}`);
         }
-        const payload = value;
-        const expected = Math.min(meta.chunkSize, meta.numGaussians - request.chunkIndex * meta.chunkSize);
-        if (payload.count !== expected) {
-            throw new Error(`decimate output chunk ${request.chunkIndex}: expected ${expected} rows, produced ${payload.count}`);
+        if (value !== expected) {
+            throw new Error(`decimate output chunk ${request.chunkIndex}: expected ${expected} rows, produced ${value}`);
         }
-
-        const fill = (cd: ChunkData | undefined, layer: ChunkLayer): void => {
-            if (!cd) return;
-            const src = payload[layer as 'position' | 'geometric' | 'color' | 'other'];
-            if (!src) {
-                throw new Error(`decimate output has no '${layer}' layer`);
-            }
-            const bytes = payload.count * cd.stride;
-            new Uint8Array(cd.data, 0, bytes).set(new Uint8Array(src.buffer, src.byteOffset, bytes));
-        };
-        fill(request.position, 'position');
-        fill(request.geometric, 'geometric');
-        fill(request.color, 'color');
-        fill(request.other, 'other');
 
         nextChunk++;
         if (nextChunk >= (meta.numChunks[0] ?? 0)) done = true;
@@ -91,4 +90,4 @@ const createBlockProducerSource = (
     return { meta, read, close };
 };
 
-export { createBlockProducerSource, type ChunkPayload };
+export { createBlockProducerSource, type DestBuffers };

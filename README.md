@@ -110,8 +110,10 @@ Actions execute in the order specified and can be repeated. Any action may appea
                                           opacity, scale_*, f_dc_* use transformed values
                                           (linear opacity 0-1, linear scale, linear color 0-1).
                                           Append _raw for raw PLY values (e.g. opacity_raw).
--d, --decimate         <n|n%>           Simplify to n Gaussians via merge-based decimation
-                                          Use n% to keep a percentage of Gaussians.
+-d, --decimate         <n|n%>           Simplify, allocating removal by local error (adaptive)
+                                          Use n% for a percentage. --decimate-uniform removes at a uniform
+                                          rate instead (the pre-3.2 algorithm): lower memory, and better on
+                                          uniformly-sized Gaussians.
                                           Memory-bounded and streaming: scales to scenes of 100M+
                                           Gaussians. Must be the final action, and the output must
                                           be .ply (write a decimated PLY first, then convert in a

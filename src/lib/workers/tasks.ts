@@ -1,7 +1,8 @@
 import type { TypedArray } from '../data-table/data-table';
-import { knnQueryBlock } from '../decimate/knn-core';
+import { knnForestQuery, type ForestPart } from '../decimate/knn-core';
 import { mergeGroup, createMergeScratch, splatMass } from '../decimate/moment-match';
-import { KdTree, type FlatKdTree } from '../spatial/kd-tree';
+import { knnQueryBlock } from '../decimate-uniform/knn-core';
+import { buildFlatKdTree, type FlatKdTree } from '../spatial/kd-tree';
 import { quantize1dColumns, type QuantizedColumns } from '../spatial/quantize-1d-core';
 import { WebPCodec } from '../utils/webp-codec';
 
@@ -39,8 +40,72 @@ const taskHandlers = {
         return { result: webp, transfer: [webp.buffer as ArrayBuffer] };
     },
 
-    // Build + flatten a KD-tree over interleaved local positions (decimation
-    // GPU path: the flattened arrays upload straight into GpuKnn).
+    // Build one forest part: a flat KD-tree over the part's position columns
+    // whose node splat ids are remapped to GLOBAL ids, plus the part's point
+    // AABB (the query-side part-entry cull). With `shared`, the flat arrays
+    // move to SharedArrayBuffers so knnForest query tasks read them without
+    // copies (structured clone shares SABs).
+    buildKdForestPart: (args: {
+        x: Float32Array, y: Float32Array, z: Float32Array, ids: Uint32Array, shared?: boolean
+    }): TaskOutput<ForestPart> => {
+        const { x, y, z, ids } = args;
+        const flat = buildFlatKdTree(x, y, z);
+        const splatIdx = flat.nodeSplatIdx;
+        for (let t = 0; t < splatIdx.length; t++) splatIdx[t] = ids[splatIdx[t]];
+        const aabb = new Float32Array([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity]);
+        for (let i = 0; i < x.length; i++) {
+            if (x[i] < aabb[0]) aabb[0] = x[i];
+            if (y[i] < aabb[1]) aabb[1] = y[i];
+            if (z[i] < aabb[2]) aabb[2] = z[i];
+            if (x[i] > aabb[3]) aabb[3] = x[i];
+            if (y[i] > aabb[4]) aabb[4] = y[i];
+            if (z[i] > aabb[5]) aabb[5] = z[i];
+        }
+        if (args.shared && typeof SharedArrayBuffer !== 'undefined') {
+            const shareU32 = (a: Uint32Array): Uint32Array => {
+                const s = new Uint32Array(new SharedArrayBuffer(a.byteLength));
+                s.set(a);
+                return s;
+            };
+            const shareF32 = (a: Float32Array): Float32Array => {
+                const s = new Float32Array(new SharedArrayBuffer(a.byteLength));
+                s.set(a);
+                return s;
+            };
+            return {
+                result: {
+                    nodeSplatIdx: shareU32(flat.nodeSplatIdx),
+                    nodePositions: shareF32(flat.nodePositions),
+                    nodeChildren: shareU32(flat.nodeChildren),
+                    rootIdx: flat.rootIdx,
+                    aabb
+                },
+                transfer: []
+            };
+        }
+        return {
+            result: { ...flat, aabb },
+            transfer: [
+                flat.nodeSplatIdx.buffer, flat.nodePositions.buffer, flat.nodeChildren.buffer, aabb.buffer
+            ] as ArrayBuffer[]
+        };
+    },
+
+    // Decimation CPU-fallback KNN: exact forest k-NN for a slice of queries,
+    // as global ids. Part arrays are SAB-backed (shared, no copies).
+    knnForest: (args: {
+        parts: ForestPart[], queryPos: Float32Array, queryIds: Uint32Array, k: number
+    }): TaskOutput<Uint32Array> => {
+        const count = args.queryIds.length;
+        const out = new Uint32Array(count * args.k);
+        knnForestQuery(args.parts, args.queryPos, args.queryIds, count, args.k, out);
+        return { result: out, transfer: [out.buffer as ArrayBuffer] };
+    },
+
+    // Build + flatten a KD-tree over interleaved LOCAL positions (the
+    // `--decimate-uniform` GPU path: node splat ids stay local and the
+    // flattened arrays upload straight into that path's GpuKnn). Serves
+    // decimate-uniform/ — see its README before changing either handler.
     flattenKdTree: (args: { positions: Float32Array }): TaskOutput<FlatKdTree> => {
         const n = args.positions.length / 3;
         const x = new Float32Array(n);
@@ -51,18 +116,17 @@ const taskHandlers = {
             y[i] = args.positions[i * 3 + 1];
             z[i] = args.positions[i * 3 + 2];
         }
-        const flat = new KdTree([x, y, z]).flatten();
+        const flat = buildFlatKdTree(x, y, z);
         return {
             result: flat,
             transfer: [
-                flat.nodeSplatIdx.buffer, flat.nodeX.buffer, flat.nodeY.buffer,
-                flat.nodeZ.buffer, flat.nodeLeft.buffer, flat.nodeRight.buffer
+                flat.nodeSplatIdx.buffer, flat.nodePositions.buffer, flat.nodeChildren.buffer
             ] as ArrayBuffer[]
         };
     },
 
-    // Decimation CPU-fallback block KNN: exact k-NN of the owned prefix
-    // within the local point set, as local indices.
+    // `--decimate-uniform` CPU-fallback block KNN: exact k-NN of the owned
+    // prefix within the local point set, as local indices. Frozen.
     knnBlock: (args: { positions: Float32Array, ownedCount: number, k: number }): TaskOutput<Uint32Array> => {
         const result = knnQueryBlock(args.positions, args.ownedCount, args.k);
         return { result, transfer: [result.buffer as ArrayBuffer] };

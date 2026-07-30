@@ -13,7 +13,7 @@ import assert from 'node:assert';
 import { performance } from 'node:perf_hooks';
 import { describe, it } from 'node:test';
 
-import { KdTree } from '../src/lib/spatial/kd-tree.js';
+import { KdTree, buildFlatKdTree } from '../src/lib/spatial/kd-tree.js';
 
 const mulberry = (seed) => {
     let t = seed >>> 0;
@@ -61,10 +61,10 @@ describe('KdTree', () => {
         }
     });
 
-    it('flatten produces a traversable tree covering all points exactly once', () => {
+    it('buildFlatKdTree produces a traversable tree covering all points exactly once', () => {
         const n = 257;
         const [x, y, z] = randomCols(n, 3, 99);
-        const flat = new KdTree([x, y, z]).flatten();
+        const flat = buildFlatKdTree(x, y, z);
         assert.strictEqual(flat.rootIdx, 0);
         const seen = new Set();
         const stack = [flat.rootIdx];
@@ -73,13 +73,43 @@ describe('KdTree', () => {
             const splat = flat.nodeSplatIdx[t];
             assert.ok(!seen.has(splat), 'splat appears once');
             seen.add(splat);
-            assert.strictEqual(flat.nodeX[t], x[splat]);
-            assert.strictEqual(flat.nodeY[t], y[splat]);
-            assert.strictEqual(flat.nodeZ[t], z[splat]);
-            if (flat.nodeLeft[t] !== 0xFFFFFFFF) stack.push(flat.nodeLeft[t]);
-            if (flat.nodeRight[t] !== 0xFFFFFFFF) stack.push(flat.nodeRight[t]);
+            assert.strictEqual(flat.nodePositions[t * 3], x[splat]);
+            assert.strictEqual(flat.nodePositions[t * 3 + 1], y[splat]);
+            assert.strictEqual(flat.nodePositions[t * 3 + 2], z[splat]);
+            if (flat.nodeChildren[t * 2] !== 0xFFFFFFFF) stack.push(flat.nodeChildren[t * 2]);
+            if (flat.nodeChildren[t * 2 + 1] !== 0xFFFFFFFF) stack.push(flat.nodeChildren[t * 2 + 1]);
         }
         assert.strictEqual(seen.size, n);
+    });
+
+    it('buildFlatKdTree splitting planes are consistent with the cycling axis rule', () => {
+        // The GPU kernel derives each node's axis from traversal depth
+        // (x→y→z cycling), so the flat tree must respect it: every splat in
+        // the left subtree sits at-or-below the node on that axis, right
+        // subtree at-or-above. Ties may land on either side of an equal
+        // block, so compare with <= / >=.
+        const n = 1000;
+        const [x, y, z] = randomCols(n, 3, 4242);
+        const cols = [x, y, z];
+        const flat = buildFlatKdTree(x, y, z);
+        const check = (t, depth) => {
+            if (t === 0xFFFFFFFF) return;
+            const axis = depth % 3;
+            const v = cols[axis][flat.nodeSplatIdx[t]];
+            const left = flat.nodeChildren[t * 2];
+            const right = flat.nodeChildren[t * 2 + 1];
+            const walk = (s, cmp) => {
+                if (s === 0xFFFFFFFF) return;
+                assert.ok(cmp(cols[axis][flat.nodeSplatIdx[s]], v), `axis ${axis} split violated at node ${t}`);
+                walk(flat.nodeChildren[s * 2], cmp);
+                walk(flat.nodeChildren[s * 2 + 1], cmp);
+            };
+            walk(left, (a, b) => a <= b);
+            walk(right, (a, b) => a >= b);
+            check(left, depth + 1);
+            check(right, depth + 1);
+        };
+        check(flat.rootIdx, 0);
     });
 
     it('builds in sub-quadratic time over a large all-identical point set', { timeout: 5000 }, () => {

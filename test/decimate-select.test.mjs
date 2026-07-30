@@ -1,12 +1,14 @@
 /**
- * Global selection tests: disjointness, exact targets, closure behaviour,
- * bucketed-vs-exact-sorted greedy equivalence, non-finite exclusion.
+ * Global selection tests (cost-ordered agglomeration): disjoint clustering,
+ * exact targets, CSR consistency, cheap-region concentration (expensive
+ * gaussians spared), multi-member clusters when pairing alone can't reach the
+ * target, non-finite exclusion.
  */
 
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
 
-import { selectMerges } from '../src/lib/decimate/select.js';
+import { selectMerges, MAX_GROUP } from '../src/lib/decimate/select.js';
 
 const mulberry = (seed) => {
     let t = seed >>> 0;
@@ -18,7 +20,7 @@ const mulberry = (seed) => {
     };
 };
 
-// Ring candidates: each i lists i±1, i±2 — a perfect matching always exists.
+// Ring candidates: each i lists i±1, i±2 — a dense graph that clusters freely.
 const ringCandidates = (N, K, r) => {
     const idx = new Uint32Array(N * K);
     const cost = new Float32Array(N * K);
@@ -32,8 +34,8 @@ const ringCandidates = (N, K, r) => {
     return { idx, cost };
 };
 
-describe('selectMerges', () => {
-    it('selection is disjoint, hits exact target, CSR consistent', () => {
+describe('selectMerges (agglomeration)', () => {
+    it('clusters are disjoint, hit exact target, CSR consistent', () => {
         const N = 10000, K = 4, r = mulberry(9);
         const cand = ringCandidates(N, K, r);
         const needed = N / 2;
@@ -42,7 +44,7 @@ describe('selectMerges', () => {
         const seen = new Int32Array(N).fill(-1);
         for (let g = 0; g < sel.mergedGroups; g++) {
             const size = sel.groupOffsets[g + 1] - sel.groupOffsets[g];
-            assert.ok(size >= 2 && size <= 4, `group ${g} size ${size}`);
+            assert.ok(size >= 2 && size <= MAX_GROUP, `group ${g} size ${size}`);
             let min = Infinity;
             for (let m = sel.groupOffsets[g]; m < sel.groupOffsets[g + 1]; m++) {
                 const id = sel.groupMembers[m];
@@ -53,6 +55,7 @@ describe('selectMerges', () => {
             }
             assert.strictEqual(sel.groupMin[g], min);
         }
+        // Each cluster collapses to one survivor: survivors + groups = N - removed.
         let survivors = 0;
         for (let i = 0; i < N; i++) {
             if (sel.memberGroup[i] === -1) survivors++;
@@ -60,51 +63,42 @@ describe('selectMerges', () => {
         assert.strictEqual(survivors + sel.mergedGroups, N - needed);
     });
 
-    it('bucketed greedy tracks exact-sorted greedy selection cost within quantization', () => {
-        const N = 4000, K = 4, r = mulberry(21);
-        const cand = ringCandidates(N, K, r);
-        const needed = Math.floor(N * 0.3); // selective regime
-        const sel = selectMerges(cand, N, K, needed);
-        assert.strictEqual(sel.removed, needed);
-
-        // reference: exact-sort greedy over the same candidate edges
-        const entries = [];
-        for (let e = 0; e < N * K; e++) {
-            if (Number.isFinite(cand.cost[e])) entries.push(e);
-        }
-        entries.sort((a, b) => cand.cost[a] - cand.cost[b]);
-        const used = new Uint8Array(N);
-        let refCost = 0, taken = 0;
-        for (const e of entries) {
-            const i = Math.floor(e / K), j = cand.idx[e];
-            if (used[i] || used[j]) continue;
-            used[i] = 1;
-            used[j] = 1;
-            refCost += cand.cost[e];
-            if (++taken >= needed) break;
-        }
-
-        let gotCost = 0;
-        for (let g = 0; g < sel.mergedGroups; g++) {
-            const a = sel.groupMembers[sel.groupOffsets[g]];
-            const b = sel.groupMembers[sel.groupOffsets[g] + 1];
-            let c = Infinity;
-            for (let s = 0; s < K; s++) {
-                if (cand.idx[a * K + s] === b) c = Math.min(c, cand.cost[a * K + s]);
-                if (cand.idx[b * K + s] === a) c = Math.min(c, cand.cost[b * K + s]);
-            }
-            gotCost += c;
-        }
-        assert.ok(gotCost <= refCost * 1.02, `bucketed ${gotCost} vs sorted ${refCost}`);
-    });
-
-    it('closure attaches unmatched gaussians when pairs alone cannot reach the target', () => {
-        // Star topology: everyone's candidates point at a tiny hub set, so
-        // primary pairing exhausts quickly and closure must attach the rest.
-        const N = 100, K = 2;
+    it('removal concentrates in the low-cost region, sparing expensive gaussians', () => {
+        // Two disjoint rings: a cheap region [0, H) and an expensive one [H, N).
+        // Cost-ordered agglomeration must exhaust the cheap region before ever
+        // touching an expensive edge, so with a target the cheap side can cover
+        // on its own, every expensive gaussian survives untouched.
+        const N = 2000, K = 4, H = 1000, r = mulberry(7);
         const idx = new Uint32Array(N * K);
         const cost = new Float32Array(N * K);
-        const r = mulberry(5);
+        for (let i = 0; i < N; i++) {
+            const base = i < H ? 0 : H;
+            const local = i - base;
+            const nb = [
+                base + (local + 1) % H, base + (local + H - 1) % H,
+                base + (local + 2) % H, base + (local + H - 2) % H
+            ];
+            const cheap = i < H;
+            for (let s = 0; s < K; s++) {
+                idx[i * K + s] = nb[s];
+                cost[i * K + s] = (cheap ? 0.01 * r() : 10 + r()) + (s >= 2 ? (cheap ? 0.02 : 1) : 0);
+            }
+        }
+        const needed = 400; // < cheap-region capacity
+        const sel = selectMerges({ idx, cost }, N, K, needed);
+        assert.strictEqual(sel.removed, needed);
+        for (let i = H; i < N; i++) {
+            assert.strictEqual(sel.memberGroup[i], -1, `expensive gaussian ${i} must be spared`);
+        }
+    });
+
+    it('reaches the target via multi-member clusters when pairing alone cannot', () => {
+        // Star topology: everyone points at a tiny hub set, so a disjoint
+        // matching tops out at ~8 removals. Agglomeration must grow hub-centred
+        // clusters (size > 2) to reach a target beyond that.
+        const N = 100, K = 2, r = mulberry(5);
+        const idx = new Uint32Array(N * K);
+        const cost = new Float32Array(N * K);
         for (let i = 0; i < N; i++) {
             idx[i * K] = i < 8 ? (i + 1) % 8 : i % 8;      // hub 0..7
             idx[i * K + 1] = (i % 8 === 0) ? 1 : 0;
@@ -113,11 +107,14 @@ describe('selectMerges', () => {
         }
         const needed = 12;
         const sel = selectMerges({ idx, cost }, N, K, needed);
-        assert.ok(sel.removed > 4, `closure extended removal (${sel.removed})`);
+        assert.strictEqual(sel.removed, needed);
+        let maxSize = 0;
         for (let g = 0; g < sel.mergedGroups; g++) {
             const size = sel.groupOffsets[g + 1] - sel.groupOffsets[g];
-            assert.ok(size >= 2 && size <= 4);
+            assert.ok(size >= 2 && size <= MAX_GROUP, `group ${g} size ${size}`);
+            maxSize = Math.max(maxSize, size);
         }
+        assert.ok(maxSize >= 3, `expected a multi-member cluster (max size ${maxSize})`);
     });
 
     it('non-finite costs are never selected', () => {
