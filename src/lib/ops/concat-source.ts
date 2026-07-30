@@ -6,6 +6,8 @@ import {
     type ChunkSource,
     type ChunkSourceMetadata
 } from '../chunk';
+import { resolveSplatModel } from '../splat-model';
+import { logger } from '../utils';
 
 const LAYERS: ChunkLayer[] = ['position', 'geometric', 'color', 'other'];
 
@@ -76,6 +78,15 @@ const concatSource = (allSources: ChunkSource[], pool: ChunkDataPool): ChunkSour
         sources = [allSources[0]];
     }
 
+    // Unlike the structural mismatches above, disagreeing models don't block the
+    // concat: no output format can hold two, so fall back to plain gaussians
+    // (which every variant renders acceptably as) rather than mistagging.
+    const model = resolveSplatModel(sources.map(s => s.meta.model));
+    if (sources.some(s => s.meta.model !== model)) {
+        const seen = [...new Set(sources.map(s => s.meta.model))].join(', ');
+        logger.warn(`mixed splat models (${seen}); writing the result as '${model}'`);
+    }
+
     const S = ref.chunkSize;
     // Per-source gaussian counts and the output-row offset each source begins at.
     const counts = sources.map(s => s.meta.numGaussians);
@@ -88,6 +99,7 @@ const concatSource = (allSources: ChunkSource[], pool: ChunkDataPool): ChunkSour
 
     const meta: ChunkSourceMetadata = {
         ...ref,
+        model,
         numGaussians: total,
         numLods: 1,
         lodCounts: [total],

@@ -1,3 +1,4 @@
+import { type SplatModel } from '../splat-model';
 import { type Transform } from '../utils';
 import { type ChunkData } from './data';
 import {
@@ -178,6 +179,7 @@ type LayerBuffers = ReadonlyArray<ReadonlyArray<ArrayBuffer>>;
  * @param params.chunkSize - Gaussians per chunk.
  * @param params.shBands - SH band count of the color layer.
  * @param params.extraColumns - Descriptors for the `other` layer columns.
+ * @param params.model - How the scene was trained. Default: `default`.
  * @param params.transform - Pending coordinate-space transform.
  * @param params.lodCounts - Gaussians per LOD; `lodCounts[0]` must equal `numGaussians`.
  * @param params.position - Per-LOD per-chunk position buffers, or undefined.
@@ -191,6 +193,8 @@ const createInMemoryChunkSource = (params: {
     chunkSize: number;
     shBands: SHBands;
     extraColumns?: ReadonlyArray<ExtraColumn>;
+    /** How the scene was trained; untagged sources are `default`. */
+    model?: SplatModel;
     transform: Transform;
     /** Gaussians per LOD. `lodCounts[0]` must equal `numGaussians`. */
     lodCounts: ReadonlyArray<number>;
@@ -259,6 +263,7 @@ const createInMemoryChunkSource = (params: {
         chunkSize,
         numChunks,
         shBands,
+        model: params.model ?? 'default',
         extraColumns: extras,
         transform,
         availableLayers,

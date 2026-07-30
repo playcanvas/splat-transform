@@ -17,7 +17,8 @@ import {
 import { dataTableToChunkSource, materializeToDataTable } from '../compat/data-table';
 import { type DataTable } from '../data-table';
 import { basename, dirname, join, type ReadFileSystem, readFile } from '../io/read';
-import { Transform, WebPCodec } from '../utils';
+import { isSplatModel, type SplatModel } from '../splat-model';
+import { logger, Transform, WebPCodec } from '../utils';
 import { readSogV1, type MetaV1 } from './read-sog-v1';
 
 // V2 (current) SOG meta layout - codebook-based quantization for scales /
@@ -26,6 +27,7 @@ import { readSogV1, type MetaV1 } from './read-sog-v1';
 type MetaV2 = {
     version: 2;
     count: number;
+    model?: string;
     means: { mins: number[]; maxs: number[]; files: string[] };
     scales: { codebook: number[]; files: string[] };
     quats: { files: string[] };
@@ -41,6 +43,15 @@ type ReadSogOptions = {
     //              decoding many chunks concurrently — logger bars are strictly
     //              LIFO, so concurrent per-chunk bars would corrupt each other)
     logging?: 'own' | 'silent';
+};
+
+// meta.json's `model` entry: absent means an untagged scene, and an unrecognized
+// value warns rather than failing the read.
+const modelFromMeta = (value: string | undefined): SplatModel => {
+    if (value === undefined) return 'default';
+    if (isSplatModel(value)) return value;
+    logger.warn(`unrecognized splat model '${value}' in meta.json, reading as 'default'`);
+    return 'default';
 };
 
 // Inverse of logTransform(x) = sign(x) * ln(|x| + 1)
@@ -186,6 +197,7 @@ const readSogSourceV2 = async (
         chunkSize,
         numChunks: [count === 0 ? 0 : Math.ceil(count / chunkSize)],
         shBands,
+        model: modelFromMeta(meta.model),
         extraColumns: [],
         transform: Transform.PLY.clone(),
         availableLayers: new Set<ChunkLayer>(['position', 'geometric', 'color']),

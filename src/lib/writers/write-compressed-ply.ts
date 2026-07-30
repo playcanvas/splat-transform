@@ -1,11 +1,12 @@
 import { basename } from 'pathe';
 
 import { CompressedChunk } from './compressed-chunk';
-import { logWrittenFile } from './utils';
+import { logWrittenFile, splatModelComment } from './utils';
 import { type ChunkSource, type ChunkDataPool } from '../chunk';
 import { materializeToDataTable } from '../compat/data-table';
 import { DataTable, sortMortonOrder, convertToSpace, getSHBands, shRestNames } from '../data-table';
 import { type FileSystem } from '../io/write';
+import { type SplatModel } from '../splat-model';
 import { logger, Transform } from '../utils';
 import { version } from '../version';
 
@@ -33,6 +34,7 @@ const CHUNK_SIZE = 256;
 type WriteCompressedPlyOptions = {
     filename: string;
     dataTable: DataTable;
+    model?: SplatModel;
 };
 
 /**
@@ -61,10 +63,15 @@ const writeCompressedPly = async (options: WriteCompressedPlyOptions, fs: FileSy
         new Array(outputSHCoeffs * 3).fill('').map((_, i) => `property uchar f_rest_${i}`)
     ].flat() : [];
 
+    // The packed layout is fixed, so a 2DGS scene keeps its (materialized) third
+    // scale — the comment is what tells a viewer to ignore it.
+    const modelComment = splatModelComment(options.model ?? 'default');
+
     const headerText = [
         'ply',
         'format binary_little_endian 1.0',
         `comment ${generatedByString}`,
+        ...(modelComment ? [`comment ${modelComment}`] : []),
         `element chunk ${numChunks}`,
         chunkProps.map(p => `property float ${p}`),
         `element vertex ${numSplats}`,
@@ -161,7 +168,7 @@ const writeCompressedPlySource = async (
     fs: FileSystem
 ): Promise<void> => {
     const dataTable = await materializeToDataTable(source, pool);
-    await writeCompressedPly({ filename: options.filename, dataTable }, fs);
+    await writeCompressedPly({ filename: options.filename, dataTable, model: source.meta.model }, fs);
 };
 
 export { writeCompressedPly, writeCompressedPlySource };

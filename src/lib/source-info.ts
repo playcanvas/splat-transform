@@ -36,6 +36,7 @@ const buildSourceInfo = (meta: ChunkSourceMetadata, format?: InputFormat) => ({
     numLods: meta.numLods,
     lodCounts: [...meta.lodCounts],
     shBands: meta.shBands,
+    model: meta.model,
     layers: orderedLayers(meta.availableLayers),
     extraColumns: meta.extraColumns.map(e => ({ name: e.name, type: e.type }))
 });
@@ -55,6 +56,8 @@ const sourceInfoLines = (meta: ChunkSourceMetadata, format?: InputFormat): strin
         `lods: ${meta.numLods}`,
         `lod counts: ${meta.lodCounts.join(', ')}`,
         `sh bands: ${meta.shBands}`,
+        // untagged scenes say nothing, so existing output is unchanged
+        ...(meta.model === 'default' ? [] : [`model: ${meta.model}`]),
         `layers: ${orderedLayers(meta.availableLayers).join(', ')}`,
         `extra columns: ${meta.extraColumns.length > 0 ? meta.extraColumns.map(e => `${e.name} (${e.type})`).join(', ') : '(none)'}`
     ];

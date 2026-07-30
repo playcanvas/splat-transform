@@ -1,4 +1,5 @@
 import { Column, DataTable, convertToSpace } from './data-table';
+import { type SplatModel } from './splat-model';
 import { Transform } from './utils';
 
 type CoordinateSystem = {
@@ -155,7 +156,7 @@ const gaussianCloudToDataTable = (cloud: GaussianCloud) => {
     return new DataTable(columns, Transform.PLY);
 };
 
-const dataTableToGaussianCloud = (dataTable: DataTable): GaussianCloud => {
+const dataTableToGaussianCloud = (dataTable: DataTable, model: SplatModel = 'default'): GaussianCloud => {
     const plyDataTable = convertToSpace(dataTable, Transform.PLY);
     const shColumnCount = getShColumnCount(plyDataTable);
     const shDegree = getShDegreeFromCount(shColumnCount);
@@ -223,7 +224,7 @@ const dataTableToGaussianCloud = (dataTable: DataTable): GaussianCloud => {
     return {
         numPoints,
         shDegree,
-        antialiased: false,
+        antialiased: model === 'antialiased',
         extensions: [],
         positions,
         scales,

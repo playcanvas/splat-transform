@@ -2,12 +2,14 @@ import { basename } from 'pathe';
 
 import { logWrittenFile } from './utils';
 import { type FileSystem, writeFile } from '../io/write';
+import { type SplatModel } from '../splat-model';
 import { dataTableToGaussianCloud, getSpzModule, makeSpzPackOptions } from '../spz-module';
 import { logger } from '../utils';
 
 type WriteSpzOptions = {
     filename: string;
     dataTable: import('../data-table').DataTable;
+    model?: SplatModel;
     version?: 3 | 4;
 };
 
@@ -20,12 +22,19 @@ type WriteSpzOptions = {
  * @ignore
  */
 const writeSpz = async (options: WriteSpzOptions, fs: FileSystem) => {
-    const { filename, dataTable, version = 4 } = options;
+    const { filename, dataTable, model = 'default', version = 4 } = options;
     const writingGroup = logger.group('Writing');
+
+    // SPZ's header has an antialiased bit but no 2DGS state. The third scale
+    // still encodes: SPZ's quantized log-scale range saturates at its floor, so
+    // the flat axis survives as the smallest scale the format can express.
+    if (model === '2dgs') {
+        logger.warn('spz cannot represent a 2dgs scene; writing it as ordinary gaussians with a minimal third scale');
+    }
 
     const spz = await getSpzModule();
     const packOptions = await makeSpzPackOptions({ version });
-    const cloud = dataTableToGaussianCloud(dataTable);
+    const cloud = dataTableToGaussianCloud(dataTable, model);
     const bytes = spz.saveSpzToBuffer(cloud, packOptions);
 
     if (version === 4) {

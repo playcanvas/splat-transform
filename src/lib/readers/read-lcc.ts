@@ -684,6 +684,7 @@ const readLccSource = async (
         chunkSize,
         numChunks: lodCounts.map(c => Math.ceil(c / chunkSize)),
         shBands,
+        model: 'default', // lcc carries no training-model tag
         extraColumns,
         transform: LCC_TRANSFORM(),
         availableLayers: new Set<ChunkLayer>(['position', 'geometric', 'color', 'other']),
