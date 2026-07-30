@@ -32,48 +32,13 @@ type CandidateArrays = {
     cost: Float32Array;
 };
 
-/** A per-slot GPU cost engine (one thread per dense neighbour slot). */
-type GpuSlotCost = {
-    execute(view: SplatView, cache: unknown, nbRows: Uint32Array, outCosts: Float32Array): Promise<void>;
-    destroy(): void;
-};
-
 /**
- * The cost kernel the priority pass runs: quality (field-L2, DC-only
- * colour) or legacy (KL-style, full-SH colour). Strategies own their cache
- * shape (each implementation casts what it created).
+ * Colour components the pass gathers per row. The field-L2 cost reads only
+ * DC, so at SH band 3 this is 16× less colour RAM and copy traffic per block
+ * than gathering every band. (`--decimate-uniform` scores full SH and has its
+ * own pass — see lib/decimate-uniform/priority.ts.)
  */
-type CostStrategy = {
-    /** Colour components the block view needs (undefined = all). */
-    colorComponents?: number;
-    /** Whether the CPU cache is also the GPU upload payload (quality's 16-f32 rows). */
-    cacheForGpu: boolean;
-    /** Build the per-view CPU cost cache. */
-    buildCache(view: SplatView): unknown;
-    /** Per-slot GPU engine factory (capacity = max view rows). */
-    createGpu(device: GraphicsDevice, capacity: number, k: number): GpuSlotCost;
-    /** Evaluate one edge on the CPU. */
-    cpuEdge(view: SplatView, cache: unknown, i: number, j: number): number;
-};
-
-/** The production field-L2 kernel (see edge-cost-cpu.ts / gpu-edge-cost.ts). */
-const qualityStrategy: CostStrategy = {
-    colorComponents: 3,
-    cacheForGpu: true,
-    buildCache(view) {
-        const cache = new Float32Array((view.geo.length / 8) * CACHE_STRIDE);
-        buildSplatCache(view, cache);
-        return cache;
-    },
-    createGpu(device, capacity, k) {
-        const gpu = new GpuEdgeCost(device, capacity, k);
-        return {
-            execute: (view, cache, nbRows, outCosts) => gpu.execute(cache as Float32Array, view.geo.length / 8, nbRows, outCosts),
-            destroy: () => gpu.destroy()
-        };
-    },
-    cpuEdge: (view, cache, i, j) => computeEdgeCost(cache as Float32Array, i, j)
-};
+const COLOR_COMPONENTS = 3;
 
 /** Everything the block passes need: baked single-LOD source + resident state. */
 type PriorityContext = {
@@ -121,7 +86,7 @@ type BlockView = {
  * @param extraGlobals - Sorted out-of-block rows to append after the owned rows.
  * @param includeOther - Also gather the `other` layer (merge pass only).
  * @param colorComponents - Colour components to copy per row (default: all).
- * The quality cost reads only DC, so its pass gathers 3 — at SH band 3 that
+ * The adaptive cost reads only DC, so its pass gathers 3 — at SH band 3 that
  * is 16× less colour RAM and copy traffic per block. The read itself still
  * decodes whole rows (row-interleaved sources); only the view copy narrows.
  * @returns The gathered block view.
@@ -326,13 +291,11 @@ const sortNeighborRows = (
  * @param cand - Candidate arrays (`N*K`) to fill, or undefined to skip all
  * cost work (cacheOut/neighborsOut persistence only).
  * @param tick - Optional progress callback (owned gaussians completed).
- * @param strategy - The cost kernel (default: the production field-L2).
  */
 const runPriorityPass = async (
     ctx: PriorityContext,
     cand: CandidateArrays | undefined,
-    tick?: (n: number) => void,
-    strategy: CostStrategy = qualityStrategy
+    tick?: (n: number) => void
 ): Promise<void> => {
     const { pos, order, blocks, device, K, k } = ctx;
 
@@ -340,7 +303,7 @@ const runPriorityPass = async (
     for (const b of blocks) maxOwned = Math.max(maxOwned, b.end - b.start);
 
     let gpuKnn: GpuKnn | undefined;
-    let gpuCost: GpuSlotCost | undefined;
+    let gpuCost: GpuEdgeCost | undefined;
     let gpuCostCapacity = Math.ceil(maxOwned * VIEW_GROW);
 
     // The forest is built once per generation (its trees are exact and
@@ -398,7 +361,7 @@ const runPriorityPass = async (
     try {
         if (device) {
             gpuKnn = new GpuKnn(device, forest, k);
-            if (cand) gpuCost = strategy.createGpu(device, gpuCostCapacity, k);
+            if (cand) gpuCost = new GpuEdgeCost(device, gpuCostCapacity, k);
         }
 
         let next: Promise<Uint32Array> | null = blocks.length > 0 ? prepare(0) : null;
@@ -451,15 +414,15 @@ const runPriorityPass = async (
             if (gpuCost && viewN > gpuCostCapacity) {
                 gpuCost.destroy();
                 gpuCostCapacity = Math.ceil(viewN * 1.1);
-                gpuCost = strategy.createGpu(device!, gpuCostCapacity, k);
+                gpuCost = new GpuEdgeCost(device!, gpuCostCapacity, k);
             }
 
-            const { view } = await gatherBlockView(ctx, bi, extraGlobals, false, strategy.colorComponents);
+            const { view } = await gatherBlockView(ctx, bi, extraGlobals, false, COLOR_COMPONENTS);
 
-            // Per-view cost cache: quality's 16-f32 rows double as the GPU
-            // upload and the re-costed selection's resident copy; legacy's is
-            // CPU-only (its GPU engine packs from the view internally).
-            const cache = (strategy.cacheForGpu || !device) ? strategy.buildCache(view) : undefined;
+            // Per-view cost cache: the 16-f32 rows double as the GPU upload
+            // and the re-costed selection's resident copy.
+            const cache = new Float32Array((view.geo.length / 8) * CACHE_STRIDE);
+            buildSplatCache(view, cache);
 
             if (cand) {
                 // Translate neighbour slots: global ids → view rows
@@ -478,13 +441,13 @@ const runPriorityPass = async (
 
                 const blockCosts = new Float32Array(slots);
                 if (gpuCost) {
-                    await gpuCost.execute(view, cache, nbRow, blockCosts);
+                    await gpuCost.execute(cache, view.geo.length / 8, nbRow, blockCosts);
                 } else {
                     for (let s = 0; s < slots; s++) {
                         const row = nbRow[s];
                         blockCosts[s] = row === KNN_SENTINEL ?
                             0 :
-                            strategy.cpuEdge(view, cache, (s / k) | 0, row);
+                            computeEdgeCost(cache, (s / k) | 0, row);
                     }
                 }
 
@@ -519,15 +482,12 @@ const runPriorityPass = async (
                 }
             }
 
-            // Persist owned rows for re-costed selection: the splat cache
-            // (identical layout on both paths) and the global neighbour ids
-            // (sentinel-padded). Quality-only (cacheOut implies the quality
-            // strategy, whose cache is the 16-f32 rows).
+            // Persist owned rows for re-costed selection: the splat cache and
+            // the global neighbour ids (sentinel-padded).
             if (ctx.cacheOut) {
                 const CO = ctx.cacheOut;
-                const c16 = cache as Float32Array;
                 for (let qi = 0; qi < nOwned; qi++) {
-                    CO.set(c16.subarray(qi * CACHE_STRIDE, (qi + 1) * CACHE_STRIDE), owned[qi] * CACHE_STRIDE);
+                    CO.set(cache.subarray(qi * CACHE_STRIDE, (qi + 1) * CACHE_STRIDE), owned[qi] * CACHE_STRIDE);
                 }
             }
             if (ctx.neighborsOut) {
@@ -551,10 +511,8 @@ export {
     gatherBlockView,
     sortNeighborRows,
     indexOfSorted,
-    qualityStrategy,
     VIEW_GROW,
     type CandidateArrays,
-    type CostStrategy,
     type PriorityContext,
     type BlockView
 };

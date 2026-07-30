@@ -1,7 +1,8 @@
 import type { TypedArray } from '../data-table/data-table';
 import { knnForestQuery, type ForestPart } from '../decimate/knn-core';
 import { mergeGroup, createMergeScratch, splatMass } from '../decimate/moment-match';
-import { buildFlatKdTree } from '../spatial/kd-tree';
+import { knnQueryBlock } from '../decimate-uniform/knn-core';
+import { buildFlatKdTree, type FlatKdTree } from '../spatial/kd-tree';
 import { quantize1dColumns, type QuantizedColumns } from '../spatial/quantize-1d-core';
 import { WebPCodec } from '../utils/webp-codec';
 
@@ -99,6 +100,36 @@ const taskHandlers = {
         const out = new Uint32Array(count * args.k);
         knnForestQuery(args.parts, args.queryPos, args.queryIds, count, args.k, out);
         return { result: out, transfer: [out.buffer as ArrayBuffer] };
+    },
+
+    // Build + flatten a KD-tree over interleaved LOCAL positions (the
+    // `--decimate-uniform` GPU path: node splat ids stay local and the
+    // flattened arrays upload straight into that path's GpuKnn). Serves
+    // decimate-uniform/ — see its README before changing either handler.
+    flattenKdTree: (args: { positions: Float32Array }): TaskOutput<FlatKdTree> => {
+        const n = args.positions.length / 3;
+        const x = new Float32Array(n);
+        const y = new Float32Array(n);
+        const z = new Float32Array(n);
+        for (let i = 0; i < n; i++) {
+            x[i] = args.positions[i * 3];
+            y[i] = args.positions[i * 3 + 1];
+            z[i] = args.positions[i * 3 + 2];
+        }
+        const flat = buildFlatKdTree(x, y, z);
+        return {
+            result: flat,
+            transfer: [
+                flat.nodeSplatIdx.buffer, flat.nodePositions.buffer, flat.nodeChildren.buffer
+            ] as ArrayBuffer[]
+        };
+    },
+
+    // `--decimate-uniform` CPU-fallback block KNN: exact k-NN of the owned
+    // prefix within the local point set, as local indices. Frozen.
+    knnBlock: (args: { positions: Float32Array, ownedCount: number, k: number }): TaskOutput<Uint32Array> => {
+        const result = knnQueryBlock(args.positions, args.ownedCount, args.k);
+        return { result, transfer: [result.buffer as ArrayBuffer] };
     },
 
     // Decimation merge stream: n-ary moment match of packed member-major

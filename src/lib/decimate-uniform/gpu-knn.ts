@@ -1,0 +1,345 @@
+import {
+    BUFFERUSAGE_COPY_DST,
+    BUFFERUSAGE_COPY_SRC,
+    SHADERLANGUAGE_WGSL,
+    SHADERSTAGE_COMPUTE,
+    UNIFORMTYPE_UINT,
+    BindGroupFormat,
+    BindStorageBufferFormat,
+    BindUniformBufferFormat,
+    Compute,
+    GraphicsDevice,
+    Shader,
+    StorageBuffer,
+    UniformBufferFormat,
+    UniformFormat
+} from 'playcanvas';
+
+import { type FlatKdTree } from '../spatial/kd-tree';
+
+/**
+ * Block-local GPU KNN for `--decimate-uniform`.
+ *
+ * Separate from the quality path's `gpu/gpu-knn.ts` because the two have
+ * incompatible models: this one takes a max size and accepts a DIFFERENT tree
+ * per `execute` (the decimator re-uploads one block's tree at a time), while
+ * that one bakes each forest part's root and AABB in as compile-time constants
+ * at construction.
+ *
+ * The one deviation from 3.1.x here is the flat-tree layout it reads; see
+ * README.md in this directory before changing it.
+ */
+
+/**
+ * WGSL kernel: iterative KD-tree K-nearest-neighbours.
+ *
+ * Each thread runs a depth-first traversal of the flattened KD-tree with a
+ * fixed-size per-thread stack. Visits at most `O(K · log N)` nodes per
+ * query thanks to the standard "skip the far subtree if its splitting plane
+ * is farther than the current K-th best" pruning. Top-K is maintained
+ * unsorted in per-thread storage with explicit worst-index tracking, so the
+ * common-case "candidate is rejected against worst" path is a single
+ * compare-and-branch (no dynamic-indexed shift).
+ *
+ * @param k - Compile-time K, the number of nearest neighbours per query.
+ * @param stackSize - Compile-time per-thread DFS stack depth.
+ * @returns WGSL source.
+ */
+const knnWgsl = (k: number, stackSize: number) => /* wgsl */`
+struct Uniforms {
+    queryOffset: u32,
+    queryCount: u32,
+    rootIdx: u32,
+}
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+// Query positions interleaved xyz: positions[q*3 + 0/1/2].
+@group(0) @binding(1) var<storage, read> positions: array<f32>;
+// Flattened KD-tree. Positions and children are interleaved so the kernel
+// stays comfortably under the WebGPU per-stage storage-buffer minimum (8):
+// nodePositions[t*3 + 0/1/2] for tree node t, nodeChildren[t*2 + 0/1] for
+// (left, right). Kept separate from nodeSplatIdx to avoid mixing f32/u32.
+@group(0) @binding(2) var<storage, read> nodeSplatIdx: array<u32>;
+@group(0) @binding(3) var<storage, read> nodePositions: array<f32>;
+@group(0) @binding(4) var<storage, read> nodeChildren: array<u32>;
+// Output: per query, k neighbour splat indices (unsorted).
+@group(0) @binding(5) var<storage, read_write> outIndices: array<u32>;
+
+const K: u32 = ${k}u;
+const NULL_NODE: u32 = 0xFFFFFFFFu;
+const F32_MAX: f32 = 3.4028234663852886e+38;
+// log2(N) + slack — safe to ~2^40 nodes which is way past our limits.
+const STACK_SIZE: u32 = ${stackSize}u;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+    let bid = gid.x;
+    if (bid >= uniforms.queryCount) { return; }
+    let q = bid + uniforms.queryOffset;
+
+    let q3 = q * 3u;
+    let qx = positions[q3 + 0u];
+    let qy = positions[q3 + 1u];
+    let qz = positions[q3 + 2u];
+
+    // Top-K state, unsorted. worstIdx points to the current K-th worst slot
+    // so accepts replace it in O(1) and we recompute worst via a fixed loop.
+    var topIdx: array<u32, ${k}>;
+    var topDist: array<f32, ${k}>;
+    var worst: f32 = F32_MAX;
+    var worstIdx: u32 = 0u;
+    for (var i: u32 = 0u; i < K; i++) {
+        topDist[i] = F32_MAX;
+        topIdx[i] = 0u;
+    }
+
+    // Stack: (nodeIdx, axis) packed as u32. axis ∈ {0,1,2} in top 2 bits,
+    // nodeIdx in low 30 — supports up to ~1B nodes.
+    var stack: array<u32, ${stackSize}>;
+    var sp: u32 = 0u;
+    stack[0] = uniforms.rootIdx;   // axis=0 → no axis bits set
+    sp = 1u;
+
+    while (sp > 0u) {
+        sp = sp - 1u;
+        let packed = stack[sp];
+        let nodeIdx = packed & 0x3FFFFFFFu;
+        let axis = packed >> 30u;
+
+        // Read the node's position + splat id.
+        let np = nodeIdx * 3u;
+        let nx = nodePositions[np + 0u];
+        let ny = nodePositions[np + 1u];
+        let nz = nodePositions[np + 2u];
+        let splatId = nodeSplatIdx[nodeIdx];
+
+        // Update top-K, skipping the query itself.
+        if (splatId != q) {
+            let dx = nx - qx;
+            let dy = ny - qy;
+            let dz = nz - qz;
+            let d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 < worst) {
+                topDist[worstIdx] = d2;
+                topIdx[worstIdx] = splatId;
+                // Recompute worst with a constant-bound loop (compiler can
+                // unroll → all accesses to topDist resolve statically).
+                var w: f32 = topDist[0];
+                var wi: u32 = 0u;
+                for (var i: u32 = 1u; i < K; i++) {
+                    if (topDist[i] > w) { w = topDist[i]; wi = i; }
+                }
+                worst = w;
+                worstIdx = wi;
+            }
+        }
+
+        // Choose near/far children based on which side of the splitting
+        // plane the query lies on. Walk near first (push far first so LIFO
+        // pops near first), with pruning on far.
+        var qAxisVal: f32;
+        var nAxisVal: f32;
+        if (axis == 0u) { qAxisVal = qx; nAxisVal = nx; }
+        else if (axis == 1u) { qAxisVal = qy; nAxisVal = ny; }
+        else { qAxisVal = qz; nAxisVal = nz; }
+
+        let delta = qAxisVal - nAxisVal;
+        let nextAxis = select(axis + 1u, 0u, axis + 1u >= 3u);
+        let nextAxisPacked = nextAxis << 30u;
+
+        let nc = nodeIdx * 2u;
+        let leftChild = nodeChildren[nc + 0u];
+        let rightChild = nodeChildren[nc + 1u];
+        let near = select(rightChild, leftChild, delta < 0.0);
+        let far = select(leftChild, rightChild, delta < 0.0);
+
+        // Push far first iff its subtree could still hold a closer point
+        // than the current K-th best.
+        if (far != NULL_NODE && delta * delta < worst) {
+            stack[sp] = far | nextAxisPacked;
+            sp = sp + 1u;
+        }
+        if (near != NULL_NODE) {
+            stack[sp] = near | nextAxisPacked;
+            sp = sp + 1u;
+        }
+    }
+
+    // Emit unsorted top-K (the decimator does not require sorted neighbours).
+    // Slots that never received a real candidate (n-1 < K) keep F32_MAX in
+    // topDist; emit the sentinel 0xFFFFFFFF for those so downstream
+    // edge-extraction can skip them, matching the CPU path.
+    let outBase = bid * K;
+    for (var i: u32 = 0u; i < K; i++) {
+        if (topDist[i] == F32_MAX) {
+            outIndices[outBase + i] = 0xFFFFFFFFu;
+        } else {
+            outIndices[outBase + i] = topIdx[i];
+        }
+    }
+}
+`;
+
+/**
+ * GPU K-nearest-neighbours over a fixed point set using a flattened KD-tree.
+ *
+ * Algorithm: classic KD-tree DFS with bounded heap pruning, except the
+ * recursion is unrolled into an explicit per-thread stack and the top-K is
+ * maintained unsorted (with worst-index tracking) so the dominant
+ * candidate-rejection path is a single compare. Same O(N log N) total work
+ * as the CPU KD-tree the kernel mirrors, just parallelised across queries.
+ *
+ * The flattened tree is built by the caller (`buildFlatKdTree`, typically
+ * off-thread via the `flattenKdTree` worker task) — this class only uploads
+ * and traverses it.
+ *
+ * Memory footprint: ~24 N bytes for the flattened tree (3 floats + 3
+ * u32 per node), plus query positions and the per-query output indices.
+ */
+class GpuKnn {
+    /**
+     * @param tree - Prebuilt flattened KD-tree over the `n` local points
+     * (see `buildFlatKdTree`; node splat ids are LOCAL indices).
+     * @param positions - Interleaved xyz for all `n` local points; queries
+     * are the first `queryCount` of them (owned-first ordering).
+     * @param n - Total local point count (tree size).
+     * @param queryCount - How many leading points to query.
+     * @param outNeighbours - destination for per-query K neighbour indices,
+     * length `queryCount * k`. `outNeighbours[i * k + j]` is one of the k
+     * nearest LOCAL neighbours of point i (UNSORTED). Excludes i itself;
+     * sentinel 0xFFFFFFFF fills surplus slots.
+     */
+    execute: (
+        tree: FlatKdTree,
+        positions: Float32Array,
+        n: number,
+        queryCount: number,
+        outNeighbours: Uint32Array
+    ) => Promise<void>;
+    destroy: () => void;
+
+    /**
+     * @param device - PlayCanvas GraphicsDevice (WebGPU).
+     * @param maxN - Maximum number of points the index will handle.
+     * @param k - Number of nearest neighbours per query.
+     */
+    constructor(device: GraphicsDevice, maxN: number, k: number) {
+        const workgroupSize = 64;
+        const queriesPerBatch = 1024 * workgroupSize;  // 65,536
+        // Per-thread DFS stack depth: tree depth = log2(maxN) + slack. 48 is
+        // safe for any N within the 30-bit nodeIdx packing limit checked below.
+        const stackSize = 48;
+        if (maxN > 0x3FFFFFFF) {
+            throw new Error(`GpuKnn: maxN=${maxN} exceeds 30-bit nodeIdx packing limit (~1B nodes)`);
+        }
+
+        // 5 storage buffers + 1 uniform — comfortably under the WebGPU
+        // per-stage minimum (8 storage buffers). Positions and KD-tree
+        // arrays are interleaved (see WGSL above) to keep the count down.
+        const bindGroupFormat = new BindGroupFormat(device, [
+            new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
+            new BindStorageBufferFormat('positions', SHADERSTAGE_COMPUTE, true),
+            new BindStorageBufferFormat('nodeSplatIdx', SHADERSTAGE_COMPUTE, true),
+            new BindStorageBufferFormat('nodePositions', SHADERSTAGE_COMPUTE, true),
+            new BindStorageBufferFormat('nodeChildren', SHADERSTAGE_COMPUTE, true),
+            new BindStorageBufferFormat('outIndices', SHADERSTAGE_COMPUTE)
+        ]);
+
+        const shader = new Shader(device, {
+            name: 'compute-knn-kdtree',
+            shaderLanguage: SHADERLANGUAGE_WGSL,
+            cshader: knnWgsl(k, stackSize),
+            // @ts-ignore
+            computeUniformBufferFormats: {
+                uniforms: new UniformBufferFormat(device, [
+                    new UniformFormat('queryOffset', UNIFORMTYPE_UINT),
+                    new UniformFormat('queryCount', UNIFORMTYPE_UINT),
+                    new UniformFormat('rootIdx', UNIFORMTYPE_UINT)
+                ])
+            },
+            // @ts-ignore
+            computeBindGroupFormat: bindGroupFormat
+        });
+
+        const positionsBuf = new StorageBuffer(device, maxN * 3 * 4, BUFFERUSAGE_COPY_DST);
+        const nSplatIdxBuf = new StorageBuffer(device, maxN * 4, BUFFERUSAGE_COPY_DST);
+        const nPositionsBuf = new StorageBuffer(device, maxN * 3 * 4, BUFFERUSAGE_COPY_DST);
+        const nChildrenBuf = new StorageBuffer(device, maxN * 2 * 4, BUFFERUSAGE_COPY_DST);
+
+        const outBatchBytes = queriesPerBatch * k * 4;
+        const outBuf = new StorageBuffer(
+            device,
+            outBatchBytes,
+            BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST
+        );
+        const outScratch = new Uint32Array(queriesPerBatch * k);
+
+        const compute = new Compute(device, shader, 'compute-knn-kdtree');
+        compute.setParameter('positions', positionsBuf);
+        compute.setParameter('nodeSplatIdx', nSplatIdxBuf);
+        compute.setParameter('nodePositions', nPositionsBuf);
+        compute.setParameter('nodeChildren', nChildrenBuf);
+        compute.setParameter('outIndices', outBuf);
+
+        this.execute = async (
+            tree: FlatKdTree,
+            positions: Float32Array,
+            n: number,
+            queryCount: number,
+            outNeighbours: Uint32Array
+        ) => {
+            if (n > maxN) {
+                throw new Error(`GpuKnn: N=${n} exceeds maxN=${maxN}`);
+            }
+            if (positions.length < n * 3) {
+                throw new Error(`GpuKnn: positions length ${positions.length} must be at least N*3 = ${n * 3}`);
+            }
+            if (queryCount > n) {
+                throw new Error(`GpuKnn: queryCount=${queryCount} exceeds N=${n}`);
+            }
+            if (outNeighbours.length !== queryCount * k) {
+                throw new Error(`GpuKnn: outNeighbours length ${outNeighbours.length} must be queryCount*k = ${queryCount * k}`);
+            }
+
+            // `FlatKdTree` already carries the interleaved layout this kernel
+            // wants (it is what this class used to pack for itself), so the
+            // uploads are direct. Bytes are unchanged from the packing loops
+            // this replaced — `buildFlatKdTree` is verified structurally
+            // identical to the pre-3.2 `KdTree.flatten()`.
+            positionsBuf.write(0, positions, 0, n * 3);
+            nSplatIdxBuf.write(0, tree.nodeSplatIdx, 0, n);
+            nPositionsBuf.write(0, tree.nodePositions, 0, n * 3);
+            nChildrenBuf.write(0, tree.nodeChildren, 0, n * 2);
+            compute.setParameter('rootIdx', tree.rootIdx);
+
+            const numBatches = Math.ceil(queryCount / queriesPerBatch);
+            for (let batch = 0; batch < numBatches; batch++) {
+                const queryOffset = batch * queriesPerBatch;
+                const batchCount = Math.min(queriesPerBatch, queryCount - queryOffset);
+                const groups = Math.ceil(batchCount / workgroupSize);
+
+                compute.setParameter('queryOffset', queryOffset);
+                compute.setParameter('queryCount', batchCount);
+
+                compute.setupDispatch(groups);
+                device.computeDispatch([compute], `knn-dispatch-${batch}`);
+
+                const readBytes = batchCount * k * 4;
+                await outBuf.read(0, readBytes, outScratch, true);
+                outNeighbours.set(outScratch.subarray(0, batchCount * k), queryOffset * k);
+            }
+        };
+
+        this.destroy = () => {
+            positionsBuf.destroy();
+            nSplatIdxBuf.destroy();
+            nPositionsBuf.destroy();
+            nChildrenBuf.destroy();
+            outBuf.destroy();
+            shader.destroy();
+            bindGroupFormat.destroy();
+        };
+    }
+}
+
+export { GpuKnn };

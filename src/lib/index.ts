@@ -42,6 +42,11 @@ export type {
 export { decimateSource } from './decimate';
 export type { DecimateOptions, DecimateSpill } from './decimate';
 
+// The frozen pre-3.2 decimator (--decimate-uniform); see
+// lib/decimate-uniform/README.md
+export { decimateSourceUniform } from './decimate-uniform';
+export type { DecimateUniformOptions, DecimateUniformSpill } from './decimate-uniform';
+
 // Statistics
 export { computeStats } from './stats';
 export type { LodStats, LodStatsData, SourceStats } from './stats';

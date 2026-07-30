@@ -46,7 +46,7 @@ type SelectionResult = {
  * @param mergesNeeded - Target removal count for this generation.
  * @returns The selection.
  */
-const selectMergesLegacy = (cand: CandidateArrays, N: number, K: number, mergesNeeded: number): SelectionResult => {
+const selectMerges = (cand: CandidateArrays, N: number, K: number, mergesNeeded: number): SelectionResult => {
     const E = N * K;
 
     // Pass 1: finite cost range.
@@ -151,4 +151,4 @@ const selectMergesLegacy = (cand: CandidateArrays, N: number, K: number, mergesN
     return { groupOffsets, groupMembers, memberGroup, groupMin, mergedGroups: G, removed };
 };
 
-export { selectMergesLegacy, SELECT_BUCKETS, type SelectionResult };
+export { selectMerges, SELECT_BUCKETS, type SelectionResult };

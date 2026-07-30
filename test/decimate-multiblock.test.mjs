@@ -22,12 +22,12 @@ after(() => {
     device?.destroy?.();
 });
 
-describe('decimateSource multi-block quality path', () => {
+describe('decimateSource multi-block adaptive path', () => {
     it('fails clearly when the memory budget requires multiple blocks without WebGPU', async () => {
         const { source, pool } = await makeSyntheticSource(65540, 0, 123, { chunkSize: 1024 });
         await assert.rejects(
             decimateSource(source, pool, { targetCount: 65000, memoryBudgetBytes: 1 }),
-            /multi-block quality decimation requires WebGPU/
+            /multi-block adaptive decimation requires WebGPU/
         );
     });
 

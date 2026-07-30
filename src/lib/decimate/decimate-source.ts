@@ -10,13 +10,10 @@ import { blockPlanMergeStream } from './block-merge-stream';
 import { planBlockMerges } from './block-plan';
 import { prepareGpuBlock, type PreparedBlock } from './block-prepare';
 import { createBlockProducerSource, type DestBuffers } from './block-producer';
-import { buildCostCacheLegacy, computeEdgeCostViewLegacy, packGpuCacheLegacy } from './edge-cost-legacy';
 import { mergeStream } from './merge-stream';
-import { createMergeScratch, makeGaussianSamples } from './moment-match';
 import { buildBlockHalo, kdPartition, coherenceRuns, type ResidentPositions } from './partition';
-import { runPriorityPass, VIEW_GROW, type CandidateArrays, type CostStrategy } from './priority';
+import { runPriorityPass, type CandidateArrays } from './priority';
 import { selectMerges, type SelectionResult } from './select';
-import { selectMergesLegacy } from './select-legacy';
 import { selectMergesRecosted, CACHE_STRIDE } from './select-recost';
 import {
     compact,
@@ -24,8 +21,6 @@ import {
     type ChunkSource,
     type ChunkSourceMetadata
 } from '../chunk';
-import { SPLAT_STRIDE } from '../gpu/gpu-edge-cost';
-import { GpuEdgeCostLegacy } from '../gpu/gpu-edge-cost-legacy';
 import { type ReadFileSystem } from '../io/read';
 import { type FileSystem } from '../io/write';
 import { bakeTransform, permuteSource } from '../ops';
@@ -84,15 +79,6 @@ type DecimateOptions = {
     spill?: DecimateSpill;
     /** Resident-memory budget driving the candidate-K and re-costed-selection policies (default 48 GiB). */
     memoryBudgetBytes?: number;
-    /**
-     * Decimation algorithm. `'quality'` (default): field-L2 cost with the
-     * scale-free colour term and re-costed selection — the quality-study
-     * winner (large gains on mixed-scale scenes, e.g. skies). `'legacy'`: the
-     * pre-study pipeline (KL-style cost with full-SH colour term, uniform
-     * matching) — faster, lower memory, and still measurably better on scenes
-     * of uniformly-sized gaussians (single objects, uniform texture).
-     */
-    mode?: 'quality' | 'legacy';
 };
 
 // Candidate-K policy: keep 4 when the resident estimate fits the budget,
@@ -129,26 +115,6 @@ const chooseBlockSize = (
         blockSize = Math.min(blockSize, Math.floor(bindingLimit / (CACHE_STRIDE * 4)));
     }
     return Math.max(1, Math.min(blockSize, n));
-};
-
-// The pre-study KL-style cost kernel (--decimate-balanced): full-SH colour
-// L2, single-Monte-Carlo geometric term, its own GPU cache/kernel layouts.
-const createLegacyStrategy = (colorDim: number): CostStrategy => {
-    const Z = makeGaussianSamples(1, 0);
-    const z = new Float32Array([Z[0][0], Z[0][1], Z[0][2]]);
-    const scratch = createMergeScratch();
-    return {
-        cacheForGpu: false,
-        buildCache: view => buildCostCacheLegacy(view),
-        createGpu(device, capacity, k) {
-            const gpu = new GpuEdgeCostLegacy(device, capacity, k, colorDim);
-            return {
-                execute: (view, _cache, nbRows, outCosts) => gpu.execute(packGpuCacheLegacy(view), nbRows, z, outCosts),
-                destroy: () => gpu.destroy()
-            };
-        },
-        cpuEdge: (view, cache, i, j) => computeEdgeCostViewLegacy(view, cache as ReturnType<typeof buildCostCacheLegacy>, i, j, Z, scratch)
-    };
 };
 
 // Read the position layer sequentially into resident columns (generation 1
@@ -256,28 +222,16 @@ const decimateSource = async (
 
             positions ??= await extractPositions(src, pool);
 
-            // Quality multi-block working sets are sized from the actual host
-            // budget and adapter binding limits. Legacy retains its previous
-            // fixed-size batching policy.
-            const legacy = opts.mode === 'legacy';
+            // Multi-block working sets are sized from the actual host budget
+            // and adapter binding limits.
             const nextCount = Math.max(targetCount, N - Math.floor(N / 2));
-            let blockSize = legacy ?
-                BLOCK_SIZE :
-                chooseBlockSize(N, budget, residentInputBytes, nextCount * 12, device);
-            if (legacy) {
-                const bindingLimit = (device as unknown as { limits?: { maxStorageBufferBindingSize?: number } } | undefined)
-                ?.limits?.maxStorageBufferBindingSize;
-                if (typeof bindingLimit === 'number') {
-                    const largestBinding = (bs: number) => Math.ceil(bs * VIEW_GROW) * SPLAT_STRIDE * 4;
-                    while (blockSize > (1 << 16) && largestBinding(blockSize) > bindingLimit) blockSize >>= 1;
-                }
-            }
+            const blockSize = chooseBlockSize(N, budget, residentInputBytes, nextCount * 12, device);
             if (blockSize !== BLOCK_SIZE && N > blockSize) {
                 logger.info(`decimate core size ${fmtCount(blockSize)} (memory/device working-set limit)`);
             }
 
             const partSub = logger.group('Partitioning');
-            let partition = kdPartition(positions, blockSize, legacy ? null : generation);
+            let partition = kdPartition(positions, blockSize, generation);
             let { order, blocks } = partition;
             partSub.end();
 
@@ -285,10 +239,10 @@ const decimateSource = async (
                 const runs = blocks.map(b => coherenceRuns(order, b.start, b.end, COHERENCE_GAP_ROWS)).sort((a, b) => a - b);
                 const median = runs[runs.length >> 1] ?? 0;
                 if (median > INCOHERENT_RUNS_PER_BLOCK) {
-                    if (!legacy && blocks.length > 1) {
+                    if (blocks.length > 1) {
                         if (!opts.spill) {
                             throw new Error(
-                                'multi-block quality decimation needs scratch storage to stage spatially incoherent input; ' +
+                                'multi-block adaptive decimation needs scratch storage to stage spatially incoherent input; ' +
                             'provide opts.spill / --scratch-dir'
                             );
                         }
@@ -349,13 +303,12 @@ const decimateSource = async (
             // Re-costed selection (exact within-generation greedy) when its
             // resident state fits the budget alongside the base state; one-shot
             // selection otherwise. Gated per generation, so large scenes regain
-            // re-costing as soon as the cascade shrinks under the budget. Legacy
-            // mode uses the pre-study pipeline throughout (no re-costing state).
+            // re-costing as soon as the cascade shrinks under the budget.
             const K = chooseK(N, budget);
             const k = Math.min(KNN_K, Math.max(1, N - 1));
             const generationTarget = Math.max(targetCount, N - Math.floor(N / 2));
             const needed = N - generationTarget;
-            const multiBlock = !legacy && blocks.length > 1;
+            const multiBlock = blocks.length > 1;
             let selection: SelectionResult | undefined;
             let storedPlans: StoredBlockPlan[] | undefined;
             let planPrefixes: Uint32Array | undefined;
@@ -364,13 +317,13 @@ const decimateSource = async (
             if (multiBlock) {
                 if (!device) {
                     throw new Error(
-                        `multi-block quality decimation requires WebGPU (${fmtCount(N)} splats, ` +
-                    `${fmtCount(blockSize)}-splat cores); provide a device, or use --decimate-balanced`
+                        `multi-block adaptive decimation requires WebGPU (${fmtCount(N)} splats, ` +
+                    `${fmtCount(blockSize)}-splat cores); provide a device, or use --decimate-uniform`
                     );
                 }
                 if (!opts.spill) {
                     throw new Error(
-                        'multi-block quality decimation needs scratch storage for merge plans ' +
+                        'multi-block adaptive decimation needs scratch storage for merge plans ' +
                     `(approximately ${fmtBytes(N * 12)} this generation); provide opts.spill / --scratch-dir`
                     );
                 }
@@ -479,10 +432,10 @@ const decimateSource = async (
                 );
             } else {
                 const baseBytes = residentInputBytes + N * (12 + K * 8 + K * 4 + 4) + 3 * 2 ** 30;
-                const recost = !legacy && baseBytes + N * RECOST_BYTES_PER_GAUSSIAN(k) <= budget;
+                const recost = baseBytes + N * RECOST_BYTES_PER_GAUSSIAN(k) <= budget;
 
-                // One-block quality deliberately follows the pre-existing path
-                // with no staging, halos, plan files, or k-way coordination.
+                // One block deliberately follows the pre-existing path with no
+                // staging, halos, plan files, or k-way coordination.
                 const cand: CandidateArrays | undefined = recost ?
                     undefined :
                     {
@@ -492,28 +445,17 @@ const decimateSource = async (
                 const cacheOut = recost ? new Float32Array(N * CACHE_STRIDE) : undefined;
                 const neighborsOut = recost ? new Uint32Array(N * k) : undefined;
                 const priorityBar = logger.bar('computing merge priorities', N);
-                if (legacy) {
-                    await runPriorityPass(
-                        { source: src, pool, pos: positions, order, blocks, device, K, k },
-                    cand!,
-                    n => priorityBar.tick(n),
-                    createLegacyStrategy(src.meta.layouts.color!.stride >> 2)
-                    );
-                } else {
-                    await runPriorityPass(
-                        { source: src, pool, pos: positions, order, blocks, device, K, k, cacheOut, neighborsOut },
-                        cand,
-                        n => priorityBar.tick(n)
-                    );
-                }
+                await runPriorityPass(
+                    { source: src, pool, pos: positions, order, blocks, device, K, k, cacheOut, neighborsOut },
+                    cand,
+                    n => priorityBar.tick(n)
+                );
                 priorityBar.end();
 
                 const selectSub = logger.group(recost ? 'Selecting merges (re-costed)' : 'Selecting merges');
-                selection = legacy ?
-                    selectMergesLegacy(cand!, N, K, needed) :
-                    cacheOut ?
-                        await selectMergesRecosted({ splatCache: cacheOut, neighbors: neighborsOut!, D: k, N, mergesNeeded: needed, device }) :
-                        selectMerges(cand!, N, K, needed);
+                selection = cacheOut ?
+                    await selectMergesRecosted({ splatCache: cacheOut, neighbors: neighborsOut!, D: k, N, mergesNeeded: needed, device }) :
+                    selectMerges(cand!, N, K, needed);
                 selectSub.end();
                 removed = selection.removed;
             }

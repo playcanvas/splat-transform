@@ -16,9 +16,14 @@ import {
     UniformFormat
 } from 'playcanvas';
 
-import { APP_CHUNK } from '../decimate/edge-cost-legacy';
-
-export { APP_CHUNK };
+/**
+ * Appearance columns per storage chunk. The kernel exposes three appearance
+ * bindings (appA/appB/appC), so the layout holds up to 3·APP_CHUNK columns; at
+ * 16 the widest chunk reaches the ~2 GB per-binding limit around ~33.5M splats.
+ * The CPU-side packing in `decimate/priority.ts` imports this same constant,
+ * so the kernel strides and the host packing can't drift.
+ */
+export const APP_CHUNK = 16;
 
 /**
  * WGSL kernel: per-edge KL-style cost (matches `computeEdgeCostView` in
@@ -30,47 +35,45 @@ export { APP_CHUNK };
  * (the same `z` for both components, matching the CPU implementation),
  * and adds an L2 distance over the appearance (SH) coefficients.
  *
- * @param k - Compile-time K, neighbour slots per owned row.
  * @param strideA - Live column count of appearance chunk A (0 if unused).
  * @param strideB - Live column count of appearance chunk B (0 if unused).
  * @param strideC - Live column count of appearance chunk C (0 if unused).
  * @returns WGSL source.
  */
-const edgeCostWgsl = (k: number, strideA: number, strideB: number, strideC: number) => /* wgsl */`
+const edgeCostWgsl = (strideA: number, strideB: number, strideC: number) => /* wgsl */`
 struct Uniforms {
-    slotBase: u32,
-    slotCount: u32,
+    edgeCount: u32,
     z0: f32,
     z1: f32,
     z2: f32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
-// Neighbour rows for the current dispatch batch (host uploads each batch's
-// slice to offset 0): view-local row per slot, 0xFFFFFFFF for empty slots.
-// Slot s belongs to owned row (slotBase + s) / K (dense-slot edge model).
-@group(0) @binding(1) var<storage, read> nbRow: array<u32>;
+// Edge list for the current dispatch batch only, split into two parallel
+// arrays (avoids a host-side (i, j) interleave). The host uploads each batch's
+// slice to offset 0, so we index edgesI/J[bid] directly — keeping these
+// buffers batch-sized instead of N·k keeps them off the per-binding limit.
+@group(0) @binding(1) var<storage, read> edgesI: array<u32>;
+@group(0) @binding(2) var<storage, read> edgesJ: array<u32>;
 // Per-splat geometry, interleaved 8-wide:
 //   posScalars[8s + 0..2] = position xyz
 //   posScalars[8s + 3]    = mass
 //   posScalars[8s + 4]    = logdet
 //   posScalars[8s + 5..7] = variances (vx, vy, vz)
-@group(0) @binding(2) var<storage, read> posScalars: array<f32>;
+@group(0) @binding(3) var<storage, read> posScalars: array<f32>;
 // Row-major 3x3 rotation matrix per splat (9 floats per splat).
-@group(0) @binding(3) var<storage, read> rotR: array<f32>;
+@group(0) @binding(4) var<storage, read> rotR: array<f32>;
 // Appearance, split into up to three chunks (≤16 columns each) so no single
 // binding exceeds maxStorageBufferBindingSize (~2 GB). Each chunk's stride is
 // its live column count (STRIDE_A/B/C below); appA holds columns 0.., appB the
 // next span, appC the next. Unused chunks have stride 0, are bound to a dummy
 // buffer, and are never read.
-@group(0) @binding(4) var<storage, read> appA: array<f32>;
-@group(0) @binding(5) var<storage, read> appB: array<f32>;
-@group(0) @binding(6) var<storage, read> appC: array<f32>;
-// Output: cost per slot.
-@group(0) @binding(7) var<storage, read_write> costs: array<f32>;
+@group(0) @binding(5) var<storage, read> appA: array<f32>;
+@group(0) @binding(6) var<storage, read> appB: array<f32>;
+@group(0) @binding(7) var<storage, read> appC: array<f32>;
+// Output: cost per edge.
+@group(0) @binding(8) var<storage, read_write> costs: array<f32>;
 
-const K: u32 = ${k}u;
-const SENTINEL: u32 = 0xFFFFFFFFu;
 const EPS_COV: f32 = 1e-8;
 const LOG2PI: f32 = 1.8378770664093453;
 // Per-chunk appearance strides = live column count in each chunk (0 = unused,
@@ -128,16 +131,10 @@ fn logAddExp(a: f32, b: f32) -> f32 {
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
     let bid = gid.x;
-    if (bid >= uniforms.slotCount) { return; }
+    if (bid >= uniforms.edgeCount) { return; }
 
-    // Empty slot: the reduction skips sentinel slots by id, so the cost value
-    // is never read.
-    let j = nbRow[bid];
-    if (j == SENTINEL) {
-        costs[bid] = 0.0;
-        return;
-    }
-    let i = (uniforms.slotBase + bid) / K;
+    let i = edgesI[bid];
+    let j = edgesJ[bid];
 
     let i8 = i * 8u;
     let j8 = j * 8u;
@@ -260,7 +257,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
  * WebGPU per-stage storage-buffer count limit (8) and the per-binding size
  * limit (~2 GB) — appearance is split into 16-column chunks for the latter.
  */
-interface EdgeCostCacheLegacy {
+interface EdgeCostCache {
     /** Per-splat geometry interleaved 8-wide: (x, y, z, mass, logdet, vx, vy, vz). */
     posScalars: Float32Array;
     /** Row-major 3×3 rotation per splat (length 9N). */
@@ -287,17 +284,18 @@ interface EdgeCostCacheLegacy {
  *
  * Mirrors the CPU `computeEdgeCostView` in `decimate/edge-cost-cpu.ts`.
  */
-class GpuEdgeCostLegacy {
+class GpuEdgeCost {
     /**
      * @param cache - Per-splat cache (uploaded once).
-     * @param nbRows - Dense neighbour slots (view-local row per slot,
-     * 0xFFFFFFFF sentinel for empty; slot s belongs to owned row s / k).
+     * @param edgeI - Edge u indices (length E).
+     * @param edgeJ - Edge v indices (length E).
      * @param z - Single Monte-Carlo sample (3 floats from N(0,1)).
-     * @param outCosts - Destination for per-slot costs (length = slots).
+     * @param outCosts - Destination for per-edge costs (length E).
      */
     execute: (
-        cache: EdgeCostCacheLegacy,
-        nbRows: Uint32Array,
+        cache: EdgeCostCache,
+        edgeI: Uint32Array,
+        edgeJ: Uint32Array,
         z: Float32Array,
         outCosts: Float32Array
     ) => Promise<void>;
@@ -306,13 +304,12 @@ class GpuEdgeCostLegacy {
     /**
      * @param device - PlayCanvas GraphicsDevice (WebGPU).
      * @param maxN - Maximum number of splats.
-     * @param k - Neighbour slots per owned row.
+     * @param maxE - Maximum number of edges in a single dispatch.
      * @param maxAppCols - Maximum appearance column count (over all bands).
      */
-    constructor(device: GraphicsDevice, maxN: number, k: number, maxAppCols: number) {
+    constructor(device: GraphicsDevice, maxN: number, maxE: number, maxAppCols: number) {
         const workgroupSize = 64;
-        // Slots per dispatch: bounded by the 65,535 workgroups-per-dimension limit.
-        const slotsPerBatch = 65535 * workgroupSize;  // 4,194,240
+        const edgesPerBatch = 1024 * workgroupSize;  // 65,536
         // Appearance is split at fixed APP_CHUNK-column boundaries, but each
         // chunk's *stride* is its live column count — only the last non-empty
         // chunk is ever partial, so partial chunks neither allocate nor upload
@@ -331,7 +328,8 @@ class GpuEdgeCostLegacy {
 
         const bindGroupFormat = new BindGroupFormat(device, [
             new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
-            new BindStorageBufferFormat('nbRow', SHADERSTAGE_COMPUTE, true),
+            new BindStorageBufferFormat('edgesI', SHADERSTAGE_COMPUTE, true),
+            new BindStorageBufferFormat('edgesJ', SHADERSTAGE_COMPUTE, true),
             new BindStorageBufferFormat('posScalars', SHADERSTAGE_COMPUTE, true),
             new BindStorageBufferFormat('rotR', SHADERSTAGE_COMPUTE, true),
             new BindStorageBufferFormat('appA', SHADERSTAGE_COMPUTE, true),
@@ -341,14 +339,13 @@ class GpuEdgeCostLegacy {
         ]);
 
         const shader = new Shader(device, {
-            name: 'compute-edge-cost-legacy',
+            name: 'compute-edge-cost',
             shaderLanguage: SHADERLANGUAGE_WGSL,
-            cshader: edgeCostWgsl(k, appStrides[0], appStrides[1], appStrides[2]),
+            cshader: edgeCostWgsl(appStrides[0], appStrides[1], appStrides[2]),
             // @ts-ignore
             computeUniformBufferFormats: {
                 uniforms: new UniformBufferFormat(device, [
-                    new UniformFormat('slotBase', UNIFORMTYPE_UINT),
-                    new UniformFormat('slotCount', UNIFORMTYPE_UINT),
+                    new UniformFormat('edgeCount', UNIFORMTYPE_UINT),
                     new UniformFormat('z0', UNIFORMTYPE_FLOAT),
                     new UniformFormat('z1', UNIFORMTYPE_FLOAT),
                     new UniformFormat('z2', UNIFORMTYPE_FLOAT)
@@ -369,7 +366,7 @@ class GpuEdgeCostLegacy {
             const checkLimit = (label: string, bytes: number) => {
                 if (bytes > maxStorage) {
                     throw new Error(
-                        `GpuEdgeCostLegacy: ${label} buffer (${bytes} bytes) exceeds device ` +
+                        `GpuEdgeCost: ${label} buffer (${bytes} bytes) exceeds device ` +
                         `maxStorageBufferBindingSize (${maxStorage})`
                     );
                 }
@@ -393,20 +390,24 @@ class GpuEdgeCostLegacy {
                 appDummy;
         });
 
-        // Neighbour-row buffer sized to a single dispatch batch (not the full
-        // N·k slot list): execute uploads each batch's slice before its
-        // dispatch, keeping it off the ~2 GB per-binding limit.
-        const nbRowBuf = new StorageBuffer(device, slotsPerBatch * 4, BUFFERUSAGE_COPY_DST);
+        // Two parallel u32 buffers, sized to a single dispatch batch (not the
+        // full N·k edge list): execute uploads each batch's slice before its
+        // dispatch. Batch-sizing keeps these ~256 KB instead of N·k·4 — off the
+        // ~2 GB per-binding limit (so edges never cap scene size) and ~1.6 GB
+        // less VRAM at 13M splats. Two parallel arrays avoid a host-side pack.
+        const edgesIBuf = new StorageBuffer(device, edgesPerBatch * 4, BUFFERUSAGE_COPY_DST);
+        const edgesJBuf = new StorageBuffer(device, edgesPerBatch * 4, BUFFERUSAGE_COPY_DST);
 
         const outBuf = new StorageBuffer(
             device,
-            slotsPerBatch * 4,
+            edgesPerBatch * 4,
             BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST
         );
-        const outScratch = new Float32Array(slotsPerBatch);
+        const outScratch = new Float32Array(edgesPerBatch);
 
-        const compute = new Compute(device, shader, 'compute-edge-cost-legacy');
-        compute.setParameter('nbRow', nbRowBuf);
+        const compute = new Compute(device, shader, 'compute-edge-cost');
+        compute.setParameter('edgesI', edgesIBuf);
+        compute.setParameter('edgesJ', edgesJBuf);
         compute.setParameter('posScalars', posScalarsBuf);
         compute.setParameter('rotR', rotRBuf);
         compute.setParameter('appA', appBufs[0]);
@@ -415,27 +416,28 @@ class GpuEdgeCostLegacy {
         compute.setParameter('costs', outBuf);
 
         this.execute = async (
-            cache: EdgeCostCacheLegacy,
-            nbRows: Uint32Array,
+            cache: EdgeCostCache,
+            edgeI: Uint32Array,
+            edgeJ: Uint32Array,
             z: Float32Array,
             outCosts: Float32Array
         ) => {
             const n = cache.numSplats;
-            const s = nbRows.length;
+            const e = edgeI.length;
 
-            if (n > maxN) throw new Error(`GpuEdgeCostLegacy: N=${n} exceeds maxN=${maxN}`);
+            if (n > maxN) throw new Error(`GpuEdgeCost: N=${n} exceeds maxN=${maxN}`);
+            if (e > maxE) throw new Error(`GpuEdgeCost: E=${e} exceeds maxE=${maxE}`);
             if (cache.numAppCols !== maxAppCols) {
-                throw new Error(`GpuEdgeCostLegacy: numAppCols=${cache.numAppCols} must equal maxAppCols=${maxAppCols} (baked into the kernel)`);
+                throw new Error(`GpuEdgeCost: numAppCols=${cache.numAppCols} must equal maxAppCols=${maxAppCols} (baked into the kernel)`);
             }
             if (cache.appChunks.length !== numAppChunks) {
-                throw new Error(`GpuEdgeCostLegacy: cache supplies ${cache.appChunks.length} appearance chunks but the kernel layout expects ${numAppChunks}`);
+                throw new Error(`GpuEdgeCost: cache supplies ${cache.appChunks.length} appearance chunks but the kernel layout expects ${numAppChunks}`);
             }
-            if (outCosts.length !== s) {
-                throw new Error('GpuEdgeCostLegacy: nbRows / outCosts must have same length');
+            if (edgeJ.length !== e || outCosts.length !== e) {
+                throw new Error('GpuEdgeCost: edgeI / edgeJ / outCosts must have same length');
             }
-            if (s % k !== 0) throw new Error(`GpuEdgeCostLegacy: slot count ${s} must be a multiple of k=${k}`);
             if (z.length < 3) {
-                throw new Error('GpuEdgeCostLegacy: z must have at least 3 elements');
+                throw new Error('GpuEdgeCost: z must have at least 3 elements');
             }
 
             // Upload per-splat cache. Each appearance chunk is row-major with
@@ -450,23 +452,25 @@ class GpuEdgeCostLegacy {
             compute.setParameter('z1', z[1]);
             compute.setParameter('z2', z[2]);
 
-            const numBatches = Math.ceil(s / slotsPerBatch);
+            const numBatches = Math.ceil(e / edgesPerBatch);
             for (let batch = 0; batch < numBatches; batch++) {
-                const slotBase = batch * slotsPerBatch;
-                const slotCount = Math.min(slotsPerBatch, s - slotBase);
-                const groups = Math.ceil(slotCount / workgroupSize);
+                const edgeOffset = batch * edgesPerBatch;
+                const edgeCount = Math.min(edgesPerBatch, e - edgeOffset);
+                const groups = Math.ceil(edgeCount / workgroupSize);
 
-                nbRowBuf.write(0, nbRows, slotBase, slotCount);
+                // Upload just this batch's edges to offset 0; the kernel indexes
+                // edgesI/J[bid] within the batch.
+                edgesIBuf.write(0, edgeI, edgeOffset, edgeCount);
+                edgesJBuf.write(0, edgeJ, edgeOffset, edgeCount);
 
-                compute.setParameter('slotBase', slotBase);
-                compute.setParameter('slotCount', slotCount);
+                compute.setParameter('edgeCount', edgeCount);
 
                 compute.setupDispatch(groups);
                 device.computeDispatch([compute], `edge-cost-dispatch-${batch}`);
 
-                const readBytes = slotCount * 4;
+                const readBytes = edgeCount * 4;
                 await outBuf.read(0, readBytes, outScratch, true);
-                outCosts.set(outScratch.subarray(0, slotCount), slotBase);
+                outCosts.set(outScratch.subarray(0, edgeCount), edgeOffset);
             }
         };
 
@@ -477,7 +481,8 @@ class GpuEdgeCostLegacy {
                 if (buf !== appDummy) buf.destroy();
             }
             appDummy.destroy();
-            nbRowBuf.destroy();
+            edgesIBuf.destroy();
+            edgesJBuf.destroy();
             outBuf.destroy();
             shader.destroy();
             bindGroupFormat.destroy();
@@ -485,4 +490,4 @@ class GpuEdgeCostLegacy {
     }
 }
 
-export { GpuEdgeCostLegacy, type EdgeCostCacheLegacy };
+export { GpuEdgeCost, type EdgeCostCache };

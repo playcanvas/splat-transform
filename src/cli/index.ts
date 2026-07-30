@@ -16,6 +16,7 @@ import {
     DataTable,
     dataTableToChunkSource,
     decimateSource,
+    decimateSourceUniform,
     fmtBytes,
     fmtCount,
     fmtTime,
@@ -67,7 +68,7 @@ interface CliOptions extends LibOptions {
     listGpus: boolean;
     deviceIdx: number;  // -1 = auto, -2 = CPU, 0+ = GPU index
     scratchDir: string | undefined;  // decimation spill location (default: output directory)
-    decimateMode: 'quality' | 'legacy';
+    decimateUniform: boolean;  // --decimate-uniform: the frozen pre-3.2 decimator
     memoryBudgetBytes: number;  // decimation residency policy ceiling (not an allocation, not user-facing)
 }
 
@@ -191,7 +192,7 @@ const cliOptionsConfig = {
     'filter-box': { type: 'string', short: 'B', multiple: true },
     'filter-sphere': { type: 'string', short: 'S', multiple: true },
     'decimate': { type: 'string', short: 'd', multiple: true },
-    'decimate-balanced': { type: 'string', multiple: true },
+    'decimate-uniform': { type: 'string', multiple: true },
     'filter-cluster': { type: 'string', short: 'C', multiple: true },
     'filter-floaters': { type: 'string', short: 'F', multiple: true },
     params: { type: 'string', short: 'p', multiple: true },
@@ -521,7 +522,7 @@ const parseArguments = async () => {
         listGpus: v['list-gpus'],
         deviceIdx,
         scratchDir: v['scratch-dir'],
-        decimateMode: 'quality',
+        decimateUniform: false,
         // Residency policy ceiling for decimation (not an upfront allocation).
         // Half the machine's RAM, capped at 48 GiB — derived here because the
         // library is node-free and cannot read os.totalmem() itself.
@@ -697,8 +698,8 @@ const parseArguments = async () => {
                     });
                     break;
                 case 'decimate':
-                case 'decimate-balanced': {
-                    if (t.name === 'decimate-balanced') options.decimateMode = 'legacy';
+                case 'decimate-uniform': {
+                    if (t.name === 'decimate-uniform') options.decimateUniform = true;
                     const value = t.value.trim();
                     let count: number | null = null;
                     let percent: number | null = null;
@@ -798,9 +799,11 @@ ACTIONS (executed in order; can be repeated)
     -S, --filter-sphere    <x,y,z,radius>   Remove Gaussians outside sphere
     -V, --filter-value     <name,cmp,value> Keep Gaussians where <name> <cmp> <value>;
                                               cmp ∈ {lt,lte,gt,gte,eq,neq}
-    -d, --decimate         <n|n%>           Simplify with field-L2 cost and re-costed selection (quality default).
-        --decimate-balanced <n|n%>          Simplify with the pre-3.2 balanced algorithm (lower memory and often
-                                            better on uniformly-sized Gaussians).
+    -d, --decimate         <n|n%>           Simplify, allocating removal by local error (adaptive; default).
+                                              Much better on mixed-scale content such as skies.
+        --decimate-uniform <n|n%>           Simplify at a uniform rate everywhere (the pre-3.2 algorithm).
+                                              Lower memory, and better at depth on uniformly-sized
+                                              Gaussians: uniform texture, single objects, snow.
                                               Must be the final action, and the output must be .ply
         --scratch-dir      <path>           Directory for decimation spill files (deep targets on huge
                                               scenes). Default: the output file's directory
@@ -1256,18 +1259,25 @@ const main = async () => {
                 if (keepCount < 1) {
                     failExit(`--decimate target resolves to ${keepCount} gaussians; must keep at least 1`);
                 }
-                combined = await decimateSource(combined, pool, {
-                    targetCount: keepCount,
-                    createDevice: deviceCreator,
-                    mode: options.decimateMode,
-                    memoryBudgetBytes: options.memoryBudgetBytes,
-                    spill: {
-                        writeFs: new NodeFileSystem(),
-                        readFs: new NodeReadFileSystem(),
-                        scratchDir: options.scratchDir ?? dirname(outputFilename),
-                        remove: path => unlink(path)
-                    }
-                });
+                const spill = {
+                    writeFs: new NodeFileSystem(),
+                    readFs: new NodeReadFileSystem(),
+                    scratchDir: options.scratchDir ?? dirname(outputFilename),
+                    remove: (path: string) => unlink(path)
+                };
+                combined = options.decimateUniform ?
+                    await decimateSourceUniform(combined, pool, {
+                        targetCount: keepCount,
+                        createDevice: deviceCreator,
+                        memoryBudgetBytes: options.memoryBudgetBytes,
+                        spill
+                    }) :
+                    await decimateSource(combined, pool, {
+                        targetCount: keepCount,
+                        createDevice: deviceCreator,
+                        memoryBudgetBytes: options.memoryBudgetBytes,
+                        spill
+                    });
             }
 
             logger.info(`${fmtCount(combined.meta.numGaussians)} gaussians · ${combined.meta.shBands} SH bands`);

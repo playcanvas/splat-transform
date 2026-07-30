@@ -217,7 +217,7 @@ const planBlockMerges = async (inputs: BlockPlanInputs): Promise<BlockPlan> => {
     const gpuFits = !!device && D * MAX_GROUP === 64 && GpuRecost.fits(device, N, D, WAVE, coreCount, true);
     if (requireGpu && !gpuFits) {
         throw new Error(
-            'multi-block quality decimation requires a WebGPU block working set that fits the adapter limits ' +
+            'multi-block adaptive decimation requires a WebGPU block working set that fits the adapter limits ' +
             `(core ${coreCount}, halo ${N - coreCount})`
         );
     }
