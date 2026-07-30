@@ -63,19 +63,29 @@ Changes are fine — bug fixes, performance work, new capability — but they ar
 output changes to a path whose selling point is reproducibility, so they need
 to be deliberate rather than incidental. Before landing one:
 
-- Re-run the whole-scene comparison against the 3.1.6 binary if you expect
-  output to be unchanged. Equivalence was last verified on both study scenes,
-  `fr-sky` (5.81M, 3 SH bands, multi-block) and `fr-snow` (26.1M, DC only, 13
-  blocks), six chained halvings each: every level byte-identical, PSNR matching
-  the published `old` columns exactly.
+- Re-run the whole-scene comparison if you expect output to be unchanged. That
+  is what `tools/decimate-parity.mjs` is for — it chains halvings through a
+  reference binary's `--decimate` and this tree's `--decimate-uniform`, compares
+  byte for byte, reports PSNR for both, and exits non-zero on any mismatch:
+
+  ```bash
+  node tools/decimate-parity.mjs sky --ref splat-transform
+  node tools/decimate-parity.mjs snow --ref splat-transform
+  ```
+
+  Equivalence was last verified against 3.1.6 on both study scenes, `fr-sky`
+  (5.81M, 3 SH bands, multi-block) and `fr-snow` (26.1M, DC only, 13 blocks),
+  six chained halvings each: every level byte-identical, PSNR matching the
+  published `old` columns exactly.
 - If output *should* change, re-baseline `scenes/DECIMATION-RESULTS.md` — the
   `old` column is this path, and the study's conclusions are stated relative
-  to it.
-- Repin the digest in `test/decimate-legacy-frozen.test.mjs`, which is the
+  to it. That document is local-only (`scenes/` is gitignored).
+- Repin the digest in `test/decimate-uniform-parity.test.mjs`, which is the
   in-suite tripwire for accidental drift.
 
 ## If it is ever retired
 
 Nothing in `src/lib/decimate/` refers to this directory, so: `rm -rf` it, drop
 `decimateSourceUniform` from `src/lib/index.ts`, drop `--decimate-uniform`
-from the CLI, and delete `test/decimate-legacy-frozen.test.mjs`.
+from the CLI, and delete `test/decimate-uniform-parity.test.mjs` and
+`tools/decimate-parity.mjs`.
