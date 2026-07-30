@@ -68,7 +68,7 @@ interface CliOptions extends LibOptions {
     deviceIdx: number;  // -1 = auto, -2 = CPU, 0+ = GPU index
     scratchDir: string | undefined;  // decimation spill location (default: output directory)
     decimateMode: 'quality' | 'legacy';
-    memoryBudgetBytes: number;  // decimation residency policy ceiling (not an allocation)
+    memoryBudgetBytes: number;  // decimation residency policy ceiling (not an allocation, not user-facing)
 }
 
 const fileExists = async (filename: string) => {
@@ -192,7 +192,6 @@ const cliOptionsConfig = {
     'filter-sphere': { type: 'string', short: 'S', multiple: true },
     'decimate': { type: 'string', short: 'd', multiple: true },
     'decimate-balanced': { type: 'string', multiple: true },
-    'memory-budget': { type: 'string' },
     'filter-cluster': { type: 'string', short: 'C', multiple: true },
     'filter-floaters': { type: 'string', short: 'F', multiple: true },
     params: { type: 'string', short: 'p', multiple: true },
@@ -523,11 +522,10 @@ const parseArguments = async () => {
         deviceIdx,
         scratchDir: v['scratch-dir'],
         decimateMode: 'quality',
-        // Residency policy ceiling for decimation (not an upfront allocation):
-        // default to half the machine's RAM, capped at 48 GiB.
-        memoryBudgetBytes: v['memory-budget'] !== undefined ?
-            Math.max(1, parseNumber(v['memory-budget'])) * 2 ** 30 :
-            Math.min(48 * 2 ** 30, Math.floor(totalmem() / 2)),
+        // Residency policy ceiling for decimation (not an upfront allocation).
+        // Half the machine's RAM, capped at 48 GiB — derived here because the
+        // library is node-free and cannot read os.totalmem() itself.
+        memoryBudgetBytes: Math.min(48 * 2 ** 30, Math.floor(totalmem() / 2)),
         lodSelect: v['select-lod'].split(',').filter(v => !!v).map(parseInteger),
         viewerSettingsJson: viewerSettingsPath && await readJsonFile(viewerSettingsPath),
         unbundled: v.unbundled,
@@ -803,9 +801,6 @@ ACTIONS (executed in order; can be repeated)
     -d, --decimate         <n|n%>           Simplify with field-L2 cost and re-costed selection (quality default).
         --decimate-balanced <n|n%>          Simplify with the pre-3.2 balanced algorithm (lower memory and often
                                             better on uniformly-sized Gaussians).
-        --memory-budget    <GiB>            Decimation residency policy ceiling (not an upfront allocation);
-                                            re-costed selection falls back to one-shot selection above it.
-                                            Default: min(48, half of system RAM).
                                               Must be the final action, and the output must be .ply
         --scratch-dir      <path>           Directory for decimation spill files (deep targets on huge
                                               scenes). Default: the output file's directory

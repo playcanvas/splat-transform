@@ -365,7 +365,7 @@ const decimateSource = async (
                 if (!device) {
                     throw new Error(
                         `multi-block quality decimation requires WebGPU (${fmtCount(N)} splats, ` +
-                    `${fmtCount(blockSize)}-splat cores); increase --memory-budget for the one-block path or provide a device`
+                    `${fmtCount(blockSize)}-splat cores); provide a device, or use --decimate-balanced`
                     );
                 }
                 if (!opts.spill) {
