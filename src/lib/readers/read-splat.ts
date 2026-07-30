@@ -116,6 +116,7 @@ const readSplat = async (source: ReadSource, pool: ChunkDataPool): Promise<Chunk
         chunkSize,
         numChunks: [numChunks],
         shBands: 0,
+        model: 'default', // .splat carries no training-model tag
         extraColumns: [],
         transform: Transform.PLY.clone(),
         availableLayers,

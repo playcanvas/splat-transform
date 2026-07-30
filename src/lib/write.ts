@@ -2,8 +2,10 @@ import { type ChunkDataPool, type ChunkLayer, type ChunkSource } from './chunk';
 import { materializeToDataTable } from './compat/data-table';
 import { DataTable } from './data-table';
 import { type FileSystem } from './io/write';
+import { type SplatModel } from './splat-model';
 import { type DeviceCreator, type Options } from './types';
 import { writeCompressedPly, writeCsv, writeGlb, writeHtml, writeImage, writePly, writeSog, writeSogSource, writeSpz, writeVoxel } from './writers';
+import { splatModelComment } from './writers/utils';
 import { writeCompressedPlySource } from './writers/write-compressed-ply';
 import { writePlyStreaming } from './writers/write-ply-streaming';
 import { writeSplatStreaming } from './writers/write-splat-streaming';
@@ -37,6 +39,8 @@ type WriteOptions = {
     outputFormat: OutputFormat;
     /** The splat data to write. */
     dataTable: DataTable;
+    /** How the scene was trained. Defaults to `default` (untagged). */
+    model?: SplatModel;
     /** Processing options. */
     options: Options;
     /** Optional function to create a GPU device for compression. */
@@ -112,6 +116,7 @@ const getOutputFormat = (filename: string, options: Options): OutputFormat => {
  */
 const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
     const { filename, outputFormat, dataTable, options, createDevice } = writeOptions;
+    const model = writeOptions.model ?? 'default';
 
     // Each writer is responsible for opening its own `Writing` log group and
     // emitting `filename (size)` info entries per output file.
@@ -124,6 +129,7 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
             await writeSog({
                 filename,
                 dataTable,
+                model,
                 bundle: outputFormat === 'sog-bundle',
                 iterations: options.iterations ?? 10,
                 createDevice
@@ -132,26 +138,36 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
         case 'lod':
             throw new Error('lod-meta.json output is written from a multi-LOD ChunkSource via writeLodSource, not from a DataTable.');
         case 'compressed-ply':
-            await writeCompressedPly({ filename, dataTable }, fs);
+            await writeCompressedPly({ filename, dataTable, model }, fs);
             break;
         case 'splat':
             throw new Error('splat output is written from a ChunkSource via writeSource, not from a DataTable.');
-        case 'ply':
+        case 'ply': {
+            const comment = splatModelComment(model);
+            // 2DGS has no third scale axis: it was materialized on read to keep
+            // the pipeline uniform, so drop it again here.
+            const columns = model === '2dgs' ?
+                dataTable.columns.filter(c => c.name !== 'scale_2') :
+                dataTable.columns;
             await writePly({
                 filename,
                 plyData: {
-                    comments: [],
+                    comments: comment ? [comment] : [],
                     elements: [{
                         name: 'vertex',
-                        dataTable
+                        dataTable: columns.length === dataTable.columns.length ?
+                            dataTable :
+                            new DataTable(columns, dataTable.transform)
                     }]
                 }
             }, fs);
             break;
+        }
         case 'spz':
             await writeSpz({
                 filename,
                 dataTable,
+                model,
                 version: options.spzVersion ?? 4
             }, fs);
             break;
@@ -271,14 +287,14 @@ const writeSource = async (writeSourceOptions: WriteSourceOptions, fs: FileSyste
             // layers so color and SH are never loaded (they were previously read
             // into the full table and discarded).
             const dataTable = await materializeToDataTable(source, pool, new Set<ChunkLayer>(['position', 'geometric']));
-            await writeFile({ filename, outputFormat, dataTable, options, createDevice }, fs);
+            await writeFile({ filename, outputFormat, dataTable, model: source.meta.model, options, createDevice }, fs);
             break;
         }
         default: {
             // No streaming writer yet — materialize and delegate to the DataTable
             // writer (the inline bridge around the unconverted writer).
             const dataTable = await materializeToDataTable(source, pool);
-            await writeFile({ filename, outputFormat, dataTable, options, createDevice }, fs);
+            await writeFile({ filename, outputFormat, dataTable, model: source.meta.model, options, createDevice }, fs);
         }
     }
 };

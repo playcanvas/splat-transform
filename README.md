@@ -91,6 +91,14 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 | `.webp` | ❌ | ✅ | Lossless WebP image rendered from a camera view via GPU rasterizer |
 | `null` | ❌ | ✅ | Discard output (useful with `--stats` for analysis-only runs) |
 
+### Antialiased and 2DGS scenes
+
+Scenes trained with antialiasing or as 2DGS are tagged, and the tag is preserved where the output format can hold it. `--info` reports it as `model`.
+
+On read: a PLY header comment — Brush's `comment SplatRenderMode: default | mip | 2dgs` or Postshot's `comment antialiased 0 | 1` (last one wins); SPZ's antialiased header bit; a SOG `meta.json` `"model"` entry. A PLY with `scale_0`/`scale_1` but no `scale_2` is read as 2DGS regardless of comments, and the missing column is materialized as a zero-thickness scale so the rest of the pipeline is unaffected.
+
+On write: `.ply` and `.compressed.ply` carry `comment SplatRenderMode: mip | 2dgs` (Brush's spelling, whichever form was read); `.sog` and `meta.json` carry `"model": "antialiased" | "2dgs"`; `.spz` sets its antialiased bit, and warns that it cannot represent 2DGS. A 2DGS PLY output drops the `scale_2` column again. Other output formats have nowhere to record it and drop the tag silently. Combining inputs whose models disagree warns and writes the result untagged.
+
 ## Actions
 
 Actions execute in the order specified and can be repeated. Any action may appear after any input or output file:

@@ -5,6 +5,7 @@ import {
     type ChunkDataPool,
     SH_REST_COUNTS
 } from '../chunk';
+import { splatModelComment } from './utils';
 import { type FileSystem } from '../io/write';
 import { bakeTransform } from '../ops';
 import { logger, Transform } from '../utils';
@@ -21,9 +22,9 @@ type WritePlyStreamingOptions = {
 // it's a u32 (an `other` extra) rather than f32.
 type OutColumn = { name: string; layer: ChunkLayer; layerByteOffset: number; uint: boolean };
 
-// A "run": a maximal contiguous span of output columns fed by a single layer.
-// Interleaving each run is a straight per-row block copy (see writePlyStreaming).
-type LayerRun = { layer: ChunkLayer; dstStart: number; words: number; srcStrideWords: number };
+// A "run": a maximal span of output columns fed by consecutive words of a single
+// layer. Interleaving each run is a straight per-row block copy (see writePlyStreaming).
+type LayerRun = { layer: ChunkLayer; srcStart: number; dstStart: number; words: number; srcStrideWords: number };
 
 /**
  * Stream a {@link ChunkSource} out to a binary little-endian PLY file.
@@ -63,7 +64,10 @@ const writePlyStreaming = async (
         );
     }
     if (layers.has('geometric')) {
+        // 2DGS has no third scale axis: the column was materialized on read to
+        // keep the layer uniform, so drop it again here.
         GEOMETRIC_COLS.forEach((name, i) => {
+            if (meta.model === '2dgs' && name === 'scale_2') return;
             columns.push({ name, layer: 'geometric', layerByteOffset: i * 4, uint: false });
         });
     }
@@ -95,26 +99,29 @@ const writePlyStreaming = async (
     //
     // A "run" captures one such block: copy `words` words per row from the layer
     // buffer (row stride `srcStrideWords`) into the record at word offset `dstStart`.
+    // A dropped column (2DGS omits scale_2) splits its layer into two runs rather
+    // than breaking the copy: a run ends where the source words stop being
+    // consecutive, and each run records where in the layer row it starts.
     const runs: LayerRun[] = [];
     for (let c = 0; c < columns.length;) {
         const layer = columns[c].layer;
+        const srcStart = columns[c].layerByteOffset >> 2;
         let e = c;
-        while (e < columns.length && columns[e].layer === layer) {
-            // Invariant the block copy relies on: output word (e - c) reads source
-            // word (e - c). Fail loud if column ordering ever stops matching.
-            if ((columns[e].layerByteOffset >> 2) !== e - c) {
-                throw new Error('writePlyStreaming: layer columns not in packed canonical order');
-            }
+        while (e < columns.length &&
+               columns[e].layer === layer &&
+               (columns[e].layerByteOffset >> 2) === srcStart + (e - c)) {
             e++;
         }
-        runs.push({ layer, dstStart: c, words: e - c, srcStrideWords: meta.layouts[layer]!.stride >> 2 });
+        runs.push({ layer, srcStart, dstStart: c, words: e - c, srcStrideWords: meta.layouts[layer]!.stride >> 2 });
         c = e;
     }
 
-    // Header (matches writePly: no comments here, single vertex element).
+    // Header: the model tag (when any), then a single vertex element.
+    const modelComment = splatModelComment(meta.model);
     const header = [
         'ply',
         'format binary_little_endian 1.0',
+        ...(modelComment ? [`comment ${modelComment}`] : []),
         `element vertex ${N}`,
         ...columns.map(c => `property ${plyType(c.uint)} ${c.name}`),
         'end_header'
@@ -157,7 +164,7 @@ const writePlyStreaming = async (
                 const ds = run.dstStart;
                 const w = run.words;
                 for (let i = 0; i < count; i++) {
-                    const s = i * ss;
+                    const s = i * ss + run.srcStart;
                     const d = i * recordF + ds;
                     for (let j = 0; j < w; j++) outU32[d + j] = src[s + j];
                 }

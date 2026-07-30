@@ -14,6 +14,11 @@ export type {
 // Structural combinators (lazy views over sources)
 export { bakeTransform, concatSource, selectLod, stackLods } from './ops';
 
+// How a scene was trained (carried on `ChunkSourceMetadata.model`). The per-format
+// spellings of the tag live with their reader/writer.
+export { isSplatModel, resolveSplatModel } from './splat-model';
+export type { SplatModel } from './splat-model';
+
 // Action processing over a source: `processSource` streams and throws on
 // actions that need the DataTable bridge; `processSourceBridged` handles every
 // action, materializing only the DataTable-only runs as islands.

@@ -21,6 +21,7 @@ import {
 } from '../chunk';
 import { Column, DataTable } from '../data-table';
 import { type ReadSource, type ReadStream } from '../io/read';
+import { type SplatModel } from '../splat-model';
 import { logger, Transform } from '../utils';
 
 type PlyProperty = {
@@ -52,6 +53,47 @@ type PlyData = {
 
 const GEOMETRIC_COLS = ['rot_0', 'rot_1', 'rot_2', 'rot_3', 'scale_0', 'scale_1', 'scale_2', 'opacity'];
 const COLOR_DC_COLS = ['f_dc_0', 'f_dc_1', 'f_dc_2'];
+const SCALE_2_WORD = GEOMETRIC_COLS.indexOf('scale_2');
+
+// Brush's `SplatRenderMode: <mode>` (brush-serde export.rs/import.rs) — the wire
+// form we also write, see `splatModelComment` in the writers.
+const MODE_COMMENT_KEY = 'splatrendermode: ';
+const MODE_TO_MODEL: Readonly<Record<string, SplatModel>> = {
+    default: 'default',
+    mip: 'antialiased',
+    '2dgs': '2dgs'
+};
+
+// Postshot's flag.
+const AA_COMMENT_KEY = 'antialiased ';
+
+/**
+ * Detect the splat model from a PLY header's comments. Two producer forms are
+ * recognized: Brush's `SplatRenderMode: default | mip | 2dgs` and Postshot's
+ * `antialiased 0 | 1`.
+ *
+ * Matching is case-insensitive and the last match wins (as Brush's own importer
+ * does), so a file carrying both forms is decided by header order. Unrecognized
+ * comments are ignored.
+ *
+ * @param comments - Header comments, without their leading `comment `.
+ * @returns The detected model, or `default` if nothing matched.
+ */
+const splatModelFromComments = (comments: string[]): SplatModel => {
+    let model: SplatModel = 'default';
+    for (const comment of comments) {
+        const lower = comment.toLowerCase().trim();
+        if (lower.startsWith(MODE_COMMENT_KEY)) {
+            const mode = MODE_TO_MODEL[lower.substring(MODE_COMMENT_KEY.length).trim()];
+            if (mode) model = mode;
+        } else if (lower.startsWith(AA_COMMENT_KEY)) {
+            const value = lower.substring(AA_COMMENT_KEY.length).trim();
+            if (value === '1') model = 'antialiased';
+            else if (value === '0') model = 'default';
+        }
+    }
+    return model;
+};
 
 const getDataType = (type: string) => {
     switch (type) {
@@ -364,6 +406,7 @@ const readCompressedChunked = (source: ReadSource, header: PlyHeader, pool: Chun
         chunkSize,
         numChunks: [numChunks],
         shBands,
+        model: splatModelFromComments(header.comments),
         extraColumns: [],
         transform: Transform.PLY.clone(),
         availableLayers,
@@ -549,7 +592,15 @@ const readCompressedChunked = (source: ReadSource, header: PlyHeader, pool: Chun
 type FillField = { recordOffset: number; read: ValueReader; dstByteOffset: number; uint: boolean };
 // `srcIdx`/`dstIdx` are float indices for the all-float fast path; `allFloat`
 // is true only when the whole record is float (so a Float32Array view is valid).
-type LayerPlan = { stride: number; fields: FillField[]; allFloat: boolean; srcIdx: Uint32Array; dstIdx: Uint32Array };
+type LayerPlan = {
+    stride: number;
+    fields: FillField[];
+    allFloat: boolean;
+    srcIdx: Uint32Array;
+    dstIdx: Uint32Array;
+    // 2DGS only: the record has no scale_2, so the slot is filled with a constant.
+    synthScale2: boolean;
+};
 
 /**
  * Open a gaussian-splat PLY as a {@link ChunkSource}. The single public PLY reader.
@@ -617,8 +668,16 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
 
     const has = (name: string) => recordOffset.has(name);
     const hasPosition = ['x', 'y', 'z'].every(has);
-    const hasGeometric = GEOMETRIC_COLS.every(has);
     const hasColor = COLOR_DC_COLS.every(has);
+
+    // A 2DGS scene has no third scale axis, so its PLY carries scale_0/scale_1
+    // only. Structural evidence outranks any header comment: the missing column
+    // is materialized as -Infinity log scale (linear 0 — a zero-thickness
+    // surfel) so the rest of the pipeline sees an ordinary geometric layer.
+    const is2dgs = !has('scale_2') && ['scale_0', 'scale_1'].every(has);
+    const geometricCols = is2dgs ? GEOMETRIC_COLS.filter(c => c !== 'scale_2') : GEOMETRIC_COLS;
+    const hasGeometric = geometricCols.every(has);
+    const model = is2dgs ? '2dgs' : splatModelFromComments(header.comments);
 
     // SH band count from the highest f_rest_* index present.
     let highestRest = -1;
@@ -632,7 +691,8 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
         throw new Error(`readPly: unrecognized f_rest_* count ${restCount}`);
     }
 
-    // Non-standard columns become `other` extras (in file order).
+    // Non-standard columns become `other` extras (in file order). scale_2 stays
+    // standard for 2DGS: it's absent, not extra.
     const standard = new Set<string>(['x', 'y', 'z', ...GEOMETRIC_COLS, ...COLOR_DC_COLS]);
     const extras: ExtraColumn[] = properties
     .filter(p => !standard.has(p.name) && !/^f_rest_\d+$/.test(p.name))
@@ -646,7 +706,7 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
     const fieldNames = (layer: ChunkLayer): string[] => {
         switch (layer) {
             case 'position': return ['x', 'y', 'z'];
-            case 'geometric': return GEOMETRIC_COLS;
+            case 'geometric': return geometricCols;
             case 'color': return [...COLOR_DC_COLS, ...Array.from({ length: SH_REST_COUNTS[shBands] }, (_, k) => `f_rest_${k}`)];
             case 'other': return extras.map(e => e.name);
         }
@@ -654,16 +714,19 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
     const uintByName = new Map(extras.map(e => [e.name, e.type === 'uint32']));
 
     const layerPlan = (layer: ChunkLayer, stride: number): LayerPlan => {
+        // The geometric layer's destination slot is its canonical position (so a
+        // 2DGS record, missing scale_2, still writes opacity at word 7); every
+        // other layer packs in file order.
         const fields: FillField[] = fieldNames(layer).map((name, idx) => ({
             recordOffset: recordOffset.get(name)!,
             read: reader.get(name)!,
-            dstByteOffset: idx * 4,
+            dstByteOffset: (layer === 'geometric' ? GEOMETRIC_COLS.indexOf(name) : idx) * 4,
             uint: uintByName.get(name) ?? false
         }));
         const allFloat = recordAllFloat && fields.every(f => !f.uint);
         const srcIdx = new Uint32Array(fields.map(f => f.recordOffset >> 2));
         const dstIdx = new Uint32Array(fields.map(f => f.dstByteOffset >> 2));
-        return { stride, fields, allFloat, srcIdx, dstIdx };
+        return { stride, fields, allFloat, srcIdx, dstIdx, synthScale2: is2dgs && layer === 'geometric' };
     };
 
     const availableLayers = new Set<ChunkLayer>();
@@ -701,6 +764,7 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
         chunkSize,
         numChunks: [numChunks],
         shBands,
+        model,
         extraColumns: extras,
         transform: Transform.PLY.clone(),
         availableLayers,
@@ -708,6 +772,17 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
     };
 
     const fill = (recordBytes: Uint8Array, count: number, chunkData: ChunkData, plan: LayerPlan, dstRow: number): void => {
+        // 2DGS: no source field targets the scale_2 slot, so fill it here (order
+        // relative to the de-interleave below doesn't matter). -Infinity log scale
+        // is linear 0 — a zero-thickness surfel.
+        if (plan.synthScale2) {
+            const dstF32 = new Float32Array(chunkData.data);
+            const dStrideF = plan.stride >> 2;
+            for (let i = 0; i < count; i++) {
+                dstF32[(dstRow + i) * dStrideF + SCALE_2_WORD] = -Infinity;
+            }
+        }
+
         // Fast path: whole-float record -> de-interleave via Float32Array views
         // (no DataView). Little-endian only, matching the binary PLY format.
         if (plan.allFloat) {
@@ -838,4 +913,4 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
     return fileChunkSource(source, meta, read);
 };
 
-export { PlyData, decodePlyToDataTable, readPly };
+export { PlyData, decodePlyToDataTable, readPly, splatModelFromComments };

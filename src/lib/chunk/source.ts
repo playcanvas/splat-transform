@@ -1,3 +1,4 @@
+import { type SplatModel } from '../splat-model';
 import { type Transform } from '../utils';
 import { type ChunkData } from './data';
 import { type ExtraColumn, type ChunkLayer, type SHBands, type LayerLayout } from './layout';
@@ -27,6 +28,8 @@ type ChunkSourceMetadata = {
     readonly numChunks: ReadonlyArray<number>;
     /** SH band count present in the source. */
     readonly shBands: SHBands;
+    /** How the scene was trained, and so how it must be evaluated. */
+    readonly model: SplatModel;
     /** Extra non-standard columns mapped to the `other` layer. */
     readonly extraColumns: ReadonlyArray<ExtraColumn>;
     /** Coordinate-space transform; applied lazily when consumed. */

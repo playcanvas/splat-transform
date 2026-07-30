@@ -14,6 +14,7 @@ import { type FileSystem, writeFile, ZipFileSystem } from '../io/write';
 import { bakeTransform } from '../ops';
 import { sortMortonInterleaved } from '../ops/morton-order';
 import { kmeansInterleaved } from '../spatial';
+import { type SplatModel } from '../splat-model';
 import type { DeviceCreator } from '../types';
 import { logger, sigmoid, Transform } from '../utils';
 import { version } from '../version';
@@ -381,6 +382,8 @@ const writeSogSource = async (
             version: 2,
             asset: { generator: `splat-transform v${version}` },
             count: numRows,
+            // untagged scenes stay byte-identical to pre-3.2 output
+            ...(meta.model === 'default' ? {} : { model: meta.model }),
             means: { mins: meansMeta.mins, maxs: meansMeta.maxs, files: ['means_l.webp', 'means_u.webp'] },
             scales: { codebook: scalesCodebook, files: ['scales.webp'] },
             quats: { files: ['quats.webp'] },
@@ -415,7 +418,7 @@ const writeSogSource = async (
     }
 };
 
-type WriteSogOptions = WriteSogSourceOptions & { dataTable: DataTable };
+type WriteSogOptions = WriteSogSourceOptions & { dataTable: DataTable; model?: SplatModel };
 
 /**
  * DataTable-input adapter over {@link writeSogSource}, for callers that still
@@ -428,9 +431,9 @@ type WriteSogOptions = WriteSogSourceOptions & { dataTable: DataTable };
  * @ignore
  */
 const writeSog = async (options: WriteSogOptions, fs: FileSystem): Promise<void> => {
-    const { dataTable, ...rest } = options;
+    const { dataTable, model, ...rest } = options;
     const pool = createChunkDataPool();
-    const source = dataTableToChunkSource(dataTable, pool.chunkSize);
+    const source = dataTableToChunkSource(dataTable, pool.chunkSize, undefined, model);
     await writeSogSource(source, pool, rest, fs);
 };
 

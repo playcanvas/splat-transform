@@ -26,6 +26,7 @@ import {
     processSourceBridged,
     readFile,
     readPly,
+    resolveSplatModel,
     revision,
     selectLod,
     stackLods,
@@ -1223,12 +1224,19 @@ const main = async () => {
                     return concatSource(unified, pool);
                 }
                 // Mismatched layouts: combine() can union them, concatSource can't.
+                // A DataTable carries no model tag, so resolve it here as
+                // concatSource would (mixed -> 'default', with a warning).
+                const model = resolveSplatModel(sources.map(s => s.meta.model));
+                if (sources.some(s => s.meta.model !== model)) {
+                    const seen = [...new Set(sources.map(s => s.meta.model))].join(', ');
+                    logger.warn(`mixed splat models (${seen}); writing the result as '${model}'`);
+                }
                 const dts: DataTable[] = [];
                 for (const s of sources) {
                     dts.push(await materializeToDataTable(s, pool));
                     await s.close();
                 }
-                return dataTableToChunkSource(combine(dts), pool.chunkSize);
+                return dataTableToChunkSource(combine(dts), pool.chunkSize, undefined, model);
             };
 
             const phase = logger.group(`Output ${outputArg.filename}`, { index: phaseTotal, total: phaseTotal });

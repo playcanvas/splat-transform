@@ -12,6 +12,7 @@ import {
     type SHBands
 } from '../chunk';
 import { Column, DataTable } from '../data-table';
+import { type SplatModel } from '../splat-model';
 import { type Transform } from '../utils';
 
 /**
@@ -161,12 +162,14 @@ const splitToChunks = (
  * @param dataTable - The legacy table to convert.
  * @param chunkSize - Gaussians per chunk (default {@link DEFAULT_CHUNK_SIZE}).
  * @param indices - Optional ordered row indices to gather; output row `i` is `dataTable` row `indices[i]`.
+ * @param model - How the scene was trained (a `DataTable` carries no tag of its own). Defaults to `default`.
  * @returns A CPU-resident `InMemoryChunkSource` over the repacked data.
  */
 const dataTableToChunkSource = (
     dataTable: DataTable,
     chunkSize: number = DEFAULT_CHUNK_SIZE,
-    indices?: Uint32Array
+    indices?: Uint32Array,
+    model?: SplatModel
 ): InMemoryChunkSource => {
     const count = indices ? indices.length : dataTable.numRows;
     const shBands = detectShBands(dataTable);
@@ -254,6 +257,7 @@ const dataTableToChunkSource = (
         numGaussians: count,
         chunkSize,
         shBands,
+        model,
         extraColumns: extras,
         transform,
         lodCounts: [count],

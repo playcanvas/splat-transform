@@ -1,4 +1,5 @@
 import { Column, DataTable, convertToSpace } from './data-table';
+import { type SplatModel } from './splat-model';
 import { Transform } from './utils';
 
 type CoordinateSystem = {
@@ -40,6 +41,9 @@ type SpzModule = {
 type CreateSpzModule = () => Promise<SpzModule>;
 
 const SPZ_SH_COMPONENTS = [0, 9, 24, 45, 72] as const;
+
+// Log-scale floor for SPZ output, matching the compressed-PLY writer's clamp.
+const MIN_LOG_SCALE = -20;
 
 let spzModulePromise: Promise<SpzModule> | null = null;
 
@@ -155,7 +159,7 @@ const gaussianCloudToDataTable = (cloud: GaussianCloud) => {
     return new DataTable(columns, Transform.PLY);
 };
 
-const dataTableToGaussianCloud = (dataTable: DataTable): GaussianCloud => {
+const dataTableToGaussianCloud = (dataTable: DataTable, model: SplatModel = 'default'): GaussianCloud => {
     const plyDataTable = convertToSpace(dataTable, Transform.PLY);
     const shColumnCount = getShColumnCount(plyDataTable);
     const shDegree = getShDegreeFromCount(shColumnCount);
@@ -199,7 +203,10 @@ const dataTableToGaussianCloud = (dataTable: DataTable): GaussianCloud => {
 
         scales[i3] = scale0[i];
         scales[i3 + 1] = scale1[i];
-        scales[i3 + 2] = scale2[i];
+        // 2DGS carries -Infinity here; the SPZ encoder quantizes log scales, so
+        // floor it at the smallest value the format resolves rather than feeding
+        // it an infinity. SPZ has no 2DGS flag, so the axis is merely tiny.
+        scales[i3 + 2] = Math.max(scale2[i], MIN_LOG_SCALE);
 
         colors[i3] = color0[i];
         colors[i3 + 1] = color1[i];
@@ -223,7 +230,7 @@ const dataTableToGaussianCloud = (dataTable: DataTable): GaussianCloud => {
     return {
         numPoints,
         shDegree,
-        antialiased: false,
+        antialiased: model === 'antialiased',
         extensions: [],
         positions,
         scales,

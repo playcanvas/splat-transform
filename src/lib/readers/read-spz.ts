@@ -54,6 +54,7 @@ const HARMONICS_COMPONENT_COUNT = [0, 9, 24, 45, 72];
 const MIN_SPZ_VERSION = 2;
 const LATEST_SPZ_VERSION = 4;
 const SPZ_VERSION_ZSTD = 4; // v4+ switched to per-stream ZSTD + 32-byte header
+const FLAG_ANTIALIASED = 0x1; // header flags byte (offset 14): trained with antialiasing
 
 // The resident, decompressed per-attribute byte views for one scene.
 type SpzStreams = {
@@ -61,6 +62,7 @@ type SpzStreams = {
     numSplats: number;
     shBands: SHBands;
     fractionalBits: number;
+    antialiased: boolean;
     positions: DataView;
     alphas: DataView;
     colors: DataView;
@@ -104,6 +106,7 @@ const parseSpz = async (source: ReadSource): Promise<SpzStreams | null> => {
     const numSplats = header.getUint32(8, true);
     const shDegree = header.getUint8(12);
     const fractionalBits = header.getUint8(13);
+    const antialiased = (header.getUint8(14) & FLAG_ANTIALIASED) !== 0;
     if (shDegree < 0 || shDegree >= HARMONICS_COMPONENT_COUNT.length) {
         throw new Error(`Unsupported SH degree ${shDegree}`);
     }
@@ -158,6 +161,7 @@ const parseSpz = async (source: ReadSource): Promise<SpzStreams | null> => {
             numSplats,
             shBands,
             fractionalBits,
+            antialiased,
             positions: streams[0],
             alphas: streams[1],
             colors: streams[2],
@@ -180,7 +184,7 @@ const parseSpz = async (source: ReadSource): Promise<SpzStreams | null> => {
     const scales = new DataView(buf, off, scalesByteSize); off += scalesByteSize;
     const rotations = new DataView(buf, off, rotationsByteSize); off += rotationsByteSize;
     const sh = new DataView(buf, off, shByteSize);
-    return { version, numSplats, shBands, fractionalBits, positions, alphas, colors, scales, rotations, sh };
+    return { version, numSplats, shBands, fractionalBits, antialiased, positions, alphas, colors, scales, rotations, sh };
 };
 
 // Reusable scratch for smallest-three quaternion decoding.
@@ -224,6 +228,7 @@ const readSpz = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
         chunkSize,
         numChunks: [numChunks],
         shBands,
+        model: streams?.antialiased ? 'antialiased' : 'default',
         extraColumns: [],
         transform: Transform.PLY.clone(),
         availableLayers: new Set<ChunkLayer>(['position', 'geometric', 'color']),
