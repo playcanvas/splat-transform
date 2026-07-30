@@ -20,7 +20,7 @@ import {
     bestOut,
     partitionBestOut
 } from '../src/lib/decimate/recost-core.js';
-import { planBlockMerges } from '../src/lib/decimate/block-plan.js';
+import { planBlockMerges, replayBlockPlan } from '../src/lib/decimate/block-plan.js';
 import { MAX_GROUP } from '../src/lib/decimate/select.js';
 import { selectMergesRecosted } from '../src/lib/decimate/select-recost.js';
 import { GpuRecost, COMMIT_LOG_STRIDE } from '../src/lib/gpu/gpu-recost.js';
@@ -149,6 +149,29 @@ describe('GpuRecost refresh parity', () => {
             requireGpu: true
         });
         assert.ok(Array.from(plan.pairs).every(row => row < coreCount));
+    });
+
+    it('plans a core-only GPU block with the compact output stride', async (t) => {
+        if (!device) return t.skip('no WebGPU adapter available');
+
+        const n = 512;
+        const cache = makeCache(n, 777);
+        const neighbors = bruteNeighbors(cache, n, K);
+        const inputs = {
+            splatCache: cache,
+            neighbors,
+            D: K,
+            coreCount: n,
+            totalCount: n
+        };
+        const inline = await planBlockMerges(inputs);
+        const gpu = await planBlockMerges({ ...inputs, device, requireGpu: true });
+
+        assert.strictEqual(gpu.costs.length, inline.costs.length);
+        assert.deepStrictEqual(
+            Array.from(replayBlockPlan(n, gpu).memberGroup),
+            Array.from(replayBlockPlan(n, inline).memberGroup)
+        );
     });
 
     it('wave-0 singleton and post-commit cluster costs match CPU within 1e-3', async (t) => {

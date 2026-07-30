@@ -131,7 +131,7 @@ const chooseBlockSize = (
     return Math.max(1, Math.min(blockSize, n));
 };
 
-// The pre-study KL-style cost kernel (--decimate-mode legacy): full-SH colour
+// The pre-study KL-style cost kernel (--decimate-balanced): full-SH colour
 // L2, single-Monte-Carlo geometric term, its own GPU cache/kernel layouts.
 const createLegacyStrategy = (colorDim: number): CostStrategy => {
     const Z = makeGaussianSamples(1, 0);

@@ -184,6 +184,27 @@ describe('CLI decimate (terminal PLY restriction)', () => {
         const inputCount = parsed.count ?? parsed.numGaussians ?? parsed.lods?.[0]?.count;
         assert.strictEqual(written, Math.round(inputCount / 2), `50% of ${inputCount}`);
     });
+
+    it('--decimate-balanced runs the pre-3.2 algorithm', async () => {
+        const { mkdtemp, readFile: readFileFs, rm } = await import('node:fs/promises');
+        const { tmpdir } = await import('node:os');
+        const { join } = await import('node:path');
+        const dir = await mkdtemp(join(tmpdir(), 'st-decimate-balanced-cli-'));
+        const balancedPath = join(dir, 'balanced.ply');
+
+        const balanced = await runCli([
+            '--gpu', 'cpu',
+            'test/fixtures/splat/minimal.splat',
+            '--decimate-balanced', '50%',
+            balancedPath
+        ]);
+        assert.strictEqual(balanced.code, 0, `balanced CLI failed:\n${balanced.stderr}\n${balanced.stdout}`);
+        const header = (await readFileFs(balancedPath)).subarray(0, 1024).toString('ascii');
+        const match = header.match(/element vertex (\d+)/);
+        assert.ok(match, 'output has a vertex element');
+        assert.strictEqual(parseInt(match[1], 10), 2);
+        await rm(dir, { recursive: true, force: true });
+    });
 });
 
 describe('CLI filter-nan (zero-norm rotation)', () => {

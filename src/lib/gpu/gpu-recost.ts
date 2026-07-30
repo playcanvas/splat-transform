@@ -458,6 +458,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 const COMMIT_LOG_STRIDE = 5;
 
 class GpuRecost {
+    /** Number of u32 values written per refreshed root. */
+    readonly outputStride: number;
+
     /**
      * Upload the immutable inputs and initialize the structure buffers.
      * Call once before the first wave.
@@ -466,7 +469,7 @@ class GpuRecost {
     /**
      * Run one wave: replay `commitCount` log entries, refresh
      * `pendingCount` queued roots, and read back (partner, cost) pairs
-     * into `outBest` (2 u32 per root; cost is a bitcast f32).
+     * into `outBest` (`outputStride` u32 per root; costs are bitcast f32).
      */
     wave: (
         commitLog: Uint32Array,
@@ -526,7 +529,8 @@ class GpuRecost {
         }
         const splitN = Math.ceil(n / 2);
         const partitioned = coreCount < n;
-        const outputStride = partitioned ? 16 : 8;
+        this.outputStride = partitioned ? 4 : 2;
+        const outputStrideBytes = this.outputStride * 4;
 
         const cacheABuf = new StorageBuffer(device, splitN * 16 * 4, BUFFERUSAGE_COPY_DST);
         const cacheBBuf = new StorageBuffer(device, Math.max(n - splitN, 1) * 16 * 4, BUFFERUSAGE_COPY_DST);
@@ -535,7 +539,7 @@ class GpuRecost {
         const parentMetaBuf = new StorageBuffer(device, n * 8, BUFFERUSAGE_COPY_DST);
         const chainBuf = new StorageBuffer(device, n * 8, BUFFERUSAGE_COPY_DST);
         const pendingBuf = new StorageBuffer(device, n * 4, BUFFERUSAGE_COPY_DST);
-        const outBestBuf = new StorageBuffer(device, n * outputStride, BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST);
+        const outBestBuf = new StorageBuffer(device, n * outputStrideBytes, BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST);
         const commitLogBuf = new StorageBuffer(device, wave * COMMIT_LOG_STRIDE * 4, BUFFERUSAGE_COPY_DST);
 
         const initKernel = makeKernel(device, 'recost-init', initWgsl(), ['count'], [
@@ -624,7 +628,7 @@ class GpuRecost {
             device.computeDispatch(computes, 'recost-wave');
 
             // Blocking readback — also the wave's submit boundary.
-            await outBestBuf.read(0, pendingCount * outputStride, outBest, true);
+            await outBestBuf.read(0, pendingCount * outputStrideBytes, outBest, true);
         };
 
         this.destroy = () => {

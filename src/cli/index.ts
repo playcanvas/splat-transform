@@ -191,7 +191,7 @@ const cliOptionsConfig = {
     'filter-box': { type: 'string', short: 'B', multiple: true },
     'filter-sphere': { type: 'string', short: 'S', multiple: true },
     'decimate': { type: 'string', short: 'd', multiple: true },
-    'decimate-mode': { type: 'string', default: 'quality' },
+    'decimate-balanced': { type: 'string', multiple: true },
     'memory-budget': { type: 'string' },
     'filter-cluster': { type: 'string', short: 'C', multiple: true },
     'filter-floaters': { type: 'string', short: 'F', multiple: true },
@@ -522,13 +522,7 @@ const parseArguments = async () => {
         listGpus: v['list-gpus'],
         deviceIdx,
         scratchDir: v['scratch-dir'],
-        decimateMode: (() => {
-            const m = v['decimate-mode'];
-            if (m !== 'quality' && m !== 'legacy') {
-                throw new Error(`Invalid --decimate-mode: ${m}. Must be 'quality' or 'legacy'.`);
-            }
-            return m;
-        })(),
+        decimateMode: 'quality',
         // Residency policy ceiling for decimation (not an upfront allocation):
         // default to half the machine's RAM, capped at 48 GiB.
         memoryBudgetBytes: v['memory-budget'] !== undefined ?
@@ -704,7 +698,9 @@ const parseArguments = async () => {
                         kind: 'mortonOrder'
                     });
                     break;
-                case 'decimate': {
+                case 'decimate':
+                case 'decimate-balanced': {
+                    if (t.name === 'decimate-balanced') options.decimateMode = 'legacy';
                     const value = t.value.trim();
                     let count: number | null = null;
                     let percent: number | null = null;
@@ -804,11 +800,9 @@ ACTIONS (executed in order; can be repeated)
     -S, --filter-sphere    <x,y,z,radius>   Remove Gaussians outside sphere
     -V, --filter-value     <name,cmp,value> Keep Gaussians where <name> <cmp> <value>;
                                               cmp ∈ {lt,lte,gt,gte,eq,neq}
-    -d, --decimate         <n|n%>           Simplify to n (or n%) Gaussians via merge-based decimation.
-        --decimate-mode    <quality|legacy> quality (default): field-L2 cost + re-costed selection — best on
-                                            mixed-scale scenes (large gains on skies/distant structure).
-                                            legacy: pre-3.2 pipeline — faster, lower memory, and still slightly
-                                            better on scenes of uniformly-sized Gaussians (single objects).
+    -d, --decimate         <n|n%>           Simplify with field-L2 cost and re-costed selection (quality default).
+        --decimate-balanced <n|n%>          Simplify with the pre-3.2 balanced algorithm (lower memory and often
+                                            better on uniformly-sized Gaussians).
         --memory-budget    <GiB>            Decimation residency policy ceiling (not an upfront allocation);
                                             re-costed selection falls back to one-shot selection above it.
                                             Default: min(48, half of system RAM).

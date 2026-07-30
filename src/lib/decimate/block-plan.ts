@@ -223,7 +223,7 @@ const planBlockMerges = async (inputs: BlockPlanInputs): Promise<BlockPlan> => {
     }
     const gpu = gpuFits ? new GpuRecost(device!, N, D, MAX_GROUP, WAVE, coreCount) : undefined;
     const commitLog = gpu ? new Uint32Array(WAVE * COMMIT_LOG_STRIDE) : undefined;
-    const outBest = gpu ? new Uint32Array(coreCount * 4) : undefined;
+    const outBest = gpu ? new Uint32Array(coreCount * gpu.outputStride) : undefined;
     const outCost = gpu ? new Float32Array(outBest!.buffer) : undefined;
 
     const planPairs: number[] = [];
@@ -311,12 +311,13 @@ const planBlockMerges = async (inputs: BlockPlanInputs): Promise<BlockPlan> => {
                 for (let p = 0; p < pendingCount; p++) {
                     const root = pending[p];
                     if (parent[root] !== root) continue;
+                    const o = p * gpu.outputStride;
                     refreshResult(
                         root,
-                        outBest![p * 4],
-                        outCost![p * 4 + 1],
-                        outBest![p * 4 + 2],
-                        outCost![p * 4 + 3]
+                        outBest![o],
+                        outCost![o + 1],
+                        gpu.outputStride === 4 ? outBest![o + 2] : NIL,
+                        gpu.outputStride === 4 ? outCost![o + 3] : Infinity
                     );
                 }
             } else {
