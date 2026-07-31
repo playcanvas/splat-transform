@@ -13,6 +13,7 @@ type LodReference = {
 type LodNode = {
     children?: LodNode[];
     lods?: Record<string, LodReference>;
+    errors?: number[];
 };
 
 type LodMeta = {
@@ -64,6 +65,11 @@ const collectFilesByLod = (meta: LodMeta, filename: string): Map<number, Map<num
         if (!node || typeof node !== 'object' || Array.isArray(node) ||
             (node.children !== undefined && !Array.isArray(node.children))) {
             throw new Error(`Invalid lod-meta.json tree: ${filename}`);
+        }
+        if (node.errors !== undefined &&
+            (!Array.isArray(node.errors) || node.errors.length !== meta.lodLevels ||
+            node.errors.some(error => typeof error !== 'number' || !Number.isFinite(error) || error < 0))) {
+            throw new Error(`Invalid lod-meta.json errors: ${filename}`);
         }
         for (const [key, ref] of Object.entries(node.lods ?? {})) {
             const lod = Number(key);

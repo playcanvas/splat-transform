@@ -79,6 +79,53 @@ const makeTable = (n) => {
     ], Transform.PLY);
 };
 
+// A table from explicit per-splat values, for exercising the LOD error metric.
+// Defaults put every splat at the origin with log-scale -3 (sigma ~0.0498) and
+// opacity logit 0 (alpha 0.5).
+const makeSplatTable = (splats) => {
+    const col = (key, fallback) => new Float32Array(splats.map(s => s[key] ?? fallback));
+    return new DataTable([
+        new Column('x', col('x', 0)),
+        new Column('y', col('y', 0)),
+        new Column('z', col('z', 0)),
+        new Column('rot_0', col('rot_0', 1)),
+        new Column('rot_1', col('rot_1', 0)),
+        new Column('rot_2', col('rot_2', 0)),
+        new Column('rot_3', col('rot_3', 0)),
+        new Column('scale_0', col('scale', -3)),
+        new Column('scale_1', col('scale', -3)),
+        new Column('scale_2', col('scale', -3)),
+        new Column('f_dc_0', col('f_dc', 0)),
+        new Column('f_dc_1', col('f_dc', 0)),
+        new Column('f_dc_2', col('f_dc', 0)),
+        new Column('opacity', col('opacity', 0))
+    ], Transform.PLY);
+};
+
+// The error table of a scene whose levels are given splat-by-splat.
+const writeErrors = async (levels) => {
+    const fs = new MemoryFileSystem();
+    const sources = levels.map(splats => dataTableToChunkSource(makeSplatTable(splats), 1 << 20));
+    await writeLodSource({
+        filename: '/scene/lod-meta.json',
+        mainSource: sources.length === 1 ? sources[0] : stackLods(sources),
+        envSource: null,
+        iterations: 1,
+        chunkCount: 1,
+        chunkExtent: 16
+    }, fs);
+    const meta = JSON.parse(new TextDecoder().decode(fs.results.get('/scene/lod-meta.json')));
+    return meta.tree.errors;
+};
+
+const makeShTable = (restValue) => {
+    const table = makeTable(1);
+    for (let i = 0; i < 9; i++) {
+        table.addColumn(new Column(`f_rest_${i}`, new Float32Array([restValue])));
+    }
+    return table;
+};
+
 // Build a structural multi-LOD source from per-level row counts (each level a
 // single-LOD resident source; stacked when there is more than one level).
 const makeSource = (levelCounts) => {
@@ -139,9 +186,61 @@ describe('writeLodSource: lod-meta.json contract', function () {
             { offset: meta.tree.lods['1'].offset, count: meta.tree.lods['1'].count },
             { offset: 0, count: 2 }
         );
+        assert.strictEqual(meta.tree.errors.length, 2);
+        assert.strictEqual(meta.tree.errors[0], 0);
+        assert.ok(Number.isFinite(meta.tree.errors[1]) && meta.tree.errors[1] >= 0);
 
         assert.ok(fs.results.has('/scene/0_0/meta.json'));
         assert.ok(fs.results.has('/scene/1_0/meta.json'));
+    });
+
+    it('includes stored spherical harmonics in the LOD error', async function () {
+        const fs = new MemoryFileSystem();
+        await writeLodSource({
+            filename: '/scene/lod-meta.json',
+            mainSource: stackLods([
+                dataTableToChunkSource(makeShTable(0), 1 << 20),
+                dataTableToChunkSource(makeShTable(2), 1 << 20)
+            ]),
+            envSource: null,
+            iterations: 1,
+            chunkCount: 1,
+            chunkExtent: 16
+        }, fs);
+
+        const meta = JSON.parse(new TextDecoder().decode(fs.results.get('/scene/lod-meta.json')));
+        assert.ok(meta.tree.errors[1] > 0);
+    });
+
+    it('reports no error for a level identical to the finest', async function () {
+        assert.deepStrictEqual(await writeErrors([[{}], [{}]]), [0, 0]);
+    });
+
+    it('resolves a sub-sigma displacement', async function () {
+        // half a sigma apart: 1 - exp(-d^2/4) = 0.0606 for the relative field-L2
+        const sigma = Math.exp(-3);
+        const errors = await writeErrors([[{}], [{ x: 0.5 * sigma }]]);
+        assert.ok(errors[1] > 0.05 && errors[1] < 0.07, `expected ~0.0606, got ${errors[1]}`);
+    });
+
+    it('penalises an opacity drop at identical geometry', async function () {
+        const errors = await writeErrors([[{ opacity: 2 }], [{ opacity: -2 }]]);
+        assert.ok(errors[1] > 0.5, `expected a large error, got ${errors[1]}`);
+    });
+
+    it('penalises thinning even when the survivors are identical', async function () {
+        // two coincident splats decimated to one: every nearest-neighbour match
+        // is exact, but the level carries half the alpha mass
+        const errors = await writeErrors([[{}, {}], [{}]]);
+        assert.ok(Math.abs(errors[1] - 0.5) < 1e-6, `expected 0.5, got ${errors[1]}`);
+    });
+
+    it('keeps the error table monotone across levels', async function () {
+        // level 2 matches a level-0 splat exactly while level 1 sits between
+        // both, so the raw errors would rank the coarser level as the better one
+        const errors = await writeErrors([[{ x: 0 }, { x: 1 }], [{ x: 0.5 }], [{ x: 0 }]]);
+        assert.ok(errors[1] > 0, `expected a non-zero error, got ${errors[1]}`);
+        assert.ok(errors[2] >= errors[1], `expected monotone errors, got ${errors}`);
     });
 
     it('references the environment SOG when environment splats are present', async function () {
