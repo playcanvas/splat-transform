@@ -5,8 +5,9 @@ import { logWrittenFile } from './utils';
 import { writeSogSource } from './write-sog.js';
 import { type ChunkDataPool, type ChunkSource, type ReadRequest, createChunkDataPool } from '../chunk';
 import { Column, DataTable } from '../data-table';
-import { det3, sigmoid, type SplatView } from '../decimate/moment-match';
-import { buildCostCache, type CostCache } from '../decimate-uniform/edge-cost-cpu';
+import {
+    EPS_COV, det3, ellipsoidArea, quatToRotmat, sigmaFromRotVar, sigmoid, type SplatView
+} from '../decimate/moment-match';
 import { type FileSystem } from '../io/write';
 import { bakeTransform, permuteSource, sortMortonColumns } from '../ops';
 import { BTreeNode, BTree } from '../spatial';
@@ -252,13 +253,40 @@ const distanceToAabbSq = (node: BTreeNode, x: number, y: number, z: number): num
     return dx * dx + dy * dy + dz * dz;
 };
 
+/**
+ * The k nearest candidates of each of several structural LODs to every query, in
+ * center space — one traversal per query, serving every LOD.
+ *
+ * `ranges` holds `[lo, hi)` per LOD in flat analysis index space: LOD is
+ * structural, so a level's gaussians are exactly one contiguous index range and
+ * the level test is two comparisons rather than a lookup. Sharing the traversal
+ * is what makes the error pass affordable — every splat of the reference level is
+ * matched against every coarser level, so searching them separately would repeat
+ * the same descent once per level.
+ *
+ * A node is descended while any level can still improve on it, and a leaf's
+ * candidates are examined for a level only when that level's own k-th distance
+ * says they could, so each level's result is identical to a search of its own.
+ * Each node's distance is computed once, by its parent, and passed in.
+ *
+ * @param root - Root of the tree to search.
+ * @param slim - Resident position columns.
+ * @param queries - Flat analysis indices to search from.
+ * @param ranges - Flat `[lo, hi)` pairs, one per LOD to match against.
+ * @param k - Neighbours per query per LOD.
+ * @returns Per LOD, `k` flat indices per query, nearest first, `-1` for none.
+ */
 const findNearest = (
-    root: BTreeNode, slim: SlimColumns, lodOf: (index: number) => number,
-    queries: Uint32Array, targetLod: number, k: number
-): Int32Array => {
-    const result = new Int32Array(queries.length * k);
-    result.fill(-1);
-    const distances = new Float64Array(k);
+    root: BTreeNode, slim: SlimColumns, queries: Uint32Array, ranges: Int32Array, k: number
+): Int32Array[] => {
+    const targets = ranges.length >> 1;
+    const results: Int32Array[] = [];
+    for (let t = 0; t < targets; t++) {
+        const result = new Int32Array(queries.length * k);
+        result.fill(-1);
+        results.push(result);
+    }
+    const distances = new Float64Array(targets * k);
 
     for (let q = 0; q < queries.length; q++) {
         distances.fill(Infinity);
@@ -266,53 +294,78 @@ const findNearest = (
         const x = slim.x[g], y = slim.y[g], z = slim.z[g];
         const output = q * k;
 
-        const visit = (node: BTreeNode): void => {
-            if (distanceToAabbSq(node, x, y, z) > distances[k - 1]) return;
+        // the walk can stop where no level can improve: the largest k-th distance
+        let radius = Infinity;
 
-            if (node.indices) {
-                for (let i = 0; i < node.indices.length; i++) {
-                    const candidate = node.indices[i];
-                    if (lodOf(candidate) !== targetLod) continue;
-                    const dx = slim.x[candidate] - x;
-                    const dy = slim.y[candidate] - y;
-                    const dz = slim.z[candidate] - z;
-                    const distance = dx * dx + dy * dy + dz * dz;
-                    if (distance >= distances[k - 1]) continue;
+        const visit = (node: BTreeNode, distance: number): void => {
+            if (distance > radius) return;
 
-                    let insert = k - 1;
-                    while (insert > 0 && distance < distances[insert - 1]) {
-                        distances[insert] = distances[insert - 1];
-                        result[output + insert] = result[output + insert - 1];
-                        insert--;
+            const { indices } = node;
+            if (indices) {
+                for (let t = 0; t < targets; t++) {
+                    const base = t * k;
+                    const worst = base + k - 1;
+                    if (distance > distances[worst]) continue;
+
+                    const lo = ranges[2 * t];
+                    const hi = ranges[2 * t + 1];
+                    const result = results[t];
+                    for (let i = 0; i < indices.length; i++) {
+                        const candidate = indices[i];
+                        if (candidate < lo || candidate >= hi) continue;
+                        const dx = slim.x[candidate] - x;
+                        const dy = slim.y[candidate] - y;
+                        const dz = slim.z[candidate] - z;
+                        const d = dx * dx + dy * dy + dz * dz;
+                        if (d >= distances[worst]) continue;
+
+                        let insert = k - 1;
+                        while (insert > 0 && d < distances[base + insert - 1]) {
+                            distances[base + insert] = distances[base + insert - 1];
+                            result[output + insert] = result[output + insert - 1];
+                            insert--;
+                        }
+                        distances[base + insert] = d;
+                        result[output + insert] = candidate;
                     }
-                    distances[insert] = distance;
-                    result[output + insert] = candidate;
+                }
+
+                radius = 0;
+                for (let t = 0; t < targets; t++) {
+                    const d = distances[t * k + k - 1];
+                    if (d > radius) radius = d;
                 }
                 return;
             }
 
             const left = node.left!;
             const right = node.right!;
-            if (distanceToAabbSq(left, x, y, z) <= distanceToAabbSq(right, x, y, z)) {
-                visit(left);
-                visit(right);
+            const dl = distanceToAabbSq(left, x, y, z);
+            const dr = distanceToAabbSq(right, x, y, z);
+            if (dl <= dr) {
+                visit(left, dl);
+                visit(right, dr);
             } else {
-                visit(right);
-                visit(left);
+                visit(right, dr);
+                visit(left, dl);
             }
         };
-        visit(root);
+        visit(root, distanceToAabbSq(root, x, y, z));
     }
 
-    return result;
+    return results;
 };
 
-const uniqueGlobals = (queries: Uint32Array, neighbours: Int32Array): Uint32Array => {
-    const combined = new Uint32Array(queries.length + neighbours.length);
+const uniqueGlobals = (queries: Uint32Array, neighbourSets: Int32Array[]): Uint32Array => {
+    let capacity = queries.length;
+    for (const neighbours of neighbourSets) capacity += neighbours.length;
+    const combined = new Uint32Array(capacity);
     combined.set(queries);
     let count = queries.length;
-    for (let i = 0; i < neighbours.length; i++) {
-        if (neighbours[i] >= 0) combined[count++] = neighbours[i];
+    for (const neighbours of neighbourSets) {
+        for (let i = 0; i < neighbours.length; i++) {
+            if (neighbours[i] >= 0) combined[count++] = neighbours[i];
+        }
     }
     const sorted = combined.subarray(0, count);
     sorted.sort();
@@ -371,47 +424,80 @@ const gatherView = async (
     return view;
 };
 
-const combineViews = (a: SplatView, b: SplatView): SplatView => {
-    const countA = a.pos.length / 3;
-    const countB = b.pos.length / 3;
+const concatViews = (views: SplatView[]): SplatView => {
+    const { colorDim } = views[0];
+    let count = 0;
+    for (const v of views) count += v.pos.length / 3;
     const result: SplatView = {
-        pos: new Float32Array((countA + countB) * 3),
-        geo: new Float32Array((countA + countB) * 8),
-        color: new Float32Array((countA + countB) * a.colorDim),
-        colorDim: a.colorDim
+        pos: new Float32Array(count * 3),
+        geo: new Float32Array(count * 8),
+        color: new Float32Array(count * colorDim),
+        colorDim
     };
-    result.pos.set(a.pos); result.pos.set(b.pos, a.pos.length);
-    result.geo.set(a.geo); result.geo.set(b.geo, a.geo.length);
-    result.color.set(a.color); result.color.set(b.color, a.color.length);
+    let row = 0;
+    for (const v of views) {
+        result.pos.set(v.pos, row * 3);
+        result.geo.set(v.geo, row * 8);
+        result.color.set(v.color, row * colorDim);
+        row += v.pos.length / 3;
+    }
     return result;
 };
 
 const PI_1_5 = Math.PI ** 1.5;
 const TWO_PI_1_5 = (2 * Math.PI) ** 1.5;
 
-// Per-splat terms of the field-L2: the gaussian's opacity, sqrt(det sigma), and
-// its self inner product <f, f> = alpha^2 * pi^1.5 * sqrt(det sigma).
+/**
+ * Per-splat terms of the field-L2: the covariance, the footprint mass used to
+ * weight it, the gaussian's opacity, sqrt(det sigma), and its self inner product
+ * <f, f> = alpha^2 * pi^1.5 * sqrt(det sigma).
+ *
+ * `sigma` and `mass` are what the decimator's `buildCostCache` computes (same
+ * math, same f32 storage, so the same values); the rest of that cache serves the
+ * MC-KL edge cost, which this path does not evaluate, so it is not built here.
+ */
 type ErrorCache = {
+    sigma: Float32Array;
+    mass: Float32Array;
     alpha: Float64Array;
     sqrtDet: Float64Array;
     self: Float64Array;
 };
 
-const buildErrorCache = (view: SplatView, cache: CostCache): ErrorCache => {
-    const n = view.geo.length / 8;
+const buildErrorCache = (view: SplatView): ErrorCache => {
+    const { geo } = view;
+    const n = geo.length / 8;
+    const sigma = new Float32Array(n * 9);
+    const mass = new Float32Array(n);
     const alpha = new Float64Array(n);
     const sqrtDet = new Float64Array(n);
     const self = new Float64Array(n);
+    const rot = new Float32Array(9);
 
     for (let i = 0; i < n; i++) {
-        const a = sigmoid(view.geo[i * 8 + 7]);
-        const root = Math.sqrt(Math.max(det3(cache.sigma, i * 9), 1e-300));
-        alpha[i] = a;
+        const i8 = 8 * i;
+        const i9 = 9 * i;
+
+        const linAlpha = sigmoid(geo[i8 + 7]);
+        const sx = Math.max(Math.exp(geo[i8 + 4]), 1e-12);
+        const sy = Math.max(Math.exp(geo[i8 + 5]), 1e-12);
+        const sz = Math.max(Math.exp(geo[i8 + 6]), 1e-12);
+
+        let qw = geo[i8], qx = geo[i8 + 1], qy = geo[i8 + 2], qz = geo[i8 + 3];
+        const invq = 1 / Math.max(Math.hypot(qw, qx, qy, qz), 1e-12);
+        qw *= invq; qx *= invq; qy *= invq; qz *= invq;
+
+        quatToRotmat(qw, qx, qy, qz, rot, 0);
+        sigmaFromRotVar(rot, 0, sx * sx + EPS_COV, sy * sy + EPS_COV, sz * sz + EPS_COV, sigma, i9);
+
+        const root = Math.sqrt(Math.max(det3(sigma, i9), 1e-300));
+        alpha[i] = linAlpha;
         sqrtDet[i] = root;
-        self[i] = a * a * PI_1_5 * root;
+        self[i] = linAlpha * linAlpha * PI_1_5 * root;
+        mass[i] = linAlpha * ellipsoidArea(sx, sy, sz) + 1e-12;
     }
 
-    return { alpha, sqrtDet, self };
+    return { sigma, mass, alpha, sqrtDet, self };
 };
 
 const sumScratch = new Float64Array(9);
@@ -431,15 +517,19 @@ const sumScratch = new Float64Array(9);
  * noise, far more than the error a well-decimated leaf actually has, and it is
  * blind to opacity (alpha only sets the merge weights there).
  *
+ * Both terms are non-negative, so a pair whose geometric term alone already
+ * reaches `cutoff` cannot beat it: `Infinity` is returned without summing the SH
+ * coefficients, which is the bulk of the arithmetic at 3 SH bands.
+ *
  * @param view - Splat columns.
- * @param cache - Per-splat cache from `buildCostCache` (supplies sigma).
- * @param errorCache - Per-splat cache from {@link buildErrorCache}.
+ * @param cache - Per-splat cache from {@link buildErrorCache}.
  * @param i - First splat (view row).
  * @param j - Second splat (view row).
+ * @param cutoff - Error to beat; pass `Infinity` for the unconditional error.
  * @returns The error, zero when the two splats are identical.
  */
 const splatError = (
-    view: SplatView, cache: CostCache, errorCache: ErrorCache, i: number, j: number
+    view: SplatView, cache: ErrorCache, i: number, j: number, cutoff: number
 ): number => {
     const s = sumScratch;
     const i9 = 9 * i, j9 = 9 * j;
@@ -456,10 +546,11 @@ const splatError = (
     const az = (s[3] * s[7] - s[4] * s[6]) * dx + (s[1] * s[6] - s[0] * s[7]) * dy + (s[0] * s[4] - s[1] * s[3]) * dz;
     const quad = (dx * ax + dy * ay + dz * az) / detS;
 
-    const cross = errorCache.alpha[i] * errorCache.alpha[j] * TWO_PI_1_5 *
-        errorCache.sqrtDet[i] * errorCache.sqrtDet[j] / Math.sqrt(detS) * Math.exp(-0.5 * quad);
-    const total = errorCache.self[i] + errorCache.self[j];
+    const cross = cache.alpha[i] * cache.alpha[j] * TWO_PI_1_5 *
+        cache.sqrtDet[i] * cache.sqrtDet[j] / Math.sqrt(detS) * Math.exp(-0.5 * quad);
+    const total = cache.self[i] + cache.self[j];
     const geoError = Math.max(0, total - 2 * cross) / Math.max(total, 1e-300);
+    if (geoError >= cutoff) return Infinity;
 
     const { color, colorDim } = view;
     let colorError = 0;
@@ -473,7 +564,7 @@ const splatError = (
 
 const calcErrors = async (
     source: ChunkSource, pool: ChunkDataPool, slim: SlimColumns, root: BTreeNode,
-    bins: Map<number, Uint32Array>, lodOf: (index: number) => number, cum: number[], numLods: number
+    bins: Map<number, Uint32Array>, cum: number[], numLods: number
 ): Promise<number[]> => {
     // Symmetric Chamfer-style error against the finest representation present in
     // this leaf, plus the alpha-mass a level fails to carry. Center-space KNN
@@ -486,66 +577,101 @@ const calcErrors = async (
     const referenceQueries = bins.get(referenceLod)!;
     const k = 4;
 
-    for (const [lod, targetQueries] of bins) {
-        if (lod === referenceLod) continue;
+    const targetLods = [...bins.keys()].filter(lod => lod !== referenceLod).sort((a, b) => a - b);
+    if (targetLods.length === 0) return errors;
 
-        const forward = findNearest(root, slim, lodOf, referenceQueries, lod, k);
-        const reverse = findNearest(root, slim, lodOf, targetQueries, referenceLod, k);
-        const referenceGlobals = uniqueGlobals(referenceQueries, reverse);
-        const targetGlobals = uniqueGlobals(targetQueries, forward);
-        const referenceView = await gatherView(source, pool, slim, referenceGlobals, referenceLod, cum[referenceLod]);
-        const targetView = await gatherView(source, pool, slim, targetGlobals, lod, cum[lod]);
-        const view = combineViews(referenceView, targetView);
-        const cache = buildCostCache(view);
-        const errorCache = buildErrorCache(view, cache);
-        const targetOffset = referenceGlobals.length;
+    // Forward (reference -> each level) shares one traversal per reference splat;
+    // reverse (each level -> reference) is a separate query set per level.
+    const targetRanges = new Int32Array(targetLods.length * 2);
+    targetLods.forEach((lod, i) => {
+        targetRanges[2 * i] = cum[lod];
+        targetRanges[2 * i + 1] = cum[lod + 1];
+    });
+    const referenceRange = Int32Array.of(cum[referenceLod], cum[referenceLod + 1]);
 
-        // `mass` (alpha * ellipsoid area) is a splat's share of what the leaf
-        // paints, so it weights both the per-splat mean and the coverage term —
-        // a hair-thin splat and one spanning the whole leaf are not equals.
-        const directional = (
-            queries: Uint32Array, neighbours: Int32Array,
-            queryGlobals: Uint32Array, neighbourGlobals: Uint32Array,
-            queryOffset: number, neighbourOffset: number
-        ): number => {
-            let total = 0;
-            let weight = 0;
-            for (let i = 0; i < queries.length; i++) {
-                const queryRow = queryOffset + indexOfSorted(queryGlobals, queries[i]);
-                let best = Infinity;
-                for (let j = 0; j < k; j++) {
-                    const neighbour = neighbours[i * k + j];
-                    if (neighbour < 0) continue;
-                    const neighbourRow = neighbourOffset + indexOfSorted(neighbourGlobals, neighbour);
-                    best = Math.min(best, splatError(view, cache, errorCache, queryRow, neighbourRow));
-                }
-                if (best === Infinity) continue;
-                total += cache.mass[queryRow] * best;
-                weight += cache.mass[queryRow];
-            }
-            return weight > 0 ? total / weight : 0;
-        };
+    const forwards = findNearest(root, slim, referenceQueries, targetRanges, k);
+    const reverses = targetLods.map(lod => findNearest(root, slim, bins.get(lod)!, referenceRange, k)[0]);
 
-        const massOf = (queries: Uint32Array, globals: Uint32Array, offset: number): number => {
-            let mass = 0;
-            for (let i = 0; i < queries.length; i++) {
-                mass += cache.mass[offset + indexOfSorted(globals, queries[i])];
-            }
-            return mass;
-        };
+    // One gathered section per level, holding that level's own splats plus every
+    // splat another level matched into it, concatenated into a single view. All
+    // levels are handled in one pass so the reference level — the largest, and a
+    // participant in every pair — is read and cached once instead of once per
+    // level pair.
+    const order = [referenceLod, ...targetLods];
+    const globals: Uint32Array[] = new Array(numLods);
+    globals[referenceLod] = uniqueGlobals(referenceQueries, reverses);
+    targetLods.forEach((lod, i) => {
+        globals[lod] = uniqueGlobals(bins.get(lod)!, [forwards[i]]);
+    });
 
-        // Nearest-neighbour matching cannot see thinning: drop every second
-        // splat of an overlapping group and each survivor still has a
-        // near-identical partner, while the alpha the group accumulates halves.
-        // Sky gaps are exactly that, so compare the mass the levels carry.
-        const referenceMass = massOf(referenceQueries, referenceGlobals, 0);
-        const targetMass = massOf(targetQueries, targetGlobals, targetOffset);
-        const coverageError = Math.max(0, 1 - targetMass / Math.max(referenceMass, 1e-300));
-
-        const forwardError = directional(referenceQueries, forward, referenceGlobals, targetGlobals, 0, targetOffset);
-        const reverseError = directional(targetQueries, reverse, targetGlobals, referenceGlobals, targetOffset, 0);
-        errors[lod] = 0.5 * (forwardError + reverseError) + coverageError;
+    const offsets = new Int32Array(numLods);
+    const sections: SplatView[] = [];
+    let rows = 0;
+    for (const lod of order) {
+        offsets[lod] = rows;
+        sections.push(await gatherView(source, pool, slim, globals[lod], lod, cum[lod]));
+        rows += globals[lod].length;
     }
+
+    const view = concatViews(sections);
+    const cache = buildErrorCache(view);
+
+    // Rows of a level's own splats, in query order. The reference level's are
+    // reused by every pair.
+    const rowsOf = (queries: Uint32Array, lod: number): Int32Array => {
+        const result = new Int32Array(queries.length);
+        const offset = offsets[lod];
+        const g = globals[lod];
+        for (let i = 0; i < queries.length; i++) result[i] = offset + indexOfSorted(g, queries[i]);
+        return result;
+    };
+    const referenceRows = rowsOf(referenceQueries, referenceLod);
+
+    // `mass` (alpha * ellipsoid area) is a splat's share of what the leaf
+    // paints, so it weights both the per-splat mean and the coverage term —
+    // a hair-thin splat and one spanning the whole leaf are not equals.
+    const directional = (
+        queryRows: Int32Array, neighbours: Int32Array, neighbourLod: number
+    ): number => {
+        let total = 0;
+        let weight = 0;
+        const neighbourOffset = offsets[neighbourLod];
+        const neighbourGlobals = globals[neighbourLod];
+        for (let i = 0; i < queryRows.length; i++) {
+            const queryRow = queryRows[i];
+            let best = Infinity;
+            for (let j = 0; j < k; j++) {
+                const neighbour = neighbours[i * k + j];
+                if (neighbour < 0) continue;
+                const neighbourRow = neighbourOffset + indexOfSorted(neighbourGlobals, neighbour);
+                const error = splatError(view, cache, queryRow, neighbourRow, best);
+                if (error < best) best = error;
+            }
+            if (best === Infinity) continue;
+            total += cache.mass[queryRow] * best;
+            weight += cache.mass[queryRow];
+        }
+        return weight > 0 ? total / weight : 0;
+    };
+
+    const massOf = (queryRows: Int32Array): number => {
+        let mass = 0;
+        for (let i = 0; i < queryRows.length; i++) mass += cache.mass[queryRows[i]];
+        return mass;
+    };
+
+    // Nearest-neighbour matching cannot see thinning: drop every second
+    // splat of an overlapping group and each survivor still has a
+    // near-identical partner, while the alpha the group accumulates halves.
+    // Sky gaps are exactly that, so compare the mass the levels carry.
+    const referenceMass = massOf(referenceRows);
+    targetLods.forEach((lod, i) => {
+        const targetRows = rowsOf(bins.get(lod)!, lod);
+        const coverageError = Math.max(0, 1 - massOf(targetRows) / Math.max(referenceMass, 1e-300));
+        const forwardError = directional(referenceRows, forwards[i], lod);
+        const reverseError = directional(targetRows, reverses[i], referenceLod);
+        errors[lod] = 0.5 * (forwardError + reverseError) + coverageError;
+    });
 
     // The engine's budget balancer drops a level from its frontier whenever a
     // coarser one claims less error, which pins the node to that coarser level
@@ -744,7 +870,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
 
         // Bound and approximation errors over the leaf's full structural LOD data.
         const bound = await calcBound(mainSource, pool, bins, cum, n => chunkingBar.tick(n));
-        const errors = await calcErrors(mainSource, pool, slim, bTree!.root, bins, lodOf, cum, numLods);
+        const errors = await calcErrors(mainSource, pool, slim, bTree!.root, bins, cum, numLods);
 
         return { bound, lods, errors };
     };
