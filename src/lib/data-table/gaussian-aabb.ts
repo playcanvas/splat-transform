@@ -1,21 +1,22 @@
 import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
-import { Column, DataTable } from './data-table';
 import { SIGMA_CUTOFF } from '../render/config';
 import { fmtCount, logger } from '../utils';
+
+import { Column, DataTable } from './data-table';
 
 /**
  * Bounds specification with min/max Vec3.
  */
-interface Bounds {
+type Bounds = {
     min: Vec3;
     max: Vec3;
-}
+};
 
 /**
  * Result of computing Gaussian extents.
  */
-interface GaussianExtentsResult {
+type GaussianExtentsResult = {
     /**
      * DataTable containing extent_x, extent_y, extent_z columns.
      * To compute AABB for Gaussian i:
@@ -30,7 +31,7 @@ interface GaussianExtentsResult {
 
     /** Number of Gaussians skipped due to invalid values */
     invalidCount: number;
-}
+};
 
 /**
  * Compute axis-aligned bounding box half-extents for all Gaussians in a DataTable.
@@ -154,8 +155,6 @@ const computeGaussianExtents = (dataTable: DataTable): GaussianExtentsResult => 
     };
 };
 
-export {
-    computeGaussianExtents
-};
+export { computeGaussianExtents };
 
 export type { Bounds, GaussianExtentsResult };

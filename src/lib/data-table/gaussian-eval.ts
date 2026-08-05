@@ -1,11 +1,12 @@
-import { TypedArray } from './data-table';
 import { sigmoid } from '../utils';
+
+import type { TypedArray } from './data-table';
 
 /**
  * Pre-computed per-Gaussian inverse transform data for evaluating
  * Gaussian contribution at arbitrary 3D points.
  */
-interface GaussianInverseTransform {
+type GaussianInverseTransform = {
     /** Inverse rotation quaternion (w, x, y, z) with xyz negated */
     qw: number;
     qx: number;
@@ -17,7 +18,7 @@ interface GaussianInverseTransform {
     isz: number;
     /** Linear opacity (sigmoid of raw logit) */
     alpha: number;
-}
+};
 
 /**
  * Compute the inverse transform for a single Gaussian.
@@ -33,8 +34,13 @@ interface GaussianInverseTransform {
  * @returns Inverse transform parameters.
  */
 const computeGaussianInverse = (
-    rotW: number, rotX: number, rotY: number, rotZ: number,
-    logScaleX: number, logScaleY: number, logScaleZ: number,
+    rotW: number,
+    rotX: number,
+    rotY: number,
+    rotZ: number,
+    logScaleX: number,
+    logScaleY: number,
+    logScaleZ: number,
     opacityLogit: number
 ): GaussianInverseTransform => {
     const qlen = Math.sqrt(rotW * rotW + rotX * rotX + rotY * rotY + rotZ * rotZ);
@@ -68,8 +74,12 @@ const computeGaussianInverse = (
  */
 const evaluateGaussianAt = (
     g: GaussianInverseTransform,
-    px: number, py: number, pz: number,
-    vx: number, vy: number, vz: number
+    px: number,
+    py: number,
+    pz: number,
+    vx: number,
+    vy: number,
+    vz: number
 ): number => {
     const dx = vx - px;
     const dy = vy - py;
@@ -94,7 +104,7 @@ const evaluateGaussianAt = (
 /**
  * Column arrays needed for Gaussian contribution evaluation.
  */
-interface GaussianColumns {
+type GaussianColumns = {
     posX: TypedArray;
     posY: TypedArray;
     posZ: TypedArray;
@@ -109,11 +119,6 @@ interface GaussianColumns {
     extentX: TypedArray;
     extentY: TypedArray;
     extentZ: TypedArray;
-}
-
-export {
-    evaluateGaussianAt,
-    computeGaussianInverse,
-    type GaussianColumns,
-    type GaussianInverseTransform
 };
+
+export { evaluateGaussianAt, computeGaussianInverse, type GaussianColumns, type GaussianInverseTransform };

@@ -17,7 +17,7 @@ type Options = {
     lodSelect?: number[];
 
     /** Viewer settings JSON for HTML output */
-    viewerSettingsJson?: any;
+    viewerSettingsJson?: unknown;
 
     /** Whether to generate unbundled HTML output with separate files. Default: false */
     unbundled?: boolean;
@@ -158,6 +158,7 @@ type Param = {
  *
  * @returns Promise resolving to a GraphicsDevice instance.
  */
-type DeviceCreator = () => Promise<import('playcanvas').GraphicsDevice>;
+type DeviceCreator = () => Promise<GraphicsDevice>;
 
 export type { CollisionMeshShape, Options, Param, DeviceCreator };
+import type { GraphicsDevice } from 'playcanvas';

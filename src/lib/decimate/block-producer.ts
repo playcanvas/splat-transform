@@ -1,4 +1,4 @@
-import { type ChunkData, type ChunkSource, type ChunkSourceMetadata, type ReadRequest } from '../chunk';
+import type { ChunkData, ChunkSource, ChunkSourceMetadata, ReadRequest } from '../chunk';
 
 /**
  * One output chunk's destination views for the merge stream — typed windows
@@ -52,7 +52,7 @@ const createBlockProducerSource = (
         }
         if (!generator) {
             generator = produce();
-            await generator.next();   // prime: run to the first dest handshake
+            await generator.next(); // prime: run to the first dest handshake
         }
 
         const expected = Math.min(meta.chunkSize, meta.numGaussians - request.chunkIndex * meta.chunkSize);
@@ -74,7 +74,9 @@ const createBlockProducerSource = (
             throw new Error(`decimate output ended early at chunk ${request.chunkIndex}`);
         }
         if (value !== expected) {
-            throw new Error(`decimate output chunk ${request.chunkIndex}: expected ${expected} rows, produced ${value}`);
+            throw new Error(
+                `decimate output chunk ${request.chunkIndex}: expected ${expected} rows, produced ${value}`
+            );
         }
 
         nextChunk++;

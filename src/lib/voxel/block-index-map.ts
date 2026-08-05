@@ -47,7 +47,7 @@ class BlockIndexMap {
     set(key: number, val: number): void {
         const keys = this.keys;
         const mask = this.mask;
-        let i = ((Math.imul(key >>> 0, 0x9E3779B9) ^ Math.imul((key / 4294967296) >>> 0, 0x85EBCA77)) >>> 0) & mask;
+        let i = ((Math.imul(key >>> 0, 0x9e3779b9) ^ Math.imul((key / 4294967296) >>> 0, 0x85ebca77)) >>> 0) & mask;
         while (keys[i] !== EMPTY_KEY && keys[i] !== key) {
             i = (i + 1) & mask;
         }
@@ -58,7 +58,7 @@ class BlockIndexMap {
     get(key: number): number {
         const keys = this.keys;
         const mask = this.mask;
-        let i = ((Math.imul(key >>> 0, 0x9E3779B9) ^ Math.imul((key / 4294967296) >>> 0, 0x85EBCA77)) >>> 0) & mask;
+        let i = ((Math.imul(key >>> 0, 0x9e3779b9) ^ Math.imul((key / 4294967296) >>> 0, 0x85ebca77)) >>> 0) & mask;
         while (true) {
             const k = keys[i];
             if (k === key) return this.vals[i];

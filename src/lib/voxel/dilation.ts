@@ -1,12 +1,7 @@
-import {
-    BLOCK_EMPTY,
-    BLOCK_SOLID,
-    SOLID_WORD,
-    SparseVoxelGrid,
-    readBlockType
-} from './sparse-voxel-grid';
 import { GpuDilation } from '../gpu';
 import { logger } from '../utils';
+
+import { BLOCK_EMPTY, BLOCK_SOLID, SOLID_WORD, SparseVoxelGrid, readBlockType } from './sparse-voxel-grid';
 
 // ============================================================================
 // GPU Dilation
@@ -41,8 +36,12 @@ const blockAlignedExtent = (halfExtent: number): number => {
  */
 function chunkIsEmpty(
     src: SparseVoxelGrid,
-    ox: number, oy: number, oz: number,
-    cx: number, cy: number, cz: number
+    ox: number,
+    oy: number,
+    oz: number,
+    cx: number,
+    cy: number,
+    cz: number
 ): boolean {
     const minBx = Math.max(0, Math.floor(ox / 4));
     const minBy = Math.max(0, Math.floor(oy / 4));
@@ -83,8 +82,12 @@ function chunkIsEmpty(
  */
 function chunkIsSaturated(
     src: SparseVoxelGrid,
-    ox: number, oy: number, oz: number,
-    cx: number, cy: number, cz: number
+    ox: number,
+    oy: number,
+    oz: number,
+    cx: number,
+    cy: number,
+    cz: number
 ): boolean {
     // Halo extends past grid → those bits are 0, not saturated.
     if (ox < 0 || oy < 0 || oz < 0) return false;
@@ -131,8 +134,12 @@ function chunkIsSaturated(
  */
 function insertSaturatedInner(
     dst: SparseVoxelGrid,
-    innerOx: number, innerOy: number, innerOz: number,
-    innerCx: number, innerCy: number, innerCz: number
+    innerOx: number,
+    innerOy: number,
+    innerOz: number,
+    innerCx: number,
+    innerCy: number,
+    innerCz: number
 ): void {
     const minBx = Math.max(0, innerOx >> 2);
     const minBy = Math.max(0, innerOy >> 2);
@@ -190,8 +197,12 @@ function applyChunkToDst(
     dst: SparseVoxelGrid,
     typesOut: Uint32Array,
     masksOut: Uint32Array,
-    cx: number, cy: number, cz: number,
-    innerNx: number, innerNy: number, innerNz: number
+    cx: number,
+    cy: number,
+    cz: number,
+    innerNx: number,
+    innerNy: number,
+    innerNz: number
 ): void {
     const innerBx = innerNx >> 2;
     const innerBy = innerNy >> 2;
@@ -215,14 +226,15 @@ function applyChunkToDst(
                 const wordIdx = innerIdx >>> 4;
                 const bitShift = (innerIdx & 15) << 1;
                 const bt = (typesOut[wordIdx] >>> bitShift) & 3;
-                if (bt === 0) continue;  // EMPTY
+                if (bt === 0) continue; // EMPTY
 
                 const globalBlockIdx = baseGlobalIdx + bx;
                 const w = globalBlockIdx >>> 4;
                 const shift = (globalBlockIdx & 15) << 1;
                 dstTypes[w] |= bt << shift;
 
-                if (bt === 2) {  // MIXED
+                if (bt === 2) {
+                    // MIXED
                     const m2 = innerIdx * 2;
                     dstMasks.set(globalBlockIdx, masksOut[m2], masksOut[m2 + 1]);
                 }
@@ -276,12 +288,16 @@ async function gpuDilate3(
     const numChunksZ = Math.ceil(src.nz / innerStep);
     const totalChunks = numChunksX * numChunksY * numChunksZ;
 
-    interface InFlight {
+    type InFlight = {
         typesPromise: Promise<Uint32Array>;
         masksPromise: Promise<Uint32Array>;
-        cx: number; cy: number; cz: number;
-        innerNx: number; innerNy: number; innerNz: number;
-    }
+        cx: number;
+        cy: number;
+        cz: number;
+        innerNx: number;
+        innerNy: number;
+        innerNz: number;
+    };
 
     let currentSlot = 0;
     let inflight: InFlight | null = null;
@@ -334,11 +350,20 @@ async function gpuDilate3(
 
                     const { types: typesPromise, masks: masksPromise } = gpu.submitChunkSparse(
                         currentSlot,
-                        minBx, minBy, minBz,
-                        outerBx, outerBy, outerBz,
-                        haloBx, haloBy, haloBz,
-                        innerBx, innerBy, innerBz,
-                        halfExtentXZ, halfExtentY
+                        minBx,
+                        minBy,
+                        minBz,
+                        outerBx,
+                        outerBy,
+                        outerBz,
+                        haloBx,
+                        haloBy,
+                        haloBz,
+                        innerBx,
+                        innerBy,
+                        innerBz,
+                        halfExtentXZ,
+                        halfExtentY
                     );
 
                     if (inflight) {

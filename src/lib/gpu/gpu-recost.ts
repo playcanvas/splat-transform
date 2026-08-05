@@ -1,11 +1,8 @@
-import {
-    BUFFERUSAGE_COPY_DST,
-    BUFFERUSAGE_COPY_SRC,
-    GraphicsDevice,
-    StorageBuffer
-} from 'playcanvas';
+import type { GraphicsDevice } from 'playcanvas';
+import { BUFFERUSAGE_COPY_DST, BUFFERUSAGE_COPY_SRC, StorageBuffer } from 'playcanvas';
 
-import { makeKernel, type Kernel } from './compute-kernel';
+import { makeKernel } from './compute-kernel';
+import type { Kernel } from './compute-kernel';
 import { gaussianL2Wgsl } from './shaders/chunks/gaussian-l2';
 
 /**
@@ -33,7 +30,7 @@ import { gaussianL2Wgsl } from './shaders/chunks/gaussian-l2';
  */
 
 const WG = 64;
-const NONE = 0xFFFFFFFF;
+const NONE = 0xffffffff;
 const MAX_DIM = 65535;
 
 // Shared structure access for the replay/refresh kernels: parentMeta[i] =
@@ -44,7 +41,7 @@ const refreshWgsl = (
     splitN: number,
     coreCount: number,
     partitioned: boolean
-) => /* wgsl */`
+) => /* wgsl */ `
 struct Uniforms {
     pendingCount: u32,
 }
@@ -286,9 +283,11 @@ fn main(@builtin(workgroup_id) wgid: vec3u, @builtin(local_invocation_id) lid3: 
             let root = pending[pIdx];
             if (parentMeta[root].x != root) {
                 // Stale queued root (absorbed since queuing) — no result.
-                outBest[pIdx] = ${partitioned ?
-        'vec4u(NONE, bitcast<u32>(F32_MAX), NONE, bitcast<u32>(F32_MAX))' :
-        'vec2u(NONE, bitcast<u32>(F32_MAX))'};
+                outBest[pIdx] = ${
+                    partitioned
+                        ? 'vec4u(NONE, bitcast<u32>(F32_MAX), NONE, bitcast<u32>(F32_MAX))'
+                        : 'vec2u(NONE, bitcast<u32>(F32_MAX))'
+                };
                 wgAbort = 1u;
             } else {
                 wgAbort = 0u;
@@ -397,9 +396,11 @@ fn main(@builtin(workgroup_id) wgid: vec3u, @builtin(local_invocation_id) lid3: 
         if (redCost[0] == F32_MAX) { p = NONE; }
         var hp = redHaloPartner[0];
         if (redHaloCost[0] == F32_MAX) { hp = NONE; }
-        outBest[pIdx] = ${partitioned ?
-        'vec4u(p, bitcast<u32>(redCost[0]), hp, bitcast<u32>(redHaloCost[0]))' :
-        'vec2u(p, bitcast<u32>(redCost[0]))'};
+        outBest[pIdx] = ${
+            partitioned
+                ? 'vec4u(p, bitcast<u32>(redCost[0]), hp, bitcast<u32>(redHaloCost[0]))'
+                : 'vec2u(p, bitcast<u32>(redCost[0]))'
+        };
     }
 }
 `;
@@ -409,7 +410,7 @@ fn main(@builtin(workgroup_id) wgid: vec3u, @builtin(local_invocation_id) lid3: 
 // guarantees each root commits at most once per wave (entries touching a
 // committed root fail their version/seq/parent checks), so writes across
 // entries target disjoint words.
-const replayWgsl = () => /* wgsl */`
+const replayWgsl = () => /* wgsl */ `
 struct Uniforms {
     commitCount: u32,
 }
@@ -436,7 +437,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 `;
 
 // Initialize the structure buffers: every splat a singleton root.
-const initWgsl = () => /* wgsl */`
+const initWgsl = () => /* wgsl */ `
 struct Uniforms {
     count: u32,
 }
@@ -501,18 +502,26 @@ class GpuRecost {
         coreCount = n,
         allowSmall = false
     ): boolean {
-        if (n < 1024 && !allowSmall) return false;   // inline is instant below this on the global path
-        const limits = (device as any).limits;
+        if (n < 1024 && !allowSmall) return false; // inline is instant below this on the global path
+        const limits = (
+            device as GraphicsDevice & {
+                limits?: { maxStorageBufferBindingSize?: number; maxBufferSize?: number };
+            }
+        ).limits;
         const maxBinding = Math.min(
-            typeof limits?.maxStorageBufferBindingSize === 'number' ? limits.maxStorageBufferBindingSize : 128 * 2 ** 20,
+            typeof limits?.maxStorageBufferBindingSize === 'number'
+                ? limits.maxStorageBufferBindingSize
+                : 128 * 2 ** 20,
             typeof limits?.maxBufferSize === 'number' ? limits.maxBufferSize : 256 * 2 ** 20
         );
         const splitN = Math.ceil(n / 2);
-        return splitN * 16 * 4 <= maxBinding &&      // cacheA/B
-            splitN * k * 4 <= maxBinding &&           // nbA/B
+        return (
+            splitN * 16 * 4 <= maxBinding && // cacheA/B
+            splitN * k * 4 <= maxBinding && // nbA/B
             n * (coreCount < n ? 16 : 8) <= maxBinding && // outBest
-            n * 8 <= maxBinding &&                    // parentMeta/chain
-            wave * COMMIT_LOG_STRIDE * 4 <= maxBinding;
+            n * 8 <= maxBinding && // parentMeta/chain
+            wave * COMMIT_LOG_STRIDE * 4 <= maxBinding
+        );
     }
 
     /**
@@ -539,21 +548,37 @@ class GpuRecost {
         const parentMetaBuf = new StorageBuffer(device, n * 8, BUFFERUSAGE_COPY_DST);
         const chainBuf = new StorageBuffer(device, n * 8, BUFFERUSAGE_COPY_DST);
         const pendingBuf = new StorageBuffer(device, n * 4, BUFFERUSAGE_COPY_DST);
-        const outBestBuf = new StorageBuffer(device, n * outputStrideBytes, BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST);
+        const outBestBuf = new StorageBuffer(
+            device,
+            n * outputStrideBytes,
+            BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST
+        );
         const commitLogBuf = new StorageBuffer(device, wave * COMMIT_LOG_STRIDE * 4, BUFFERUSAGE_COPY_DST);
 
-        const initKernel = makeKernel(device, 'recost-init', initWgsl(), ['count'], [
-            ['parentMeta', false],
-            ['chain', false]
-        ]);
+        const initKernel = makeKernel(
+            device,
+            'recost-init',
+            initWgsl(),
+            ['count'],
+            [
+                ['parentMeta', false],
+                ['chain', false]
+            ]
+        );
         initKernel.compute.setParameter('parentMeta', parentMetaBuf);
         initKernel.compute.setParameter('chain', chainBuf);
 
-        const replayKernel = makeKernel(device, 'recost-replay', replayWgsl(), ['commitCount'], [
-            ['commitLog', true],
-            ['parentMeta', false],
-            ['chain', false]
-        ]);
+        const replayKernel = makeKernel(
+            device,
+            'recost-replay',
+            replayWgsl(),
+            ['commitCount'],
+            [
+                ['commitLog', true],
+                ['parentMeta', false],
+                ['chain', false]
+            ]
+        );
         replayKernel.compute.setParameter('commitLog', commitLogBuf);
         replayKernel.compute.setParameter('parentMeta', parentMetaBuf);
         replayKernel.compute.setParameter('chain', chainBuf);
@@ -620,10 +645,7 @@ class GpuRecost {
             }
             pendingBuf.write(0, pending, 0, pendingCount);
             refreshKernel.compute.setParameter('pendingCount', pendingCount);
-            refreshKernel.compute.setupDispatch(
-                Math.min(pendingCount, MAX_DIM),
-                Math.ceil(pendingCount / MAX_DIM)
-            );
+            refreshKernel.compute.setupDispatch(Math.min(pendingCount, MAX_DIM), Math.ceil(pendingCount / MAX_DIM));
             computes.push(refreshKernel.compute);
             device.computeDispatch(computes, 'recost-wave');
 

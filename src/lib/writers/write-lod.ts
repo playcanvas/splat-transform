@@ -1,20 +1,23 @@
 import { basename, dirname, resolve } from 'pathe';
 import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
-import { logWrittenFile } from './utils';
-import { writeSogSource } from './write-sog.js';
-import { type ChunkDataPool, type ChunkSource, type ReadRequest, createChunkDataPool } from '../chunk';
+import { createChunkDataPool } from '../chunk';
+import type { ChunkDataPool, ChunkSource, ReadRequest } from '../chunk';
 import { Column, DataTable } from '../data-table';
-import { type FileSystem } from '../io/write';
+import type { FileSystem } from '../io/write';
 import { bakeTransform, permuteSource, sortMortonColumns } from '../ops';
-import { BTreeNode, BTree } from '../spatial';
+import type { BTreeNode } from '../spatial';
+import { BTree } from '../spatial';
 import type { DeviceCreator } from '../types';
 import { logger, Transform } from '../utils';
 import { version } from '../version';
 
+import { logWrittenFile } from './utils';
+import { writeSogSource } from './write-sog.js';
+
 type Aabb = {
-    min: number[],
-    max: number[]
+    min: number[];
+    max: number[];
 };
 
 type MetaLod = {
@@ -26,7 +29,7 @@ type MetaLod = {
 type MetaNode = {
     bound: Aabb;
     children?: MetaNode[];
-    lods?: { [key: number]: MetaLod };
+    lods?: Record<number, MetaLod>;
 };
 
 type LodMeta = {
@@ -65,7 +68,9 @@ const boundUnion = (result: Aabb, a: Aabb, b: Aabb) => {
  * SH degree — the point of the streaming LOD writer for very large scenes.
  */
 type SlimColumns = {
-    x: Float32Array; y: Float32Array; z: Float32Array;
+    x: Float32Array;
+    y: Float32Array;
+    z: Float32Array;
 };
 
 /**
@@ -91,14 +96,18 @@ const positionsFromSlim = (parent: ChunkSource, slim: SlimColumns, flat: Uint32A
             const { indices, indexOffset, count } = request;
             for (let j = 0; j < count; j++) {
                 const g = flat[indices[indexOffset + j]];
-                out[j * 3] = slim.x[g]; out[j * 3 + 1] = slim.y[g]; out[j * 3 + 2] = slim.z[g];
+                out[j * 3] = slim.x[g];
+                out[j * 3 + 1] = slim.y[g];
+                out[j * 3 + 2] = slim.z[g];
             }
         } else {
             const base = request.chunkIndex * chunkSize;
             const count = Math.min(chunkSize, flat.length - base);
             for (let j = 0; j < count; j++) {
                 const g = flat[base + j];
-                out[j * 3] = slim.x[g]; out[j * 3 + 1] = slim.y[g]; out[j * 3 + 2] = slim.z[g];
+                out[j * 3] = slim.x[g];
+                out[j * 3 + 1] = slim.y[g];
+                out[j * 3 + 2] = slim.z[g];
             }
         }
         if (request.geometric || request.color || request.other) {
@@ -113,8 +122,12 @@ const positionsFromSlim = (parent: ChunkSource, slim: SlimColumns, flat: Uint32A
 // pass can run over gathered batches; the math mirrors the legacy per-gaussian
 // path exactly (quaternion order (rot_1, rot_2, rot_3, rot_0); scale = exp).
 const accumulateBound = (
-    min: number[], max: number[],
-    pos: Float32Array, rot: Float32Array, scale: Float32Array, count: number
+    min: number[],
+    max: number[],
+    pos: Float32Array,
+    rot: Float32Array,
+    scale: Float32Array,
+    count: number
 ): void => {
     const p = new Vec3();
     const r = new Quat();
@@ -157,7 +170,10 @@ const accumulateBound = (
 // `bins` maps LOD -> flat analysis indices; each is gathered from its own LOD
 // (flat index `g` -> local row `g - cum[lod]`).
 const calcBound = async (
-    source: ChunkSource, pool: ChunkDataPool, bins: Map<number, Uint32Array>, cum: number[],
+    source: ChunkSource,
+    pool: ChunkDataPool,
+    bins: Map<number, Uint32Array>,
+    cum: number[],
     tick?: (n: number) => void
 ): Promise<Aabb> => {
     const min = [Infinity, Infinity, Infinity];
@@ -175,9 +191,17 @@ const calcBound = async (
             const count = Math.min(batch, local.length - off);
             const pos = pool.acquire('position', layouts.position!, count);
             const geo = pool.acquire('geometric', layouts.geometric!, count);
-            await source.read({ indices: local, indexOffset: off, count, lod: lodValue, position: pos, geometric: geo });
+            await source.read({
+                indices: local,
+                indexOffset: off,
+                count,
+                lod: lodValue,
+                position: pos,
+                geometric: geo
+            });
             accumulateBound(
-                min, max,
+                min,
+                max,
                 // position is full-stride packed xyz — read the pool buffer
                 // in place rather than copying it out per batch
                 new Float32Array(pos.data, 0, count * 3),
@@ -277,7 +301,9 @@ const extractSlim = async (source: ChunkSource, pool: ChunkDataPool): Promise<Sl
             const p = new Float32Array(pos.data, 0, count * 3);
             for (let i = 0; i < count; i++) {
                 const di = base + i;
-                cols.x[di] = p[i * 3]; cols.y[di] = p[i * 3 + 1]; cols.z[di] = p[i * 3 + 2];
+                cols.x[di] = p[i * 3];
+                cols.y[di] = p[i * 3 + 1];
+                cols.z[di] = p[i * 3 + 2];
             }
             base += count;
             pos.release();
@@ -353,11 +379,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     await fs.mkdir(outputDir);
 
     // construct a kd-tree based on centroids from all lods
-    const centroidsTable = new DataTable([
-        new Column('x', slim.x),
-        new Column('y', slim.y),
-        new Column('z', slim.z)
-    ]);
+    const centroidsTable = new DataTable([new Column('x', slim.x), new Column('y', slim.y), new Column('z', slim.z)]);
 
     let bTree: BTree | null = new BTree(centroidsTable);
 
@@ -368,7 +390,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     // map of lod -> file units -> subunits (each subunit a tight Uint32Array of
     // gaussian indices). This is the bulk retained bookkeeping; Uint32Array keeps
     // it off the V8 heap at 4 B/gaussian.
-    const lodFiles: Map<number, Uint32Array[][]> = new Map();
+    const lodFiles = new Map<number, Uint32Array[][]>();
     const filenames: string[] = [];
     let lodLevels = 0;
 
@@ -378,10 +400,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
 
     const build = async (node: BTreeNode): Promise<MetaNode> => {
         if (!node.indices && (node.count > binSize || (node.aabb && node.aabb.largestDim() > binDim))) {
-            const children = [
-                await build(node.left),
-                await build(node.right)
-            ];
+            const children = [await build(node.left), await build(node.right)];
 
             const bound = {
                 min: [0, 0, 0],
@@ -392,7 +411,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
             return { bound, children };
         }
 
-        const lods: { [key: number]: MetaLod } = { };
+        const lods: Record<number, MetaLod> = {};
         const bins = binIndices(node, lodOf);
 
         for (const [lodValue, indices] of bins) {
@@ -425,7 +444,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
         }
 
         // bound over the leaf's gaussians, gathered per structural LOD.
-        const bound = await calcBound(mainSource, pool, bins, cum, n => chunkingBar.tick(n));
+        const bound = await calcBound(mainSource, pool, bins, cum, (n) => chunkingBar.tick(n));
 
         return { bound, lods };
     };
@@ -464,7 +483,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     };
 
     // write the meta file with float precision quantization (approx. 32-bit float => ~7 significant digits)
-    const replacer = (_key: string, value: any) => {
+    const replacer = (_key: string, value: unknown) => {
         if (typeof value === 'number') {
             if (!Number.isFinite(value)) return value;
             return Number.isInteger(value) ? value : +value.toPrecision(7);
@@ -508,7 +527,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     }
 
     // write lod-meta.json
-    const metaJson = (new TextEncoder()).encode(JSON.stringify(meta, replacer));
+    const metaJson = new TextEncoder().encode(JSON.stringify(meta, replacer));
     const writer = await fs.createWriter(filename);
     await writer.write(metaJson);
     await writer.close();
@@ -538,7 +557,12 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
                 const orderedIndices = new Uint32Array(totalIndices);
                 for (let j = 0, offset = 0; j < fileUnit.length; ++j) {
                     orderedIndices.set(fileUnit[j], offset);
-                    sortMortonColumns(slim.x, slim.y, slim.z, orderedIndices.subarray(offset, offset + fileUnit[j].length));
+                    sortMortonColumns(
+                        slim.x,
+                        slim.y,
+                        slim.z,
+                        orderedIndices.subarray(offset, offset + fileUnit[j].length)
+                    );
                     offset += fileUnit[j].length;
                 }
 
@@ -554,19 +578,25 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
                 // writer's own Morton pass.
                 const unitSource = positionsFromSlim(
                     permuteSource(mainSource, orderedLocal, { lod: lodValue }),
-                    slim, orderedIndices
+                    slim,
+                    orderedIndices
                 );
                 const identity = new Uint32Array(totalIndices);
                 for (let j = 0; j < totalIndices; ++j) identity[j] = j;
 
-                await writeSogSource(unitSource, pool, {
-                    filename: pathname,
-                    bundle: false,
-                    iterations,
-                    createDevice,
-                    indices: identity,
-                    logging: 'flat'
-                }, fs);
+                await writeSogSource(
+                    unitSource,
+                    pool,
+                    {
+                        filename: pathname,
+                        bundle: false,
+                        iterations,
+                        createDevice,
+                        indices: identity,
+                        logging: 'flat'
+                    },
+                    fs
+                );
             } finally {
                 unitGroup.end();
             }

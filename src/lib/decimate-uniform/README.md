@@ -68,16 +68,17 @@ to be deliberate rather than incidental. Before landing one:
   reference binary's `--decimate` and this tree's `--decimate-uniform`, compares
   byte for byte, reports PSNR for both, and exits non-zero on any mismatch:
 
-  ```bash
-  node tools/decimate-parity.mjs sky --ref splat-transform
-  node tools/decimate-parity.mjs snow --ref splat-transform
-  ```
+    ```bash
+    node tools/decimate-parity.mjs sky --ref splat-transform
+    node tools/decimate-parity.mjs snow --ref splat-transform
+    ```
 
-  Equivalence was last verified against 3.1.6 on both study scenes, `fr-sky`
-  (5.81M, 3 SH bands, multi-block) and `fr-snow` (26.1M, DC only, 13 blocks),
-  six chained halvings each: every level byte-identical, PSNR matching the
-  published `old` columns exactly.
-- If output *should* change, re-baseline `scenes/DECIMATION-RESULTS.md` — the
+    Equivalence was last verified against 3.1.6 on both study scenes, `fr-sky`
+    (5.81M, 3 SH bands, multi-block) and `fr-snow` (26.1M, DC only, 13 blocks),
+    six chained halvings each: every level byte-identical, PSNR matching the
+    published `old` columns exactly.
+
+- If output _should_ change, re-baseline `scenes/DECIMATION-RESULTS.md` — the
   `old` column is this path, and the study's conclusions are stated relative
   to it. That document is local-only (`scenes/` is gitignored).
 - Repin the digest in `test/decimate-uniform-parity.test.mjs`, which is the

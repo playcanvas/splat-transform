@@ -2,16 +2,16 @@ import { Vec3 } from 'playcanvas';
 
 import type { Bounds } from '../data-table';
 import { logger } from '../utils';
-import { BlockMaskBuffer } from '../voxel/block-mask-buffer';
+import type { BlockMaskBuffer } from '../voxel/block-mask-buffer';
 import { popcount, xyzToMorton } from '../voxel/morton';
 import { sortKeyMaskPairs } from '../voxel/sort-key-mask';
+import type { SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
 import {
     BLOCK_EMPTY,
     BLOCK_MIXED,
     BLOCK_SOLID,
     BLOCKS_PER_WORD,
     EVEN_BITS,
-    SparseVoxelGrid,
     TYPE_MASK,
     readBlockType,
     writeBlockType
@@ -22,7 +22,7 @@ import {
  * This is unambiguous because BFS layout guarantees children always come after
  * their parent, so baseOffset = 0 is never valid for an interior node.
  */
-const SOLID_LEAF_MARKER = 0xFF000000 >>> 0;
+const SOLID_LEAF_MARKER = 0xff000000 >>> 0;
 
 /**
  * Maximum value encodable in the low 24 bits of a Laine-Karras node word.
@@ -32,7 +32,7 @@ const SOLID_LEAF_MARKER = 0xFF000000 >>> 0;
  * values. (Interior nodes additionally reserve baseOffset=0 for
  * `SOLID_LEAF_MARKER`, so the practical interior cap is 16,777,215.)
  */
-const MAX_24BIT_OFFSET = 0x00FFFFFF;
+const MAX_24BIT_OFFSET = 0x00ffffff;
 const MAX_V1_MIXED_LEAVES = MAX_24BIT_OFFSET + 1;
 
 const DENSE_SOLID_STREAM_THRESHOLD = 8_000_000;
@@ -44,7 +44,7 @@ const DENSE_SOLID_STREAM_THRESHOLD = 8_000_000;
 /**
  * Sparse voxel octree using Laine-Karras node format.
  */
-interface SparseOctree {
+type SparseOctree = {
     /** Grid bounds aligned to 4x4x4 block boundaries */
     gridBounds: Bounds;
 
@@ -71,14 +71,14 @@ interface SparseOctree {
 
     /** Voxel masks for mixed leaves: pairs of u32 (lo, hi) */
     leafData: Uint32Array;
-}
+};
 
-interface BuildSparseOctreeOptions {
+type BuildSparseOctreeOptions = {
     /** Release the input grid's backing storage after the octree has copied the data it needs. */
     consumeGrid?: boolean;
     /** Force dense-mip construction; intended for tests and benchmarks. */
     dense?: boolean;
-}
+};
 
 // ============================================================================
 // Octree Node Types (during construction)
@@ -99,33 +99,33 @@ const enum BlockType {
  * (in `solidStream` + `mixedStream` + `mixedMasks`), so every entry stored
  * here is an interior node and `childMasks` is always non-null.
  */
-interface LevelData {
+type LevelData = {
     /** Sorted Morton codes for nodes at this level */
     mortons: Float64Array;
     /** Block type for each node (Solid or Mixed) */
     types: Uint8Array;
     /** 8-bit child presence mask for each node */
     childMasks: Uint8Array;
-}
+};
 
 /**
  * Interior nodes waiting for child emission during BFS flattening.
  * Children are written immediately, so this wave never contains leaves.
  */
-interface InteriorWave {
+type InteriorWave = {
     pos: Uint32Array;
     li: Int32Array;
     ii: Uint32Array;
     length: number;
-}
+};
 
-interface DenseLevel {
+type DenseLevel = {
     types: Uint32Array;
     nbx: number;
     nby: number;
     nbz: number;
     nonEmptyCount: number;
-}
+};
 
 // ============================================================================
 // Mixed-stream Sort
@@ -192,12 +192,7 @@ function createInteriorWave(initialCapacity: number): InteriorWave {
  * @param li - Interior level index.
  * @param ii - Node index within the level.
  */
-function pushInteriorWave(
-    wave: InteriorWave,
-    pos: number,
-    li: number,
-    ii: number
-): void {
+function pushInteriorWave(wave: InteriorWave, pos: number, li: number, ii: number): void {
     if (wave.length === wave.pos.length) {
         const cap = wave.pos.length * 2;
         const grownPos = new Uint32Array(cap);
@@ -249,9 +244,7 @@ function calculateTreeDepth(gridBounds: Bounds, voxelResolution: number): number
  * @returns True when dense construction is likely to use less memory.
  */
 function shouldUseDenseMipBuild(totalBlocks: number, nSolid: number, nMixed: number): boolean {
-    return nSolid >= DENSE_SOLID_STREAM_THRESHOLD &&
-        nSolid > nMixed * 4 &&
-        nSolid > totalBlocks * 0.25;
+    return nSolid >= DENSE_SOLID_STREAM_THRESHOLD && nSolid > nMixed * 4 && nSolid > totalBlocks * 0.25;
 }
 
 /**
@@ -263,13 +256,15 @@ function shouldUseDenseMipBuild(totalBlocks: number, nSolid: number, nMixed: num
  * @returns Dense type levels from leaf blocks to root.
  */
 function buildDenseTypeLevels(grid: SparseVoxelGrid, maxDepth: number): DenseLevel[] {
-    const levels: DenseLevel[] = [{
-        types: grid.types,
-        nbx: grid.nbx,
-        nby: grid.nby,
-        nbz: grid.nbz,
-        nonEmptyCount: 0
-    }];
+    const levels: DenseLevel[] = [
+        {
+            types: grid.types,
+            nbx: grid.nbx,
+            nby: grid.nby,
+            nbz: grid.nbz,
+            nonEmptyCount: 0
+        }
+    ];
 
     for (let li = 1; li <= maxDepth; li++) {
         const prev = levels[li - 1];
@@ -336,7 +331,7 @@ function buildDenseTypeLevels(grid: SparseVoxelGrid, maxDepth: number): DenseLev
  * @returns Sparse octree structure.
  */
 function flattenDenseLevels(
-    levels: Array<DenseLevel | null>,
+    levels: (DenseLevel | null)[],
     grid: SparseVoxelGrid,
     gridBounds: Bounds,
     sceneBounds: Bounds,
@@ -345,8 +340,8 @@ function flattenDenseLevels(
     if (grid.masks.size > MAX_V1_MIXED_LEAVES) {
         throw new Error(
             `Sparse octree mixed-leaf count (${grid.masks.size}) exceeds the ` +
-            `Laine-Karras 24-bit baseOffset limit (${MAX_V1_MIXED_LEAVES}). ` +
-            'Use a coarser voxel resolution.'
+                `Laine-Karras 24-bit baseOffset limit (${MAX_V1_MIXED_LEAVES}). ` +
+                'Use a coarser voxel resolution.'
         );
     }
     const treeDepth = Math.max(1, levels.length - 1);
@@ -379,8 +374,8 @@ function flattenDenseLevels(
         if (nodeLen >= MAX_24BIT_OFFSET + 1) {
             throw new Error(
                 `Sparse octree node count (${nodeLen + 1}) exceeds the ` +
-                `Laine-Karras 24-bit baseOffset limit (${MAX_24BIT_OFFSET + 1}). ` +
-                'Use a coarser voxel resolution.'
+                    `Laine-Karras 24-bit baseOffset limit (${MAX_24BIT_OFFSET + 1}). ` +
+                    'Use a coarser voxel resolution.'
             );
         }
         if (nodeLen === nodes.length) {
@@ -397,8 +392,8 @@ function flattenDenseLevels(
         if (leafDataIndex > MAX_24BIT_OFFSET) {
             throw new Error(
                 `Sparse octree mixed-leaf count (${leafDataIndex + 1}) exceeds the ` +
-                `Laine-Karras 24-bit baseOffset limit (${MAX_24BIT_OFFSET + 1}). ` +
-                'Use a coarser voxel resolution.'
+                    `Laine-Karras 24-bit baseOffset limit (${MAX_24BIT_OFFSET + 1}). ` +
+                    'Use a coarser voxel resolution.'
             );
         }
         if (leafDataLen + 2 > leafData.length) {
@@ -453,8 +448,8 @@ function flattenDenseLevels(
             if (childStart > MAX_24BIT_OFFSET) {
                 throw new Error(
                     `Sparse octree node count (${childStart + 1}) exceeds the ` +
-                    `Laine-Karras 24-bit baseOffset limit (${MAX_24BIT_OFFSET + 1}). ` +
-                    'Use a coarser voxel resolution.'
+                        `Laine-Karras 24-bit baseOffset limit (${MAX_24BIT_OFFSET + 1}). ` +
+                        'Use a coarser voxel resolution.'
                 );
             }
 
@@ -479,7 +474,7 @@ function flattenDenseLevels(
                 }
             }
 
-            nodes[curWave.pos[w]] = ((childMask & 0xFF) << 24) | childStart;
+            nodes[curWave.pos[w]] = ((childMask & 0xff) << 24) | childStart;
         }
 
         levels[currentLi] = null;
@@ -582,9 +577,7 @@ function buildSparseOctree(
     const treeDepth = calculateTreeDepth(gridBounds, voxelResolution);
     const lastWordIdx = gridTypes.length - 1;
     const lastLanes = totalBlocks - lastWordIdx * BLOCKS_PER_WORD;
-    const lastValidWordMask = lastLanes >= BLOCKS_PER_WORD ?
-        0xFFFFFFFF >>> 0 :
-        ((1 << (lastLanes * 2)) - 1) >>> 0;
+    const lastValidWordMask = lastLanes >= BLOCKS_PER_WORD ? 0xffffffff >>> 0 : ((1 << (lastLanes * 2)) - 1) >>> 0;
 
     // Pass 1: count.
     let nSolid = 0;
@@ -594,16 +587,14 @@ function buildSparseOctree(
         if (w === lastWordIdx) word = (word & lastValidWordMask) >>> 0;
         if (word === 0) continue;
         // Solid lanes: 0b01 = 1; Mixed lanes: 0b10 = 2.
-        const solidMask = (word & EVEN_BITS) & ~((word >>> 1) & EVEN_BITS);
-        const mixedMask = ((word >>> 1) & EVEN_BITS) & ~(word & EVEN_BITS);
+        const solidMask = word & EVEN_BITS & ~((word >>> 1) & EVEN_BITS);
+        const mixedMask = (word >>> 1) & EVEN_BITS & ~(word & EVEN_BITS);
         nSolid += popcount(solidMask >>> 0);
         nMixed += popcount(mixedMask >>> 0);
     }
 
     if (options.dense || shouldUseDenseMipBuild(totalBlocks, nSolid, nMixed)) {
-        return buildSparseOctreeDense(
-            grid, gridBounds, sceneBounds, voxelResolution, treeDepth, !!options.consumeGrid
-        );
+        return buildSparseOctreeDense(grid, gridBounds, sceneBounds, voxelResolution, treeDepth, !!options.consumeGrid);
     }
 
     const solidStream = new Float64Array(nSolid);
@@ -651,16 +642,21 @@ function buildSparseOctree(
     if (nMixed > 1) sortKeyMaskPairs(mixedStream, mixedMasks, nMixed);
 
     return buildSparseOctreeFromStreams(
-        solidStream, mixedStream, mixedMasks,
-        gridBounds, sceneBounds, voxelResolution, treeDepth
+        solidStream,
+        mixedStream,
+        mixedMasks,
+        gridBounds,
+        sceneBounds,
+        voxelResolution,
+        treeDepth
     );
 }
 
-interface BlockBufferRegion {
+type BlockBufferRegion = {
     minBx: number;
     minBy: number;
     minBz: number;
-}
+};
 
 /**
  * Build a sparse octree directly from a voxelization buffer. The block-index
@@ -693,8 +689,8 @@ function buildSparseOctreeFromBuffer(
     if (mixedStream.length > MAX_V1_MIXED_LEAVES) {
         throw new Error(
             `Sparse octree mixed-leaf count (${mixedStream.length}) exceeds the ` +
-            `Laine-Karras 24-bit baseOffset limit (${MAX_V1_MIXED_LEAVES}). ` +
-            'Use a coarser voxel resolution.'
+                `Laine-Karras 24-bit baseOffset limit (${MAX_V1_MIXED_LEAVES}). ` +
+                'Use a coarser voxel resolution.'
         );
     }
     const sourceStride = sourceNbx * sourceNby;
@@ -702,7 +698,7 @@ function buildSparseOctreeFromBuffer(
     if (!Number.isSafeInteger(totalBlocks)) {
         throw new Error(
             `Voxel source grid ${sourceNbx}x${sourceNby}x${sourceNbz} exceeds the safe-integer block-index limit. ` +
-            'Use a coarser voxel resolution.'
+                'Use a coarser voxel resolution.'
         );
     }
 
@@ -710,7 +706,9 @@ function buildSparseOctreeFromBuffer(
         for (let i = 0; i < stream.length; i++) {
             const blockIdx = stream[i];
             if (!Number.isSafeInteger(blockIdx) || blockIdx < 0 || blockIdx >= totalBlocks) {
-                throw new Error(`Voxel block index ${blockIdx} is outside the ${sourceNbx}x${sourceNby}x${sourceNbz} grid`);
+                throw new Error(
+                    `Voxel block index ${blockIdx} is outside the ${sourceNbx}x${sourceNby}x${sourceNbz} grid`
+                );
             }
             const bx = blockIdx % sourceNbx;
             const byBz = Math.floor(blockIdx / sourceNbx);
@@ -733,8 +731,13 @@ function buildSparseOctreeFromBuffer(
 
     const treeDepth = calculateTreeDepth(gridBounds, voxelResolution);
     return buildSparseOctreeFromStreams(
-        solidStream, mixedStream, mixed.masks,
-        gridBounds, sceneBounds, voxelResolution, treeDepth
+        solidStream,
+        mixedStream,
+        mixed.masks,
+        gridBounds,
+        sceneBounds,
+        voxelResolution,
+        treeDepth
     );
 }
 
@@ -762,13 +765,15 @@ function buildSparseOctreeFromStreams(
     const nSolid = solidStream.length;
     const nMixed = mixedStream.length;
     if (treeDepth > 17) {
-        throw new Error(`Sparse octree depth ${treeDepth} exceeds the 17-level Morton encoding limit. Use a coarser voxel resolution.`);
+        throw new Error(
+            `Sparse octree depth ${treeDepth} exceeds the 17-level Morton encoding limit. Use a coarser voxel resolution.`
+        );
     }
     if (nMixed > MAX_V1_MIXED_LEAVES) {
         throw new Error(
             `Sparse octree mixed-leaf count (${nMixed}) exceeds the ` +
-            `Laine-Karras 24-bit baseOffset limit (${MAX_V1_MIXED_LEAVES}). ` +
-            'Use a coarser voxel resolution.'
+                `Laine-Karras 24-bit baseOffset limit (${MAX_V1_MIXED_LEAVES}). ` +
+                'Use a coarser voxel resolution.'
         );
     }
 
@@ -872,7 +877,7 @@ function buildSparseOctreeFromStreams(
         });
     } else {
         for (let level = 1; level < treeDepth; level++) {
-            const targetStep = 1 + Math.min(levelSteps, Math.floor((level + 1) / treeDepth * levelSteps));
+            const targetStep = 1 + Math.min(levelSteps, Math.floor(((level + 1) / treeDepth) * levelSteps));
             while (octreeStep < targetStep) {
                 bar.tick();
                 octreeStep++;
@@ -909,7 +914,7 @@ function buildSparseOctreeFromStreams(
 
                 while (i < n && Math.floor(curMortons[i] / 8) === parentMorton) {
                     const octant = curMortons[i] % 8;
-                    childMask |= (1 << octant);
+                    childMask |= 1 << octant;
                     if (curTypes[i] !== BlockType.Solid) {
                         allSolid = false;
                     }
@@ -955,8 +960,16 @@ function buildSparseOctreeFromStreams(
 
     // --- Phase 3: Flatten tree to Laine-Karras format ---
     const result = flattenTreeFromLevels(
-        interiorLevels, solidStream, mixedStream, mixedMasks, nSolid, nMixed,
-        gridBounds, sceneBounds, voxelResolution, actualDepth
+        interiorLevels,
+        solidStream,
+        mixedStream,
+        mixedMasks,
+        nSolid,
+        nMixed,
+        gridBounds,
+        sceneBounds,
+        voxelResolution,
+        actualDepth
     );
 
     bar.tick();
@@ -1060,8 +1073,8 @@ function flattenTreeFromLevels(
                     if (leafDataIndex > MAX_24BIT_OFFSET) {
                         throw new Error(
                             `Sparse octree mixed-leaf count (${leafDataIndex + 1}) exceeds the ` +
-                            `Laine-Karras 24-bit baseOffset limit (${MAX_24BIT_OFFSET + 1}). ` +
-                            'Use a coarser voxel resolution.'
+                                `Laine-Karras 24-bit baseOffset limit (${MAX_24BIT_OFFSET + 1}). ` +
+                                'Use a coarser voxel resolution.'
                         );
                     }
                     leafData[leafDataLen++] = mixedMasks[ii * 2];
@@ -1102,8 +1115,8 @@ function flattenTreeFromLevels(
         if (emitPos + nextLength > MAX_24BIT_OFFSET + 1) {
             throw new Error(
                 `Sparse octree node count (${emitPos + nextLength}) exceeds the ` +
-                `Laine-Karras 24-bit baseOffset limit (${MAX_24BIT_OFFSET + 1}). ` +
-                'Use a coarser voxel resolution.'
+                    `Laine-Karras 24-bit baseOffset limit (${MAX_24BIT_OFFSET + 1}). ` +
+                    'Use a coarser voxel resolution.'
             );
         }
         const nextWave = createInteriorWave(nextLength);
@@ -1115,7 +1128,7 @@ function flattenTreeFromLevels(
             const childMask = interiorLevels[myLi].childMasks[myIi];
             const childCount = popcount(childMask);
 
-            nodes[interiors.pos[j]] = ((childMask & 0xFF) << 24) | nextChildStart;
+            nodes[interiors.pos[j]] = ((childMask & 0xff) << 24) | nextChildStart;
 
             const myMorton = interiorLevels[myLi].mortons[myIi];
             const childMortonBase = myMorton * 8;
@@ -1130,10 +1143,14 @@ function flattenTreeFromLevels(
                 let sIdx = lowerBoundF64(solidStream, childMortonBase, nSolid);
                 let mIdx = lowerBoundF64(mixedStream, childMortonBase, nMixed);
                 while (true) {
-                    const sM = sIdx < nSolid && solidStream[sIdx] < childMortonEnd ?
-                        solidStream[sIdx] : Number.POSITIVE_INFINITY;
-                    const mM = mIdx < nMixed && mixedStream[mIdx] < childMortonEnd ?
-                        mixedStream[mIdx] : Number.POSITIVE_INFINITY;
+                    const sM =
+                        sIdx < nSolid && solidStream[sIdx] < childMortonEnd
+                            ? solidStream[sIdx]
+                            : Number.POSITIVE_INFINITY;
+                    const mM =
+                        mIdx < nMixed && mixedStream[mIdx] < childMortonEnd
+                            ? mixedStream[mIdx]
+                            : Number.POSITIVE_INFINITY;
                     if (!isFinite(sM) && !isFinite(mM)) break;
                     if (sM < mM) {
                         pushInteriorWave(nextWave, 0, -1, nMixed + sIdx);
@@ -1182,11 +1199,6 @@ function flattenTreeFromLevels(
     };
 }
 
-export {
-    buildSparseOctree,
-    buildSparseOctreeFromBuffer,
-    MAX_V1_MIXED_LEAVES,
-    SOLID_LEAF_MARKER
-};
+export { buildSparseOctree, buildSparseOctreeFromBuffer, MAX_V1_MIXED_LEAVES, SOLID_LEAF_MARKER };
 
 export type { SparseOctree };

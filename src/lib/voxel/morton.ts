@@ -1,5 +1,5 @@
 /** All 64 bits set (as unsigned 32-bit) */
-const SOLID_MASK = 0xFFFFFFFF >>> 0;
+const SOLID_MASK = 0xffffffff >>> 0;
 
 /**
  * Encode block coordinates to Morton code (17 bits per axis = 51 bits total).
@@ -33,9 +33,9 @@ function xyzToMorton(x: number, y: number, z: number): number {
  */
 function popcount(n: number): number {
     n >>>= 0;
-    n -= ((n >>> 1) & 0x55555555);
+    n -= (n >>> 1) & 0x55555555;
     n = (n & 0x33333333) + ((n >>> 2) & 0x33333333);
-    return (((n + (n >>> 4)) & 0x0F0F0F0F) * 0x01010101) >>> 24;
+    return (((n + (n >>> 4)) & 0x0f0f0f0f) * 0x01010101) >>> 24;
 }
 
 /**
@@ -46,7 +46,7 @@ function popcount(n: number): number {
  * @returns True if all 64 voxels are solid
  */
 function isSolid(lo: number, hi: number): boolean {
-    return (lo >>> 0) === SOLID_MASK && (hi >>> 0) === SOLID_MASK;
+    return lo >>> 0 === SOLID_MASK && hi >>> 0 === SOLID_MASK;
 }
 
 /**
@@ -60,9 +60,4 @@ function isEmpty(lo: number, hi: number): boolean {
     return lo === 0 && hi === 0;
 }
 
-export {
-    xyzToMorton,
-    popcount,
-    isSolid,
-    isEmpty
-};
+export { xyzToMorton, popcount, isSolid, isEmpty };

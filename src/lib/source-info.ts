@@ -1,6 +1,7 @@
-import { type ChunkSourceMetadata, hasGaussianLayers, orderedLayers } from './chunk';
-import { type LodStats, type SourceStats } from './ops';
-import { type InputFormat } from './read';
+import { hasGaussianLayers, orderedLayers } from './chunk';
+import type { ChunkSourceMetadata } from './chunk';
+import type { LodStats, SourceStats } from './ops';
+import type { InputFormat } from './read';
 import { forwardTransforms } from './value-transforms';
 
 /**
@@ -16,8 +17,9 @@ type OutputFormat = 'text' | 'json';
 // nested brackets) onto one line so the columnar stat arrays read as table
 // rows instead of one value per line.
 const stringifyCompact = (value: unknown): string => {
-    return JSON.stringify(value, null, 4)
-    .replace(/\[[^[\]{}]*\]/g, m => m.replace(/\s+/g, ' ').replace('[ ', '[').replace(' ]', ']'));
+    return JSON.stringify(value, null, 4).replace(/\[[^[\]{}]*\]/g, (m) =>
+        m.replace(/\s+/g, ' ').replace('[ ', '[').replace(' ]', ']')
+    );
 };
 
 /**
@@ -38,7 +40,7 @@ const buildSourceInfo = (meta: ChunkSourceMetadata, format?: InputFormat) => ({
     shBands: meta.shBands,
     model: meta.model,
     layers: orderedLayers(meta.availableLayers),
-    extraColumns: meta.extraColumns.map(e => ({ name: e.name, type: e.type }))
+    extraColumns: meta.extraColumns.map((e) => ({ name: e.name, type: e.type }))
 });
 
 /**
@@ -59,7 +61,7 @@ const sourceInfoLines = (meta: ChunkSourceMetadata, format?: InputFormat): strin
         // untagged scenes say nothing, so existing output is unchanged
         ...(meta.model === 'default' ? [] : [`model: ${meta.model}`]),
         `layers: ${orderedLayers(meta.availableLayers).join(', ')}`,
-        `extra columns: ${meta.extraColumns.length > 0 ? meta.extraColumns.map(e => `${e.name} (${e.type})`).join(', ') : '(none)'}`
+        `extra columns: ${meta.extraColumns.length > 0 ? meta.extraColumns.map((e) => `${e.name} (${e.type})`).join(', ') : '(none)'}`
     ];
 };
 
@@ -74,7 +76,11 @@ const sourceInfoLines = (meta: ChunkSourceMetadata, format?: InputFormat): strin
  * @param sourceFormat - Detected input format; reported when provided.
  * @returns A text or JSON block for `logger.output`.
  */
-const formatSourceInfo = (meta: ChunkSourceMetadata, format: OutputFormat = 'text', sourceFormat?: InputFormat): string => {
+const formatSourceInfo = (
+    meta: ChunkSourceMetadata,
+    format: OutputFormat = 'text',
+    sourceFormat?: InputFormat
+): string => {
     if (format === 'json') {
         return stringifyCompact(buildSourceInfo(meta, sourceFormat));
     }
@@ -96,10 +102,12 @@ const BARS = '▁▂▃▄▅▆▇█';
 // all-blank for an empty column).
 const sparkline = (counts: number[]): string => {
     const maxBin = Math.max(...counts);
-    return counts.map((c) => {
-        if (c === 0) return ' ';
-        return BARS[maxBin > 0 ? Math.floor(c / maxBin * (BARS.length - 1)) : 0];
-    }).join('');
+    return counts
+        .map((c) => {
+            if (c === 0) return ' ';
+            return BARS[maxBin > 0 ? Math.floor((c / maxBin) * (BARS.length - 1)) : 0];
+        })
+        .join('');
 };
 
 // Map a LOD's stats to display space for JSON output: value arrays through the
@@ -136,12 +144,12 @@ const statsTable = (lod: LodStats): string[] => {
     ]);
 
     const colWidths = headers.map((header, colIndex) => {
-        const dataWidths = rows.map(row => row[colIndex].length);
+        const dataWidths = rows.map((row) => row[colIndex].length);
         return Math.max(header.length, ...dataWidths);
     });
 
     const padRow = (cells: string[]) => `| ${cells.map((cell, i) => cell.padEnd(colWidths[i])).join(' | ')} |`;
-    const separator = `|${colWidths.map(w => '-'.repeat(w + 2)).join('|')}|`;
+    const separator = `|${colWidths.map((w) => '-'.repeat(w + 2)).join('|')}|`;
 
     return [padRow(headers), separator, ...rows.map(padRow)];
 };
@@ -158,7 +166,12 @@ const statsTable = (lod: LodStats): string[] => {
  * @param sourceFormat - Detected input format; reported when provided.
  * @returns A text or JSON block for `logger.output`.
  */
-const formatSourceStats = (meta: ChunkSourceMetadata, stats: SourceStats, format: OutputFormat = 'text', sourceFormat?: InputFormat): string => {
+const formatSourceStats = (
+    meta: ChunkSourceMetadata,
+    stats: SourceStats,
+    format: OutputFormat = 'text',
+    sourceFormat?: InputFormat
+): string => {
     if (format === 'json') {
         return stringifyCompact({
             ...buildSourceInfo(meta, sourceFormat),

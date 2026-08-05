@@ -1,11 +1,13 @@
-import { type ChunkLayer, type ChunkSource, type ChunkSourceMetadata, type ExtraColumn, type SHBands, createChunkDataPool, hasGaussianLayers, orderedLayers } from './chunk';
+import { createChunkDataPool, hasGaussianLayers, orderedLayers } from './chunk';
+import type { ChunkLayer, ChunkSource, ChunkSourceMetadata, ExtraColumn, SHBands } from './chunk';
 import { dataTableToChunkSource } from './compat/data-table';
-import { ReadFileSystem, ZipReadFileSystem } from './io/read';
+import type { ReadFileSystem } from './io/read';
+import { ZipReadFileSystem } from './io/read';
 import { readKsplat, readMjs, readPly, readSogSource, readSplat, readSpz, statSogSource } from './readers';
 import { readLccSource } from './readers/read-lcc';
 import { readLcc2Source } from './readers/read-lcc2';
 import { readLodSource } from './readers/read-lod';
-import { Options, Param } from './types';
+import type { Options, Param } from './types';
 
 /**
  * Supported input file formats for Gaussian splat data.
@@ -222,8 +224,10 @@ type FileInfo = {
 
 // The subset of ChunkSourceMetadata a FileInfo is built from — satisfied by a
 // full ChunkSource.meta as well as the header-only SOG/PLY peeks.
-type MetaSummary = Pick<ChunkSourceMetadata,
-    'numGaussians' | 'numLods' | 'lodCounts' | 'shBands' | 'availableLayers' | 'extraColumns'>;
+type MetaSummary = Pick<
+    ChunkSourceMetadata,
+    'numGaussians' | 'numLods' | 'lodCounts' | 'shBands' | 'availableLayers' | 'extraColumns'
+>;
 
 const buildFileInfo = (format: InputFormat, meta: MetaSummary): FileInfo => ({
     format,

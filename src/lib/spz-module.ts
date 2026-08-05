@@ -1,5 +1,5 @@
 import { Column, DataTable, convertToSpace } from './data-table';
-import { type SplatModel } from './splat-model';
+import type { SplatModel } from './splat-model';
 import { Transform } from './utils';
 
 type CoordinateSystem = {
@@ -56,7 +56,7 @@ const getCreateSpzModule = async () => {
 
 const getSpzModule = (): Promise<SpzModule> => {
     if (!spzModulePromise) {
-        spzModulePromise = getCreateSpzModule().then(createModule => createModule());
+        spzModulePromise = getCreateSpzModule().then((createModule) => createModule());
     }
     return spzModulePromise;
 };
@@ -70,7 +70,7 @@ const getShColumnCount = (dataTable: DataTable) => {
 };
 
 const getShDegreeFromCount = (count: number) => {
-    const degree = SPZ_SH_COMPONENTS.indexOf(count as typeof SPZ_SH_COMPONENTS[number]);
+    const degree = SPZ_SH_COMPONENTS.indexOf(count as (typeof SPZ_SH_COMPONENTS)[number]);
     if (degree === -1) {
         throw new Error(`Unsupported SH coefficient count for SPZ: ${count}`);
     }
@@ -252,10 +252,4 @@ const makeSpzPackOptions = async (overrides: Partial<PackOptions> = {}): Promise
     };
 };
 
-export {
-    SPZ_SH_COMPONENTS,
-    dataTableToGaussianCloud,
-    gaussianCloudToDataTable,
-    getSpzModule,
-    makeSpzPackOptions
-};
+export { SPZ_SH_COMPONENTS, dataTableToGaussianCloud, gaussianCloudToDataTable, getSpzModule, makeSpzPackOptions };

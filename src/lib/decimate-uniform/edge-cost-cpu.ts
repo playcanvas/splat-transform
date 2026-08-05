@@ -17,10 +17,9 @@ import {
     quatToRotmat,
     sigmaFromRotVar,
     det3,
-    gaussLogpdfDiagrot,
-    type SplatView,
-    type MergeScratch
+    gaussLogpdfDiagrot
 } from '../decimate/moment-match';
+import type { SplatView, MergeScratch } from '../decimate/moment-match';
 
 /**
  * Per-splat derived quantities for the cost function (legacy
@@ -60,16 +59,24 @@ const buildCostCache = (view: SplatView): CostCache => {
         const vy = sy * sy + EPS_COV;
         const vz = sz * sz + EPS_COV;
 
-        v[i3] = vx; v[i3 + 1] = vy; v[i3 + 2] = vz;
+        v[i3] = vx;
+        v[i3 + 1] = vy;
+        v[i3 + 2] = vz;
         invdiag[i3] = 1 / Math.max(vx, 1e-30);
         invdiag[i3 + 1] = 1 / Math.max(vy, 1e-30);
         invdiag[i3 + 2] = 1 / Math.max(vz, 1e-30);
         logdet[i] = Math.log(Math.max(vx, 1e-30)) + Math.log(Math.max(vy, 1e-30)) + Math.log(Math.max(vz, 1e-30));
 
-        let qw = geo[i8], qx = geo[i8 + 1], qy = geo[i8 + 2], qz = geo[i8 + 3];
+        let qw = geo[i8],
+            qx = geo[i8 + 1],
+            qy = geo[i8 + 2],
+            qz = geo[i8 + 3];
         const qn = Math.hypot(qw, qx, qy, qz);
         const invq = 1 / Math.max(qn, 1e-12);
-        qw *= invq; qx *= invq; qy *= invq; qz *= invq;
+        qw *= invq;
+        qx *= invq;
+        qy *= invq;
+        qz *= invq;
 
         quatToRotmat(qw, qx, qy, qz, R, i9);
         sigmaFromRotVar(R, i9, vx, vy, vz, sigma, i9);
@@ -102,13 +109,20 @@ const computeEdgeCostView = (
     scratch: MergeScratch
 ): number => {
     const { pos, color, colorDim } = view;
-    const i3 = 3 * i, j3 = 3 * j;
-    const i9 = 9 * i, j9 = 9 * j;
+    const i3 = 3 * i,
+        j3 = 3 * j;
+    const i9 = 9 * i,
+        j9 = 9 * j;
 
-    const mux = pos[i3], muy = pos[i3 + 1], muz = pos[i3 + 2];
-    const mvx = pos[j3], mvy = pos[j3 + 1], mvz = pos[j3 + 2];
+    const mux = pos[i3],
+        muy = pos[i3 + 1],
+        muz = pos[i3 + 2];
+    const mvx = pos[j3],
+        mvy = pos[j3 + 1],
+        mvz = pos[j3 + 2];
 
-    const wi = cache.mass[i], wj = cache.mass[j];
+    const wi = cache.mass[i],
+        wj = cache.mass[j];
     const W = wi + wj;
     const Wsafe = W > 0 ? W : 1;
 
@@ -122,8 +136,12 @@ const computeEdgeCostView = (
     const mmy = pi * muy + pj * mvy;
     const mmz = pi * muz + pj * mvz;
 
-    const dix = mux - mmx, diy = muy - mmy, diz = muz - mmz;
-    const djx = mvx - mmx, djy = mvy - mmy, djz = mvz - mmz;
+    const dix = mux - mmx,
+        diy = muy - mmy,
+        diz = muz - mmz;
+    const djx = mvx - mmx,
+        djy = mvy - mmy,
+        djz = mvz - mmz;
 
     const sigm = scratch.sigm;
     for (let a = 0; a < 9; a++) {
@@ -162,7 +180,9 @@ const computeEdgeCostView = (
     let sumLogpOnJ = 0;
 
     for (let s = 0; s < Z.length; s++) {
-        const z0 = Z[s][0], z1 = Z[s][1], z2 = Z[s][2];
+        const z0 = Z[s][0],
+            z1 = Z[s][1],
+            z2 = Z[s][2];
 
         const xix = mux + z0 * stdix * cache.R[i9 + 0] + z1 * stdiy * cache.R[i9 + 1] + z2 * stdiz * cache.R[i9 + 2];
         const xiy = muy + z0 * stdix * cache.R[i9 + 3] + z1 * stdiy * cache.R[i9 + 4] + z2 * stdiz * cache.R[i9 + 5];
@@ -172,16 +192,64 @@ const computeEdgeCostView = (
         const xjy = mvy + z0 * stdjx * cache.R[j9 + 3] + z1 * stdjy * cache.R[j9 + 4] + z2 * stdjz * cache.R[j9 + 5];
         const xjz = mvz + z0 * stdjx * cache.R[j9 + 6] + z1 * stdjy * cache.R[j9 + 7] + z2 * stdjz * cache.R[j9 + 8];
 
-        const logNiOnI = gaussLogpdfDiagrot(xix, xiy, xiz, mux, muy, muz,
-            cache.R, i9, cache.invdiag[i3], cache.invdiag[i3 + 1], cache.invdiag[i3 + 2], cache.logdet[i]);
-        const logNjOnI = gaussLogpdfDiagrot(xix, xiy, xiz, mvx, mvy, mvz,
-            cache.R, j9, cache.invdiag[j3], cache.invdiag[j3 + 1], cache.invdiag[j3 + 2], cache.logdet[j]);
+        const logNiOnI = gaussLogpdfDiagrot(
+            xix,
+            xiy,
+            xiz,
+            mux,
+            muy,
+            muz,
+            cache.R,
+            i9,
+            cache.invdiag[i3],
+            cache.invdiag[i3 + 1],
+            cache.invdiag[i3 + 2],
+            cache.logdet[i]
+        );
+        const logNjOnI = gaussLogpdfDiagrot(
+            xix,
+            xiy,
+            xiz,
+            mvx,
+            mvy,
+            mvz,
+            cache.R,
+            j9,
+            cache.invdiag[j3],
+            cache.invdiag[j3 + 1],
+            cache.invdiag[j3 + 2],
+            cache.logdet[j]
+        );
         sumLogpOnI += logAddExp(logPi + logNiOnI, logPj + logNjOnI);
 
-        const logNiOnJ = gaussLogpdfDiagrot(xjx, xjy, xjz, mux, muy, muz,
-            cache.R, i9, cache.invdiag[i3], cache.invdiag[i3 + 1], cache.invdiag[i3 + 2], cache.logdet[i]);
-        const logNjOnJ = gaussLogpdfDiagrot(xjx, xjy, xjz, mvx, mvy, mvz,
-            cache.R, j9, cache.invdiag[j3], cache.invdiag[j3 + 1], cache.invdiag[j3 + 2], cache.logdet[j]);
+        const logNiOnJ = gaussLogpdfDiagrot(
+            xjx,
+            xjy,
+            xjz,
+            mux,
+            muy,
+            muz,
+            cache.R,
+            i9,
+            cache.invdiag[i3],
+            cache.invdiag[i3 + 1],
+            cache.invdiag[i3 + 2],
+            cache.logdet[i]
+        );
+        const logNjOnJ = gaussLogpdfDiagrot(
+            xjx,
+            xjy,
+            xjz,
+            mvx,
+            mvy,
+            mvz,
+            cache.R,
+            j9,
+            cache.invdiag[j3],
+            cache.invdiag[j3 + 1],
+            cache.invdiag[j3 + 2],
+            cache.logdet[j]
+        );
         sumLogpOnJ += logAddExp(logPi + logNiOnJ, logPj + logNjOnJ);
     }
 

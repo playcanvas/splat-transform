@@ -1,12 +1,10 @@
-import {
-    BUFFERUSAGE_COPY_DST,
-    BUFFERUSAGE_COPY_SRC,
-    GraphicsDevice,
-    StorageBuffer
-} from 'playcanvas';
+import type { GraphicsDevice } from 'playcanvas';
+import { BUFFERUSAGE_COPY_DST, BUFFERUSAGE_COPY_SRC, StorageBuffer } from 'playcanvas';
 
-import { makeKernel, type Kernel } from './compute-kernel';
-import { type ForestPart } from '../decimate/knn-core';
+import type { ForestPart } from '../decimate/knn-core';
+
+import { makeKernel } from './compute-kernel';
+import type { Kernel } from './compute-kernel';
 
 /**
  * WGSL kernel: iterative KD-tree K-nearest-neighbours over one forest part.
@@ -32,7 +30,7 @@ import { type ForestPart } from '../decimate/knn-core';
  * @param aabb - The part's point AABB [minx, miny, minz, maxx, maxy, maxz].
  * @returns WGSL source.
  */
-const knnWgsl = (k: number, stackSize: number, rootIdx: number, aabb: Float32Array) => /* wgsl */`
+const knnWgsl = (k: number, stackSize: number, rootIdx: number, aabb: Float32Array) => /* wgsl */ `
 struct Uniforms {
     queryCount: u32,
 }
@@ -166,7 +164,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 `;
 
 // Reset the batch's carried top-K rows (runs before the batch's parts).
-const knnResetWgsl = () => /* wgsl */`
+const knnResetWgsl = () => /* wgsl */ `
 struct Uniforms {
     slotCount: u32,
 }
@@ -223,26 +221,32 @@ class GpuKnn {
      */
     constructor(device: GraphicsDevice, parts: ForestPart[], k: number) {
         const workgroupSize = 64;
-        const queriesPerBatch = 1024 * workgroupSize;  // 65,536
+        const queriesPerBatch = 1024 * workgroupSize; // 65,536
         const stackSize = 48;
 
         // Group parts under the per-binding ceiling (positions, 12 B/node,
         // is the largest array).
-        const limits = (device as unknown as { limits?: { maxStorageBufferBindingSize?: number, maxBufferSize?: number } }).limits;
+        const limits = (
+            device as unknown as { limits?: { maxStorageBufferBindingSize?: number; maxBufferSize?: number } }
+        ).limits;
         const maxBinding = Math.min(
-            typeof limits?.maxStorageBufferBindingSize === 'number' ? limits.maxStorageBufferBindingSize : 128 * 2 ** 20,
+            typeof limits?.maxStorageBufferBindingSize === 'number'
+                ? limits.maxStorageBufferBindingSize
+                : 128 * 2 ** 20,
             typeof limits?.maxBufferSize === 'number' ? limits.maxBufferSize : 256 * 2 ** 20
         );
         const maxNodesPerGroup = Math.floor(maxBinding / 12);
 
-        type Group = { parts: { part: ForestPart, base: number }[], nodes: number };
+        type Group = { parts: { part: ForestPart; base: number }[]; nodes: number };
         const groups: Group[] = [];
         for (const part of parts) {
             const n = part.nodeSplatIdx.length;
             if (n > maxNodesPerGroup) {
-                throw new Error(`GpuKnn: a forest part (${n} nodes) exceeds the device binding limit — reduce the part size`);
+                throw new Error(
+                    `GpuKnn: a forest part (${n} nodes) exceeds the device binding limit — reduce the part size`
+                );
             }
-            if (n > 0x3FFFFFFF) {
+            if (n > 0x3fffffff) {
                 throw new Error(`GpuKnn: part exceeds the 30-bit node packing limit (${n} nodes)`);
             }
             let g = groups[groups.length - 1];
@@ -266,10 +270,16 @@ class GpuKnn {
         const outScratch = new Uint32Array(queriesPerBatch * k);
 
         // Per-batch top-K reset (frees the part dispatch order per batch).
-        const resetKernel = makeKernel(device, 'compute-knn-reset', knnResetWgsl(), ['slotCount'], [
-            ['topDist', false],
-            ['topIdx', false]
-        ]);
+        const resetKernel = makeKernel(
+            device,
+            'compute-knn-reset',
+            knnResetWgsl(),
+            ['slotCount'],
+            [
+                ['topDist', false],
+                ['topIdx', false]
+            ]
+        );
         resetKernel.compute.setParameter('topDist', topDistBuf);
         resetKernel.compute.setParameter('topIdx', topIdxBuf);
 
@@ -294,20 +304,26 @@ class GpuKnn {
                 if (remapped.length < n * 2) remapped = new Uint32Array(n * 2);
                 for (let i = 0; i < n * 2; i++) {
                     const c = part.nodeChildren[i];
-                    remapped[i] = c === 0xFFFFFFFF ? c : c + base;
+                    remapped[i] = c === 0xffffffff ? c : c + base;
                 }
                 childrenBuf.write(base * 2 * 4, remapped, 0, n * 2);
 
                 const source = knnWgsl(k, stackSize, base + part.rootIdx, part.aabb);
-                const kernel = makeKernel(device, 'compute-knn-forest', source, ['queryCount'], [
-                    ['queryPos', true],
-                    ['queryIds', true],
-                    ['nodeSplatIdx', true],
-                    ['nodePositions', true],
-                    ['nodeChildren', true],
-                    ['topDist', false],
-                    ['topIdx', false]
-                ]);
+                const kernel = makeKernel(
+                    device,
+                    'compute-knn-forest',
+                    source,
+                    ['queryCount'],
+                    [
+                        ['queryPos', true],
+                        ['queryIds', true],
+                        ['nodeSplatIdx', true],
+                        ['nodePositions', true],
+                        ['nodeChildren', true],
+                        ['topDist', false],
+                        ['topIdx', false]
+                    ]
+                );
                 kernel.compute.setParameter('queryPos', queryPosBuf);
                 kernel.compute.setParameter('queryIds', queryIdBuf);
                 kernel.compute.setParameter('nodeSplatIdx', splatIdxBuf);
@@ -327,7 +343,9 @@ class GpuKnn {
             homePart: number
         ) => {
             if (outNeighbours.length !== queryCount * k) {
-                throw new Error(`GpuKnn: outNeighbours length ${outNeighbours.length} must be queryCount*k = ${queryCount * k}`);
+                throw new Error(
+                    `GpuKnn: outNeighbours length ${outNeighbours.length} must be queryCount*k = ${queryCount * k}`
+                );
             }
 
             // Home part first: it fills the top-K with true near neighbours,
@@ -349,7 +367,7 @@ class GpuKnn {
                     kernel.compute.setParameter('queryCount', batchCount);
                     kernel.compute.setupDispatch(dispatchGroups);
                 }
-                device.computeDispatch([resetKernel.compute, ...order.map(kn => kn.compute)], `knn-batch-${batch}`);
+                device.computeDispatch([resetKernel.compute, ...order.map((kn) => kn.compute)], `knn-batch-${batch}`);
 
                 const readBytes = batchCount * k * 4;
                 await topIdxBuf.read(0, readBytes, outScratch, true);

@@ -26,14 +26,8 @@
  * Engine-free.
  */
 
-import {
-    EPS_COV,
-    sigmoid,
-    ellipsoidArea,
-    quatToRotmat,
-    sigmaFromRotVar,
-    type SplatView
-} from './moment-match';
+import { EPS_COV, sigmoid, ellipsoidArea, quatToRotmat, sigmaFromRotVar } from './moment-match';
+import type { SplatView } from './moment-match';
 
 /** SH band-0 constant (f_dc → base colour: 0.5 + C0·f_dc). */
 const C0 = 0.28209479177387814;
@@ -96,18 +90,30 @@ const buildSplatCache = (view: SplatView, out: Float32Array): number => {
         const sy = Math.max(Math.exp(geo[i8 + 5]), 1e-12);
         const sz = Math.max(Math.exp(geo[i8 + 6]), 1e-12);
 
-        let qw = geo[i8], qx = geo[i8 + 1], qy = geo[i8 + 2], qz = geo[i8 + 3];
+        let qw = geo[i8],
+            qx = geo[i8 + 1],
+            qy = geo[i8 + 2],
+            qz = geo[i8 + 3];
         const invq = 1 / Math.max(Math.hypot(qw, qx, qy, qz), 1e-12);
-        qw *= invq; qx *= invq; qy *= invq; qz *= invq;
+        qw *= invq;
+        qx *= invq;
+        qy *= invq;
+        qz *= invq;
 
         quatToRotmat(qw, qx, qy, qz, R, 0);
         sigmaFromRotVar(R, 0, sx * sx, sy * sy, sz * sz, S, 0);
 
         const o = i * CACHE_STRIDE;
         const i3 = 3 * i;
-        out[o] = pos[i3]; out[o + 1] = pos[i3 + 1]; out[o + 2] = pos[i3 + 2];
-        out[o + 3] = S[0]; out[o + 4] = S[1]; out[o + 5] = S[2];
-        out[o + 6] = S[4]; out[o + 7] = S[5]; out[o + 8] = S[8];
+        out[o] = pos[i3];
+        out[o + 1] = pos[i3 + 1];
+        out[o + 2] = pos[i3 + 2];
+        out[o + 3] = S[0];
+        out[o + 4] = S[1];
+        out[o + 5] = S[2];
+        out[o + 6] = S[4];
+        out[o + 7] = S[5];
+        out[o + 8] = S[8];
         out[o + 9] = sx * sy * sz;
         out[o + 10] = a;
         out[o + 11] = a * ellipsoidArea(sx, sy, sz) + 1e-30;
@@ -115,7 +121,9 @@ const buildSplatCache = (view: SplatView, out: Float32Array): number => {
         const br = 0.5 + C0 * color[i * colorDim];
         const bg = 0.5 + C0 * color[i * colorDim + 1];
         const bb = 0.5 + C0 * color[i * colorDim + 2];
-        out[o + 12] = br; out[o + 13] = bg; out[o + 14] = bb;
+        out[o + 12] = br;
+        out[o + 13] = bg;
+        out[o + 14] = bb;
         out[o + 15] = br * br + bg * bg + bb * bb;
     }
 
@@ -125,9 +133,17 @@ const buildSplatCache = (view: SplatView, out: Float32Array): number => {
 // dᵀ(A)⁻¹d and √|A| for a symmetric 3×3 A = [xx,xy,xz,yy,yz,zz]; returns the
 // Gaussian cross-product ⟨G_a,G_b⟩ scaled by the caller's √|Σ_a|·√|Σ_b|.
 const crossG = (
-    sdA: number, sdB: number,
-    xx: number, xy: number, xz: number, yy: number, yz: number, zz: number,
-    dx: number, dy: number, dz: number
+    sdA: number,
+    sdB: number,
+    xx: number,
+    xy: number,
+    xz: number,
+    yy: number,
+    yz: number,
+    zz: number,
+    dx: number,
+    dy: number,
+    dz: number
 ): number => {
     // Signed cofactors (adj is symmetric); det via row-0 expansion.
     const c00 = yy * zz - yz * yz;
@@ -137,10 +153,9 @@ const crossG = (
     const c12 = xy * xz - xx * yz;
     const c22 = xx * yy - xy * xy;
     const det = Math.max(xx * c00 + xy * c01 + xz * c02, 1e-30);
-    const quadAdj = c00 * dx * dx + c11 * dy * dy + c22 * dz * dz +
-        2 * (c01 * dx * dy + c02 * dx * dz + c12 * dy * dz);
+    const quadAdj = c00 * dx * dx + c11 * dy * dy + c22 * dz * dz + 2 * (c01 * dx * dy + c02 * dx * dz + c12 * dy * dz);
     const quad = quadAdj / det;
-    return TWO_PI_1_5 * sdA * sdB / Math.sqrt(det) * Math.exp(-0.5 * quad);
+    return ((TWO_PI_1_5 * sdA * sdB) / Math.sqrt(det)) * Math.exp(-0.5 * quad);
 };
 
 /**
@@ -151,17 +166,19 @@ const crossG = (
  * @param j - Second splat (cache row).
  * @returns The edge cost (≥ 0).
  */
-const computeEdgeCost = (
-    cache: Float32Array,
-    i: number,
-    j: number
-): number => {
-    const io = i * CACHE_STRIDE, jo = j * CACHE_STRIDE;
+const computeEdgeCost = (cache: Float32Array, i: number, j: number): number => {
+    const io = i * CACHE_STRIDE,
+        jo = j * CACHE_STRIDE;
 
-    const mux = cache[io], muy = cache[io + 1], muz = cache[io + 2];
-    const mvx = cache[jo], mvy = cache[jo + 1], mvz = cache[jo + 2];
+    const mux = cache[io],
+        muy = cache[io + 1],
+        muz = cache[io + 2];
+    const mvx = cache[jo],
+        mvy = cache[jo + 1],
+        mvz = cache[jo + 2];
 
-    const mi = cache[io + 11], mj = cache[jo + 11];
+    const mi = cache[io + 11],
+        mj = cache[jo + 11];
     const W = mi + mj;
     const pi = W > 0 ? mi / W : 0.5;
     const pj = 1 - pi;
@@ -171,8 +188,12 @@ const computeEdgeCost = (
     const mmy = pi * muy + pj * mvy;
     const mmz = pi * muz + pj * mvz;
 
-    const dix = mux - mmx, diy = muy - mmy, diz = muz - mmz;
-    const djx = mvx - mmx, djy = mvy - mmy, djz = mvz - mmz;
+    const dix = mux - mmx,
+        diy = muy - mmy,
+        diz = muz - mmz;
+    const djx = mvx - mmx,
+        djy = mvy - mmy,
+        djz = mvz - mmz;
 
     // Merged covariance: Σ pₖ(δₖδₖᵀ + Σₖ) + EPS_COV·I  (law of total variance).
     const sxx = pi * (dix * dix + cache[io + 3]) + pj * (djx * djx + cache[jo + 3]) + EPS_COV;
@@ -194,19 +215,25 @@ const computeEdgeCost = (
     const p1 = sxy * sxy + sxz * sxz + syz * syz;
     let e0: number, e1: number, e2: number;
     if (p1 <= 1e-30) {
-        e0 = sxx; e1 = syy; e2 = szz;
+        e0 = sxx;
+        e1 = syy;
+        e2 = szz;
     } else {
         const p2 = (sxx - q) * (sxx - q) + (syy - q) * (syy - q) + (szz - q) * (szz - q) + 2 * p1;
         const p = Math.sqrt(p2 / 6);
         const ip = 1 / p;
-        const b00 = (sxx - q) * ip, b11 = (syy - q) * ip, b22 = (szz - q) * ip;
-        const b01 = sxy * ip, b02 = sxz * ip, b12 = syz * ip;
+        const b00 = (sxx - q) * ip,
+            b11 = (syy - q) * ip,
+            b22 = (szz - q) * ip;
+        const b01 = sxy * ip,
+            b02 = sxz * ip,
+            b12 = syz * ip;
         const detB = b00 * (b11 * b22 - b12 * b12) - b01 * (b01 * b22 - b12 * b02) + b02 * (b01 * b12 - b11 * b02);
         let r = detB / 2;
-        r = r < -1 ? -1 : (r > 1 ? 1 : r);
+        r = r < -1 ? -1 : r > 1 ? 1 : r;
         const phi = Math.acos(r) / 3;
         e0 = q + 2 * p * Math.cos(phi);
-        e2 = q + 2 * p * Math.cos(phi + 2 * Math.PI / 3);
+        e2 = q + 2 * p * Math.cos(phi + (2 * Math.PI) / 3);
         e1 = 3 * q - e0 - e2;
     }
     const s0 = Math.sqrt(Math.max(e0, 1e-18));
@@ -215,17 +242,24 @@ const computeEdgeCost = (
     const alphaM = Math.min(1, W / Math.max(ellipsoidArea(s0, s1, s2), 1e-30));
 
     // Base colours and their dots (merged colour = mass-weighted average).
-    const bir = cache[io + 12], big = cache[io + 13], bib = cache[io + 14];
-    const bjr = cache[jo + 12], bjg = cache[jo + 13], bjb = cache[jo + 14];
-    const bij = bir * bjr + big * bjg + bib * bjb;   // base_i · base_j
-    const bni = cache[io + 15];                       // base_i · base_i
-    const bnj = cache[jo + 15];                       // base_j · base_j
-    const bim = pi * bni + pj * bij;                  // base_i · base_m
-    const bjm = pi * bij + pj * bnj;                  // base_j · base_m
+    const bir = cache[io + 12],
+        big = cache[io + 13],
+        bib = cache[io + 14];
+    const bjr = cache[jo + 12],
+        bjg = cache[jo + 13],
+        bjb = cache[jo + 14];
+    const bij = bir * bjr + big * bjg + bib * bjb; // base_i · base_j
+    const bni = cache[io + 15]; // base_i · base_i
+    const bnj = cache[jo + 15]; // base_j · base_j
+    const bim = pi * bni + pj * bij; // base_i · base_m
+    const bjm = pi * bij + pj * bnj; // base_j · base_m
     const bnm = pi * pi * bni + 2 * pi * pj * bij + pj * pj * bnj; // base_m · base_m
 
-    const ai = cache[io + 10], aj = cache[jo + 10], am = alphaM;
-    const sdi = cache[io + 9], sdj = cache[jo + 9];
+    const ai = cache[io + 10],
+        aj = cache[jo + 10],
+        am = alphaM;
+    const sdi = cache[io + 9],
+        sdj = cache[jo + 9];
 
     // Self terms ⟨G,G⟩ = π^{3/2}·√|Σ|.
     const selfI = ai * ai * bni * PI_1_5 * sdi;
@@ -233,23 +267,47 @@ const computeEdgeCost = (
     const selfM = am * am * bnm * PI_1_5 * sqrtDetM;
 
     // Cross terms (amplitude dot × Gaussian overlap).
-    const cIJ = crossG(sdi, sdj,
-        cache[io + 3] + cache[jo + 3], cache[io + 4] + cache[jo + 4], cache[io + 5] + cache[jo + 5],
-        cache[io + 6] + cache[jo + 6], cache[io + 7] + cache[jo + 7], cache[io + 8] + cache[jo + 8],
-        mux - mvx, muy - mvy, muz - mvz);
-    const cIM = crossG(sdi, sqrtDetM,
-        cache[io + 3] + sxx, cache[io + 4] + sxy, cache[io + 5] + sxz,
-        cache[io + 6] + syy, cache[io + 7] + syz, cache[io + 8] + szz,
-        dix, diy, diz);
-    const cJM = crossG(sdj, sqrtDetM,
-        cache[jo + 3] + sxx, cache[jo + 4] + sxy, cache[jo + 5] + sxz,
-        cache[jo + 6] + syy, cache[jo + 7] + syz, cache[jo + 8] + szz,
-        djx, djy, djz);
+    const cIJ = crossG(
+        sdi,
+        sdj,
+        cache[io + 3] + cache[jo + 3],
+        cache[io + 4] + cache[jo + 4],
+        cache[io + 5] + cache[jo + 5],
+        cache[io + 6] + cache[jo + 6],
+        cache[io + 7] + cache[jo + 7],
+        cache[io + 8] + cache[jo + 8],
+        mux - mvx,
+        muy - mvy,
+        muz - mvz
+    );
+    const cIM = crossG(
+        sdi,
+        sqrtDetM,
+        cache[io + 3] + sxx,
+        cache[io + 4] + sxy,
+        cache[io + 5] + sxz,
+        cache[io + 6] + syy,
+        cache[io + 7] + syz,
+        cache[io + 8] + szz,
+        dix,
+        diy,
+        diz
+    );
+    const cJM = crossG(
+        sdj,
+        sqrtDetM,
+        cache[jo + 3] + sxx,
+        cache[jo + 4] + sxy,
+        cache[jo + 5] + sxz,
+        cache[jo + 6] + syy,
+        cache[jo + 7] + syz,
+        cache[jo + 8] + szz,
+        djx,
+        djy,
+        djz
+    );
 
-    const E = selfI + selfJ + selfM +
-        2 * ai * aj * bij * cIJ -
-        2 * ai * am * bim * cIM -
-        2 * aj * am * bjm * cJM;
+    const E = selfI + selfJ + selfM + 2 * ai * aj * bij * cIJ - 2 * ai * am * bim * cIM - 2 * aj * am * bjm * cJM;
 
     // Clamp float-noise negatives (both terms are squared norms ≥ 0; the
     // colour distance uses separately-rounded f32 norms so it too can round

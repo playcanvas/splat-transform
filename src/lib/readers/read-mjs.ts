@@ -1,10 +1,11 @@
 import { Column, DataTable } from '../data-table';
-import { Param } from '../types';
+import type { Row } from '../data-table';
+import type { Param } from '../types';
 
 type Generator = {
     count: number;
     columnNames: string[];
-    getRow: (index: number, row: any) => void;
+    getRow: (index: number, row: Row) => void;
 };
 
 /**
@@ -35,7 +36,7 @@ const readMjs = async (moduleUrl: string, params: Param[]): Promise<DataTable> =
         return new Column(name, new Float32Array(generator.count));
     });
 
-    const row: any = {};
+    const row: Row = {};
     for (let i = 0; i < generator.count; ++i) {
         generator.getRow(i, row);
         columns.forEach((c) => {

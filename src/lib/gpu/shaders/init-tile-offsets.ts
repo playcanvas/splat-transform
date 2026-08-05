@@ -7,7 +7,7 @@
  *
  * @returns WGSL source for the init-tile-offsets compute shader.
  */
-const initTileOffsetsWgsl = () => /* wgsl */`
+const initTileOffsetsWgsl = () => /* wgsl */ `
 #include "uniformsStruct"
 #include "constants"
 

@@ -1,13 +1,15 @@
-import { type GraphicsDevice } from 'playcanvas';
+import type { GraphicsDevice } from 'playcanvas';
 
-import { buildSplatCache, computeEdgeCost, CACHE_STRIDE } from './edge-cost-cpu';
-import { KNN_SENTINEL, type ForestPart } from './knn-core';
-import { type SplatView } from './moment-match';
-import { type BlockRange, type ResidentPositions } from './partition';
-import { type ChunkData, type ChunkDataPool, type ChunkSource } from '../chunk';
+import type { ChunkData, ChunkDataPool, ChunkSource } from '../chunk';
 import { GpuEdgeCost } from '../gpu/gpu-edge-cost';
 import { GpuKnn } from '../gpu/gpu-knn';
 import { WorkerQueue } from '../workers';
+
+import { buildSplatCache, computeEdgeCost, CACHE_STRIDE } from './edge-cost-cpu';
+import { KNN_SENTINEL } from './knn-core';
+import type { ForestPart } from './knn-core';
+import type { SplatView } from './moment-match';
+import type { BlockRange, ResidentPositions } from './partition';
 
 /**
  * Max points per forest part. Parts build in parallel on the worker pool
@@ -139,7 +141,8 @@ const gatherBlockView = async (
                 view.color.set(colSrc, (rowBase + off) * colorDim);
             } else {
                 for (let r = 0; r < count; r++) {
-                    const src = r * colorDim, dst = (rowBase + off + r) * viewColorDim;
+                    const src = r * colorDim,
+                        dst = (rowBase + off + r) * viewColorDim;
                     for (let c = 0; c < viewColorDim; c++) view.color[dst + c] = colSrc[src + c];
                 }
             }
@@ -172,7 +175,8 @@ const gatherBlockView = async (
 
 // Binary search `g` in the sorted array; -1 when absent.
 const indexOfSorted = (sorted: Uint32Array, g: number): number => {
-    let lo = 0, hi = sorted.length - 1;
+    let lo = 0,
+        hi = sorted.length - 1;
     while (lo <= hi) {
         const mid = (lo + hi) >> 1;
         const v = sorted[mid];
@@ -202,7 +206,7 @@ const buildForest = async (
     order: Uint32Array,
     blocks: BlockRange[],
     shared: boolean
-): Promise<{ parts: ForestPart[], blockPart: Uint32Array }> => {
+): Promise<{ parts: ForestPart[]; blockPart: Uint32Array }> => {
     const jobs: Promise<ForestPart>[] = [];
     const blockPart = new Uint32Array(blocks.length);
     let bi = 0;
@@ -228,9 +232,14 @@ const buildForest = async (
             y[i] = pos.y[g];
             z[i] = pos.z[g];
         }
-        jobs.push(WorkerQueue.run('buildKdForestPart', { x, y, z, ids, shared }, [
-            x.buffer as ArrayBuffer, y.buffer as ArrayBuffer, z.buffer as ArrayBuffer, ids.buffer as ArrayBuffer
-        ]));
+        jobs.push(
+            WorkerQueue.run('buildKdForestPart', { x, y, z, ids, shared }, [
+                x.buffer as ArrayBuffer,
+                y.buffer as ArrayBuffer,
+                z.buffer as ArrayBuffer,
+                ids.buffer as ArrayBuffer
+            ])
+        );
     }
     return { parts: await Promise.all(jobs), blockPart };
 };
@@ -245,23 +254,22 @@ const buildForest = async (
  * @param nb - Neighbour rows (`owned.length * k` global ids), sorted in place.
  * @param k - Neighbours per row.
  */
-const sortNeighborRows = (
-    pos: ResidentPositions,
-    owned: Uint32Array,
-    nb: Uint32Array,
-    k: number
-): void => {
+const sortNeighborRows = (pos: ResidentPositions, owned: Uint32Array, nb: Uint32Array, k: number): void => {
     const d = new Float64Array(k);
     const id = new Uint32Array(k);
     for (let q = 0; q < owned.length; q++) {
         const g = owned[q];
-        const qx = pos.x[g], qy = pos.y[g], qz = pos.z[g];
+        const qx = pos.x[g],
+            qy = pos.y[g],
+            qz = pos.z[g];
         const base = q * k;
         let m = 0;
         for (let s = 0; s < k; s++) {
             const j = nb[base + s];
             if (j === KNN_SENTINEL) continue;
-            const dx = pos.x[j] - qx, dy = pos.y[j] - qy, dz = pos.z[j] - qz;
+            const dx = pos.x[j] - qx,
+                dy = pos.y[j] - qy,
+                dz = pos.z[j] - qz;
             const dist = dx * dx + dy * dy + dz * dz;
             let at = m;
             while (at > 0 && (d[at - 1] > dist || (d[at - 1] === dist && id[at - 1] > j))) {
@@ -330,7 +338,9 @@ const runPriorityPass = async (
         if (device) {
             const out = new Uint32Array(nOwned * k);
             const run = gpuKnnQueue.then(() => gpuKnn!.execute(queryPos, owned, nOwned, out, home));
-            gpuKnnQueue = run.catch(() => { /* surfaced by the awaiting block */ });
+            gpuKnnQueue = run.catch(() => {
+                /* surfaced by the awaiting block */
+            });
             return run.then(() => out);
         }
         // CPU path: split the block's queries across the worker pool (extra
@@ -343,9 +353,12 @@ const runPriorityPass = async (
             const cnt = Math.min(per, nOwned - off);
             const qp = queryPos.slice(off * 3, (off + cnt) * 3);
             const qi = owned.slice(off, off + cnt);
-            jobs.push(WorkerQueue.run('knnForest', { parts: ordered, queryPos: qp, queryIds: qi, k }, [
-                qp.buffer as ArrayBuffer, qi.buffer as ArrayBuffer
-            ]));
+            jobs.push(
+                WorkerQueue.run('knnForest', { parts: ordered, queryPos: qp, queryIds: qi, k }, [
+                    qp.buffer as ArrayBuffer,
+                    qi.buffer as ArrayBuffer
+                ])
+            );
         }
         return Promise.all(jobs).then((outs) => {
             const out = new Uint32Array(nOwned * k);
@@ -445,9 +458,7 @@ const runPriorityPass = async (
                 } else {
                     for (let s = 0; s < slots; s++) {
                         const row = nbRow[s];
-                        blockCosts[s] = row === KNN_SENTINEL ?
-                            0 :
-                            computeEdgeCost(cache, (s / k) | 0, row);
+                        blockCosts[s] = row === KNN_SENTINEL ? 0 : computeEdgeCost(cache, (s / k) | 0, row);
                     }
                 }
 
@@ -476,7 +487,7 @@ const runPriorityPass = async (
                     }
                     const g = owned[qi];
                     for (let s = 0; s < K; s++) {
-                        cand.idx[g * K + s] = s < size ? bestIdx[s] : 0xFFFFFFFF;
+                        cand.idx[g * K + s] = s < size ? bestIdx[s] : 0xffffffff;
                         cand.cost[g * K + s] = s < size ? bestCost[s] : Infinity;
                     }
                 }

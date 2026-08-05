@@ -1,6 +1,8 @@
 import { Column, DataTable } from '../data-table';
-import { join, type ReadFileSystem } from '../io/read';
+import { join } from '../io/read';
+import type { ReadFileSystem } from '../io/read';
 import { logger, Transform, WebPCodec } from '../utils';
+
 import type { ReadSogOptions } from './read-sog';
 
 // V1 (legacy) SOG meta layout. Quantization is a per-channel linear lerp
@@ -54,9 +56,9 @@ const invLogTransform = (v: number) => {
 
 const unpackQuat = (px: number, py: number, pz: number, tag: number): [number, number, number, number] => {
     const maxComp = tag - 252;
-    const a = px / 255 * 2 - 1;
-    const b = py / 255 * 2 - 1;
-    const c = pz / 255 * 2 - 1;
+    const a = (px / 255) * 2 - 1;
+    const b = (py / 255) * 2 - 1;
+    const c = (pz / 255) * 2 - 1;
     const sqrt2 = Math.sqrt(2);
     const comps = [0, 0, 0, 0];
     const idx = [
@@ -95,7 +97,12 @@ const v1ShBandsWidths: Record<number, number> = { 192: 1, 512: 2, 960: 3 };
  * @returns DataTable with Gaussian splat data
  * @ignore
  */
-const readSogV1 = async (fileSystem: ReadFileSystem, baseDir: string, meta: MetaV1, options: ReadSogOptions = {}): Promise<DataTable> => {
+const readSogV1 = async (
+    fileSystem: ReadFileSystem,
+    baseDir: string,
+    meta: MetaV1,
+    options: ReadSogOptions = {}
+): Promise<DataTable> => {
     const decoder = await WebPCodec.create();
     const count = meta.means.shape[0];
 
@@ -144,9 +151,12 @@ const readSogV1 = async (fileSystem: ReadFileSystem, baseDir: string, meta: Meta
     const xCol = columns[0].data as Float32Array;
     const yCol = columns[1].data as Float32Array;
     const zCol = columns[2].data as Float32Array;
-    const xMin = mins[0], xScale = (maxs[0] - mins[0]) || 1;
-    const yMin = mins[1], yScale = (maxs[1] - mins[1]) || 1;
-    const zMin = mins[2], zScale = (maxs[2] - mins[2]) || 1;
+    const xMin = mins[0],
+        xScale = maxs[0] - mins[0] || 1;
+    const yMin = mins[1],
+        yScale = maxs[1] - mins[1] || 1;
+    const zMin = mins[2],
+        zScale = maxs[2] - mins[2] || 1;
     for (let i = 0; i < count; i++) {
         xCol[i] = invLogTransform(xMin + xScale * (xs[i] / 65535));
         yCol[i] = invLogTransform(yMin + yScale * (ys[i] / 65535));
@@ -167,13 +177,20 @@ const readSogV1 = async (fileSystem: ReadFileSystem, baseDir: string, meta: Meta
     for (let i = 0; i < count; i++) {
         const o = i * 4;
         const tag = qr[o + 3];
-        if (tag < 252 || tag > 255) { // invalid tag, default to identity (rot_0 = w)
-            r0[i] = 1; r1[i] = 0; r2[i] = 0; r3[i] = 0;
+        if (tag < 252 || tag > 255) {
+            // invalid tag, default to identity (rot_0 = w)
+            r0[i] = 1;
+            r1[i] = 0;
+            r2[i] = 0;
+            r3[i] = 0;
             continue;
         }
         // unpackQuat returns components in (w, x, y, z) order; rot_0..rot_3 map to (w, x, y, z).
         const [w, x, y, z] = unpackQuat(qr[o], qr[o + 1], qr[o + 2], tag);
-        r0[i] = w; r1[i] = x; r2[i] = y; r3[i] = z;
+        r0[i] = w;
+        r1[i] = x;
+        r2[i] = y;
+        r3[i] = z;
     }
     tickPass();
 
@@ -233,7 +250,8 @@ const readSogV1 = async (fileSystem: ReadFileSystem, baseDir: string, meta: Meta
         // shN payload is malformed; throw rather than silently skipping.
         const bands = v1ShBandsWidths[cW] ?? 0;
         const shCoeffs = [0, 3, 8, 15][bands];
-        if (bands === 0) throw new Error(`SOG shN centroids texture has unrecognized width ${cW}, expected one of 192 / 512 / 960`);
+        if (bands === 0)
+            throw new Error(`SOG shN centroids texture has unrecognized width ${cW}, expected one of 192 / 512 / 960`);
 
         if (shCoeffs > 0) {
             const shMin = meta.shN.mins;

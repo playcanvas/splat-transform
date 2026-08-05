@@ -15,7 +15,7 @@
  *
  * @returns WGSL source for the prepare-indirect compute shader.
  */
-const prepareIndirectWgsl = () => /* wgsl */`
+const prepareIndirectWgsl = () => /* wgsl */ `
 struct PrepareUniforms {
     sortSlotBase: u32,
     boundariesSlotBase: u32,

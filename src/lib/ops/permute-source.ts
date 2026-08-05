@@ -1,8 +1,4 @@
-import {
-    type ChunkSource,
-    type ChunkSourceMetadata,
-    type ReadRequest
-} from '../chunk';
+import type { ChunkSource, ChunkSourceMetadata, ReadRequest } from '../chunk';
 
 /**
  * Gather a source's gaussians by an ordered index list, as a lazy view.

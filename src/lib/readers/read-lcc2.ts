@@ -1,12 +1,17 @@
-import { containerSource, type ContainerSegment } from './container-source';
+import { createChunkDataPool } from '../chunk';
+import type { ChunkDataPool, ChunkSource } from '../chunk';
+import { dataTableToChunkSource, materializeToDataTable } from '../compat/data-table';
+import type { TypedArray } from '../data-table';
+import { Column, DataTable } from '../data-table';
+import type { ReadFileSystem, ReadSource, ReadStream } from '../io/read';
+import { basename, dirname, join, readFile, ZipReadFileSystem } from '../io/read';
+import type { Options } from '../types';
+import { logger, Transform } from '../utils';
+
+import { containerSource } from './container-source';
+import type { ContainerSegment } from './container-source';
 import { readSog, readSogSource } from './read-sog';
 import { readSpz } from './read-spz';
-import { type ChunkDataPool, type ChunkSource, createChunkDataPool } from '../chunk';
-import { dataTableToChunkSource, materializeToDataTable } from '../compat/data-table';
-import { Column, DataTable, TypedArray } from '../data-table';
-import { basename, dirname, join, readFile, ReadFileSystem, ReadSource, ReadStream, ZipReadFileSystem } from '../io/read';
-import { Options } from '../types';
-import { logger, Transform } from '../utils';
 
 // Bounded concurrency for chunk decoding. SOG/SPZ decoding is heavier than
 // LCC v1's range reads (WebP decode / WASM calls), so we stay conservative.
@@ -28,7 +33,7 @@ type RawLcc2Node = {
     data?: {
         '3dgs'?: { name: number; start?: number; count?: number };
         env?: { name: number };
-        [key: string]: any;
+        [key: string]: unknown;
     };
     // Children: array or { "0": node, "1": node, ... } object map.
     child?: RawLcc2Node[] | Record<string, RawLcc2Node>;
@@ -36,14 +41,14 @@ type RawLcc2Node = {
     // Old protocol fields (need mapping).
     files?: string[];
     child_num?: number;
-    datatype?: any;
+    datatype?: unknown;
 
     // New protocol fields (used directly).
     splatFiles?: string[];
     childNum?: number;
-    dataType?: any;
+    dataType?: unknown;
 
-    [key: string]: any;
+    [key: string]: unknown;
 };
 
 // Top-level meta.lcc2 raw shape.
@@ -62,12 +67,12 @@ type RawLcc2Meta = {
     splatType?: '.sog' | '.spz';
 
     // Bounding box (passed through for downstream/debug use).
-    boundingBox?: any;
+    boundingBox?: unknown;
 
     // Octree root node.
     root: RawLcc2Node;
 
-    [key: string]: any;
+    [key: string]: unknown;
 };
 
 // --- Normalized model (post-parse) ------------------------------------------
@@ -78,13 +83,13 @@ type Lcc2TreeNode = {
     data?: {
         '3dgs'?: { name: number; start?: number; count?: number };
         env?: { name: number };
-        [key: string]: any;
+        [key: string]: unknown;
     };
     child?: Lcc2TreeNode[] | Record<string, Lcc2TreeNode>;
     splatFiles?: string[];
     childNum?: number;
-    dataType?: any;
-    [key: string]: any;
+    dataType?: unknown;
+    [key: string]: unknown;
 };
 
 // Return value of parseLcc2Meta.
@@ -100,7 +105,7 @@ type Lcc2Meta = {
     /** Unified chunk encoding type, defaults to '.sog'. */
     splatType: '.sog' | '.spz';
     /** Bounding box (passed through). */
-    boundingBox: any;
+    boundingBox: unknown;
     /** Optional environment chunk file index (root.data.env.name); undefined if absent. */
     envFileIndex: number | undefined;
     /** Octree root node (normalized). */
@@ -196,9 +201,7 @@ const parseLcc2Meta = (metaText: string, filename: string): Lcc2Meta => {
             meta = JSON.parse(stripTrailingCommas(metaText)) as RawLcc2Meta;
         } catch (e) {
             const reason = (e as Error)?.message ?? String(e);
-            throw new Error(
-                `Failed to parse meta.lcc2 as JSON: ${filename}: ${reason}`
-            );
+            throw new Error(`Failed to parse meta.lcc2 as JSON: ${filename}: ${reason}`);
         }
     }
 
@@ -206,11 +209,7 @@ const parseLcc2Meta = (metaText: string, filename: string): Lcc2Meta => {
     // legacy fields are present. Use explicit presence checks (not truthiness)
     // so legitimate zero values (e.g. total_splats: 0, lod_level: 0) don't
     // incorrectly skip the legacy normalization branch.
-    if (
-        meta.total_splats !== undefined &&
-        meta.lod_3dgs_info !== undefined &&
-        meta.lod_level !== undefined
-    ) {
+    if (meta.total_splats !== undefined && meta.lod_3dgs_info !== undefined && meta.lod_level !== undefined) {
         // Recursively normalize node field names.
         const normalizeNode = (node: RawLcc2Node) => {
             if (node.datatype !== undefined) {
@@ -239,33 +238,23 @@ const parseLcc2Meta = (metaText: string, filename: string): Lcc2Meta => {
     }
 
     // 3) env detection.
-    const envFileIndex = meta.root?.data?.env ?
-        meta.root.data.env.name :
-        undefined;
+    const envFileIndex = meta.root?.data?.env ? meta.root.data.env.name : undefined;
 
     // 4) Validate required fields rather than masking absence with type
     // assertions. totalLevels and root.splatFiles are mandatory for the reader
     // to resolve LODs and address chunk files; totalSplats / lodSplats are
     // scene metadata that downstream consumers may rely on.
     if (typeof meta.totalLevels !== 'number') {
-        throw new Error(
-            `Invalid meta.lcc2 (missing or non-numeric totalLevels): ${filename}`
-        );
+        throw new Error(`Invalid meta.lcc2 (missing or non-numeric totalLevels): ${filename}`);
     }
     if (!Array.isArray(meta.root?.splatFiles)) {
-        throw new Error(
-            `Invalid meta.lcc2 (missing root.splatFiles): ${filename}`
-        );
+        throw new Error(`Invalid meta.lcc2 (missing root.splatFiles): ${filename}`);
     }
     if (typeof meta.totalSplats !== 'number') {
-        throw new Error(
-            `Invalid meta.lcc2 (missing or non-numeric totalSplats): ${filename}`
-        );
+        throw new Error(`Invalid meta.lcc2 (missing or non-numeric totalSplats): ${filename}`);
     }
     if (!Array.isArray(meta.lodSplats)) {
-        throw new Error(
-            `Invalid meta.lcc2 (missing lodSplats): ${filename}`
-        );
+        throw new Error(`Invalid meta.lcc2 (missing lodSplats): ${filename}`);
     }
 
     // 5) Return normalized model.
@@ -344,14 +333,11 @@ const collectChunksByLevel = (
  * @returns Ordered list of input LOD levels. Its index is the output LOD index.
  * @ignore
  */
-const resolveLodSelection = (
-    lodSelect: number[],
-    totalLevels: number
-): number[] => {
+const resolveLodSelection = (lodSelect: number[], totalLevels: number): number[] => {
     if (lodSelect.length > 0) {
         return lodSelect
-        .map(lod => (lod < 0 ? totalLevels + lod : lod)) // negative -> from end
-        .filter(lod => lod >= 0 && lod < totalLevels); // drop out-of-range
+            .map((lod) => (lod < 0 ? totalLevels + lod : lod)) // negative -> from end
+            .filter((lod) => lod >= 0 && lod < totalLevels); // drop out-of-range
     }
     // empty = all [0, totalLevels)
     return Array.from({ length: totalLevels }, (_, i) => i);
@@ -369,9 +355,7 @@ const resolveLodSelection = (
 const isMissingError = (err: unknown): boolean => {
     const code = (err as { code?: string })?.code;
     const message = (err as Error)?.message ?? '';
-    return code === 'ENOENT' ||
-        message.startsWith('Entry not found') ||
-        message.startsWith('HTTP error 404');
+    return code === 'ENOENT' || message.startsWith('Entry not found') || message.startsWith('HTTP error 404');
 };
 
 /**
@@ -391,10 +375,7 @@ const isMissingError = (err: unknown): boolean => {
  * @returns An open {@link ReadSource} for the chunk.
  * @ignore
  */
-const openChunkSource = async (
-    fileSystem: ReadFileSystem,
-    fullPath: string
-): Promise<ReadSource> => {
+const openChunkSource = async (fileSystem: ReadFileSystem, fullPath: string): Promise<ReadSource> => {
     try {
         return await fileSystem.createSource(fullPath);
     } catch (err) {
@@ -426,11 +407,7 @@ const openChunkSource = async (
  * @returns Decoded DataTable.
  * @ignore
  */
-const decodeChunk = async (
-    fileSystem: ReadFileSystem,
-    splatType: string,
-    fullPath: string
-): Promise<DataTable> => {
+const decodeChunk = async (fileSystem: ReadFileSystem, splatType: string, fullPath: string): Promise<DataTable> => {
     const source = await openChunkSource(fileSystem, fullPath);
     try {
         if (splatType === '.sog') {
@@ -509,9 +486,9 @@ const gunzipPrefix = async (stream: ReadStream, length: number): Promise<Uint8Ar
         }
     });
     // Type assertion needed due to TypeScript's strict typing of DecompressionStream
-    const reader = inputStream.pipeThrough(
-        new DecompressionStream('gzip') as unknown as TransformStream<Uint8Array, Uint8Array>
-    ).getReader();
+    const reader = inputStream
+        .pipeThrough(new DecompressionStream('gzip') as unknown as TransformStream<Uint8Array, Uint8Array>)
+        .getReader();
     try {
         const result = new Uint8Array(length);
         let read = 0;
@@ -528,7 +505,7 @@ const gunzipPrefix = async (stream: ReadStream, length: number): Promise<Uint8Ar
     } finally {
         // Stop decompression early; the bounded input is truncated, so
         // draining it to EOF would throw.
-        await reader.cancel().catch(() => {});
+        await reader.cancel().catch<undefined>(() => undefined);
     }
 };
 
@@ -541,8 +518,13 @@ const gunzipPrefix = async (stream: ReadStream, length: number): Promise<Uint8Ar
  * @ignore
  */
 const parseSpzNumPoints = (header: Uint8Array, context: string): number => {
-    if (header.length < SPZ_HEADER_SIZE ||
-        header[0] !== 0x4e || header[1] !== 0x47 || header[2] !== 0x53 || header[3] !== 0x50) {
+    if (
+        header.length < SPZ_HEADER_SIZE ||
+        header[0] !== 0x4e ||
+        header[1] !== 0x47 ||
+        header[2] !== 0x53 ||
+        header[3] !== 0x50
+    ) {
         throw new Error(`Invalid SPZ chunk header: ${context}`);
     }
     const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
@@ -565,11 +547,7 @@ const parseSpzNumPoints = (header: Uint8Array, context: string): number => {
  * @returns The chunk's splat count.
  * @ignore
  */
-const readChunkCount = async (
-    fileSystem: ReadFileSystem,
-    splatType: string,
-    fullPath: string
-): Promise<number> => {
+const readChunkCount = async (fileSystem: ReadFileSystem, splatType: string, fullPath: string): Promise<number> => {
     const source = await openChunkSource(fileSystem, fullPath);
     try {
         if (splatType === '.sog') {
@@ -577,9 +555,12 @@ const readChunkCount = async (
             try {
                 const sogMeta = JSON.parse(new TextDecoder().decode(await readFile(zipFs, 'meta.json')));
                 const version = sogMeta.version;
-                const count = version === undefined ?
-                    sogMeta.means?.shape?.[0] : // V1: texture shape
-                    (version === 2 ? sogMeta.count : undefined);
+                const count =
+                    version === undefined
+                        ? sogMeta.means?.shape?.[0] // V1: texture shape
+                        : version === 2
+                          ? sogMeta.count
+                          : undefined;
                 if (!Number.isInteger(count) || count < 0) {
                     throw new Error(`Cannot determine SOG chunk splat count: ${fullPath}`);
                 }
@@ -637,11 +618,7 @@ const readChunkCount = async (
  * @returns Promise resolving to an array of DataTables (combined LODs + optional environment).
  * @ignore
  */
-const readLcc2 = async (
-    fileSystem: ReadFileSystem,
-    filename: string,
-    options: Options
-): Promise<DataTable[]> => {
+const readLcc2 = async (fileSystem: ReadFileSystem, filename: string, options: Options): Promise<DataTable[]> => {
     // 1) Read and parse meta.lcc2.
     const baseDir = dirname(filename);
     const related = (name: string) => (baseDir ? join(baseDir, name) : name);
@@ -666,8 +643,12 @@ const readLcc2 = async (
         const files = byLevel.get(inputLods[outputLod]);
         const indices = files ? Array.from(files.keys()).sort((a, b) => a - b) : [];
         for (const fileIndex of indices) {
-            if (!Number.isInteger(fileIndex) || fileIndex < 0 ||
-                fileIndex >= splatFiles.length || !splatFiles[fileIndex]) {
+            if (
+                !Number.isInteger(fileIndex) ||
+                fileIndex < 0 ||
+                fileIndex >= splatFiles.length ||
+                !splatFiles[fileIndex]
+            ) {
                 throw new Error(
                     `Invalid chunk file index ${fileIndex} (root.splatFiles has ${splatFiles.length} entries) in LCC2 input file: ${filename}`
                 );
@@ -707,15 +688,11 @@ const readLcc2 = async (
                 const m = nextScan++;
                 if (m >= missing.length) break;
                 const i = missing[m];
-                counts[i] = await readChunkCount(
-                    fileSystem, splatType, related(splatFiles[tasks[i].fileIndex])
-                );
+                counts[i] = await readChunkCount(fileSystem, splatType, related(splatFiles[tasks[i].fileIndex]));
                 scanBar.update(++scanned);
             }
         };
-        await Promise.all(
-            Array.from({ length: Math.min(LOAD_CONCURRENCY, missing.length) }, () => scanWorker())
-        );
+        await Promise.all(Array.from({ length: Math.min(LOAD_CONCURRENCY, missing.length) }, () => scanWorker()));
         // Close the bar only on success path (matches the decode bar below).
         scanBar.end();
     }
@@ -781,14 +758,12 @@ const readLcc2 = async (
             // dt goes out of scope here, releasing the chunk's memory.
         }
     };
-    await Promise.all(
-        Array.from({ length: Math.min(LOAD_CONCURRENCY, tasks.length) }, () => worker())
-    );
+    await Promise.all(Array.from({ length: Math.min(LOAD_CONCURRENCY, tasks.length) }, () => worker()));
 
     // 8) Assemble the merged table, columns ordered by first sighting.
     const columns = [...outputs.entries()]
-    .sort(([, a], [, b]) => (a.task - b.task) || (a.pos - b.pos))
-    .map(([name, output]) => new Column(name, output.data));
+        .sort(([, a], [, b]) => a.task - b.task || a.pos - b.pos)
+        .map(([name, output]) => new Column(name, output.data));
     columns.push(new Column('lod', lodData));
     const merged = new DataTable(columns, LCC2_TRANSFORM());
     // Close the bar only on success path.
@@ -801,9 +776,7 @@ const readLcc2 = async (
         try {
             const envFull = related(splatFiles[envFileIndex]);
             const envTable = await decodeChunk(fileSystem, splatType, envFull);
-            envTable.addColumn(
-                new Column('lod', new Float32Array(envTable.numRows).fill(-1))
-            );
+            envTable.addColumn(new Column('lod', new Float32Array(envTable.numRows).fill(-1)));
             envTable.transform = LCC2_TRANSFORM();
             result.push(envTable);
         } catch (err) {
@@ -910,15 +883,19 @@ const readLcc2Source = async (
         const indices = files ? Array.from(files.keys()).sort((a, b) => a - b) : [];
         const segs: ContainerSegment[] = [];
         for (const fileIndex of indices) {
-            if (!Number.isInteger(fileIndex) || fileIndex < 0 ||
-                fileIndex >= splatFiles.length || !splatFiles[fileIndex]) {
+            if (
+                !Number.isInteger(fileIndex) ||
+                fileIndex < 0 ||
+                fileIndex >= splatFiles.length ||
+                !splatFiles[fileIndex]
+            ) {
                 throw new Error(
                     `Invalid chunk file index ${fileIndex} (root.splatFiles has ${splatFiles.length} entries) in LCC2 input file: ${filename}`
                 );
             }
             const fullPath = related(splatFiles[fileIndex]);
             const metaCount = files!.get(fileIndex);
-            const count = metaCount ?? await readChunkCount(fileSystem, splatType, fullPath);
+            const count = metaCount ?? (await readChunkCount(fileSystem, splatType, fullPath));
             segs.push({ count, decode: () => decodeChunkSource(fileSystem, splatType, fullPath, pool) });
             total += count;
         }
@@ -956,8 +933,12 @@ const readLcc2EnvironmentSource = async (
     const related = (name: string) => (baseDir ? join(baseDir, name) : name);
     const meta = parseLcc2Meta(new TextDecoder().decode(await readFile(fileSystem, filename)), filename);
     const { splatFiles, splatType, envFileIndex } = meta;
-    if (envFileIndex === undefined || envFileIndex < 0 ||
-        envFileIndex >= splatFiles.length || !splatFiles[envFileIndex]) {
+    if (
+        envFileIndex === undefined ||
+        envFileIndex < 0 ||
+        envFileIndex >= splatFiles.length ||
+        !splatFiles[envFileIndex]
+    ) {
         return null;
     }
     try {

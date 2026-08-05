@@ -1,14 +1,10 @@
-import {
-    type ChunkData,
-    type ChunkLayer,
-    type ChunkSource,
-    type ChunkDataPool,
-    SH_REST_COUNTS
-} from '../chunk';
-import { splatModelComment } from './utils';
-import { type FileSystem } from '../io/write';
+import { SH_REST_COUNTS } from '../chunk';
+import type { ChunkData, ChunkLayer, ChunkSource, ChunkDataPool } from '../chunk';
+import type { FileSystem } from '../io/write';
 import { bakeTransform } from '../ops';
 import { logger, Transform } from '../utils';
+
+import { splatModelComment } from './utils';
 
 const GEOMETRIC_COLS = ['rot_0', 'rot_1', 'rot_2', 'rot_3', 'scale_0', 'scale_1', 'scale_2', 'opacity'];
 
@@ -72,7 +68,12 @@ const writePlyStreaming = async (
         });
     }
     if (layers.has('color')) {
-        const names = ['f_dc_0', 'f_dc_1', 'f_dc_2', ...Array.from({ length: SH_REST_COUNTS[meta.shBands] }, (_, k) => `f_rest_${k}`)];
+        const names = [
+            'f_dc_0',
+            'f_dc_1',
+            'f_dc_2',
+            ...Array.from({ length: SH_REST_COUNTS[meta.shBands] }, (_, k) => `f_rest_${k}`)
+        ];
         names.forEach((name, i) => {
             columns.push({ name, layer: 'color', layerByteOffset: i * 4, uint: false });
         });
@@ -107,9 +108,11 @@ const writePlyStreaming = async (
         const layer = columns[c].layer;
         const srcStart = columns[c].layerByteOffset >> 2;
         let e = c;
-        while (e < columns.length &&
-               columns[e].layer === layer &&
-               (columns[e].layerByteOffset >> 2) === srcStart + (e - c)) {
+        while (
+            e < columns.length &&
+            columns[e].layer === layer &&
+            columns[e].layerByteOffset >> 2 === srcStart + (e - c)
+        ) {
             e++;
         }
         runs.push({ layer, srcStart, dstStart: c, words: e - c, srcStrideWords: meta.layouts[layer]!.stride >> 2 });
@@ -123,7 +126,7 @@ const writePlyStreaming = async (
         'format binary_little_endian 1.0',
         ...(modelComment ? [`comment ${modelComment}`] : []),
         `element vertex ${N}`,
-        ...columns.map(c => `property ${plyType(c.uint)} ${c.name}`),
+        ...columns.map((c) => `property ${plyType(c.uint)} ${c.name}`),
         'end_header'
     ];
 

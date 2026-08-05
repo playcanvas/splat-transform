@@ -109,7 +109,7 @@ class BlockMaskMap {
             j = (j + 1) & mask;
             if (this.keys[j] === EMPTY) break;
             const k = this._hash(this.keys[j]) & mask;
-            if ((i < j) ? (k <= i || k > j) : (k <= i && k > j)) {
+            if (i < j ? k <= i || k > j : k <= i && k > j) {
                 this.keys[i] = this.keys[j];
                 this.lo[i] = this.lo[j];
                 this.hi[i] = this.hi[j];
@@ -193,7 +193,7 @@ class BlockMaskMap {
     private _hash(key: number): number {
         const lo = key >>> 0;
         const hi = Math.floor(key / 0x100000000) >>> 0;
-        return (Math.imul(lo, 0x9E3779B9) ^ Math.imul(hi, 0x85EBCA77)) >>> 0;
+        return (Math.imul(lo, 0x9e3779b9) ^ Math.imul(hi, 0x85ebca77)) >>> 0;
     }
 }
 

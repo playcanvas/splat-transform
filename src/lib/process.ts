@@ -3,12 +3,14 @@ import { Vec3 } from 'playcanvas';
 import { createChunkDataPool } from './chunk';
 import { dataTableToChunkSource, materializeToDataTable } from './compat/data-table';
 import { Column, DataTable, sortMortonOrder, convertToSpace, getSHBands } from './data-table';
+import type { Row } from './data-table';
 import { decimateSource } from './decimate';
 import { computeSourceStats } from './ops';
-import { type InputFormat } from './read';
+import type { InputFormat } from './read';
 import { formatSourceInfo, formatSourceStats } from './source-info';
 import type { DeviceCreator } from './types';
-import { fmtCount, type Group, logger, Transform } from './utils';
+import { fmtCount, logger, Transform } from './utils';
+import type { Group } from './utils';
 import { inverseTransforms, rawColumnMap, isTransformColumn } from './value-transforms';
 import { filterCluster as filterClusterFn } from './voxel/filter-cluster';
 import { filterFloaters as filterFloatersFn } from './voxel/filter-floaters';
@@ -235,7 +237,22 @@ type ProcessOptions = {
  * - `mortonOrder` - Reorder splats by Morton code for spatial locality
  * - `decimate` - Simplify to target count via progressive pairwise merging
  */
-type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | FilterFloaters | FilterCluster | Param | Stats | Info | MortonOrder | Decimate;
+type ProcessAction =
+    | Translate
+    | Rotate
+    | Scale
+    | FilterNaN
+    | FilterByValue
+    | FilterBands
+    | FilterBox
+    | FilterSphere
+    | FilterFloaters
+    | FilterCluster
+    | Param
+    | Stats
+    | Info
+    | MortonOrder
+    | Decimate;
 
 // Describe a delta as "removed N" / "added N" relative to the previous count.
 const describeDelta = (delta: number, noun: string): string => {
@@ -255,7 +272,7 @@ const endFilterGroup = (g: Group, prev: DataTable, next: DataTable) => {
     g.end();
 };
 
-const filter = (dataTable: DataTable, predicate: (row: any, rowIndex: number) => boolean): DataTable => {
+const filter = (dataTable: DataTable, predicate: (row: Row, rowIndex: number) => boolean): DataTable => {
     const indices = new Uint32Array(dataTable.numRows);
     let index = 0;
     const row = {};
@@ -295,7 +312,11 @@ const filter = (dataTable: DataTable, predicate: (row: any, rowIndex: number) =>
  * ]);
  * ```
  */
-const processDataTable = async (dataTable: DataTable, processActions: ProcessAction[], options?: ProcessOptions): Promise<DataTable> => {
+const processDataTable = async (
+    dataTable: DataTable,
+    processActions: ProcessAction[],
+    options?: ProcessOptions
+): Promise<DataTable> => {
     let result = dataTable;
 
     for (let i = 0; i < processActions.length; i++) {
@@ -306,11 +327,9 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 result.transform = new Transform(processAction.value).mul(result.transform);
                 break;
             case 'rotate':
-                result.transform = new Transform().fromEulers(
-                    processAction.value.x,
-                    processAction.value.y,
-                    processAction.value.z
-                ).mul(result.transform);
+                result.transform = new Transform()
+                    .fromEulers(processAction.value.x, processAction.value.y, processAction.value.z)
+                    .mul(result.transform);
                 break;
             case 'scale':
                 result.transform = new Transform(undefined, undefined, processAction.value).mul(result.transform);
@@ -321,9 +340,9 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 const infOk = new Set(['opacity']);
                 const negInfOk = new Set(['scale_0', 'scale_1', 'scale_2']);
                 const columnNames = result.columnNames;
-                const hasRotation = ['rot_0', 'rot_1', 'rot_2', 'rot_3'].every(c => columnNames.includes(c));
+                const hasRotation = ['rot_0', 'rot_1', 'rot_2', 'rot_3'].every((c) => columnNames.includes(c));
 
-                const predicate = (row: any) => {
+                const predicate = (row: Row) => {
                     // a zero-norm rotation quaternion cannot be normalized, so the
                     // gaussian is unrenderable (zero-padded exporter rows otherwise
                     // survive as visible alpha-0.5 splats at the origin)
@@ -354,7 +373,9 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                     columnName = rawColumnMap[columnName];
                 } else if (inverseTransforms[columnName]) {
                     if (columnName === 'opacity' && (value <= 0 || value >= 1)) {
-                        throw new Error(`filterByValue: opacity value must be between 0 and 1 (exclusive), got ${value}`);
+                        throw new Error(
+                            `filterByValue: opacity value must be between 0 and 1 (exclusive), got ${value}`
+                        );
                     }
                     value = inverseTransforms[columnName](value);
                 }
@@ -368,16 +389,18 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 }
 
                 const Predicates = {
-                    'lt': (row: any) => row[columnName] < value,
-                    'lte': (row: any) => row[columnName] <= value,
-                    'gt': (row: any) => row[columnName] > value,
-                    'gte': (row: any) => row[columnName] >= value,
-                    'eq': (row: any) => row[columnName] === value,
-                    'neq': (row: any) => row[columnName] !== value
+                    lt: (row: Row) => row[columnName] < value,
+                    lte: (row: Row) => row[columnName] <= value,
+                    gt: (row: Row) => row[columnName] > value,
+                    gte: (row: Row) => row[columnName] >= value,
+                    eq: (row: Row) => row[columnName] === value,
+                    neq: (row: Row) => row[columnName] !== value
                 };
                 const predicate = Predicates[comparator as keyof typeof Predicates];
                 if (!predicate) {
-                    throw new Error(`filterByValue: unknown comparator '${comparator}', expected one of: ${Object.keys(Predicates).join(', ')}`);
+                    throw new Error(
+                        `filterByValue: unknown comparator '${comparator}', expected one of: ${Object.keys(Predicates).join(', ')}`
+                    );
                 }
                 result = filter(result, predicate);
                 endFilterGroup(g, prev, result);
@@ -394,7 +417,7 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                     const inputCoeffs = [0, 3, 8, 15][inputBands];
                     const outputCoeffs = [0, 3, 8, 15][outputBands];
 
-                    const map: any = {};
+                    const map: Record<string, string | null> = {};
                     for (let i = 0; i < inputCoeffs; ++i) {
                         for (let j = 0; j < 3; ++j) {
                             const inputName = `f_rest_${i + j * inputCoeffs}`;
@@ -402,14 +425,18 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                         }
                     }
 
-                    result = new DataTable(result.columns.map((column) => {
-                        if (map.hasOwnProperty(column.name)) {
-                            const name = map[column.name];
-                            return name ? new Column(name, column.data) : null;
-                        }
-                        return column;
-
-                    }).filter(c => c !== null), result.transform);
+                    result = new DataTable(
+                        result.columns
+                            .map((column) => {
+                                if (Reflect.apply(map.hasOwnProperty, map, [column.name])) {
+                                    const name = map[column.name];
+                                    return name ? new Column(name, column.data) : null;
+                                }
+                                return column;
+                            })
+                            .filter((c) => c !== null),
+                        result.transform
+                    );
                 }
                 endFilterGroup(g, prev, result);
                 break;
@@ -420,11 +447,9 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 const { min, max } = processAction;
 
                 if (result.transform.isIdentity()) {
-                    const predicate = (row: any) => {
+                    const predicate = (row: Row) => {
                         const { x, y, z } = row;
-                        return x >= min.x && x <= max.x &&
-                               y >= min.y && y <= max.y &&
-                               z >= min.z && z <= max.z;
+                        return x >= min.x && x <= max.x && y >= min.y && y <= max.y && z >= min.z && z <= max.z;
                     };
                     result = filter(result, predicate);
                 } else {
@@ -451,7 +476,7 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                         rawMax[j] = (maxArr[j] - dot) / scale;
                     }
 
-                    const predicate = (row: any) => {
+                    const predicate = (row: Row) => {
                         const { x, y, z } = row;
                         for (let j = 0; j < 3; j++) {
                             const proj = rawAxes[j].x * x + rawAxes[j].y * y + rawAxes[j].z * z;
@@ -474,7 +499,7 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                     rawRadius /= result.transform.scale;
                 }
                 const radiusSq = rawRadius * rawRadius;
-                const predicate = (row: any) => {
+                const predicate = (row: Row) => {
                     const { x, y, z } = row;
                     return (x - rawCenter.x) ** 2 + (y - rawCenter.y) ** 2 + (z - rawCenter.z) ** 2 < radiusSq;
                 };
@@ -515,7 +540,7 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 if (processAction.count !== null) {
                     keepCount = Math.min(processAction.count, result.numRows);
                 } else {
-                    keepCount = Math.round(result.numRows * (processAction.percent ?? 100) / 100);
+                    keepCount = Math.round((result.numRows * (processAction.percent ?? 100)) / 100);
                 }
                 keepCount = Math.max(0, keepCount);
 
@@ -573,7 +598,6 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 break;
             }
         }
-
     }
 
     return result;

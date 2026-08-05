@@ -64,9 +64,15 @@ const makeGaussianSamples = (n: number, seed: number): Float64Array[] => {
 type Mat9 = Float32Array | Float64Array;
 
 const quatToRotmat = (qw: number, qx: number, qy: number, qz: number, out: Mat9, o: number) => {
-    const xx = qx * qx, yy = qy * qy, zz = qz * qz;
-    const wx = qw * qx, wy = qw * qy, wz = qw * qz;
-    const xy = qx * qy, xz = qx * qz, yz = qy * qz;
+    const xx = qx * qx,
+        yy = qy * qy,
+        zz = qz * qz;
+    const wx = qw * qx,
+        wy = qw * qy,
+        wz = qw * qz;
+    const xy = qx * qy,
+        xz = qx * qz,
+        yz = qy * qz;
     out[o] = 1 - 2 * (yy + zz);
     out[o + 1] = 2 * (xy - wz);
     out[o + 2] = 2 * (xz + wy);
@@ -79,9 +85,15 @@ const quatToRotmat = (qw: number, qx: number, qy: number, qz: number, out: Mat9,
 };
 
 const sigmaFromRotVar = (R: Mat9, r: number, vx: number, vy: number, vz: number, out: Mat9, o: number) => {
-    const r00 = R[r], r01 = R[r + 1], r02 = R[r + 2];
-    const r10 = R[r + 3], r11 = R[r + 4], r12 = R[r + 5];
-    const r20 = R[r + 6], r21 = R[r + 7], r22 = R[r + 8];
+    const r00 = R[r],
+        r01 = R[r + 1],
+        r02 = R[r + 2];
+    const r10 = R[r + 3],
+        r11 = R[r + 4],
+        r12 = R[r + 5];
+    const r20 = R[r + 6],
+        r21 = R[r + 7],
+        r22 = R[r + 8];
     out[o] = r00 * r00 * vx + r01 * r01 * vy + r02 * r02 * vz;
     out[o + 1] = r00 * r10 * vx + r01 * r11 * vy + r02 * r12 * vz;
     out[o + 2] = r00 * r20 * vx + r01 * r21 * vy + r02 * r22 * vz;
@@ -102,12 +114,22 @@ const det3 = (A: Mat9, o: number) => {
 };
 
 const gaussLogpdfDiagrot = (
-    x: number, y: number, z: number,
-    mx: number, my: number, mz: number,
-    R: Mat9, ro: number,
-    invx: number, invy: number, invz: number, logdet: number
+    x: number,
+    y: number,
+    z: number,
+    mx: number,
+    my: number,
+    mz: number,
+    R: Mat9,
+    ro: number,
+    invx: number,
+    invy: number,
+    invz: number,
+    logdet: number
 ) => {
-    const dx = x - mx, dy = y - my, dz = z - mz;
+    const dx = x - mx,
+        dy = y - my,
+        dz = z - mz;
     const y0 = dx * R[ro] + dy * R[ro + 3] + dz * R[ro + 6];
     const y1 = dx * R[ro + 1] + dy * R[ro + 4] + dz * R[ro + 7];
     const y2 = dx * R[ro + 2] + dy * R[ro + 5] + dz * R[ro + 8];
@@ -119,23 +141,38 @@ const gaussLogpdfDiagrot = (
 // eigenvalues land on A's diagonal, eigenvectors in V's columns.
 const eigenSymmetric3x3 = (Ain: Float64Array, A: Float64Array, V: Float64Array) => {
     A.set(Ain);
-    V[0] = 1; V[1] = 0; V[2] = 0;
-    V[3] = 0; V[4] = 1; V[5] = 0;
-    V[6] = 0; V[7] = 0; V[8] = 1;
+    V[0] = 1;
+    V[1] = 0;
+    V[2] = 0;
+    V[3] = 0;
+    V[4] = 1;
+    V[5] = 0;
+    V[6] = 0;
+    V[7] = 0;
+    V[8] = 1;
 
     for (let iter = 0; iter < 24; iter++) {
-        let p = 0, q = 1;
+        let p = 0,
+            q = 1;
         let maxAbs = Math.abs(A[1]);
         if (Math.abs(A[2]) > maxAbs) {
-            p = 0; q = 2; maxAbs = Math.abs(A[2]);
+            p = 0;
+            q = 2;
+            maxAbs = Math.abs(A[2]);
         }
         if (Math.abs(A[5]) > maxAbs) {
-            p = 1; q = 2; maxAbs = Math.abs(A[5]);
+            p = 1;
+            q = 2;
+            maxAbs = Math.abs(A[5]);
         }
         if (maxAbs < 1e-12) break;
 
-        const pp = 3 * p + p, qq = 3 * q + q, pq = 3 * p + q;
-        const app = A[pp], aqq = A[qq], apq = A[pq];
+        const pp = 3 * p + p,
+            qq = 3 * q + q,
+            pq = 3 * p + q;
+        const app = A[pp],
+            aqq = A[qq],
+            apq = A[pq];
         const tau = (aqq - app) / (2 * apq);
         const t = Math.sign(tau) / (Math.abs(tau) + Math.sqrt(1 + tau * tau));
         const c = 1 / Math.sqrt(1 + t * t);
@@ -143,9 +180,12 @@ const eigenSymmetric3x3 = (Ain: Float64Array, A: Float64Array, V: Float64Array) 
 
         for (let k = 0; k < 3; k++) {
             if (k === p || k === q) continue;
-            const kp = 3 * k + p, kq = 3 * k + q;
-            const pk = 3 * p + k, qk = 3 * q + k;
-            const akp = A[kp], akq = A[kq];
+            const kp = 3 * k + p,
+                kq = 3 * k + q;
+            const pk = 3 * p + k,
+                qk = 3 * q + k;
+            const akp = A[kp],
+                akq = A[kq];
             A[kp] = c * akp - s * akq;
             A[pk] = A[kp];
             A[kq] = s * akp + c * akq;
@@ -153,11 +193,14 @@ const eigenSymmetric3x3 = (Ain: Float64Array, A: Float64Array, V: Float64Array) 
         }
         A[pp] = c * c * app - 2 * s * c * apq + s * s * aqq;
         A[qq] = s * s * app + 2 * s * c * apq + c * c * aqq;
-        A[pq] = 0; A[3 * q + p] = 0;
+        A[pq] = 0;
+        A[3 * q + p] = 0;
 
         for (let k = 0; k < 3; k++) {
-            const kp = 3 * k + p, kq = 3 * k + q;
-            const vkp = V[kp], vkq = V[kq];
+            const kp = 3 * k + p,
+                kq = 3 * k + q;
+            const vkp = V[kp],
+                vkq = V[kq];
             V[kp] = c * vkp - s * vkq;
             V[kq] = s * vkp + c * vkq;
         }
@@ -165,7 +208,9 @@ const eigenSymmetric3x3 = (Ain: Float64Array, A: Float64Array, V: Float64Array) 
 };
 
 const rotmatToQuat = (R: Float64Array, o: number, out: Float64Array, oo: number) => {
-    const m00 = R[o], m11 = R[o + 4], m22 = R[o + 8];
+    const m00 = R[o],
+        m11 = R[o + 4],
+        m22 = R[o + 8];
     const tr = m00 + m11 + m22;
     let qw: number, qx: number, qy: number, qz: number;
 
@@ -322,7 +367,9 @@ const mergeGroup = (
     for (let m = 0; m < count; m++) weights[m] /= W;
 
     // Merged mean (weighted).
-    let mux = 0, muy = 0, muz = 0;
+    let mux = 0,
+        muy = 0,
+        muz = 0;
     for (let m = 0; m < count; m++) {
         const i = members[m];
         const p = weights[m];
@@ -341,9 +388,15 @@ const mergeGroup = (
         const i8 = i * 8;
         const p = weights[m];
 
-        let qw = geo[i8], qx = geo[i8 + 1], qy = geo[i8 + 2], qz = geo[i8 + 3];
+        let qw = geo[i8],
+            qx = geo[i8 + 1],
+            qy = geo[i8 + 2],
+            qz = geo[i8 + 3];
         const qn = 1 / Math.max(Math.hypot(qw, qx, qy, qz), 1e-12);
-        qw *= qn; qx *= qn; qy *= qn; qz *= qn;
+        qw *= qn;
+        qx *= qn;
+        qy *= qn;
+        qz *= qn;
         const sx = Math.max(Math.exp(geo[i8 + 4]), 1e-12);
         const sy = Math.max(Math.exp(geo[i8 + 5]), 1e-12);
         const sz = Math.max(Math.exp(geo[i8 + 6]), 1e-12);
@@ -351,7 +404,9 @@ const mergeGroup = (
         quatToRotmat(qw, qx, qy, qz, Ri, 0);
         sigmaFromRotVar(Ri, 0, sx * sx, sy * sy, sz * sz, SigI, 0);
 
-        const dx = pos[i * 3] - mux, dy = pos[i * 3 + 1] - muy, dz = pos[i * 3 + 2] - muz;
+        const dx = pos[i * 3] - mux,
+            dy = pos[i * 3 + 1] - muy,
+            dz = pos[i * 3 + 2] - muz;
         Sig[0] += p * (dx * dx + SigI[0]);
         Sig[1] += p * (dx * dy + SigI[1]);
         Sig[2] += p * (dx * dz + SigI[2]);
@@ -372,23 +427,37 @@ const mergeGroup = (
     eigenSymmetric3x3(Sig, eigA, eigV);
     const vecs = eigV;
 
-    const v0 = eigA[0], v1 = eigA[4], v2 = eigA[8];
+    const v0 = eigA[0],
+        v1 = eigA[4],
+        v2 = eigA[8];
     let o0: number, o1: number, o2: number;
     if (v0 >= v1) {
-        if (v1 >= v2)      {
-            o0 = 0; o1 = 1; o2 = 2;
+        if (v1 >= v2) {
+            o0 = 0;
+            o1 = 1;
+            o2 = 2;
         } else if (v0 >= v2) {
-            o0 = 0; o1 = 2; o2 = 1;
-        } else               {
-            o0 = 2; o1 = 0; o2 = 1;
+            o0 = 0;
+            o1 = 2;
+            o2 = 1;
+        } else {
+            o0 = 2;
+            o1 = 0;
+            o2 = 1;
         }
     } else {
-        if (v0 >= v2)      {
-            o0 = 1; o1 = 0; o2 = 2;
+        if (v0 >= v2) {
+            o0 = 1;
+            o1 = 0;
+            o2 = 2;
         } else if (v1 >= v2) {
-            o0 = 1; o1 = 2; o2 = 0;
-        } else               {
-            o0 = 2; o1 = 1; o2 = 0;
+            o0 = 1;
+            o1 = 2;
+            o2 = 0;
+        } else {
+            o0 = 2;
+            o1 = 1;
+            o2 = 0;
         }
     }
     const ev0 = Math.max(eigA[3 * o0 + o0], 1e-18);
@@ -403,15 +472,25 @@ const mergeGroup = (
     const alphaM = Math.min(1, W / Math.max(ellipsoidArea(s0, s1, s2), 1e-30));
 
     const Rm = scratch.rM;
-    Rm[0] = vecs[o0]; Rm[1] = vecs[o1]; Rm[2] = vecs[o2];
-    Rm[3] = vecs[3 + o0]; Rm[4] = vecs[3 + o1]; Rm[5] = vecs[3 + o2];
-    Rm[6] = vecs[6 + o0]; Rm[7] = vecs[6 + o1]; Rm[8] = vecs[6 + o2];
+    Rm[0] = vecs[o0];
+    Rm[1] = vecs[o1];
+    Rm[2] = vecs[o2];
+    Rm[3] = vecs[3 + o0];
+    Rm[4] = vecs[3 + o1];
+    Rm[5] = vecs[3 + o2];
+    Rm[6] = vecs[6 + o0];
+    Rm[7] = vecs[6 + o1];
+    Rm[8] = vecs[6 + o2];
     if (det3(Rm, 0) < 0) {
-        Rm[2] *= -1; Rm[5] *= -1; Rm[8] *= -1;
+        Rm[2] *= -1;
+        Rm[5] *= -1;
+        Rm[8] *= -1;
     }
     rotmatToQuat(Rm, 0, out.geo, 0);
 
-    out.pos[0] = mux; out.pos[1] = muy; out.pos[2] = muz;
+    out.pos[0] = mux;
+    out.pos[1] = muy;
+    out.pos[2] = muz;
     out.geo[4] = Math.log(s0);
     out.geo[5] = Math.log(s1);
     out.geo[6] = Math.log(s2);

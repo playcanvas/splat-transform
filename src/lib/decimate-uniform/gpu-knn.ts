@@ -1,3 +1,4 @@
+import type { GraphicsDevice } from 'playcanvas';
 import {
     BUFFERUSAGE_COPY_DST,
     BUFFERUSAGE_COPY_SRC,
@@ -8,14 +9,13 @@ import {
     BindStorageBufferFormat,
     BindUniformBufferFormat,
     Compute,
-    GraphicsDevice,
     Shader,
     StorageBuffer,
     UniformBufferFormat,
     UniformFormat
 } from 'playcanvas';
 
-import { type FlatKdTree } from '../spatial/kd-tree';
+import type { FlatKdTree } from '../spatial/kd-tree';
 
 /**
  * Block-local GPU KNN for `--decimate-uniform`.
@@ -45,7 +45,7 @@ import { type FlatKdTree } from '../spatial/kd-tree';
  * @param stackSize - Compile-time per-thread DFS stack depth.
  * @returns WGSL source.
  */
-const knnWgsl = (k: number, stackSize: number) => /* wgsl */`
+const knnWgsl = (k: number, stackSize: number) => /* wgsl */ `
 struct Uniforms {
     queryOffset: u32,
     queryCount: u32,
@@ -225,11 +225,11 @@ class GpuKnn {
      */
     constructor(device: GraphicsDevice, maxN: number, k: number) {
         const workgroupSize = 64;
-        const queriesPerBatch = 1024 * workgroupSize;  // 65,536
+        const queriesPerBatch = 1024 * workgroupSize; // 65,536
         // Per-thread DFS stack depth: tree depth = log2(maxN) + slack. 48 is
         // safe for any N within the 30-bit nodeIdx packing limit checked below.
         const stackSize = 48;
-        if (maxN > 0x3FFFFFFF) {
+        if (maxN > 0x3fffffff) {
             throw new Error(`GpuKnn: maxN=${maxN} exceeds 30-bit nodeIdx packing limit (~1B nodes)`);
         }
 
@@ -267,11 +267,7 @@ class GpuKnn {
         const nChildrenBuf = new StorageBuffer(device, maxN * 2 * 4, BUFFERUSAGE_COPY_DST);
 
         const outBatchBytes = queriesPerBatch * k * 4;
-        const outBuf = new StorageBuffer(
-            device,
-            outBatchBytes,
-            BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST
-        );
+        const outBuf = new StorageBuffer(device, outBatchBytes, BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST);
         const outScratch = new Uint32Array(queriesPerBatch * k);
 
         const compute = new Compute(device, shader, 'compute-knn-kdtree');
@@ -298,7 +294,9 @@ class GpuKnn {
                 throw new Error(`GpuKnn: queryCount=${queryCount} exceeds N=${n}`);
             }
             if (outNeighbours.length !== queryCount * k) {
-                throw new Error(`GpuKnn: outNeighbours length ${outNeighbours.length} must be queryCount*k = ${queryCount * k}`);
+                throw new Error(
+                    `GpuKnn: outNeighbours length ${outNeighbours.length} must be queryCount*k = ${queryCount * k}`
+                );
             }
 
             // `FlatKdTree` already carries the interleaved layout this kernel

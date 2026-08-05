@@ -1,38 +1,35 @@
 import { basename } from 'pathe';
 import { Vec3 } from 'playcanvas';
 
-import { buildCollisionMesh } from './collision-glb';
-import { logWrittenFile } from './utils';
-import { Column, DataTable, computeGaussianExtents, computeWriteTransform, transformColumns, type Bounds } from '../data-table';
+import { Column, DataTable, computeGaussianExtents, computeWriteTransform, transformColumns } from '../data-table';
+import type { Bounds } from '../data-table';
 import { GpuDilation, GpuVoxelization } from '../gpu';
-import { type FileSystem, writeFile } from '../io/write';
+import { writeFile } from '../io/write';
+import type { FileSystem } from '../io/write';
 import { GaussianBVH } from '../spatial';
 import type { CollisionMeshShape, DeviceCreator } from '../types';
 import { fmtCount, logger, Transform } from '../utils';
 import { version } from '../version';
-import { buildSparseOctree, buildSparseOctreeFromBuffer, MAX_V1_MIXED_LEAVES, type SparseOctree } from './sparse-octree';
-import {
-    filterAndFillBlocks,
-    alignGridBounds,
-    carve,
-    fillExterior,
-    fillFloor,
-    type NavSeed,
-    voxelizeToBuffer
-} from '../voxel';
+import { filterAndFillBlocks, alignGridBounds, carve, fillExterior, fillFloor, voxelizeToBuffer } from '../voxel';
+import type { NavSeed } from '../voxel';
 import type { BlockMaskBuffer } from '../voxel/block-mask-buffer';
 import { SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
 
+import { buildCollisionMesh } from './collision-glb';
+import { buildSparseOctree, buildSparseOctreeFromBuffer, MAX_V1_MIXED_LEAVES } from './sparse-octree';
+import type { SparseOctree } from './sparse-octree';
+import { logWrittenFile } from './utils';
+
 const MAX_MUTABLE_GRID_PEAK_BYTES = 1024 * 1024 * 1024;
 
-interface OccupiedBlockBounds {
+type OccupiedBlockBounds = {
     minBx: number;
     minBy: number;
     minBz: number;
     maxBx: number;
     maxBy: number;
     maxBz: number;
-}
+};
 
 const getBufferOccupiedBounds = (
     buffer: BlockMaskBuffer,
@@ -40,8 +37,12 @@ const getBufferOccupiedBounds = (
     nby: number,
     nbz: number
 ): OccupiedBlockBounds | null => {
-    let minBx = nbx, minBy = nby, minBz = nbz;
-    let maxBx = -1, maxBy = -1, maxBz = -1;
+    let minBx = nbx,
+        minBy = nby,
+        minBz = nbz;
+    let maxBx = -1,
+        maxBy = -1,
+        maxBz = -1;
 
     const scan = (indices: Float64Array): void => {
         for (let i = 0; i < indices.length; i++) {
@@ -105,7 +106,9 @@ const assertMutableGridFits = (
 ): void => {
     const totalBlocks = nbx * nby * nbz;
     if (!Number.isSafeInteger(totalBlocks) || totalBlocks > 0x100000000) {
-        throw new Error(`Voxel mutation requires ${fmtCount(totalBlocks)} blocks, exceeding the 32-bit mutable-grid limit. Use a coarser voxel resolution or disable navigation, fill, and collision output.`);
+        throw new Error(
+            `Voxel mutation requires ${fmtCount(totalBlocks)} blocks, exceeding the 32-bit mutable-grid limit. Use a coarser voxel resolution or disable navigation, fill, and collision output.`
+        );
     }
 
     const typeBytes = Math.ceil(totalBlocks / 16) * 4;
@@ -115,8 +118,8 @@ const assertMutableGridFits = (
     if (estimatedPeak > MAX_MUTABLE_GRID_PEAK_BYTES) {
         throw new Error(
             `Voxel mutation would require approximately ${fmtCount(Math.ceil(estimatedPeak / (1024 * 1024)))} MiB ` +
-            `of mutable-grid storage, exceeding the ${MAX_MUTABLE_GRID_PEAK_BYTES / (1024 * 1024)} MiB safety limit. ` +
-            'Use a coarser voxel resolution or disable navigation, fill, and collision output.'
+                `of mutable-grid storage, exceeding the ${MAX_MUTABLE_GRID_PEAK_BYTES / (1024 * 1024)} MiB safety limit. ` +
+                'Use a coarser voxel resolution or disable navigation, fill, and collision output.'
         );
     }
 };
@@ -162,6 +165,7 @@ type WriteVoxelOptions = {
 /**
  * Metadata for a voxel octree file.
  */
+// eslint-disable-next-line @typescript-eslint/consistent-type-definitions -- preserve public declaration merging
 interface VoxelMetadata {
     /** File format version */
     version: string;
@@ -218,7 +222,7 @@ const cropToOccupied = (
     const { nbx, nby, nbz } = grid;
 
     const boundsBar = logger.bar('Scanning bounds', grid.types.length);
-    const occupiedBounds = grid.getOccupiedBlockBounds(done => boundsBar.update(done));
+    const occupiedBounds = grid.getOccupiedBlockBounds((done) => boundsBar.update(done));
     boundsBar.end();
 
     if (!occupiedBounds) {
@@ -230,15 +234,13 @@ const cropToOccupied = (
     const cropMaxBy = maxBy + 1;
     const cropMaxBz = maxBz + 1;
 
-    if (minBx === 0 && minBy === 0 && minBz === 0 &&
-        cropMaxBx === nbx && cropMaxBy === nby && cropMaxBz === nbz) {
+    if (minBx === 0 && minBy === 0 && minBz === 0 && cropMaxBx === nbx && cropMaxBy === nby && cropMaxBz === nbz) {
         return { grid, gridBounds };
     }
 
     const cropBar = logger.bar('Cropping grid', grid.types.length);
-    const croppedGrid = grid.cropTo(
-        minBx, minBy, minBz, cropMaxBx, cropMaxBy, cropMaxBz,
-        done => cropBar.update(done)
+    const croppedGrid = grid.cropTo(minBx, minBy, minBz, cropMaxBx, cropMaxBy, cropMaxBz, (done) =>
+        cropBar.update(done)
     );
     cropBar.end();
 
@@ -279,7 +281,7 @@ const cropToNavigable = (
     const { nbx, nby, nbz } = grid;
 
     const boundsBar = logger.bar('Scanning bounds', grid.types.length);
-    const navBounds = grid.getNavigableBlockBounds(done => boundsBar.update(done));
+    const navBounds = grid.getNavigableBlockBounds((done) => boundsBar.update(done));
     boundsBar.end();
     if (!navBounds) {
         return { grid, gridBounds };
@@ -302,15 +304,20 @@ const cropToNavigable = (
     const cropMaxBy = Math.min(nby, maxBy + 1 + MARGIN);
     const cropMaxBz = Math.min(nbz, maxBz + 1 + MARGIN);
 
-    if (cropMinBx === 0 && cropMinBy === 0 && cropMinBz === 0 &&
-        cropMaxBx === nbx && cropMaxBy === nby && cropMaxBz === nbz) {
+    if (
+        cropMinBx === 0 &&
+        cropMinBy === 0 &&
+        cropMinBz === 0 &&
+        cropMaxBx === nbx &&
+        cropMaxBy === nby &&
+        cropMaxBz === nbz
+    ) {
         return { grid, gridBounds };
     }
 
     const cropBar = logger.bar('Cropping grid', grid.types.length);
-    const croppedGrid = grid.cropTo(
-        cropMinBx, cropMinBy, cropMinBz, cropMaxBx, cropMaxBy, cropMaxBz,
-        done => cropBar.update(done)
+    const croppedGrid = grid.cropTo(cropMinBx, cropMinBy, cropMinBz, cropMaxBx, cropMaxBy, cropMaxBz, (done) =>
+        cropBar.update(done)
     );
     cropBar.end();
 
@@ -339,11 +346,7 @@ const cropToNavigable = (
  * @param jsonFilename - Output filename for JSON metadata.
  * @param octree - Sparse octree structure to write.
  */
-const writeOctreeFiles = async (
-    fs: FileSystem,
-    jsonFilename: string,
-    octree: SparseOctree
-): Promise<void> => {
+const writeOctreeFiles = async (fs: FileSystem, jsonFilename: string, octree: SparseOctree): Promise<void> => {
     // Build metadata object
     const metadata: VoxelMetadata = {
         version: '1.1',
@@ -367,7 +370,7 @@ const writeOctreeFiles = async (
         leafDataCount: octree.leafData.length
     };
 
-    const jsonBytes = (new TextEncoder()).encode(JSON.stringify(metadata, null, 2));
+    const jsonBytes = new TextEncoder().encode(JSON.stringify(metadata, null, 2));
     await writeFile(fs, jsonFilename, jsonBytes);
     logWrittenFile(basename(jsonFilename), jsonBytes.byteLength);
 
@@ -437,7 +440,9 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         if (collisionMesh === false || collisionMesh === undefined) return null;
         if (collisionMesh === true) return 'smooth';
         if (collisionMesh === 'smooth' || collisionMesh === 'faces') return collisionMesh;
-        throw new Error(`Invalid collisionMesh value: ${String(collisionMesh)}. Expected true, false, "smooth", or "faces"`);
+        throw new Error(
+            `Invalid collisionMesh value: ${String(collisionMesh)}. Expected true, false, "smooth", or "faces"`
+        );
     })();
 
     if (navCapsule && !navSeed) {
@@ -450,18 +455,25 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     // Build a DataTable in engine space containing only the columns needed
     // for voxelization (no SH, so SH rotation cost is never paid).
     const voxelColumns = [
-        'x', 'y', 'z',
-        'rot_0', 'rot_1', 'rot_2', 'rot_3',
-        'scale_0', 'scale_1', 'scale_2',
+        'x',
+        'y',
+        'z',
+        'rot_0',
+        'rot_1',
+        'rot_2',
+        'rot_3',
+        'scale_0',
+        'scale_1',
+        'scale_2',
         'opacity'
     ];
-    const missingColumns = voxelColumns.filter(name => !dataTable.hasColumn(name));
+    const missingColumns = voxelColumns.filter((name) => !dataTable.hasColumn(name));
     if (missingColumns.length > 0) {
         throw new Error(`writeVoxel: missing required column(s): ${missingColumns.join(', ')}`);
     }
     const delta = computeWriteTransform(dataTable.transform, Transform.IDENTITY);
     let cols: ReturnType<typeof transformColumns> | null = transformColumns(dataTable, voxelColumns, delta);
-    let pcDataTable: DataTable | null = new DataTable(voxelColumns.map(name => new Column(name, cols!.get(name)!)));
+    let pcDataTable: DataTable | null = new DataTable(voxelColumns.map((name) => new Column(name, cols!.get(name)!)));
 
     let extentsResult: ReturnType<typeof computeGaussianExtents> | null = computeGaussianExtents(pcDataTable);
     const bounds = extentsResult.sceneBounds;
@@ -476,7 +488,9 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     let bvh: GaussianBVH | null = null;
     try {
         const bvhSub = logger.group('Building BVH');
-        logger.debug(`scene extents: (${bounds.min.x.toFixed(2)},${bounds.min.y.toFixed(2)},${bounds.min.z.toFixed(2)}) - (${bounds.max.x.toFixed(2)},${bounds.max.y.toFixed(2)},${bounds.max.z.toFixed(2)})`);
+        logger.debug(
+            `scene extents: (${bounds.min.x.toFixed(2)},${bounds.min.y.toFixed(2)},${bounds.min.z.toFixed(2)}) - (${bounds.max.x.toFixed(2)},${bounds.max.y.toFixed(2)},${bounds.max.z.toFixed(2)})`
+        );
 
         bvh = new GaussianBVH(pcDataTable, extentsResult.extents);
         bvhSub.end();
@@ -498,23 +512,23 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         // Vertical pad is only contributed by exteriorPad — fillFloor's
         // dilation is XZ-only, and Y padding would extend the wall pillars
         // above the splat's natural ceiling and below its floor.
-        const exteriorPad = hasFillExterior ?
-            (Math.ceil(navExteriorRadius! / voxelResolution) + 1) * voxelResolution :
-            0;
-        const floorPad = hasFloorFill ?
-            (Math.ceil(floorFillDilation / voxelResolution) + 1) * voxelResolution :
-            0;
+        const exteriorPad = hasFillExterior
+            ? (Math.ceil(navExteriorRadius! / voxelResolution) + 1) * voxelResolution
+            : 0;
+        const floorPad = hasFloorFill ? (Math.ceil(floorFillDilation / voxelResolution) + 1) * voxelResolution : 0;
         const padXZ = Math.max(exteriorPad, floorPad);
         const padY = exteriorPad;
         let gridBounds = alignGridBounds(
-            bounds.min.x - padXZ, bounds.min.y - padY, bounds.min.z - padXZ,
-            bounds.max.x + padXZ, bounds.max.y + padY, bounds.max.z + padXZ,
+            bounds.min.x - padXZ,
+            bounds.min.y - padY,
+            bounds.min.z - padXZ,
+            bounds.max.x + padXZ,
+            bounds.max.y + padY,
+            bounds.max.z + padXZ,
             voxelResolution
         );
 
-        const buffer = await voxelizeToBuffer(
-            bvh, gpuVoxelization, gridBounds, voxelResolution, opacityCutoff
-        );
+        const buffer = await voxelizeToBuffer(bvh, gpuVoxelization, gridBounds, voxelResolution, opacityCutoff);
         bvh = null;
         pcDataTable = null;
         extentsResult = null;
@@ -527,9 +541,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         const nbxInit = Math.round((gridBounds.max.x - gridBounds.min.x) / (4 * voxelResolution));
         const nbyInit = Math.round((gridBounds.max.y - gridBounds.min.y) / (4 * voxelResolution));
         const nbzInit = Math.round((gridBounds.max.z - gridBounds.min.z) / (4 * voxelResolution));
-        const filteredBuffer = filterAndFillBlocks(
-            buffer, nbxInit, nbyInit, nbzInit, MAX_V1_MIXED_LEAVES
-        );
+        const filteredBuffer = filterAndFillBlocks(buffer, nbxInit, nbyInit, nbzInit, MAX_V1_MIXED_LEAVES);
         buffer.clear();
         filterSub.end();
 
@@ -539,16 +551,18 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
 
         if (!needsMutableGrid) {
             const cropSub = logger.group('Cropping');
-            const cropped = cropBufferBounds(
-                filteredBuffer, nbxInit, nbyInit, nbzInit, gridBounds, voxelResolution
-            );
+            const cropped = cropBufferBounds(filteredBuffer, nbxInit, nbyInit, nbzInit, gridBounds, voxelResolution);
             gridBounds = cropped.gridBounds;
             cropSub.end();
 
             octree = buildSparseOctreeFromBuffer(
                 filteredBuffer,
-                nbxInit, nbyInit, nbzInit,
-                gridBounds, bounds, voxelResolution,
+                nbxInit,
+                nbyInit,
+                nbzInit,
+                gridBounds,
+                bounds,
+                voxelResolution,
                 cropped.region
             );
             filteredBuffer.clear();
@@ -561,9 +575,8 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             const nyInit = nbyInit * 4;
             const nzInit = nbzInit * 4;
             const loadBar = logger.bar('Loading grid', Math.max(1, filteredBuffer.count));
-            let grid = SparseVoxelGrid.fromBuffer(
-                filteredBuffer, nxInit, nyInit, nzInit,
-                (done, total) => loadBar.update(Math.min(done, total))
+            let grid = SparseVoxelGrid.fromBuffer(filteredBuffer, nxInit, nyInit, nzInit, (done, total) =>
+                loadBar.update(Math.min(done, total))
             );
             loadBar.end();
             filteredBuffer.clear();
@@ -578,8 +591,11 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             if (hasFillExterior) {
                 const sub = logger.group('Fill exterior');
                 const fillResult = await fillExterior(
-                    grid, gridBounds, voxelResolution,
-                    navExteriorRadius!, navSeed!,
+                    grid,
+                    gridBounds,
+                    voxelResolution,
+                    navExteriorRadius!,
+                    navSeed!,
                     gpuDilation!
                 );
                 grid = fillResult.grid;
@@ -589,9 +605,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
 
             if (hasFloorFill) {
                 const sub = logger.group('Fill floor');
-                const floorResult = await fillFloor(
-                    grid, gridBounds, voxelResolution, floorFillDilation, gpuDilation
-                );
+                const floorResult = await fillFloor(grid, gridBounds, voxelResolution, floorFillDilation, gpuDilation);
                 grid = floorResult.grid;
                 gridBounds = floorResult.gridBounds;
                 sub.end();
@@ -600,8 +614,11 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             if (hasNav) {
                 const sub = logger.group('Carve');
                 const navResult = await carve(
-                    grid, gridBounds, voxelResolution,
-                    navCapsule!.height, navCapsule!.radius,
+                    grid,
+                    gridBounds,
+                    voxelResolution,
+                    navCapsule!.height,
+                    navCapsule!.radius,
                     navSeed!,
                     gpuDilation!
                 );
@@ -611,9 +628,10 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             }
 
             const cropSub = logger.group('Cropping');
-            const finalCrop = hasFillExterior || hasFloorFill ?
-                cropToNavigable(grid, gridBounds, voxelResolution) :
-                cropToOccupied(grid, gridBounds, voxelResolution);
+            const finalCrop =
+                hasFillExterior || hasFloorFill
+                    ? cropToNavigable(grid, gridBounds, voxelResolution)
+                    : cropToOccupied(grid, gridBounds, voxelResolution);
             grid = finalCrop.grid;
             gridBounds = finalCrop.gridBounds;
             cropSub.end();
@@ -621,17 +639,11 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             gpuDilation?.destroy();
             gpuDilation = null;
 
-            glbBytes = collisionMeshShape ?
-                buildCollisionMesh(grid, gridBounds, voxelResolution, collisionMeshShape) :
-                null;
+            glbBytes = collisionMeshShape
+                ? buildCollisionMesh(grid, gridBounds, voxelResolution, collisionMeshShape)
+                : null;
 
-            octree = buildSparseOctree(
-                grid,
-                gridBounds,
-                bounds,
-                voxelResolution,
-                { consumeGrid: true }
-            );
+            octree = buildSparseOctree(grid, gridBounds, bounds, voxelResolution, { consumeGrid: true });
         }
 
         logger.info(`octree depth: ${octree.treeDepth}`);

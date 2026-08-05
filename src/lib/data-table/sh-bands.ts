@@ -17,7 +17,7 @@ const shRestNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
  * @returns The number of SH bands (0-3).
  */
 const getSHBands = (dataTable: DataTable): number => {
-    const idx = shRestNames.findIndex(v => !dataTable.hasColumn(v));
+    const idx = shRestNames.findIndex((v) => !dataTable.hasColumn(v));
     return ({ '9': 1, '24': 2, '-1': 3 } as Record<string, number>)[String(idx)] ?? 0;
 };
 

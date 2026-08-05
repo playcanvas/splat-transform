@@ -11,7 +11,7 @@
  * `coverage[i]` cap is hit. Mirrors the bbox computed by the pinhole
  * project shader's `tile-aabb-pinhole` chunk.
  */
-const tileWalkPinhole = /* wgsl */`
+const tileWalkPinhole = /* wgsl */ `
     let minTX = max(0, i32(floor((sX - radius - gox) / tsz)));
     let maxTX = min(i32(uniforms.groupTilesX) - 1, i32(floor((sX + radius - gox) / tsz)));
     let minTY = max(0, i32(floor((sY - radius - goy) / tsz)));

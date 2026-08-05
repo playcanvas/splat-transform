@@ -30,6 +30,8 @@ import assert from 'node:assert';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { enumerateAdapters } from '../src/cli/node-device.ts';
+
 import { CASES } from './render-golden.cases.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -48,6 +50,12 @@ const distExists = (() => {
         return false;
     }
 })();
+
+const skip = !distExists
+    ? 'dist/cli.mjs missing — run `npm run build` first (or `npm test`, which builds via the pretest hook)'
+    : (await enumerateAdapters()).length === 0
+      ? 'no WebGPU adapter available'
+      : false;
 
 const runCli = (args) => {
     return new Promise((resolve, reject) => {
@@ -68,7 +76,7 @@ const runCli = (args) => {
     });
 };
 
-describe('Render goldens', { skip: distExists ? false : 'dist/cli.mjs missing — run `npm run build` first (or `npm test`, which builds via the pretest hook)' }, () => {
+describe('Render goldens', { skip }, () => {
     for (const { name, args, goldenPath } of CASES) {
         it(`${name} matches golden`, async () => {
             const outPath = join(tmpdir(), `golden-${name}-${process.pid}.webp`);

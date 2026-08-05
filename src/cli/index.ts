@@ -4,16 +4,14 @@ import { basename, dirname, join, resolve } from 'node:path';
 import process, { exit } from 'node:process';
 import { parseArgs } from 'node:util';
 
-import { GraphicsDevice, Vec3 } from 'playcanvas';
+import type { GraphicsDevice } from 'playcanvas';
+import { Vec3 } from 'playcanvas';
 
-import { createDevice, enumerateAdapters, getPeakGpuMemory } from './node-device';
-import { NodeFileSystem, NodeReadFileSystem } from './node-file-system';
 import {
     bakeTransform,
     combine,
     concatSource,
     createChunkDataPool,
-    DataTable,
     dataTableToChunkSource,
     decimateSource,
     decimateSourceUniform,
@@ -37,15 +35,18 @@ import {
     WorkerQueue,
     writeLodSource,
     writeSource,
-    type ChunkSource,
-    type ChunkSourceMetadata,
-    type ProcessAction,
-    type FilterFloaters,
-    type FilterCluster,
-    type Options as LibOptions,
-    type CollisionMeshShape,
-    type ReadFileSystem,
     logger
+} from '../lib';
+import type {
+    DataTable,
+    ChunkSource,
+    ChunkSourceMetadata,
+    ProcessAction,
+    FilterFloaters,
+    FilterCluster,
+    Options as LibOptions,
+    CollisionMeshShape,
+    ReadFileSystem
 } from '../lib';
 // CLI-only internals (deliberately off the public lib surface): the LOD-path
 // level resolver and the container source readers the LOD writer drives
@@ -55,10 +56,13 @@ import { readLccSource, readLccEnvironmentSource } from '../lib/readers/read-lcc
 import { readLcc2Source, readLcc2EnvironmentSource } from '../lib/readers/read-lcc2';
 import { readLodSource, readLodEnvironmentSource } from '../lib/readers/read-lod';
 
+import { createDevice, enumerateAdapters, getPeakGpuMemory } from './node-device';
+import { NodeFileSystem, NodeReadFileSystem } from './node-file-system';
+
 /**
  * CLI-specific options extending library options.
  */
-interface CliOptions extends LibOptions {
+type CliOptions = {
     overwrite: boolean;
     help: boolean;
     version: boolean;
@@ -67,17 +71,17 @@ interface CliOptions extends LibOptions {
     mem: boolean;
     noTty: boolean | undefined;
     listGpus: boolean;
-    deviceIdx: number;  // -1 = auto, -2 = CPU, 0+ = GPU index
-    scratchDir: string | undefined;  // decimation spill location (default: output directory)
-    memoryBudgetBytes: number;  // decimation residency policy ceiling (not an allocation, not user-facing)
-}
+    deviceIdx: number; // -1 = auto, -2 = CPU, 0+ = GPU index
+    scratchDir: string | undefined; // decimation spill location (default: output directory)
+    memoryBudgetBytes: number; // decimation residency policy ceiling (not an allocation, not user-facing)
+} & LibOptions;
 
 const fileExists = async (filename: string) => {
     try {
         await lstat(filename);
         return true;
-    } catch (e: any) {
-        if (e?.code === 'ENOENT') {
+    } catch (e) {
+        if ((e as { code?: string })?.code === 'ENOENT') {
             return false;
         }
         throw e; // real error (permissions, etc)
@@ -170,21 +174,21 @@ const cliOptionsConfig = {
     'voxel-carve': { type: 'string' },
     'seed-pos': { type: 'string', default: '' },
     'collision-mesh': { type: 'string' },
-    'projection': { type: 'string' },
+    projection: { type: 'string' },
     'camera-pos': { type: 'string' },
     'camera-target': { type: 'string' },
     'camera-up': { type: 'string' },
     'camera-fov': { type: 'string' },
-    'resolution': { type: 'string' },
+    resolution: { type: 'string' },
     'camera-near': { type: 'string' },
-    'background': { type: 'string' },
+    background: { type: 'string' },
     'f-stop': { type: 'string' },
     'focus-distance': { type: 'string' },
     'sensor-size': { type: 'string' },
     'camera-pos-end': { type: 'string' },
     'camera-target-end': { type: 'string' },
     'camera-up-end': { type: 'string' },
-    'shutter': { type: 'string' },
+    shutter: { type: 'string' },
     'motion-samples': { type: 'string' },
 
     'scratch-dir': { type: 'string' },
@@ -198,7 +202,7 @@ const cliOptionsConfig = {
     'filter-harmonics': { type: 'string', short: 'H', multiple: true },
     'filter-box': { type: 'string', short: 'B', multiple: true },
     'filter-sphere': { type: 'string', short: 'S', multiple: true },
-    'decimate': { type: 'string', short: 'd', multiple: true },
+    decimate: { type: 'string', short: 'd', multiple: true },
     'decimate-uniform': { type: 'string', multiple: true },
     'filter-cluster': { type: 'string', short: 'C', multiple: true },
     'filter-floaters': { type: 'string', short: 'F', multiple: true },
@@ -209,9 +213,10 @@ const cliOptionsConfig = {
     'morton-order': { type: 'boolean', short: 'm', multiple: true }
 } as const;
 
-const stringOptionNames = new Set(Object.entries(cliOptionsConfig)
-.filter(([, v]) => v.type === 'string')
-.flatMap(([name, v]) => [`--${name}`, ...('short' in v ? [`-${v.short}`] : [])])
+const stringOptionNames = new Set(
+    Object.entries(cliOptionsConfig)
+        .filter(([, v]) => v.type === 'string')
+        .flatMap(([name, v]) => [`--${name}`, ...('short' in v ? [`-${v.short}`] : [])])
 );
 
 const isNumericValue = (s: string) => /^-?\d[\d.,e+-]*$/.test(s);
@@ -222,7 +227,7 @@ const isTextJsonFormat = (s: string) => /^(?:text|json)$/i.test(s);
 // next argv token is consumed as the value; when omitted (or rejected) the
 // option is normalized to an empty `--option=` form.
 type OptionalValueValidator = (next: string) => boolean;
-const optionalValueOptions: Map<string, OptionalValueValidator> = new Map([
+const optionalValueOptions = new Map<string, OptionalValueValidator>([
     ['--filter-cluster', isNumericValue],
     ['-C', isNumericValue],
     ['--filter-floaters', isNumericValue],
@@ -237,8 +242,8 @@ const optionalValueOptions: Map<string, OptionalValueValidator> = new Map([
 
 const shortToLong = new Map<string, string>(
     Object.entries(cliOptionsConfig)
-    .filter(([, v]) => 'short' in v)
-    .map(([name, v]) => [`-${(v as { short: string }).short}`, `--${name}`])
+        .filter(([, v]) => 'short' in v)
+        .map(([name, v]) => [`-${(v as { short: string }).short}`, `--${name}`])
 );
 
 /**
@@ -306,7 +311,7 @@ const parseArguments = async () => {
     };
 
     const parseVec = (value: string, count: number): number[] => {
-        const parts = value.split(',').map(p => parseNumber(p));
+        const parts = value.split(',').map((p) => parseNumber(p));
         if (parts.length !== count) {
             throw new Error(`Expected ${count} comma-separated values, got ${parts.length}: ${value}`);
         }
@@ -331,12 +336,18 @@ const parseArguments = async () => {
 
     const parseComparator = (value: string): 'lt' | 'lte' | 'gt' | 'gte' | 'eq' | 'neq' => {
         switch (value) {
-            case 'lt': return 'lt';
-            case 'lte': return 'lte';
-            case 'gt': return 'gt';
-            case 'gte': return 'gte';
-            case 'eq': return 'eq';
-            case 'neq': return 'neq';
+            case 'lt':
+                return 'lt';
+            case 'lte':
+                return 'lte';
+            case 'gt':
+                return 'gt';
+            case 'gte':
+                return 'gte';
+            case 'eq':
+                return 'eq';
+            case 'neq':
+                return 'neq';
             default:
                 throw new Error(`Invalid comparator value: ${value}`);
         }
@@ -348,7 +359,7 @@ const parseArguments = async () => {
     let deviceIdx: number;
     const gpuValue = v.gpu.toLowerCase();
     if (gpuValue === 'cpu') {
-        deviceIdx = -2;  // -2 indicates CPU mode
+        deviceIdx = -2; // -2 indicates CPU mode
     } else {
         deviceIdx = parseInteger(v.gpu);
         if (deviceIdx < -1) {
@@ -533,8 +544,11 @@ const parseArguments = async () => {
         // Half the machine's RAM, capped at 48 GiB — derived here because the
         // library is node-free and cannot read os.totalmem() itself.
         memoryBudgetBytes: Math.min(48 * 2 ** 30, Math.floor(totalmem() / 2)),
-        lodSelect: v['select-lod'].split(',').filter(v => !!v).map(parseInteger),
-        viewerSettingsJson: viewerSettingsPath && await readJsonFile(viewerSettingsPath),
+        lodSelect: v['select-lod']
+            .split(',')
+            .filter((v) => !!v)
+            .map(parseInteger),
+        viewerSettingsJson: viewerSettingsPath && (await readJsonFile(viewerSettingsPath)),
         unbundled: v.unbundled,
         lodChunkCount: parseInteger(v['lod-chunk-count']),
         lodChunkExtent: parseInteger(v['lod-chunk-extent']),
@@ -976,7 +990,7 @@ const main = async () => {
 
     const renderer = new TextRenderer({
         write,
-        output: chunk => process.stdout.write(chunk),
+        output: (chunk) => process.stdout.write(chunk),
         getPeakCpuMemory: peakCpuMemoryBytes,
         getPeakGpuMemory
     });
@@ -1110,30 +1124,33 @@ const main = async () => {
         // ops (decimate / voxel filters) and the GPU writers (image / voxel).
         // deviceIdx: -1 = auto, -2 = CPU, 0+ = specific GPU index
         let cachedDevice: GraphicsDevice | undefined;
-        const deviceCreator = options.deviceIdx === -2 ? undefined : async () => {
-            if (cachedDevice) {
-                return cachedDevice;
-            }
+        const deviceCreator =
+            options.deviceIdx === -2
+                ? undefined
+                : async () => {
+                      if (cachedDevice) {
+                          return cachedDevice;
+                      }
 
-            let adapterName: string | undefined;
-            if (options.deviceIdx >= 0) {
-                const adapters = await enumerateAdapters();
-                const adapter = adapters[options.deviceIdx];
-                if (adapter) {
-                    adapterName = adapter.name;
-                } else {
-                    logger.warn(`GPU adapter index ${options.deviceIdx} not found, using default`);
-                }
-            }
+                      let adapterName: string | undefined;
+                      if (options.deviceIdx >= 0) {
+                          const adapters = await enumerateAdapters();
+                          const adapter = adapters[options.deviceIdx];
+                          if (adapter) {
+                              adapterName = adapter.name;
+                          } else {
+                              logger.warn(`GPU adapter index ${options.deviceIdx} not found, using default`);
+                          }
+                      }
 
-            cachedDevice = await createDevice(adapterName);
-            return cachedDevice;
-        };
+                      cachedDevice = await createDevice(adapterName);
+                      return cachedDevice;
+                  };
 
         // A single input has an unambiguous format for --info/--stats to report;
         // with multiple (combined) inputs the format is omitted.
-        const soleInputFormat = inputArgs.length === 1 ?
-            getInputFormat(resolveInput(inputArgs[0].filename).classifyName) : undefined;
+        const soleInputFormat =
+            inputArgs.length === 1 ? getInputFormat(resolveInput(inputArgs[0].filename).classifyName) : undefined;
         const processOptions = { createDevice: deviceCreator, sourceFormat: soleInputFormat };
 
         // declare phase total: one Read phase per input + one Write phase
@@ -1147,7 +1164,9 @@ const main = async () => {
         // writer, so it keeps the full multi-LOD source — `--info`/`--stats`
         // there report every level. lod-meta output keeps every level (path below).
         if (outputFormat !== null && outputFormat !== 'lod' && options.lodSelect.length > 1) {
-            throw new Error('Cannot write multiple LOD levels (--select-lod) to a single-scene output; select one level, or output lod-meta.json.');
+            throw new Error(
+                'Cannot write multiple LOD levels (--select-lod) to a single-scene output; select one level, or output lod-meta.json.'
+            );
         }
 
         // Single-scene pipeline (one chunk-native path for every non-lod output).
@@ -1162,34 +1181,30 @@ const main = async () => {
         // voxel/spz). LOD output has its own structural path below; this pipeline
         // also handles null output (processing for side-effects, skipping the
         // write). A --tag-lod tag on single-scene output is rejected after the LOD path.
-        const singleSceneActions = [...inputArgs.flatMap(a => a.processActions), ...outputArg.processActions];
+        const singleSceneActions = [...inputArgs.flatMap((a) => a.processActions), ...outputArg.processActions];
 
         // v1 decimation is terminal: the merge stream writes straight into the
         // destination, so decimate must be the last action and the output must
         // be plain PLY. Anything else needs two invocations (decimate to PLY,
         // then convert).
-        const decimateIdx = singleSceneActions.map((a, i) => (a.kind === 'decimate' ? i : -1)).filter(i => i >= 0);
+        const decimateIdx = singleSceneActions.map((a, i) => (a.kind === 'decimate' ? i : -1)).filter((i) => i >= 0);
         if (decimateIdx.length > 0) {
-            const ok = decimateIdx.length === 1 &&
+            const ok =
+                decimateIdx.length === 1 &&
                 decimateIdx[0] === singleSceneActions.length - 1 &&
                 !isNullOutput &&
                 outputFormat === 'ply';
             if (!ok) {
                 failExit(
                     '--decimate must be the final action and the output must be .ply ' +
-                    `(got ${isNullOutput ? 'no output' : `.${outputFormat}`}${decimateIdx[0] !== singleSceneActions.length - 1 || decimateIdx.length > 1 ? ', with actions after decimate' : ''}). ` +
-                    'Write a decimated PLY first, then convert in a second invocation.'
+                        `(got ${isNullOutput ? 'no output' : `.${outputFormat}`}${decimateIdx[0] !== singleSceneActions.length - 1 || decimateIdx.length > 1 ? ', with actions after decimate' : ''}). ` +
+                        'Write a decimated PLY first, then convert in a second invocation.'
                 );
             }
         }
-        const decimateAction = decimateIdx.length === 1 ?
-            singleSceneActions[decimateIdx[0]] as CliDecimate :
-            null;
+        const decimateAction = decimateIdx.length === 1 ? (singleSceneActions[decimateIdx[0]] as CliDecimate) : null;
 
-        if (
-            isNullOutput ||
-            (outputFormat !== 'lod' && singleSceneActions.every(a => a.kind !== 'lod'))
-        ) {
+        if (isNullOutput || (outputFormat !== 'lod' && singleSceneActions.every((a) => a.kind !== 'lod'))) {
             const pool = createChunkDataPool();
 
             // Open one input as a full (all-LOD) ChunkSource via readFile — native
@@ -1197,17 +1212,25 @@ const main = async () => {
             // inputs. LOD selection is a selectLod node below (real single-LOD
             // writers only), so readFile always reads every level. mjs generators
             // need their params + a file:// URL.
-            const openInput = async (inputArg: typeof inputArgs[number]): Promise<ChunkSource> => {
+            const openInput = async (inputArg: (typeof inputArgs)[number]): Promise<ChunkSource> => {
                 const { filename: inFile, fileSystem, classifyName } = resolveInput(inputArg.filename);
                 const fmt = getInputFormat(classifyName);
                 if (fmt === 'mjs' && isHttpUrl(inputArg.filename)) {
                     throw new Error(`.mjs generator inputs cannot be loaded from a URL: ${inputArg.filename}`);
                 }
-                const params = inputArg.processActions.filter(a => a.kind === 'param').map((p) => {
-                    return { name: p.name, value: p.value };
-                });
+                const params = inputArg.processActions
+                    .filter((a) => a.kind === 'param')
+                    .map((p) => {
+                        return { name: p.name, value: p.value };
+                    });
                 const readFilename = fmt === 'mjs' ? `file://${inFile}` : inFile;
-                const srcs = await readFile({ filename: readFilename, inputFormat: fmt, options: { ...options, lodSelect: [] }, params, fileSystem });
+                const srcs = await readFile({
+                    filename: readFilename,
+                    inputFormat: fmt,
+                    options: { ...options, lodSelect: [] },
+                    params,
+                    fileSystem
+                });
                 return srcs.length === 1 ? srcs[0] : concatSource(srcs, pool);
             };
 
@@ -1215,20 +1238,21 @@ const main = async () => {
             // combine() does); mixed layout -> bridge through the DataTable combine().
             const combineSources = async (sources: ChunkSource[]): Promise<ChunkSource> => {
                 if (sources.length === 1) return sources[0];
-                const sig = (m: ChunkSourceMetadata) => `${m.shBands}|${[...m.availableLayers].sort().join(',')}|${m.extraColumns.map(e => `${e.name}:${e.type}`).join(',')}`;
-                if (sources.every(s => sig(s.meta) === sig(sources[0].meta))) {
+                const sig = (m: ChunkSourceMetadata) =>
+                    `${m.shBands}|${[...m.availableLayers].sort().join(',')}|${m.extraColumns.map((e) => `${e.name}:${e.type}`).join(',')}`;
+                if (sources.every((s) => sig(s.meta) === sig(sources[0].meta))) {
                     const ref = sources[0].meta.transform;
-                    const unified = sources.every(s => s.meta.transform.equals(ref)) ?
-                        sources :
-                        sources.map(s => bakeTransform(s, Transform.IDENTITY));
+                    const unified = sources.every((s) => s.meta.transform.equals(ref))
+                        ? sources
+                        : sources.map((s) => bakeTransform(s, Transform.IDENTITY));
                     return concatSource(unified, pool);
                 }
                 // Mismatched layouts: combine() can union them, concatSource can't.
                 // A DataTable carries no model tag, so resolve it here as
                 // concatSource would (mixed -> 'default', with a warning).
-                const model = resolveSplatModel(sources.map(s => s.meta.model));
-                if (sources.some(s => s.meta.model !== model)) {
-                    const seen = [...new Set(sources.map(s => s.meta.model))].join(', ');
+                const model = resolveSplatModel(sources.map((s) => s.meta.model));
+                if (sources.some((s) => s.meta.model !== model)) {
+                    const seen = [...new Set(sources.map((s) => s.meta.model))].join(', ');
                     logger.warn(`mixed splat models (${seen}); writing the result as '${model}'`);
                 }
                 const dts: DataTable[] = [];
@@ -1254,12 +1278,17 @@ const main = async () => {
                     const level = resolveLodLevels(options.lodSelect, src.meta.numLods)[0] ?? 0;
                     src = selectLod(src, level);
                 }
-                const actions = stripLodTags(inputArg.processActions).filter(a => a.kind !== 'decimate');
+                const actions = stripLodTags(inputArg.processActions).filter((a) => a.kind !== 'decimate');
                 processed.push(await processSourceBridged(src, actions, pool, processOptions));
             }
 
             let combined = await combineSources(processed);
-            combined = await processSourceBridged(combined, stripLodTags(outputArg.processActions).filter(a => a.kind !== 'decimate'), pool, processOptions);
+            combined = await processSourceBridged(
+                combined,
+                stripLodTags(outputArg.processActions).filter((a) => a.kind !== 'decimate'),
+                pool,
+                processOptions
+            );
 
             if (combined.meta.numGaussians === 0) {
                 throw new Error('No Gaussians to write');
@@ -1267,9 +1296,10 @@ const main = async () => {
 
             if (decimateAction) {
                 const n = combined.meta.numGaussians;
-                const keepCount = decimateAction.count !== null ?
-                    Math.min(decimateAction.count, n) :
-                    Math.round(n * (decimateAction.percent ?? 100) / 100);
+                const keepCount =
+                    decimateAction.count !== null
+                        ? Math.min(decimateAction.count, n)
+                        : Math.round((n * (decimateAction.percent ?? 100)) / 100);
                 if (keepCount < 1) {
                     failExit(`--decimate target resolves to ${keepCount} gaussians; must keep at least 1`);
                 }
@@ -1279,31 +1309,35 @@ const main = async () => {
                     scratchDir: options.scratchDir ?? dirname(outputFilename),
                     remove: (path: string) => unlink(path)
                 };
-                combined = decimateAction.uniform ?
-                    await decimateSourceUniform(combined, pool, {
-                        targetCount: keepCount,
-                        createDevice: deviceCreator,
-                        memoryBudgetBytes: options.memoryBudgetBytes,
-                        spill
-                    }) :
-                    await decimateSource(combined, pool, {
-                        targetCount: keepCount,
-                        createDevice: deviceCreator,
-                        memoryBudgetBytes: options.memoryBudgetBytes,
-                        spill
-                    });
+                combined = decimateAction.uniform
+                    ? await decimateSourceUniform(combined, pool, {
+                          targetCount: keepCount,
+                          createDevice: deviceCreator,
+                          memoryBudgetBytes: options.memoryBudgetBytes,
+                          spill
+                      })
+                    : await decimateSource(combined, pool, {
+                          targetCount: keepCount,
+                          createDevice: deviceCreator,
+                          memoryBudgetBytes: options.memoryBudgetBytes,
+                          spill
+                      });
             }
 
             logger.info(`${fmtCount(combined.meta.numGaussians)} gaussians · ${combined.meta.shBands} SH bands`);
-            if (outputFormat !== null) { // null output: process for side-effects (e.g. --stats), skip the write
-                await writeSource({
-                    filename: outputFilename,
-                    outputFormat,
-                    source: combined,
-                    pool,
-                    options,
-                    createDevice: deviceCreator
-                }, new NodeFileSystem());
+            if (outputFormat !== null) {
+                // null output: process for side-effects (e.g. --stats), skip the write
+                await writeSource(
+                    {
+                        filename: outputFilename,
+                        outputFormat,
+                        source: combined,
+                        pool,
+                        options,
+                        createDevice: deviceCreator
+                    },
+                    new NodeFileSystem()
+                );
             }
 
             await combined.close();
@@ -1321,8 +1355,10 @@ const main = async () => {
         // output byte-for-byte.
         if (!isNullOutput && outputFormat === 'lod') {
             const pool = createChunkDataPool();
-            const single = inputArgs.length === 1 && !isHttpUrl(inputArgs[0].filename) ?
-                getInputFormat(resolveInput(inputArgs[0].filename).classifyName) : null;
+            const single =
+                inputArgs.length === 1 && !isHttpUrl(inputArgs[0].filename)
+                    ? getInputFormat(resolveInput(inputArgs[0].filename).classifyName)
+                    : null;
 
             let perLevel: ChunkSource[] = [];
             let envSource: ChunkSource | null = null;
@@ -1333,59 +1369,70 @@ const main = async () => {
                 // Intrinsic multi-LOD: view each level with selectLod (shared parent);
                 // env fetched separately. The input's own actions apply per level.
                 const { filename: inFile, fileSystem } = resolveInput(inputArgs[0].filename);
-                const multi = single === 'lcc2' ?
-                    await readLcc2Source(fileSystem, inFile, { ...options, lodSelect: [] }, pool) :
-                    single === 'lod' ?
-                        await readLodSource(fileSystem, inFile, { ...options, lodSelect: [] }, pool) :
-                        await readLccSource(fileSystem, inFile, { ...options, lodSelect: [] }, pool);
+                const multi =
+                    single === 'lcc2'
+                        ? await readLcc2Source(fileSystem, inFile, { ...options, lodSelect: [] }, pool)
+                        : single === 'lod'
+                          ? await readLodSource(fileSystem, inFile, { ...options, lodSelect: [] }, pool)
+                          : await readLccSource(fileSystem, inFile, { ...options, lodSelect: [] }, pool);
                 container = multi;
-                envSource = single === 'lcc2' ?
-                    await readLcc2EnvironmentSource(fileSystem, inFile, pool) :
-                    single === 'lod' ?
-                        await readLodEnvironmentSource(fileSystem, inFile, pool) :
-                        await readLccEnvironmentSource(fileSystem, inFile, pool);
+                envSource =
+                    single === 'lcc2'
+                        ? await readLcc2EnvironmentSource(fileSystem, inFile, pool)
+                        : single === 'lod'
+                          ? await readLodEnvironmentSource(fileSystem, inFile, pool)
+                          : await readLccEnvironmentSource(fileSystem, inFile, pool);
                 // --select-lod picks which levels go into the lod-meta (default all).
-                perLevel = resolveLodLevels(options.lodSelect, multi.meta.numLods).map(lvl => selectLod(multi, lvl));
+                perLevel = resolveLodLevels(options.lodSelect, multi.meta.numLods).map((lvl) => selectLod(multi, lvl));
                 inputActions = inputArgs[0].processActions;
             } else {
                 // PLY inputs grouped by --tag-lod tag (env = -1, untagged = level 0);
                 // each input's own actions applied before grouping.
                 const tagged = inputArgs.map((a) => {
-                    const ply = !isHttpUrl(a.filename) && getInputFormat(resolveInput(a.filename).classifyName) === 'ply';
-                    const lods = a.processActions.filter(act => act.kind === 'lod');
+                    const ply =
+                        !isHttpUrl(a.filename) && getInputFormat(resolveInput(a.filename).classifyName) === 'ply';
+                    const lods = a.processActions.filter((act) => act.kind === 'lod');
                     const tag = lods.length > 0 ? (lods[lods.length - 1] as { value: number }).value : 0;
                     const rest = stripLodTags(a.processActions);
                     return { arg: a, ply, tag, rest };
                 });
-                if (!tagged.every(t => t.ply)) {
-                    throw new Error('lod-meta.json output requires a single streamed-SOG/LCC/LCC2 input, or local PLY input(s) (optionally --tag-lod tagged).');
-                }
-                const opened = await Promise.all(tagged.map(async (t) => {
-                    const { filename: inFile, fileSystem } = resolveInput(t.arg.filename);
-                    const src = await processSourceBridged(
-                        await readPly(await fileSystem.createSource(inFile), pool),
-                        t.rest, pool, processOptions
+                if (!tagged.every((t) => t.ply)) {
+                    throw new Error(
+                        'lod-meta.json output requires a single streamed-SOG/LCC/LCC2 input, or local PLY input(s) (optionally --tag-lod tagged).'
                     );
-                    return { src, tag: t.tag };
-                }));
-                const mains = opened.filter(o => o.tag >= 0);
+                }
+                const opened = await Promise.all(
+                    tagged.map(async (t) => {
+                        const { filename: inFile, fileSystem } = resolveInput(t.arg.filename);
+                        const src = await processSourceBridged(
+                            await readPly(await fileSystem.createSource(inFile), pool),
+                            t.rest,
+                            pool,
+                            processOptions
+                        );
+                        return { src, tag: t.tag };
+                    })
+                );
+                const mains = opened.filter((o) => o.tag >= 0);
                 if (mains.length === 0) {
                     throw new Error('No Gaussians to write');
                 }
-                const mainTags = [...new Set(mains.map(m => m.tag))].sort((a, b) => a - b);
+                const mainTags = [...new Set(mains.map((m) => m.tag))].sort((a, b) => a - b);
                 perLevel = mainTags.map((tag) => {
-                    const group = mains.filter(m => m.tag === tag).map(m => m.src);
+                    const group = mains.filter((m) => m.tag === tag).map((m) => m.src);
                     return group.length === 1 ? group[0] : concatSource(group, pool);
                 });
-                const envs = opened.filter(o => o.tag === -1).map(o => o.src);
-                envSource = envs.length === 0 ? null : (envs.length === 1 ? envs[0] : concatSource(envs, pool));
+                const envs = opened.filter((o) => o.tag === -1).map((o) => o.src);
+                envSource = envs.length === 0 ? null : envs.length === 1 ? envs[0] : concatSource(envs, pool);
             }
 
             // Output (and single-input) actions apply PER LEVEL and to the env —
             // never across levels.
             const perLevelActions = stripLodTags([...inputActions, ...outputArg.processActions]);
             if (perLevelActions.length > 0) {
-                perLevel = await Promise.all(perLevel.map(s => processSourceBridged(s, perLevelActions, pool, processOptions)));
+                perLevel = await Promise.all(
+                    perLevel.map((s) => processSourceBridged(s, perLevelActions, pool, processOptions))
+                );
                 if (envSource) envSource = await processSourceBridged(envSource, perLevelActions, pool, processOptions);
             }
 
@@ -1394,8 +1441,8 @@ const main = async () => {
             // bake to identity when per-input actions left transforms diverged.
             if (perLevel.length > 1) {
                 const refTransform = perLevel[0].meta.transform;
-                if (!perLevel.every(s => s.meta.transform.equals(refTransform))) {
-                    perLevel = perLevel.map(s => bakeTransform(s, Transform.IDENTITY));
+                if (!perLevel.every((s) => s.meta.transform.equals(refTransform))) {
+                    perLevel = perLevel.map((s) => bakeTransform(s, Transform.IDENTITY));
                 }
             }
             const mainSource = perLevel.length === 1 ? perLevel[0] : stackLods(perLevel);
@@ -1405,16 +1452,21 @@ const main = async () => {
             }
 
             const phase = logger.group(`Output ${outputArg.filename}`, { index: phaseTotal, total: phaseTotal });
-            logger.info(`${fmtCount(total)} gaussians · ${mainSource.meta.shBands} SH bands · ${mainSource.meta.numLods} LODs (streaming LOD)`);
-            await writeLodSource({
-                filename: outputFilename,
-                mainSource,
-                envSource,
-                iterations: options.iterations,
-                createDevice: deviceCreator,
-                chunkCount: options.lodChunkCount,
-                chunkExtent: options.lodChunkExtent
-            }, new NodeFileSystem());
+            logger.info(
+                `${fmtCount(total)} gaussians · ${mainSource.meta.shBands} SH bands · ${mainSource.meta.numLods} LODs (streaming LOD)`
+            );
+            await writeLodSource(
+                {
+                    filename: outputFilename,
+                    mainSource,
+                    envSource,
+                    iterations: options.iterations,
+                    createDevice: deviceCreator,
+                    chunkCount: options.lodChunkCount,
+                    chunkExtent: options.lodChunkExtent
+                },
+                new NodeFileSystem()
+            );
 
             await mainSource.close();
             if (container) await container.close();
@@ -1428,7 +1480,9 @@ const main = async () => {
         // *tags*: tags build lod-meta.json levels and don't apply to single-scene
         // output. (Tag-free non-lod conversions and null output ran the single-scene
         // pipeline above; lod-meta output ran the LOD path.)
-        throw new Error('--tag-lod tags apply to lod-meta.json output; for single-scene output choose a level with --select-lod (-L).');
+        throw new Error(
+            '--tag-lod tags apply to lod-meta.json output; for single-scene output choose a level with --select-lod (-L).'
+        );
     } catch (err) {
         failExit(err);
     }

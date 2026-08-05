@@ -1,14 +1,13 @@
-import { type GraphicsDevice } from 'playcanvas';
+import type { GraphicsDevice } from 'playcanvas';
 
-import {
-    bestEdgesForPartition,
-    partitionBestOut,
-    type RecostState
-} from './recost-core';
-import { MAX_GROUP, type SelectionResult } from './select';
 import { GpuRecost, COMMIT_LOG_STRIDE } from '../gpu/gpu-recost';
 
-const NIL = 0xFFFFFFFF;
+import { bestEdgesForPartition, partitionBestOut } from './recost-core';
+import type { RecostState } from './recost-core';
+import { MAX_GROUP } from './select';
+import type { SelectionResult } from './select';
+
+const NIL = 0xffffffff;
 
 /** Quality-critical maximum validated commits between refreshes. */
 const WAVE = 4096;
@@ -126,22 +125,35 @@ const planBlockMerges = async (inputs: BlockPlanInputs): Promise<BlockPlan> => {
     let seqCounter = 0;
 
     const swap = (i: number, j: number): void => {
-        let t = hCost[i]; hCost[i] = hCost[j]; hCost[j] = t;
-        t = hA[i]; hA[i] = hA[j]; hA[j] = t;
-        t = hB[i]; hB[i] = hB[j]; hB[j] = t;
-        t = hSeq[i]; hSeq[i] = hSeq[j]; hSeq[j] = t;
-        t = hVb[i]; hVb[i] = hVb[j]; hVb[j] = t;
+        let t = hCost[i];
+        hCost[i] = hCost[j];
+        hCost[j] = t;
+        t = hA[i];
+        hA[i] = hA[j];
+        hA[j] = t;
+        t = hB[i];
+        hB[i] = hB[j];
+        hB[j] = t;
+        t = hSeq[i];
+        hSeq[i] = hSeq[j];
+        hSeq[j] = t;
+        t = hVb[i];
+        hVb[i] = hVb[j];
+        hVb[j] = t;
         heapIndex[hA[i]] = i;
         heapIndex[hA[j]] = j;
     };
-    const less = (i: number, j: number): boolean => hCost[i] < hCost[j] ||
-        (hCost[i] === hCost[j] && (hA[i] < hA[j] || (hA[i] === hA[j] && hB[i] < hB[j])));
+    const less = (i: number, j: number): boolean =>
+        hCost[i] < hCost[j] || (hCost[i] === hCost[j] && (hA[i] < hA[j] || (hA[i] === hA[j] && hB[i] < hB[j])));
     const heapRemoveAt = (at: number): void => {
         heapIndex[hA[at]] = -1;
         heapSize--;
         if (at === heapSize) return;
-        hCost[at] = hCost[heapSize]; hA[at] = hA[heapSize]; hB[at] = hB[heapSize];
-        hSeq[at] = hSeq[heapSize]; hVb[at] = hVb[heapSize];
+        hCost[at] = hCost[heapSize];
+        hA[at] = hA[heapSize];
+        hB[at] = hB[heapSize];
+        hSeq[at] = hSeq[heapSize];
+        hVb[at] = hVb[heapSize];
         heapIndex[hA[at]] = at;
         let i = at;
         if (i > 0 && less(i, (i - 1) >> 1)) {
@@ -169,15 +181,29 @@ const planBlockMerges = async (inputs: BlockPlanInputs): Promise<BlockPlan> => {
         if (existing >= 0) heapRemoveAt(existing);
         if (heapSize === heapCap) {
             const next = heapCap * 2;
-            const nextCost = new Float32Array(next); nextCost.set(hCost); hCost = nextCost;
-            const nextA = new Uint32Array(next); nextA.set(hA); hA = nextA;
-            const nextB = new Uint32Array(next); nextB.set(hB); hB = nextB;
-            const nextSeq = new Uint32Array(next); nextSeq.set(hSeq); hSeq = nextSeq;
-            const nextVb = new Uint32Array(next); nextVb.set(hVb); hVb = nextVb;
+            const nextCost = new Float32Array(next);
+            nextCost.set(hCost);
+            hCost = nextCost;
+            const nextA = new Uint32Array(next);
+            nextA.set(hA);
+            hA = nextA;
+            const nextB = new Uint32Array(next);
+            nextB.set(hB);
+            hB = nextB;
+            const nextSeq = new Uint32Array(next);
+            nextSeq.set(hSeq);
+            hSeq = nextSeq;
+            const nextVb = new Uint32Array(next);
+            nextVb.set(hVb);
+            hVb = nextVb;
             heapCap = next;
         }
         let i = heapSize++;
-        hCost[i] = cost; hA[i] = a; hB[i] = b; hSeq[i] = seq; hVb[i] = vb;
+        hCost[i] = cost;
+        hA[i] = a;
+        hB[i] = b;
+        hSeq[i] = seq;
+        hVb[i] = vb;
         heapIndex[a] = i;
         while (i > 0) {
             const p = (i - 1) >> 1;
@@ -189,7 +215,11 @@ const planBlockMerges = async (inputs: BlockPlanInputs): Promise<BlockPlan> => {
     const popped = { cost: 0, a: 0, b: 0, seq: 0, vb: 0 };
     const heapPop = (): boolean => {
         if (heapSize === 0) return false;
-        popped.cost = hCost[0]; popped.a = hA[0]; popped.b = hB[0]; popped.seq = hSeq[0]; popped.vb = hVb[0];
+        popped.cost = hCost[0];
+        popped.a = hA[0];
+        popped.b = hB[0];
+        popped.seq = hSeq[0];
+        popped.vb = hVb[0];
         heapRemoveAt(0);
         return true;
     };
@@ -218,7 +248,7 @@ const planBlockMerges = async (inputs: BlockPlanInputs): Promise<BlockPlan> => {
     if (requireGpu && !gpuFits) {
         throw new Error(
             'multi-block adaptive decimation requires a WebGPU block working set that fits the adapter limits ' +
-            `(core ${coreCount}, halo ${N - coreCount})`
+                `(core ${coreCount}, halo ${N - coreCount})`
         );
     }
     const gpu = gpuFits ? new GpuRecost(device!, N, D, MAX_GROUP, WAVE, coreCount) : undefined;
@@ -236,7 +266,13 @@ const planBlockMerges = async (inputs: BlockPlanInputs): Promise<BlockPlan> => {
     let heapPops = 0;
     let staleHeapPops = 0;
 
-    const refreshResult = (root: number, corePartner: number, coreCost: number, haloPartner: number, haloCost: number): void => {
+    const refreshResult = (
+        root: number,
+        corePartner: number,
+        coreCost: number,
+        haloPartner: number,
+        haloCost: number
+    ): void => {
         const isFrozen = haloPartner !== NIL && haloCost <= coreCost;
         if (isFrozen) {
             if (frozenState[root] === 0) frozen++;
@@ -262,8 +298,13 @@ const planBlockMerges = async (inputs: BlockPlanInputs): Promise<BlockPlan> => {
                     continue;
                 }
                 const b = popped.b;
-                if (b === a || b >= coreCount || parent[b] !== b ||
-                    version[b] !== popped.vb || size[a] + size[b] > MAX_GROUP) {
+                if (
+                    b === a ||
+                    b >= coreCount ||
+                    parent[b] !== b ||
+                    version[b] !== popped.vb ||
+                    size[a] + size[b] > MAX_GROUP
+                ) {
                     staleHeapPops++;
                     queueRefresh(a);
                     continue;
@@ -420,11 +461,4 @@ const replayBlockPlan = (coreCount: number, plan: BlockPlan): SelectionResult =>
     };
 };
 
-export {
-    planBlockMerges,
-    replayBlockPlan,
-    WAVE,
-    type BlockPlan,
-    type BlockPlanDiagnostics,
-    type BlockPlanInputs
-};
+export { planBlockMerges, replayBlockPlan, WAVE, type BlockPlan, type BlockPlanDiagnostics, type BlockPlanInputs };

@@ -7,7 +7,7 @@
  * Mirrors the CPU implementations in decimate/edge-cost-cpu.ts and
  * decimate/recost-core.ts — keep them in lockstep.
  */
-const gaussianL2Wgsl = /* wgsl */`
+const gaussianL2Wgsl = /* wgsl */ `
 const EPS_COV: f32 = 1e-8;
 const PI_1_5: f32 = 5.5683279968317084;       // π^{3/2}
 const TWO_PI_1_5: f32 = 15.749609945722419;   // (2π)^{3/2}

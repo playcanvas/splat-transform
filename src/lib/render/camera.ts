@@ -85,11 +85,7 @@ type CameraBasis = {
 };
 
 const sub = (a: Vec3, b: Vec3) => new Vec3(a.x - b.x, a.y - b.y, a.z - b.z);
-const cross = (a: Vec3, b: Vec3) => new Vec3(
-    a.y * b.z - a.z * b.y,
-    a.z * b.x - a.x * b.z,
-    a.x * b.y - a.y * b.x
-);
+const cross = (a: Vec3, b: Vec3) => new Vec3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
 const normalize = (v: Vec3): Vec3 => {
     const len = Math.hypot(v.x, v.y, v.z);
     if (len === 0) return new Vec3(0, 0, 0);

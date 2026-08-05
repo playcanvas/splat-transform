@@ -30,8 +30,8 @@ import { EPS_COV, ellipsoidArea } from './moment-match';
 
 export { CACHE_STRIDE };
 
-const NO_CANDIDATE = 0xFFFFFFFF;
-const NIL = 0xFFFFFFFF;
+const NO_CANDIDATE = 0xffffffff;
+const NIL = 0xffffffff;
 
 /** Skip Gaussian products whose exponent bound exceeds this (e^-60 ≈ 9e-27). */
 const CULL_QUAD = 120;
@@ -78,8 +78,15 @@ const findRO = (parent: Uint32Array, x: number): number => {
 // ⟨G_a,G_b⟩ scaled by √|Σa|·√|Σb| for M = Σa+Σb (6 comps) and offset d.
 const crossG = (
     sdAB: number,
-    m0: number, m1: number, m2: number, m3: number, m4: number, m5: number,
-    dx: number, dy: number, dz: number
+    m0: number,
+    m1: number,
+    m2: number,
+    m3: number,
+    m4: number,
+    m5: number,
+    dx: number,
+    dy: number,
+    dz: number
 ): number => {
     const c00 = m3 * m5 - m4 * m4;
     const c01 = m2 * m4 - m1 * m5;
@@ -88,10 +95,10 @@ const crossG = (
     const c12 = m1 * m2 - m0 * m4;
     const c22 = m0 * m3 - m1 * m1;
     const det = Math.max(m0 * c00 + m1 * c01 + m2 * c02, 1e-60);
-    const quad = (c00 * dx * dx + c11 * dy * dy + c22 * dz * dz +
-        2 * (c01 * dx * dy + c02 * dx * dz + c12 * dy * dz)) / det;
+    const quad =
+        (c00 * dx * dx + c11 * dy * dy + c22 * dz * dz + 2 * (c01 * dx * dy + c02 * dx * dz + c12 * dy * dz)) / det;
     if (!(quad < CULL_QUAD)) return 0;
-    return TWO_PI_1_5 * sdAB / Math.sqrt(det) * Math.exp(-0.5 * quad);
+    return ((TWO_PI_1_5 * sdAB) / Math.sqrt(det)) * Math.exp(-0.5 * quad);
 };
 
 // Smith closed-form eigenvalues of a symmetric 3×3 (6 comps), descending.
@@ -108,15 +115,21 @@ const eig3 = (m0: number, m1: number, m2: number, m3: number, m4: number, m5: nu
     const p2 = (m0 - q) * (m0 - q) + (m3 - q) * (m3 - q) + (m5 - q) * (m5 - q) + 2 * p1;
     const p = Math.sqrt(p2 / 6);
     const ip = 1 / p;
-    const b00 = (m0 - q) * ip, b11 = (m3 - q) * ip, b22 = (m5 - q) * ip;
-    const b01 = m1 * ip, b02 = m2 * ip, b12 = m4 * ip;
+    const b00 = (m0 - q) * ip,
+        b11 = (m3 - q) * ip,
+        b22 = (m5 - q) * ip;
+    const b01 = m1 * ip,
+        b02 = m2 * ip,
+        b12 = m4 * ip;
     const detB = b00 * (b11 * b22 - b12 * b12) - b01 * (b01 * b22 - b12 * b02) + b02 * (b01 * b12 - b11 * b02);
     let r = detB / 2;
-    r = r < -1 ? -1 : (r > 1 ? 1 : r);
+    r = r < -1 ? -1 : r > 1 ? 1 : r;
     const phi = Math.acos(r) / 3;
     const e0 = q + 2 * p * Math.cos(phi);
     const e2 = q + 2 * p * Math.cos(phi + (2 * Math.PI) / 3);
-    eigOut[0] = e0; eigOut[1] = 3 * q - e0 - e2; eigOut[2] = e2;
+    eigOut[0] = e0;
+    eigOut[1] = 3 * q - e0 - e2;
+    eigOut[2] = e2;
 };
 
 /**
@@ -127,16 +140,22 @@ const eig3 = (m0: number, m1: number, m2: number, m3: number, m4: number, m5: nu
 type Comp = {
     // Raw aggregates.
     W: number;
-    mx: number; my: number; mz: number;   // mass-weighted mean
-    M2: Float64Array;                      // Σ mass·(Σₖ + δδᵀ), 6 comps
-    bw0: number; bw1: number; bw2: number; // Σ mass·base
+    mx: number;
+    my: number;
+    mz: number; // mass-weighted mean
+    M2: Float64Array; // Σ mass·(Σₖ + δδᵀ), 6 comps
+    bw0: number;
+    bw1: number;
+    bw2: number; // Σ mass·base
     // Finished merged Gaussian (valid after finishComp).
-    sm: Float64Array;                      // M2/W + EPS_COV·I, 6 comps
-    sd: number;                            // √|Σ_C|
-    alpha: number;                         // min(1, W / area)
-    bc0: number; bc1: number; bc2: number; // mean base colour (bw/W)
-    bn2: number;                           // |mean base|²
-    selfM: number;                         // ⟨f_C, f_C⟩
+    sm: Float64Array; // M2/W + EPS_COV·I, 6 comps
+    sd: number; // √|Σ_C|
+    alpha: number; // min(1, W / area)
+    bc0: number;
+    bc1: number;
+    bc2: number; // mean base colour (bw/W)
+    bn2: number; // |mean base|²
+    selfM: number; // ⟨f_C, f_C⟩
 };
 
 const makeComp = (): Comp => ({
@@ -167,22 +186,36 @@ const compAB = makeComp();
 // central second moments — algebraically identical to the parallel-axis
 // accumulation the formation tree would produce).
 const composeRaw = (SC: Float32Array, members: Uint32Array, count: number, out: Comp): void => {
-    let W = 0, sx = 0, sy = 0, sz = 0, b0 = 0, b1 = 0, b2 = 0;
+    let W = 0,
+        sx = 0,
+        sy = 0,
+        sz = 0,
+        b0 = 0,
+        b1 = 0,
+        b2 = 0;
     for (let t = 0; t < count; t++) {
         const o = members[t] * CACHE_STRIDE;
         const m = SC[o + 11];
         W += m;
-        sx += m * SC[o]; sy += m * SC[o + 1]; sz += m * SC[o + 2];
-        b0 += m * SC[o + 12]; b1 += m * SC[o + 13]; b2 += m * SC[o + 14];
+        sx += m * SC[o];
+        sy += m * SC[o + 1];
+        sz += m * SC[o + 2];
+        b0 += m * SC[o + 12];
+        b1 += m * SC[o + 13];
+        b2 += m * SC[o + 14];
     }
     const iw = 1 / W;
-    const mx = sx * iw, my = sy * iw, mz = sz * iw;
+    const mx = sx * iw,
+        my = sy * iw,
+        mz = sz * iw;
     const M2 = out.M2;
     M2.fill(0);
     for (let t = 0; t < count; t++) {
         const o = members[t] * CACHE_STRIDE;
         const m = SC[o + 11];
-        const dx = SC[o] - mx, dy = SC[o + 1] - my, dz = SC[o + 2] - mz;
+        const dx = SC[o] - mx,
+            dy = SC[o + 1] - my,
+            dz = SC[o + 2] - mz;
         M2[0] += m * (SC[o + 3] + dx * dx);
         M2[1] += m * (SC[o + 4] + dx * dy);
         M2[2] += m * (SC[o + 5] + dx * dz);
@@ -190,29 +223,47 @@ const composeRaw = (SC: Float32Array, members: Uint32Array, count: number, out: 
         M2[4] += m * (SC[o + 7] + dy * dz);
         M2[5] += m * (SC[o + 8] + dz * dz);
     }
-    out.W = W; out.mx = mx; out.my = my; out.mz = mz;
-    out.bw0 = b0; out.bw1 = b1; out.bw2 = b2;
+    out.W = W;
+    out.mx = mx;
+    out.my = my;
+    out.mz = mz;
+    out.bw0 = b0;
+    out.bw1 = b1;
+    out.bw2 = b2;
 };
 
 // Compose A∪B's raw aggregates from A's and B's (parallel-axis identity —
 // the exact arithmetic the merged-covariance step has always used).
 const composeUnion = (a: Comp, b: Comp, out: Comp): void => {
-    const WA = a.W, WB = b.W, WC = WA + WB;
+    const WA = a.W,
+        WB = b.W,
+        WC = WA + WB;
     const iw = 1 / WC;
     const mcx = (WA * a.mx + WB * b.mx) * iw;
     const mcy = (WA * a.my + WB * b.my) * iw;
     const mcz = (WA * a.mz + WB * b.mz) * iw;
-    const dax = a.mx - mcx, day = a.my - mcy, daz = a.mz - mcz;
-    const dbx = b.mx - mcx, dby = b.my - mcy, dbz = b.mz - mcz;
-    const MA = a.M2, MB = b.M2, MC = out.M2;
+    const dax = a.mx - mcx,
+        day = a.my - mcy,
+        daz = a.mz - mcz;
+    const dbx = b.mx - mcx,
+        dby = b.my - mcy,
+        dbz = b.mz - mcz;
+    const MA = a.M2,
+        MB = b.M2,
+        MC = out.M2;
     MC[0] = MA[0] + MB[0] + WA * dax * dax + WB * dbx * dbx;
     MC[1] = MA[1] + MB[1] + WA * dax * day + WB * dbx * dby;
     MC[2] = MA[2] + MB[2] + WA * dax * daz + WB * dbx * dbz;
     MC[3] = MA[3] + MB[3] + WA * day * day + WB * dby * dby;
     MC[4] = MA[4] + MB[4] + WA * day * daz + WB * dby * dbz;
     MC[5] = MA[5] + MB[5] + WA * daz * daz + WB * dbz * dbz;
-    out.W = WC; out.mx = mcx; out.my = mcy; out.mz = mcz;
-    out.bw0 = a.bw0 + b.bw0; out.bw1 = a.bw1 + b.bw1; out.bw2 = a.bw2 + b.bw2;
+    out.W = WC;
+    out.mx = mcx;
+    out.my = mcy;
+    out.mz = mcz;
+    out.bw0 = a.bw0 + b.bw0;
+    out.bw1 = a.bw1 + b.bw1;
+    out.bw2 = a.bw2 + b.bw2;
 };
 
 // Derive the merged Gaussian's field quantities from the raw aggregates.
@@ -227,7 +278,9 @@ const finishComp = (c: Comp): void => {
     sm[5] = c.M2[5] * iw + EPS_COV;
 
     const detm = Math.max(
-        sm[0] * (sm[3] * sm[5] - sm[4] * sm[4]) - sm[1] * (sm[1] * sm[5] - sm[4] * sm[2]) + sm[2] * (sm[1] * sm[4] - sm[3] * sm[2]),
+        sm[0] * (sm[3] * sm[5] - sm[4] * sm[4]) -
+            sm[1] * (sm[1] * sm[5] - sm[4] * sm[2]) +
+            sm[2] * (sm[1] * sm[4] - sm[3] * sm[2]),
         1e-60
     );
     c.sd = Math.sqrt(detm);
@@ -238,7 +291,9 @@ const finishComp = (c: Comp): void => {
     const s2 = Math.sqrt(Math.max(eigOut[2], 1e-18));
     c.alpha = Math.min(1, c.W / Math.max(ellipsoidArea(s0, s1, s2), 1e-30));
 
-    c.bc0 = c.bw0 * iw; c.bc1 = c.bw1 * iw; c.bc2 = c.bw2 * iw;
+    c.bc0 = c.bw0 * iw;
+    c.bc1 = c.bw1 * iw;
+    c.bc2 = c.bw2 * iw;
     c.bn2 = c.bc0 * c.bc0 + c.bc1 * c.bc1 + c.bc2 * c.bc2;
     c.selfM = c.alpha * c.alpha * c.bn2 * PI_1_5 * c.sd;
 };
@@ -249,13 +304,22 @@ const memfm = (SC: Float32Array, members: Uint32Array, count: number, c: Comp): 
     let acc = 0;
     for (let t = 0; t < count; t++) {
         const o = members[t] * CACHE_STRIDE;
-        const wgt = SC[o + 10] * c.alpha *
-            (SC[o + 12] * c.bc0 + SC[o + 13] * c.bc1 + SC[o + 14] * c.bc2);
+        const wgt = SC[o + 10] * c.alpha * (SC[o + 12] * c.bc0 + SC[o + 13] * c.bc1 + SC[o + 14] * c.bc2);
         if (wgt === 0) continue;
-        acc += wgt * crossG(SC[o + 9] * c.sd,
-            SC[o + 3] + sm[0], SC[o + 4] + sm[1], SC[o + 5] + sm[2],
-            SC[o + 6] + sm[3], SC[o + 7] + sm[4], SC[o + 8] + sm[5],
-            SC[o] - c.mx, SC[o + 1] - c.my, SC[o + 2] - c.mz);
+        acc +=
+            wgt *
+            crossG(
+                SC[o + 9] * c.sd,
+                SC[o + 3] + sm[0],
+                SC[o + 4] + sm[1],
+                SC[o + 5] + sm[2],
+                SC[o + 6] + sm[3],
+                SC[o + 7] + sm[4],
+                SC[o + 8] + sm[5],
+                SC[o] - c.mx,
+                SC[o + 1] - c.my,
+                SC[o + 2] - c.mz
+            );
     }
     return acc;
 };
@@ -269,14 +333,15 @@ const selfRow = (SC: Float32Array, row: number): number => {
 // Member buffers (grow-only; production maxGroup is 4).
 let aBuf: Uint32Array = new Uint32Array(1 << 12);
 let bBuf: Uint32Array = new Uint32Array(1 << 12);
-const gatherChain = (st: RecostState, root: number, into: Uint32Array): { buf: Uint32Array, count: number } => {
+const gatherChain = (st: RecostState, root: number, into: Uint32Array): { buf: Uint32Array; count: number } => {
     const { mHead, mNext } = st;
     let buf = into;
     let cnt = 0;
     for (let m = mHead[root]; m !== NIL; m = mNext[m]) {
         if (cnt === buf.length) {
             const g = new Uint32Array(buf.length * 2);
-            g.set(buf); buf = g;
+            g.set(buf);
+            buf = g;
         }
         buf[cnt++] = m;
     }
@@ -294,28 +359,46 @@ const sideTerm = (SC: Float32Array, members: Uint32Array, count: number, c: Comp
 // scross(A,B) = Σ_{a∈A,b∈B} ⟨f_a, f_b⟩ with distance culling.
 const scrossPairs = (
     SC: Float32Array,
-    aMembers: Uint32Array, na: number,
-    bMembers: Uint32Array, nb: number
+    aMembers: Uint32Array,
+    na: number,
+    bMembers: Uint32Array,
+    nb: number
 ): number => {
     let acc = 0;
     for (let u = 0; u < nb; u++) {
         const ob = bMembers[u] * CACHE_STRIDE;
-        const bxp = SC[ob], byp = SC[ob + 1], bzp = SC[ob + 2];
+        const bxp = SC[ob],
+            byp = SC[ob + 1],
+            bzp = SC[ob + 2];
         const trb = SC[ob + 3] + SC[ob + 6] + SC[ob + 8];
-        const alb = SC[ob + 10], sdb = SC[ob + 9];
-        const cb0 = SC[ob + 12], cb1 = SC[ob + 13], cb2 = SC[ob + 14];
+        const alb = SC[ob + 10],
+            sdb = SC[ob + 9];
+        const cb0 = SC[ob + 12],
+            cb1 = SC[ob + 13],
+            cb2 = SC[ob + 14];
         for (let t = 0; t < na; t++) {
             const oa = aMembers[t] * CACHE_STRIDE;
-            const dx = SC[oa] - bxp, dy = SC[oa + 1] - byp, dz = SC[oa + 2] - bzp;
+            const dx = SC[oa] - bxp,
+                dy = SC[oa + 1] - byp,
+                dz = SC[oa + 2] - bzp;
             const d2 = dx * dx + dy * dy + dz * dz;
             if (d2 > CULL_QUAD * (SC[oa + 3] + SC[oa + 6] + SC[oa + 8] + trb)) continue;
-            const wgt = SC[oa + 10] * alb *
-                (SC[oa + 12] * cb0 + SC[oa + 13] * cb1 + SC[oa + 14] * cb2);
+            const wgt = SC[oa + 10] * alb * (SC[oa + 12] * cb0 + SC[oa + 13] * cb1 + SC[oa + 14] * cb2);
             if (wgt === 0) continue;
-            acc += wgt * crossG(SC[oa + 9] * sdb,
-                SC[oa + 3] + SC[ob + 3], SC[oa + 4] + SC[ob + 4], SC[oa + 5] + SC[ob + 5],
-                SC[oa + 6] + SC[ob + 6], SC[oa + 7] + SC[ob + 7], SC[oa + 8] + SC[ob + 8],
-                dx, dy, dz);
+            acc +=
+                wgt *
+                crossG(
+                    SC[oa + 9] * sdb,
+                    SC[oa + 3] + SC[ob + 3],
+                    SC[oa + 4] + SC[ob + 4],
+                    SC[oa + 5] + SC[ob + 5],
+                    SC[oa + 6] + SC[ob + 6],
+                    SC[oa + 7] + SC[ob + 7],
+                    SC[oa + 8] + SC[ob + 8],
+                    dx,
+                    dy,
+                    dz
+                );
         }
     }
     return acc;
@@ -338,13 +421,13 @@ const evalAgainst = (st: RecostState, na: number, aTerm: number, B: number): num
     const scross = scrossPairs(SC, aBuf, na, bBuf, nb);
 
     // Scale-free DC colour term between the clusters' mean base colours.
-    const iwA = 1 / compA.W, iwB = 1 / compB.W;
+    const iwA = 1 / compA.W,
+        iwB = 1 / compB.W;
     const d0 = compA.bw0 * iwA - compB.bw0 * iwB;
     const d1 = compA.bw1 * iwA - compB.bw1 * iwB;
     const d2c = compA.bw2 * iwA - compB.bw2 * iwB;
 
-    return (2 * scross - 2 * memfmAB + compAB.selfM + aTerm + bTerm) +
-        COLOR_WEIGHT * (d0 * d0 + d1 * d1 + d2c * d2c);
+    return 2 * scross - 2 * memfmAB + compAB.selfM + aTerm + bTerm + COLOR_WEIGHT * (d0 * d0 + d1 * d1 + d2c * d2c);
 };
 
 /**
@@ -418,7 +501,8 @@ const bestEdgesForPartition = (st: RecostState, root: number, coreCount: number)
             let seen = false;
             for (let u = 0; u < cnt; u++) {
                 if (cbuf[u] === r) {
-                    seen = true; break;
+                    seen = true;
+                    break;
                 }
             }
             if (!seen) cbuf[cnt++] = r;
@@ -429,18 +513,24 @@ const bestEdgesForPartition = (st: RecostState, root: number, coreCount: number)
     composeRaw(SC, aBuf, na, compA);
     const aTerm = sideTerm(SC, aBuf, na, compA);
 
-    let bc = Infinity, bp = -1, bv = 0;
-    let hc = Infinity, hp = -1;
+    let bc = Infinity,
+        bp = -1,
+        bv = 0;
+    let hc = Infinity,
+        hp = -1;
     for (let t = 0; t < cnt; t++) {
         const c = cbuf[t];
         if (sz + size[c] > maxGroup) continue;
         const d = evalAgainst(st, na, aTerm, c);
         if (c < coreCount) {
             if (d < bc || (d === bc && c < bp)) {
-                bc = d; bp = c; bv = version[c];
+                bc = d;
+                bp = c;
+                bv = version[c];
             }
         } else if (d < hc || (d === hc && c < hp)) {
-            hc = d; hp = c;
+            hc = d;
+            hp = c;
         }
     }
     partitionBestOut.corePartner = bp;
@@ -459,12 +549,4 @@ const bestEdgeFor = (st: RecostState, root: number): boolean => {
     return true;
 };
 
-export {
-    evalMergeCore,
-    bestEdgeFor,
-    bestEdgesForPartition,
-    bestOut,
-    partitionBestOut,
-    NO_CANDIDATE,
-    type RecostState
-};
+export { evalMergeCore, bestEdgeFor, bestEdgesForPartition, bestOut, partitionBestOut, NO_CANDIDATE, type RecostState };

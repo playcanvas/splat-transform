@@ -1,17 +1,11 @@
+import type { Bounds } from '../data-table';
+import type { GpuDilation } from '../gpu';
+import { logger } from '../utils';
+
 import { gpuDilate3 } from './dilation';
 import type { NavSimplifyResult } from './fill-exterior';
 import { sparseOrGrids } from './grid-ops';
-import type { Bounds } from '../data-table';
-import type { GpuDilation } from '../gpu';
-import {
-    BLOCK_EMPTY,
-    BLOCK_SOLID,
-    SOLID_HI,
-    SOLID_LO,
-    SparseVoxelGrid,
-    readBlockType
-} from './sparse-voxel-grid';
-import { logger } from '../utils';
+import { BLOCK_EMPTY, BLOCK_SOLID, SOLID_HI, SOLID_LO, SparseVoxelGrid, readBlockType } from './sparse-voxel-grid';
 
 /**
  * Floor-fill via XZ dilate -> per-column upward walk -> XZ dilate -> OR.
@@ -52,7 +46,7 @@ const fillFloor = async (
     grid: SparseVoxelGrid,
     gridBounds: Bounds,
     voxelResolution: number,
-    dilation: number = 0,
+    dilation = 0,
     gpu: GpuDilation | null = null
 ): Promise<NavSimplifyResult> => {
     if (!Number.isFinite(voxelResolution) || voxelResolution <= 0) {
@@ -83,7 +77,7 @@ const fillFloor = async (
     const dilatedTypes = dilatedSolid.types;
     for (let bz = 0; bz < nbz; bz++) {
         for (let bx = 0; bx < nbx; bx++) {
-            let walking = 0xFFFF;
+            let walking = 0xffff;
 
             for (let by = 0; by < nby && walking; by++) {
                 const blockIdx = bx + by * nbx + bz * bStride;
@@ -94,17 +88,18 @@ const fillFloor = async (
                 }
 
                 if (bt === BLOCK_EMPTY) {
-                    if (walking === 0xFFFF) {
+                    if (walking === 0xffff) {
                         foundEmpty.orBlock(blockIdx, SOLID_LO, SOLID_HI);
                     } else {
-                        let lo = 0, hi = 0;
+                        let lo = 0,
+                            hi = 0;
                         for (let lz = 0; lz < 4; lz++) {
                             for (let lx = 0; lx < 4; lx++) {
                                 if (!(walking & (1 << (lz * 4 + lx)))) continue;
                                 for (let ly = 0; ly < 4; ly++) {
                                     const bitIdx = lx + (ly << 2) + (lz << 4);
-                                    if (bitIdx < 32) lo |= (1 << bitIdx);
-                                    else hi |= (1 << (bitIdx - 32));
+                                    if (bitIdx < 32) lo |= 1 << bitIdx;
+                                    else hi |= 1 << (bitIdx - 32);
                                 }
                             }
                         }
@@ -161,7 +156,7 @@ const fillFloor = async (
     // cloning — saves a full SparseVoxelGrid clone right at the end of
     // the fill-floor phase.
     const combineBar = logger.bar('Combining', grid.types.length);
-    const combined = sparseOrGrids(grid, dilatedFound, true, done => combineBar.update(done));
+    const combined = sparseOrGrids(grid, dilatedFound, true, (done) => combineBar.update(done));
     combineBar.end();
 
     return { grid: combined, gridBounds };

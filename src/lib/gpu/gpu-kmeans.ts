@@ -1,12 +1,8 @@
-import {
-    BUFFERUSAGE_COPY_DST,
-    BUFFERUSAGE_COPY_SRC,
-    FloatPacking,
-    StorageBuffer,
-    GraphicsDevice
-} from 'playcanvas';
+import type { GraphicsDevice } from 'playcanvas';
+import { BUFFERUSAGE_COPY_DST, BUFFERUSAGE_COPY_SRC, FloatPacking, StorageBuffer } from 'playcanvas';
 
-import { makeKernel, type Kernel } from './compute-kernel';
+import { makeKernel } from './compute-kernel';
+import type { Kernel } from './compute-kernel';
 
 /**
  * Flash-kmeans (arXiv 2603.09229) adapted to WebGPU: a fully GPU-resident
@@ -38,7 +34,7 @@ const roundUp = (value: number, multiple: number) => {
 // contiguous in memory (coalesced loads). The distance loop is scalar with a
 // compile-time trip count — explicit vec4 widening benched slower (the kernel
 // is ALU-bound; the compiler already vectorizes this loop).
-const assignWgsl = (floatType: string, numColumns: number, tileSize: number, ppt: number) => /* wgsl */`
+const assignWgsl = (floatType: string, numColumns: number, tileSize: number, ppt: number) => /* wgsl */ `
 ${floatType === 'f16' ? 'enable f16;' : ''}
 
 struct Uniforms {
@@ -138,7 +134,7 @@ fn main(
 
 // per-cluster population count. Plain u32 atomics — the paper's contention
 // concern applies to d-wide float scatters, not a 1-word histogram.
-const histogramWgsl = () => /* wgsl */`
+const histogramWgsl = () => /* wgsl */ `
 struct Uniforms {
     globalOffset: u32,
     count: u32
@@ -158,7 +154,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
 // single-workgroup exclusive scan of counts → segment offsets, plus a working
 // copy for the scatter cursors (same 3-phase pattern as shaders/prefix-sum.ts).
-const scanWgsl = () => /* wgsl */`
+const scanWgsl = () => /* wgsl */ `
 struct Uniforms {
     numCentroids: u32
 };
@@ -208,7 +204,7 @@ fn main(@builtin(local_invocation_index) tid: u32) {
 // counting-sort placement — the paper's sort-inverse mapping. Within-segment
 // order is nondeterministic (atomic race), which only permutes float
 // summation order in the reduce.
-const scatterWgsl = () => /* wgsl */`
+const scatterWgsl = () => /* wgsl */ `
 struct Uniforms {
     globalOffset: u32,
     count: u32
@@ -233,7 +229,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 // accumulate in shared memory and land in sums[] with plain (non-atomic)
 // adds — dispatch ordering serializes the per-chunk accumulation. Points
 // outside the bound chunk are skipped and picked up by that chunk's dispatch.
-const reduceWgsl = (floatType: string, numColumns: number) => /* wgsl */`
+const reduceWgsl = (floatType: string, numColumns: number) => /* wgsl */ `
 ${floatType === 'f16' ? 'enable f16;' : ''}
 
 struct Uniforms {
@@ -296,7 +292,7 @@ fn main(
 `;
 
 // centroid = sum / count for non-empty clusters (thread per element)
-const divideWgsl = (numColumns: number) => /* wgsl */`
+const divideWgsl = (numColumns: number) => /* wgsl */ `
 struct Uniforms {
     numCentroids: u32
 };
@@ -323,7 +319,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 // a per-iteration seed), preserving the CPU path's semantics. The dispatch for
 // chunk c only handles clusters whose hashed point lands in chunk c; disjoint
 // from divide (count == 0 vs count > 0), so ordering between them is free.
-const reseedWgsl = (floatType: string, numColumns: number) => /* wgsl */`
+const reseedWgsl = (floatType: string, numColumns: number) => /* wgsl */ `
 ${floatType === 'f16' ? 'enable f16;' : ''}
 
 struct Uniforms {
@@ -364,7 +360,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 `;
 
 // mirror the canonical f32 centroids into the f16 copy read by assign
-const convertWgsl = () => /* wgsl */`
+const convertWgsl = () => /* wgsl */ `
 enable f16;
 
 struct Uniforms {
@@ -408,8 +404,17 @@ class GpuKmeans {
         const floatType = useF16 ? 'f16' : 'f32';
         const bytesPerElem = useF16 ? 2 : 4;
 
-        // @ts-ignore - wgpu is private on WebgpuGraphicsDevice but exposed in practice
-        const wgpuLimits = (device as any).wgpu?.limits;
+        const wgpuLimits = (
+            device as GraphicsDevice & {
+                wgpu?: {
+                    limits?: {
+                        maxComputeWorkgroupStorageSize?: number;
+                        maxComputeInvocationsPerWorkgroup?: number;
+                        maxStorageBufferBindingSize?: number;
+                    };
+                };
+            }
+        ).wgpu?.limits;
 
         // flush recorded work to the queue without any CPU synchronization
         const submit = () => (device as unknown as { submit: () => void }).submit();
@@ -427,37 +432,103 @@ class GpuKmeans {
         const ppt = pptForColumns(numColumns);
 
         const kernels = {
-            assign: makeKernel(device, 'kmeans-assign', assignWgsl(floatType, numColumns, tileSize, ppt),
+            assign: makeKernel(
+                device,
+                'kmeans-assign',
+                assignWgsl(floatType, numColumns, tileSize, ppt),
                 ['localOffset', 'globalOffset', 'count', 'numCentroids'],
-                [['points', true], ['centroids', true], ['labels', false]]),
-            histogram: makeKernel(device, 'kmeans-histogram', histogramWgsl(),
+                [
+                    ['points', true],
+                    ['centroids', true],
+                    ['labels', false]
+                ]
+            ),
+            histogram: makeKernel(
+                device,
+                'kmeans-histogram',
+                histogramWgsl(),
                 ['globalOffset', 'count'],
-                [['labels', true], ['counts', false]]),
-            scan: makeKernel(device, 'kmeans-scan', scanWgsl(),
+                [
+                    ['labels', true],
+                    ['counts', false]
+                ]
+            ),
+            scan: makeKernel(
+                device,
+                'kmeans-scan',
+                scanWgsl(),
                 ['numCentroids'],
-                [['counts', true], ['offsets', false], ['cursors', false]]),
-            scatter: makeKernel(device, 'kmeans-scatter', scatterWgsl(),
+                [
+                    ['counts', true],
+                    ['offsets', false],
+                    ['cursors', false]
+                ]
+            ),
+            scatter: makeKernel(
+                device,
+                'kmeans-scatter',
+                scatterWgsl(),
                 ['globalOffset', 'count'],
-                [['labels', true], ['cursors', false], ['sortedIdx', false]]),
-            reduce: makeKernel(device, 'kmeans-reduce', reduceWgsl(floatType, numColumns),
+                [
+                    ['labels', true],
+                    ['cursors', false],
+                    ['sortedIdx', false]
+                ]
+            ),
+            reduce: makeKernel(
+                device,
+                'kmeans-reduce',
+                reduceWgsl(floatType, numColumns),
                 ['numCentroids', 'chunkStart', 'chunkEnd'],
-                [['points', true], ['sortedIdx', true], ['offsets', true], ['counts', true], ['sums', false]]),
-            divide: makeKernel(device, 'kmeans-divide', divideWgsl(numColumns),
+                [
+                    ['points', true],
+                    ['sortedIdx', true],
+                    ['offsets', true],
+                    ['counts', true],
+                    ['sums', false]
+                ]
+            ),
+            divide: makeKernel(
+                device,
+                'kmeans-divide',
+                divideWgsl(numColumns),
                 ['numCentroids'],
-                [['sums', true], ['counts', true], ['centroids', false]]),
-            reseed: makeKernel(device, 'kmeans-reseed', reseedWgsl(floatType, numColumns),
+                [
+                    ['sums', true],
+                    ['counts', true],
+                    ['centroids', false]
+                ]
+            ),
+            reseed: makeKernel(
+                device,
+                'kmeans-reseed',
+                reseedWgsl(floatType, numColumns),
                 ['numCentroids', 'numPoints', 'seed', 'chunkStart', 'chunkEnd'],
-                [['counts', true], ['points', true], ['centroids', false]]),
-            convert: useF16 ? makeKernel(device, 'kmeans-convert', convertWgsl(),
-                ['totalElems'],
-                [['centroids', true], ['centroidsF16', false]]) : null
+                [
+                    ['counts', true],
+                    ['points', true],
+                    ['centroids', false]
+                ]
+            ),
+            convert: useF16
+                ? makeKernel(
+                      device,
+                      'kmeans-convert',
+                      convertWgsl(),
+                      ['totalElems'],
+                      [
+                          ['centroids', true],
+                          ['centroidsF16', false]
+                      ]
+                  )
+                : null
         };
 
         this.run = async (points, numPoints, centroids, labels, iterations, onIteration) => {
             // ---- chunk plan: each point chunk must fit a storage binding and
             // keep assign a 1D dispatch (65535 workgroups × 64 threads)
             const rowBytes = numColumns * bytesPerElem;
-            const bindingLimit: number = wgpuLimits?.maxStorageBufferBindingSize ?? (128 * 1024 * 1024);
+            const bindingLimit: number = wgpuLimits?.maxStorageBufferBindingSize ?? 128 * 1024 * 1024;
             const chunkCap = Math.min(4_000_000, Math.floor(bindingLimit / rowBytes)) & ~1;
             const numChunks = Math.ceil(numPoints / chunkCap);
 
@@ -470,8 +541,8 @@ class GpuKmeans {
             if (numPoints * 4 > bindingLimit) {
                 throw new Error(
                     `GpuKmeans: labels/sortedIdx buffers (${numPoints * 4} bytes for ${numPoints} points) exceed ` +
-                    `device maxStorageBufferBindingSize (${bindingLimit}) — reduce the input (e.g. write streamed ` +
-                    'SOG / LOD units) or use a device with larger limits'
+                        `device maxStorageBufferBindingSize (${bindingLimit}) — reduce the input (e.g. write streamed ` +
+                        'SOG / LOD units) or use a device with larger limits'
                 );
             }
             // resident when all chunks fit a 2GB budget, else stream through
@@ -490,11 +561,33 @@ class GpuKmeans {
             }
 
             // ---- buffers
-            const pointBufs = resident ?
-                Array.from({ length: numChunks }, (_, c) => new StorageBuffer(device, roundUp(chunkRows(c) * numColumns, 2) * bytesPerElem, BUFFERUSAGE_COPY_DST)) :
-                Array.from({ length: 2 }, () => new StorageBuffer(device, roundUp(chunkCap * numColumns, 2) * bytesPerElem, BUFFERUSAGE_COPY_DST));
-            const centroidsBuf = new StorageBuffer(device, numCentroids * numColumns * 4, BUFFERUSAGE_COPY_DST | BUFFERUSAGE_COPY_SRC);
-            const centroidsF16Buf = useF16 ? new StorageBuffer(device, roundUp(numCentroids * numColumns, 2) * 2, 0) : null;
+            const pointBufs = resident
+                ? Array.from(
+                      { length: numChunks },
+                      (_, c) =>
+                          new StorageBuffer(
+                              device,
+                              roundUp(chunkRows(c) * numColumns, 2) * bytesPerElem,
+                              BUFFERUSAGE_COPY_DST
+                          )
+                  )
+                : Array.from(
+                      { length: 2 },
+                      () =>
+                          new StorageBuffer(
+                              device,
+                              roundUp(chunkCap * numColumns, 2) * bytesPerElem,
+                              BUFFERUSAGE_COPY_DST
+                          )
+                  );
+            const centroidsBuf = new StorageBuffer(
+                device,
+                numCentroids * numColumns * 4,
+                BUFFERUSAGE_COPY_DST | BUFFERUSAGE_COPY_SRC
+            );
+            const centroidsF16Buf = useF16
+                ? new StorageBuffer(device, roundUp(numCentroids * numColumns, 2) * 2, 0)
+                : null;
             const labelsBuf = new StorageBuffer(device, numPoints * 4, BUFFERUSAGE_COPY_SRC);
             const sortedIdxBuf = new StorageBuffer(device, numPoints * 4, 0);
             const countsBuf = new StorageBuffer(device, numCentroids * 4, BUFFERUSAGE_COPY_DST);
@@ -658,7 +751,7 @@ class GpuKmeans {
                 await labelsBuf.read(0, numPoints * 4, labels, true);
                 await centroidsBuf.read(0, numCentroids * numColumns * 4, centroids, true);
             } finally {
-                pointBufs.forEach(b => b.destroy());
+                pointBufs.forEach((b) => b.destroy());
                 centroidsBuf.destroy();
                 centroidsF16Buf?.destroy();
                 labelsBuf.destroy();
@@ -671,7 +764,7 @@ class GpuKmeans {
         };
 
         this.destroy = () => {
-            Object.values(kernels).forEach(k => k?.destroy());
+            Object.values(kernels).forEach((k) => k?.destroy());
         };
     }
 }

@@ -6,7 +6,7 @@
  *
  * @returns WGSL source for the finalize compute shader.
  */
-const finalizeWgsl = () => /* wgsl */`
+const finalizeWgsl = () => /* wgsl */ `
 #include "uniformsStruct"
 #include "constants"
 

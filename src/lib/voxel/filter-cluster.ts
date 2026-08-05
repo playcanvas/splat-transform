@@ -1,30 +1,16 @@
 import { Vec3 } from 'playcanvas';
 
-import { BlockMaskBuffer } from './block-mask-buffer';
-import {
-    setupVoxelFilter,
-    buildGaussianColumns,
-    buildBlockGridParams,
-    type VoxelFilterContext
-} from './filter-pipeline';
-import { twoLevelBFS } from './flood-fill';
-import {
-    BLOCK_EMPTY,
-    BLOCK_MIXED,
-    BLOCKS_PER_WORD,
-    EVEN_BITS,
-    SOLID_WORD,
-    SparseVoxelGrid
-} from './sparse-voxel-grid';
-import {
-    buildBlockLookup,
-    isCenterInOccupiedVoxel,
-    gaussianContributesToVoxels
-} from './voxel-query';
-import { alignGridBounds, voxelizeToBuffer } from './voxelize';
-import { DataTable } from '../data-table';
+import type { DataTable } from '../data-table';
 import type { DeviceCreator } from '../types';
 import { fmtCount, fmtDistance, logger } from '../utils';
+
+import type { BlockMaskBuffer } from './block-mask-buffer';
+import { setupVoxelFilter, buildGaussianColumns, buildBlockGridParams } from './filter-pipeline';
+import type { VoxelFilterContext } from './filter-pipeline';
+import { twoLevelBFS } from './flood-fill';
+import { BLOCK_EMPTY, BLOCK_MIXED, BLOCKS_PER_WORD, EVEN_BITS, SOLID_WORD, SparseVoxelGrid } from './sparse-voxel-grid';
+import { buildBlockLookup, isCenterInOccupiedVoxel, gaussianContributesToVoxels } from './voxel-query';
+import { alignGridBounds, voxelizeToBuffer } from './voxelize';
 
 /**
  * Build an inverted SparseVoxelGrid from a BlockMaskBuffer for flood-filling
@@ -37,10 +23,7 @@ import { fmtCount, fmtDistance, logger } from '../utils';
  * @param nz - Grid dimension Z in voxels.
  * @returns Inverted grid suitable for twoLevelBFS.
  */
-const buildInvertedGrid = (
-    buffer: BlockMaskBuffer,
-    nx: number, ny: number, nz: number
-): SparseVoxelGrid => {
+const buildInvertedGrid = (buffer: BlockMaskBuffer, nx: number, ny: number, nz: number): SparseVoxelGrid => {
     const grid = new SparseVoxelGrid(nx, ny, nz);
 
     // Inverted grid: every block defaults to SOLID (fully blocked). SOLID is
@@ -70,7 +53,7 @@ const buildInvertedGrid = (
     for (let i = 0; i < mixed.blockIdx.length; i++) {
         const blockIdx = mixed.blockIdx[i];
         grid.setBlockType(blockIdx, BLOCK_MIXED);
-        grid.masks.set(blockIdx, (~mixed.masks[i * 2]) >>> 0, (~mixed.masks[i * 2 + 1]) >>> 0);
+        grid.masks.set(blockIdx, ~mixed.masks[i * 2] >>> 0, ~mixed.masks[i * 2 + 1] >>> 0);
     }
 
     return grid;
@@ -95,8 +78,12 @@ const buildInvertedGrid = (
  */
 const findClusterVoxelFlood = (
     buffer: BlockMaskBuffer,
-    nx: number, ny: number, nz: number,
-    seedIx: number, seedIy: number, seedIz: number
+    nx: number,
+    ny: number,
+    nz: number,
+    seedIx: number,
+    seedIy: number,
+    seedIz: number
 ): { ccCount: number; visited: SparseVoxelGrid; resolvedSeed: { ix: number; iy: number; iz: number } } | null => {
     const blocked = buildInvertedGrid(buffer, nx, ny, nz);
     const nbx = nx >> 2;
@@ -156,10 +143,10 @@ const findClusterVoxelFlood = (
 const filterCluster = async (
     dataTable: DataTable,
     createDevice: DeviceCreator,
-    voxelResolution: number = 1.0,
+    voxelResolution = 1.0,
     seed: Vec3 = Vec3.ZERO,
-    opacityCutoff: number = 0.999,
-    minContribution: number = 0.1
+    opacityCutoff = 0.999,
+    minContribution = 0.1
 ): Promise<DataTable> => {
     if (!Number.isFinite(voxelResolution) || voxelResolution <= 0) {
         throw new Error(`filterCluster: voxelResolution must be a positive finite number, got ${voxelResolution}`);
@@ -203,8 +190,12 @@ const filterCluster = async (
         const sceneExtentZ = ctx.sceneBounds.max.z - ctx.sceneBounds.min.z;
 
         const gridBounds = alignGridBounds(
-            ctx.sceneBounds.min.x, ctx.sceneBounds.min.y, ctx.sceneBounds.min.z,
-            ctx.sceneBounds.max.x, ctx.sceneBounds.max.y, ctx.sceneBounds.max.z,
+            ctx.sceneBounds.min.x,
+            ctx.sceneBounds.min.y,
+            ctx.sceneBounds.min.z,
+            ctx.sceneBounds.max.x,
+            ctx.sceneBounds.max.y,
+            ctx.sceneBounds.max.z,
             clampedResolution
         );
 
@@ -233,10 +224,16 @@ const filterCluster = async (
         const nz = nbz * 4;
 
         const totalVoxels = nx * ny * nz;
-        logger.info(`scene: ${fmtDistance(sceneExtentX)} x ${fmtDistance(sceneExtentY)} x ${fmtDistance(sceneExtentZ)}, grid: ${nx} x ${ny} x ${nz} voxels (${fmtCount(totalVoxels)}) @ ${fmtDistance(clampedResolution)}`);
+        logger.info(
+            `scene: ${fmtDistance(sceneExtentX)} x ${fmtDistance(sceneExtentY)} x ${fmtDistance(sceneExtentZ)}, grid: ${nx} x ${ny} x ${nz} voxels (${fmtCount(totalVoxels)}) @ ${fmtDistance(clampedResolution)}`
+        );
 
         const buffer = await voxelizeToBuffer(
-            ctx.bvh, ctx.gpuVoxelization!, gridBounds, clampedResolution, opacityCutoff
+            ctx.bvh,
+            ctx.gpuVoxelization!,
+            gridBounds,
+            clampedResolution,
+            opacityCutoff
         );
 
         ctx.gpuVoxelization.destroy();
@@ -262,7 +259,9 @@ const filterCluster = async (
             const worldX = gridBounds.min.x + (resolvedSeed.ix + 0.5) * clampedResolution;
             const worldY = gridBounds.min.y + (resolvedSeed.iy + 0.5) * clampedResolution;
             const worldZ = gridBounds.min.z + (resolvedSeed.iz + 0.5) * clampedResolution;
-            logger.warn(`seed (${seed.x.toFixed(2)}, ${seed.y.toFixed(2)}, ${seed.z.toFixed(2)}) unoccupied; resolved to nearest at (${worldX.toFixed(2)}, ${worldY.toFixed(2)}, ${worldZ.toFixed(2)})`);
+            logger.warn(
+                `seed (${seed.x.toFixed(2)}, ${seed.y.toFixed(2)}, ${seed.z.toFixed(2)}) unoccupied; resolved to nearest at (${worldX.toFixed(2)}, ${worldY.toFixed(2)}, ${worldZ.toFixed(2)})`
+            );
         }
 
         logger.info(`cluster is ${fmtCount(ccCount)} of ${fmtCount(buffer.count)} blocks`);
@@ -306,7 +305,7 @@ const filterCluster = async (
 
             let minHits = 1;
             if (Math.max(ex, ey, ez) * 2 > largeThreshold) {
-                const aabbVoxels = (2 * ex * invVoxel) * (2 * ey * invVoxel) * (2 * ez * invVoxel);
+                const aabbVoxels = 2 * ex * invVoxel * (2 * ey * invVoxel) * (2 * ez * invVoxel);
                 minHits = Math.max(1, Math.ceil(aabbVoxels * minOccupancyRatio));
             }
 
