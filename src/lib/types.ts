@@ -17,7 +17,7 @@ type Options = {
     lodSelect?: number[];
 
     /** Viewer settings JSON for HTML output */
-    viewerSettingsJson?: any;
+    viewerSettingsJson?: unknown;
 
     /** Whether to generate unbundled HTML output with separate files. Default: false */
     unbundled?: boolean;

@@ -177,8 +177,7 @@ const writeSogSource = async (
                 logWrittenFile(filename, webp.byteLength);
             }
         });
-        // eslint-disable-next-line @typescript-eslint/no-empty-function -- preserve rejection-only control flow
-        writeChain = write.catch(() => {});
+        writeChain = write.catch<undefined>(() => undefined);
         return write;
     };
 
@@ -421,7 +420,7 @@ const writeSogSource = async (
         await Promise.all(pending);
 
         // ---- meta.json --------------------------------------------------
-        const metaObj: any = {
+        const metaObj = {
             version: 2,
             asset: { generator: `splat-transform v${version}` },
             count: numRows,

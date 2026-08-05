@@ -1,14 +1,14 @@
 import { WebPCodec } from '../utils/webp-codec';
 
 import { taskHandlers } from './tasks';
-import type { TaskName, TaskArgs, TaskResult, WorkerMessage } from './tasks';
+import type { TaskName, TaskArgs, TaskResult, HostMessage, WorkerMessage } from './tasks';
 import { workerBundled } from './worker-bundled';
 
 type PendingTask = {
     task: TaskName;
-    args: any;
+    args: unknown;
     transfer: ArrayBuffer[];
-    resolve: (result: any) => void;
+    resolve: (result: unknown) => void;
     reject: (err: Error) => void;
 };
 
@@ -18,18 +18,21 @@ type Slot = {
     state: 'starting' | 'idle' | 'busy';
     current: PendingTask | null;
     dead: boolean;
-    post: (message: any, transfer: ArrayBuffer[]) => void;
+    post: (message: HostMessage, transfer: ArrayBuffer[]) => void;
     terminate: () => void;
     ref: () => void;
     unref: () => void;
 };
 
 // same runtime check as the emscripten glue in lib/webp.mjs
-const isNode = typeof process !== 'undefined' && !!process.versions?.node && (process as any).type !== 'renderer';
+const isNode =
+    typeof process !== 'undefined' &&
+    !!process.versions?.node &&
+    (process as NodeJS.Process & { type?: string }).type !== 'renderer';
 
 let slots: Slot[] = [];
 const queue: PendingTask[] = [];
-const outstanding = new Set<Promise<any>>();
+const outstanding = new Set<Promise<unknown>>();
 
 // user-configurable: max worker threads (null = auto), 0 forces inline
 let maxWorkers: number | null = null;
@@ -52,7 +55,7 @@ const inlineMode = () => !workerBundled || unavailable || maxWorkers === 0;
 
 const runTaskInline = async (task: PendingTask) => {
     try {
-        const { result } = await taskHandlers[task.task](task.args);
+        const { result } = await taskHandlers[task.task](task.args as never);
         task.resolve(result);
     } catch (err) {
         task.reject(err instanceof Error ? err : new Error(String(err)));
@@ -249,7 +252,13 @@ function dispatch() {
 
 const enqueue = <T extends TaskName>(task: T, args: TaskArgs<T>, transfer: ArrayBuffer[]): Promise<TaskResult<T>> => {
     const promise = new Promise<TaskResult<T>>((resolve, reject) => {
-        const pending: PendingTask = { task, args, transfer, resolve, reject };
+        const pending: PendingTask = {
+            task,
+            args,
+            transfer,
+            resolve: (result) => resolve(result as TaskResult<T>),
+            reject
+        };
         if (inlineMode()) {
             runTaskInline(pending);
         } else {
@@ -259,8 +268,7 @@ const enqueue = <T extends TaskName>(task: T, args: TaskArgs<T>, transfer: Array
     });
 
     outstanding.add(promise);
-    // eslint-disable-next-line @typescript-eslint/no-empty-function -- preserve rejection-only control flow
-    promise.catch(() => {}).then(() => outstanding.delete(promise));
+    promise.catch<undefined>(() => undefined).then(() => outstanding.delete(promise));
 
     return promise;
 };

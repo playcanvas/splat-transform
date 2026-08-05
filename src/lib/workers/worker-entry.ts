@@ -22,7 +22,7 @@ const bind = (
         }
 
         try {
-            const { result, transfer } = await taskHandlers[message.task](message.args);
+            const { result, transfer } = await taskHandlers[message.task](message.args as never);
             post({ type: 'result', result }, transfer);
         } catch (err) {
             post(
@@ -45,7 +45,11 @@ const bind = (
 // same guard as WorkerQueue's isNode: a real worker_threads worker, not an
 // Electron renderer (where process.versions.node is present but messaging goes
 // through the Web Worker scope)
-if (typeof process !== 'undefined' && !!process.versions?.node && (process as any).type !== 'renderer') {
+if (
+    typeof process !== 'undefined' &&
+    !!process.versions?.node &&
+    (process as NodeJS.Process & { type?: string }).type !== 'renderer'
+) {
     // node MessagePorts buffer messages until a listener attaches, so the
     // host's init message survives this async import
     import('node:worker_threads').then(({ parentPort }) => {
@@ -57,7 +61,10 @@ if (typeof process !== 'undefined' && !!process.versions?.node && (process as an
 } else {
     // tsconfig lib "dom" types postMessage/onmessage as Window's; cast to the
     // dedicated worker scope shape
-    const scope = globalThis as any;
+    const scope = globalThis as unknown as {
+        postMessage: (message: WorkerMessage, transfer: ArrayBuffer[]) => void;
+        onmessage: ((event: MessageEvent<HostMessage>) => void) | null;
+    };
     bind(
         (message, transfer) => scope.postMessage(message, transfer),
         (handler) => {

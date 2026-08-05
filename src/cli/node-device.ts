@@ -8,12 +8,32 @@ const initializeGlobals = () => {
     Object.assign(globalThis, globals);
 
     // window stub
-    (globalThis as any).window = {
+    (globalThis as unknown as { window: { navigator: { userAgent: string } } }).window = {
         navigator: { userAgent: 'node.js' }
     };
 
     // document stub
-    (globalThis as any).document = {
+    (
+        globalThis as unknown as {
+            document: {
+                createElement: (type: string) =>
+                    | {
+                          getContext: () => null;
+                          getBoundingClientRect: () => {
+                              left: number;
+                              top: number;
+                              width: number;
+                              height: number;
+                              right: number;
+                              bottom: number;
+                          };
+                          width: number;
+                          height: number;
+                      }
+                    | undefined;
+            };
+        }
+    ).document = {
         createElement: (type: string) => {
             if (type === 'canvas') {
                 return {
@@ -135,8 +155,17 @@ const createDevice = async (adapterName?: string): Promise<GraphicsDevice> => {
     // LOD chain ended up with several identical full-resolution levels. Handling
     // it here once means every GPU consumer (decimate, filters, voxelization, …)
     // fails loudly without wrapping each call site in its own error scope.
-    // @ts-ignore - wgpu is private on WebgpuGraphicsDevice but exposed in practice
-    const wgpu = (graphicsDevice as any).wgpu;
+    const device = graphicsDevice as unknown as GraphicsDevice & {
+        wgpu?: {
+            addEventListener?: (
+                type: 'uncapturederror',
+                handler: (event: { error?: { constructor?: { name?: string }; message?: string } }) => void
+            ) => void;
+            lost?: Promise<{ reason?: string; message?: string }>;
+        };
+        _vram: Record<PropertyKey, number>;
+    };
+    const wgpu = device.wgpu;
 
     // A corrupted GPU result must never be written out, so we escalate to a hard
     // failure: re-raise on the next tick so main()'s uncaughtException handler
@@ -150,7 +179,7 @@ const createDevice = async (adapterName?: string): Promise<GraphicsDevice> => {
         });
     };
 
-    wgpu?.addEventListener?.('uncapturederror', (ev: any) => {
+    wgpu?.addEventListener?.('uncapturederror', (ev) => {
         const e = ev?.error;
         const kind = e?.constructor?.name === 'GPUOutOfMemoryError' ? 'out-of-memory' : 'error';
         escalateGpuError(`${kind}: ${e?.message || '(no message)'}`);
@@ -158,7 +187,7 @@ const createDevice = async (adapterName?: string): Promise<GraphicsDevice> => {
 
     // Skip the `destroyed` reason — that fires on intentional device.destroy()
     // during normal shutdown.
-    wgpu?.lost?.then((info: any) => {
+    wgpu?.lost?.then((info) => {
         if (info?.reason === 'destroyed') return;
         escalateGpuError(`device lost: reason=${info?.reason || 'unknown'}, message=${info?.message || '(none)'}`);
     });
@@ -173,9 +202,8 @@ const createDevice = async (adapterName?: string): Promise<GraphicsDevice> => {
     // captured. Blind spots: engine-internal readback staging buffers
     // bypass `_vram`, and Dawn's own overhead (pipelines, heap padding)
     // is invisible — the peak is a lower bound on true device memory.
-    // @ts-ignore - _vram is private on GraphicsDevice
-    const vram = (graphicsDevice as any)._vram;
-    (graphicsDevice as any)._vram = new Proxy(vram, {
+    const vram = device._vram;
+    device._vram = new Proxy(vram, {
         set(target, prop, value) {
             target[prop] = value;
             const total = target.tex + target.vb + target.ib + target.ub + target.sb;

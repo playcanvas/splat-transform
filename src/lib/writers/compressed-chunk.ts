@@ -1,5 +1,6 @@
 import { Quat } from 'playcanvas';
 
+import type { Row } from '../data-table';
 import { sigmoid } from '../utils';
 
 const q = new Quat();
@@ -24,7 +25,7 @@ class CompressedChunk {
     ];
 
     size: number;
-    data: any = {};
+    data: Record<string, Float32Array> = {};
 
     // compressed data
     chunkData: Float32Array;
@@ -45,7 +46,7 @@ class CompressedChunk {
         this.color = new Uint32Array(size);
     }
 
-    set(index: number, data: any) {
+    set(index: number, data: Row) {
         CompressedChunk.members.forEach((m) => {
             this.data[m][index] = data[m];
         });

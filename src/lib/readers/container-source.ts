@@ -56,8 +56,7 @@ const containerSource = async (
             const evicted = order.shift()!;
             const ep = cache.get(evicted)!;
             cache.delete(evicted);
-            // eslint-disable-next-line @typescript-eslint/no-empty-function -- preserve rejection-only control flow
-            ep.then((s) => s.close()).catch(() => {});
+            ep.then((s) => s.close()).catch<undefined>(() => undefined);
         }
         return p;
     };
@@ -127,8 +126,7 @@ const containerSource = async (
     };
 
     const close = async (): Promise<void> => {
-        // eslint-disable-next-line @typescript-eslint/no-empty-function -- preserve rejection-only control flow
-        await Promise.all([...cache.values()].map((p) => p.then((s) => s.close()).catch(() => {})));
+        await Promise.all([...cache.values()].map((p) => p.then((s) => s.close()).catch<undefined>(() => undefined)));
         cache.clear();
         order.length = 0;
     };

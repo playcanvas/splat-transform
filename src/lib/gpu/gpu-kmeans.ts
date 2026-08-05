@@ -404,8 +404,17 @@ class GpuKmeans {
         const floatType = useF16 ? 'f16' : 'f32';
         const bytesPerElem = useF16 ? 2 : 4;
 
-        // @ts-ignore - wgpu is private on WebgpuGraphicsDevice but exposed in practice
-        const wgpuLimits = (device as any).wgpu?.limits;
+        const wgpuLimits = (
+            device as GraphicsDevice & {
+                wgpu?: {
+                    limits?: {
+                        maxComputeWorkgroupStorageSize?: number;
+                        maxComputeInvocationsPerWorkgroup?: number;
+                        maxStorageBufferBindingSize?: number;
+                    };
+                };
+            }
+        ).wgpu?.limits;
 
         // flush recorded work to the queue without any CPU synchronization
         const submit = () => (device as unknown as { submit: () => void }).submit();

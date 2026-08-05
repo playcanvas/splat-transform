@@ -483,7 +483,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     };
 
     // write the meta file with float precision quantization (approx. 32-bit float => ~7 significant digits)
-    const replacer = (_key: string, value: any) => {
+    const replacer = (_key: string, value: unknown) => {
         if (typeof value === 'number') {
             if (!Number.isFinite(value)) return value;
             return Number.isInteger(value) ? value : +value.toPrecision(7);

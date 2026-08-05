@@ -80,8 +80,8 @@ const fileExists = async (filename: string) => {
     try {
         await lstat(filename);
         return true;
-    } catch (e: any) {
-        if (e?.code === 'ENOENT') {
+    } catch (e) {
+        if ((e as { code?: string })?.code === 'ENOENT') {
             return false;
         }
         throw e; // real error (permissions, etc)

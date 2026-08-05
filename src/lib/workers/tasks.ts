@@ -219,9 +219,9 @@ type TaskResult<T extends TaskName> = Awaited<ReturnType<(typeof taskHandlers)[T
 // Message protocol between host and worker. There are no per-task ids: each
 // worker runs strictly one task at a time (enforced by the host's slot state
 // machine), so every reply pairs with the single in-flight `run`.
-type HostMessage = { type: 'init'; wasmUrl: string } | { type: 'run'; task: TaskName; args: any };
+type HostMessage = { type: 'init'; wasmUrl: string } | { type: 'run'; task: TaskName; args: unknown };
 
 type WorkerMessage =
-    { type: 'ready' } | { type: 'result'; result: any } | { type: 'error'; message: string; stack?: string };
+    { type: 'ready' } | { type: 'result'; result: unknown } | { type: 'error'; message: string; stack?: string };
 
 export { taskHandlers, type TaskName, type TaskArgs, type TaskResult, type HostMessage, type WorkerMessage };

@@ -33,7 +33,7 @@ type RawLcc2Node = {
     data?: {
         '3dgs'?: { name: number; start?: number; count?: number };
         env?: { name: number };
-        [key: string]: any;
+        [key: string]: unknown;
     };
     // Children: array or { "0": node, "1": node, ... } object map.
     child?: RawLcc2Node[] | Record<string, RawLcc2Node>;
@@ -41,14 +41,14 @@ type RawLcc2Node = {
     // Old protocol fields (need mapping).
     files?: string[];
     child_num?: number;
-    datatype?: any;
+    datatype?: unknown;
 
     // New protocol fields (used directly).
     splatFiles?: string[];
     childNum?: number;
-    dataType?: any;
+    dataType?: unknown;
 
-    [key: string]: any;
+    [key: string]: unknown;
 };
 
 // Top-level meta.lcc2 raw shape.
@@ -67,12 +67,12 @@ type RawLcc2Meta = {
     splatType?: '.sog' | '.spz';
 
     // Bounding box (passed through for downstream/debug use).
-    boundingBox?: any;
+    boundingBox?: unknown;
 
     // Octree root node.
     root: RawLcc2Node;
 
-    [key: string]: any;
+    [key: string]: unknown;
 };
 
 // --- Normalized model (post-parse) ------------------------------------------
@@ -83,13 +83,13 @@ type Lcc2TreeNode = {
     data?: {
         '3dgs'?: { name: number; start?: number; count?: number };
         env?: { name: number };
-        [key: string]: any;
+        [key: string]: unknown;
     };
     child?: Lcc2TreeNode[] | Record<string, Lcc2TreeNode>;
     splatFiles?: string[];
     childNum?: number;
-    dataType?: any;
-    [key: string]: any;
+    dataType?: unknown;
+    [key: string]: unknown;
 };
 
 // Return value of parseLcc2Meta.
@@ -105,7 +105,7 @@ type Lcc2Meta = {
     /** Unified chunk encoding type, defaults to '.sog'. */
     splatType: '.sog' | '.spz';
     /** Bounding box (passed through). */
-    boundingBox: any;
+    boundingBox: unknown;
     /** Optional environment chunk file index (root.data.env.name); undefined if absent. */
     envFileIndex: number | undefined;
     /** Octree root node (normalized). */
@@ -505,8 +505,7 @@ const gunzipPrefix = async (stream: ReadStream, length: number): Promise<Uint8Ar
     } finally {
         // Stop decompression early; the bounded input is truncated, so
         // draining it to EOF would throw.
-        // eslint-disable-next-line @typescript-eslint/no-empty-function -- preserve rejection-only control flow
-        await reader.cancel().catch(() => {});
+        await reader.cancel().catch<undefined>(() => undefined);
     }
 };
 

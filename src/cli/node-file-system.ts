@@ -147,10 +147,8 @@ class FileWriter implements Writer {
         this.abort = async () => {
             // discard: close and remove the temp file, never touching the
             // target filename (best-effort — this runs on already-failing paths)
-            // eslint-disable-next-line @typescript-eslint/no-empty-function -- preserve rejection-only control flow
-            await fileHandle.close().catch(() => {});
-            // eslint-disable-next-line @typescript-eslint/no-empty-function -- preserve rejection-only control flow
-            await unlink(tmpFilename).catch(() => {});
+            await fileHandle.close().catch<undefined>(() => undefined);
+            await unlink(tmpFilename).catch<undefined>(() => undefined);
         };
     }
 }

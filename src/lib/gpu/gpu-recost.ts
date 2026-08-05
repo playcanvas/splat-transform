@@ -503,7 +503,11 @@ class GpuRecost {
         allowSmall = false
     ): boolean {
         if (n < 1024 && !allowSmall) return false; // inline is instant below this on the global path
-        const limits = (device as any).limits;
+        const limits = (
+            device as GraphicsDevice & {
+                limits?: { maxStorageBufferBindingSize?: number; maxBufferSize?: number };
+            }
+        ).limits;
         const maxBinding = Math.min(
             typeof limits?.maxStorageBufferBindingSize === 'number'
                 ? limits.maxStorageBufferBindingSize

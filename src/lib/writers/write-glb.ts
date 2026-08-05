@@ -15,6 +15,17 @@ type WriteGlbOptions = {
     dataTable: DataTable;
 };
 
+type Accessor = {
+    bufferView: number;
+    byteOffset: number;
+    componentType: number;
+    count: number;
+    type: string;
+    normalized?: boolean;
+    min?: number[];
+    max?: number[];
+};
+
 // glTF accessor component types
 const FLOAT = 5126;
 const UNSIGNED_BYTE = 5121;
@@ -280,8 +291,8 @@ const writeGlb = async (options: WriteGlbOptions, fs: FileSystem) => {
     const { segments, offsets, binBuffer } = buildBinaryBuffer(dataTable, numSplats, shBands);
 
     // Build glTF JSON
-    const bufferViews: any[] = [];
-    const accessors: any[] = [];
+    const bufferViews: { buffer: number; byteOffset: number; byteLength: number; target: number }[] = [];
+    const accessors: Accessor[] = [];
     const attributes: Record<string, number> = {};
 
     for (let i = 0; i < segments.length; i++) {
@@ -294,7 +305,7 @@ const writeGlb = async (options: WriteGlbOptions, fs: FileSystem) => {
             target: ARRAY_BUFFER
         });
 
-        const accessor: any = {
+        const accessor: Accessor = {
             bufferView: i,
             byteOffset: 0,
             componentType: seg.componentType,
@@ -314,7 +325,7 @@ const writeGlb = async (options: WriteGlbOptions, fs: FileSystem) => {
         attributes[seg.name] = i;
     }
 
-    const gltf: any = {
+    const gltf = {
         asset: {
             version: '2.0',
             generator: `splat-transform ${version}`

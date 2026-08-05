@@ -22,7 +22,7 @@ const defaultSettings = {
         vignette: { enabled: false, intensity: 0.5, inner: 0.3, outer: 0.75, curvature: 1 },
         fringing: { enabled: false, intensity: 0.5 }
     },
-    animTracks: [] as any[],
+    animTracks: [] as unknown[],
     cameras: [
         {
             initial: {
@@ -32,14 +32,14 @@ const defaultSettings = {
             }
         }
     ],
-    annotations: [] as any[],
+    annotations: [] as unknown[],
     startMode: 'default'
 };
 
 type WriteHtmlOptions = {
     filename: string;
     dataTable: DataTable;
-    viewerSettingsJson?: any;
+    viewerSettingsJson?: unknown;
     bundle: boolean;
     iterations: number;
     createDevice?: DeviceCreator;
