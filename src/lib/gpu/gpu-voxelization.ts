@@ -1,3 +1,4 @@
+import type { GraphicsDevice } from 'playcanvas';
 import {
     BUFFERUSAGE_COPY_DST,
     BUFFERUSAGE_COPY_SRC,
@@ -9,14 +10,13 @@ import {
     BindStorageBufferFormat,
     BindUniformBufferFormat,
     Compute,
-    GraphicsDevice,
     Shader,
     StorageBuffer,
     UniformBufferFormat,
     UniformFormat
 } from 'playcanvas';
 
-import { DataTable } from '../data-table';
+import type { DataTable } from '../data-table';
 
 /**
  * WGSL shader for multi-batch voxelization of 4x4x4 blocks.
@@ -213,7 +213,7 @@ fn main(
 /**
  * Specification for a single batch in a multi-batch dispatch.
  */
-interface BatchSpec {
+type BatchSpec = {
     /** Offset into the concatenated index array */
     indexOffset: number;
 
@@ -231,12 +231,12 @@ interface BatchSpec {
 
     /** Number of blocks in Z direction */
     numBlocksZ: number;
-}
+};
 
 /**
  * Result of a multi-batch voxelization dispatch.
  */
-interface MultiBatchResult {
+type MultiBatchResult = {
     /**
      * Raw u32 masks for all batches.
      * For batch i, block j: masks[(i * maxBlocksPerBatch + j) * 2] = low, [+1] = high
@@ -245,14 +245,14 @@ interface MultiBatchResult {
 
     /** Maximum blocks per batch, used for offset calculation */
     maxBlocksPerBatch: number;
-}
+};
 
 /**
  * A set of GPU buffers and compute instance for one dispatch slot.
  * Two slots allow double-buffered pipelining: while the GPU executes
  * a dispatch on slot A, the CPU can prepare data for slot B.
  */
-interface DispatchSlot {
+type DispatchSlot = {
     indexBuffer: StorageBuffer;
     resultsBuffer: StorageBuffer;
     batchInfoBuffer: StorageBuffer;
@@ -260,7 +260,7 @@ interface DispatchSlot {
     indexBufferSize: number;
     resultsBufferSize: number;
     batchInfoBufferSize: number;
-}
+};
 
 /**
  * GPU-accelerated voxelization of Gaussian splat data.
@@ -282,7 +282,7 @@ class GpuVoxelization {
     // Double-buffered dispatch slots
     private slots: DispatchSlot[];
 
-    private totalGaussians: number = 0;
+    private totalGaussians = 0;
 
     /** Floats per Gaussian in the interleaved buffer (16 for alignment) */
     private static readonly FLOATS_PER_GAUSSIAN = 16;
@@ -337,7 +337,7 @@ class GpuVoxelization {
         // Create double-buffered dispatch slots
         this.slots = [];
         for (let i = 0; i < GpuVoxelization.NUM_SLOTS; i++) {
-            const indexBufferSize = 1024 * 1024 * 4;  // 1M indices = 4 MB
+            const indexBufferSize = 1024 * 1024 * 4; // 1M indices = 4 MB
             const indexBuffer = new StorageBuffer(device, indexBufferSize, BUFFERUSAGE_COPY_DST);
 
             // Initial capacity: 64 batches × 4096 blocks × 2 u32 × 4 bytes = 2 MB
@@ -363,7 +363,6 @@ class GpuVoxelization {
                 batchInfoBufferSize
             });
         }
-
     }
 
     /**
@@ -419,7 +418,10 @@ class GpuVoxelization {
                 // Normalize quaternion — the Rodrigues rotation in the shader
                 // assumes unit quaternions; non-normalized ones (common in MCMC
                 // training) would produce incorrect Mahalanobis distances.
-                const qw = rotW[i], qx = rotX[i], qy = rotY[i], qz = rotZ[i];
+                const qw = rotW[i],
+                    qx = rotX[i],
+                    qy = rotY[i],
+                    qz = rotZ[i];
                 const qlen = Math.sqrt(qw * qw + qx * qx + qy * qy + qz * qz);
                 const invLen = qlen > 0 ? 1 / qlen : 0;
                 interleavedData[offset + 4] = qw * invLen;
@@ -511,20 +513,32 @@ class GpuVoxelization {
 
         // Ensure slot buffers are large enough
         this.ensureSlotBuffer(
-            slot, 'indexBuffer', 'indexBufferSize',
-            totalIndices * 4, BUFFERUSAGE_COPY_DST, 'indices'
+            slot,
+            'indexBuffer',
+            'indexBufferSize',
+            totalIndices * 4,
+            BUFFERUSAGE_COPY_DST,
+            'indices'
         );
 
         const resultsU32Count = numBatches * maxBlocks * 2;
         this.ensureSlotBuffer(
-            slot, 'resultsBuffer', 'resultsBufferSize',
-            resultsU32Count * 4, BUFFERUSAGE_COPY_SRC, 'results'
+            slot,
+            'resultsBuffer',
+            'resultsBufferSize',
+            resultsU32Count * 4,
+            BUFFERUSAGE_COPY_SRC,
+            'results'
         );
 
         const batchInfoU32Count = numBatches * GpuVoxelization.BATCH_INFO_U32S;
         this.ensureSlotBuffer(
-            slot, 'batchInfoBuffer', 'batchInfoBufferSize',
-            batchInfoU32Count * 4, BUFFERUSAGE_COPY_DST, 'batchInfos'
+            slot,
+            'batchInfoBuffer',
+            'batchInfoBufferSize',
+            batchInfoU32Count * 4,
+            BUFFERUSAGE_COPY_DST,
+            'batchInfos'
         );
 
         // Upload concatenated indices

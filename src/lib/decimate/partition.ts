@@ -111,7 +111,8 @@ const kdPartition = (pos: ResidentPositions, blockSize: number, generation: numb
             blocks.push({ start, end, aabb, residual });
             return;
         }
-        let axis = 0, ext = -Infinity;
+        let axis = 0,
+            ext = -Infinity;
         for (let c = 0; c < 3; c++) {
             const e = aabb[3 + c] - aabb[c];
             if (e > ext) {
@@ -125,7 +126,7 @@ const kdPartition = (pos: ResidentPositions, blockSize: number, generation: numb
         // deterministic.
         const count = end - start;
         const upper = generation !== null && ((generation + depth + branch) & 1) !== 0;
-        const fraction = generation === null ? 1 / 2 : (upper ? 5 / 8 : 3 / 8);
+        const fraction = generation === null ? 1 / 2 : upper ? 5 / 8 : 3 / 8;
         const offset = Math.max(1, Math.min(count - 1, Math.floor(count * fraction)));
         const mid = start + offset;
         quickselect(cols[axis], order.subarray(start, end), mid - start);
@@ -142,17 +143,30 @@ const kdPartition = (pos: ResidentPositions, blockSize: number, generation: numb
         const { lo, hi } = fence;
         let out = 0;
         for (let i = 0; i < n; i++) {
-            if (cols[0][i] < lo[0] || cols[0][i] > hi[0] ||
-                cols[1][i] < lo[1] || cols[1][i] > hi[1] ||
-                cols[2][i] < lo[2] || cols[2][i] > hi[2]) out++;
+            if (
+                cols[0][i] < lo[0] ||
+                cols[0][i] > hi[0] ||
+                cols[1][i] < lo[1] ||
+                cols[1][i] > hi[1] ||
+                cols[2][i] < lo[2] ||
+                cols[2][i] > hi[2]
+            )
+                out++;
         }
         if (out > 0 && out <= n * OUTLIER_MAX_FRACTION) {
             coreEnd = n - out;
-            let c = 0, o = coreEnd;
+            let c = 0,
+                o = coreEnd;
             for (let i = 0; i < n; i++) {
-                if (cols[0][i] < lo[0] || cols[0][i] > hi[0] ||
-                    cols[1][i] < lo[1] || cols[1][i] > hi[1] ||
-                    cols[2][i] < lo[2] || cols[2][i] > hi[2]) order[o++] = i;
+                if (
+                    cols[0][i] < lo[0] ||
+                    cols[0][i] > hi[0] ||
+                    cols[1][i] < lo[1] ||
+                    cols[1][i] > hi[1] ||
+                    cols[2][i] < lo[2] ||
+                    cols[2][i] > hi[2]
+                )
+                    order[o++] = i;
                 else order[c++] = i;
             }
         }
@@ -165,16 +179,16 @@ const kdPartition = (pos: ResidentPositions, blockSize: number, generation: numb
 const aabbDistanceSquared = (a: Float32Array, b: Float32Array): number => {
     let d2 = 0;
     for (let c = 0; c < 3; c++) {
-        const d = a[3 + c] < b[c] ? b[c] - a[3 + c] : (b[3 + c] < a[c] ? a[c] - b[3 + c] : 0);
+        const d = a[3 + c] < b[c] ? b[c] - a[3 + c] : b[3 + c] < a[c] ? a[c] - b[3 + c] : 0;
         d2 += d * d;
     }
     return d2;
 };
 
 const pointAabbDistanceSquared = (x: number, y: number, z: number, a: Float32Array): number => {
-    const dx = x < a[0] ? a[0] - x : (x > a[3] ? x - a[3] : 0);
-    const dy = y < a[1] ? a[1] - y : (y > a[4] ? y - a[4] : 0);
-    const dz = z < a[2] ? a[2] - z : (z > a[5] ? z - a[5] : 0);
+    const dx = x < a[0] ? a[0] - x : x > a[3] ? x - a[3] : 0;
+    const dy = y < a[1] ? a[1] - y : y > a[4] ? y - a[4] : 0;
+    const dz = z < a[2] ? a[2] - z : z > a[5] ? z - a[5] : 0;
     return dx * dx + dy * dy + dz * dz;
 };
 
@@ -204,9 +218,13 @@ const buildBlockHalo = (
     if (cap === 0 || blocks.length === 1) return { rows: new Uint32Array(0), capped: false, radius: 0 };
 
     const neighbours = blocks
-    .map((block, index) => ({ block, index, d2: index === blockIndex ? Infinity : aabbDistanceSquared(core.aabb, block.aabb) }))
-    .filter(v => v.index !== blockIndex)
-    .sort((a, b) => a.d2 - b.d2 || a.index - b.index);
+        .map((block, index) => ({
+            block,
+            index,
+            d2: index === blockIndex ? Infinity : aabbDistanceSquared(core.aabb, block.aabb)
+        }))
+        .filter((v) => v.index !== blockIndex)
+        .sort((a, b) => a.d2 - b.d2 || a.index - b.index);
 
     const selected: number[] = [];
     let capped = false;
@@ -228,26 +246,39 @@ const buildBlockHalo = (
         const a = new Float64Array([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity]);
         for (let i = core.start; i < core.end; i++) {
             const g = order[i];
-            const x = pos.x[g], y = pos.y[g], z = pos.z[g];
-            if (x < fence.lo[0] || x > fence.hi[0] ||
-                y < fence.lo[1] || y > fence.hi[1] ||
-                z < fence.lo[2] || z > fence.hi[2]) continue;
+            const x = pos.x[g],
+                y = pos.y[g],
+                z = pos.z[g];
+            if (
+                x < fence.lo[0] ||
+                x > fence.hi[0] ||
+                y < fence.lo[1] ||
+                y > fence.hi[1] ||
+                z < fence.lo[2] ||
+                z > fence.hi[2]
+            )
+                continue;
             inFence++;
-            a[0] = Math.min(a[0], x); a[1] = Math.min(a[1], y); a[2] = Math.min(a[2], z);
-            a[3] = Math.max(a[3], x); a[4] = Math.max(a[4], y); a[5] = Math.max(a[5], z);
+            a[0] = Math.min(a[0], x);
+            a[1] = Math.min(a[1], y);
+            a[2] = Math.min(a[2], z);
+            a[3] = Math.max(a[3], x);
+            a[4] = Math.max(a[4], y);
+            a[5] = Math.max(a[5], z);
         }
         if (inFence > 0) {
             const ex = Math.max(0, a[3] - a[0]);
             const ey = Math.max(0, a[4] - a[1]);
             const ez = Math.max(0, a[5] - a[2]);
             const extents = [ex, ey, ez].sort((u, v) => v - u);
-            const scale = extents[0] > 0 ?
-                (extents[2] > extents[0] * 1e-6 ?
-                    Math.cbrt(extents[0] * extents[1] * extents[2] / inFence) :
-                    (extents[1] > extents[0] * 1e-6 ?
-                        Math.sqrt(extents[0] * extents[1] / inFence) :
-                        extents[0] / inFence)) :
-                0;
+            const scale =
+                extents[0] > 0
+                    ? extents[2] > extents[0] * 1e-6
+                        ? Math.cbrt((extents[0] * extents[1] * extents[2]) / inFence)
+                        : extents[1] > extents[0] * 1e-6
+                          ? Math.sqrt((extents[0] * extents[1]) / inFence)
+                          : extents[0] / inFence
+                    : 0;
             radius = 2.5 * scale;
         }
         const r2 = radius * radius;

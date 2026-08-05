@@ -1,8 +1,8 @@
 import { BlockMaskBuffer } from './block-mask-buffer';
 import { BlockMaskMap } from './block-mask-map';
 
-const SOLID_LO = 0xFFFFFFFF >>> 0;
-const SOLID_HI = 0xFFFFFFFF >>> 0;
+const SOLID_LO = 0xffffffff >>> 0;
+const SOLID_HI = 0xffffffff >>> 0;
 
 const BLOCK_EMPTY = 0;
 const BLOCK_SOLID = 1;
@@ -14,18 +14,18 @@ const BLOCK_MIXED = 2;
 const FACE_MASKS_LO = [
     0x11111111 >>> 0, // -X: lx=0
     0x88888888 >>> 0, // +X: lx=3
-    0x000F000F >>> 0, // -Y: ly=0
-    0xF000F000 >>> 0, // +Y: ly=3
-    0x0000FFFF >>> 0, // -Z: lz=0
-    0x00000000 >>> 0  // +Z: lz=3
+    0x000f000f >>> 0, // -Y: ly=0
+    0xf000f000 >>> 0, // +Y: ly=3
+    0x0000ffff >>> 0, // -Z: lz=0
+    0x00000000 >>> 0 // +Z: lz=3
 ];
 const FACE_MASKS_HI = [
     0x11111111 >>> 0,
     0x88888888 >>> 0,
-    0x000F000F >>> 0,
-    0xF000F000 >>> 0,
+    0x000f000f >>> 0,
+    0xf000f000 >>> 0,
     0x00000000 >>> 0,
-    0xFFFF0000 >>> 0
+    0xffff0000 >>> 0
 ];
 
 // ============================================================================
@@ -60,8 +60,8 @@ const FACE_MASKS_HI = [
 const TYPE_BITS_PER_BLOCK = 2;
 const BLOCKS_PER_WORD = 32 / TYPE_BITS_PER_BLOCK; // 16
 const TYPE_MASK = (1 << TYPE_BITS_PER_BLOCK) - 1; // 0b11
-const SOLID_WORD = 0x55555555 >>> 0;             // 16 lanes, each = SOLID
-const EVEN_BITS = 0x55555555 >>> 0;              // mask for even bit positions
+const SOLID_WORD = 0x55555555 >>> 0; // 16 lanes, each = SOLID
+const EVEN_BITS = 0x55555555 >>> 0; // mask for even bit positions
 
 /**
  * Read the 2-bit block type directly from a packed `types` Uint32Array.
@@ -173,7 +173,8 @@ class SparseVoxelGrid {
             }
         } else {
             this.setBlockType(blockIdx, BLOCK_MIXED);
-            this.masks.set(blockIdx,
+            this.masks.set(
+                blockIdx,
                 bitIdx < 32 ? (1 << bitIdx) >>> 0 : 0,
                 bitIdx >= 32 ? (1 << (bitIdx - 32)) >>> 0 : 0
             );
@@ -193,7 +194,7 @@ class SparseVoxelGrid {
                 this.setBlockType(blockIdx, BLOCK_SOLID);
             }
         } else {
-            if ((lo >>> 0) === SOLID_LO && (hi >>> 0) === SOLID_HI) {
+            if (lo >>> 0 === SOLID_LO && hi >>> 0 === SOLID_HI) {
                 this.setBlockType(blockIdx, BLOCK_SOLID);
             } else {
                 this.setBlockType(blockIdx, BLOCK_MIXED);
@@ -224,7 +225,9 @@ class SparseVoxelGrid {
 
     static fromBuffer(
         acc: BlockMaskBuffer,
-        nx: number, ny: number, nz: number,
+        nx: number,
+        ny: number,
+        nz: number,
         onProgress?: (done: number, total: number) => void
     ): SparseVoxelGrid {
         const solidIdx = acc.getSolidBlocks();
@@ -257,8 +260,12 @@ class SparseVoxelGrid {
     }
 
     toBuffer(
-        cropMinBx: number, cropMinBy: number, cropMinBz: number,
-        cropMaxBx: number, cropMaxBy: number, cropMaxBz: number,
+        cropMinBx: number,
+        cropMinBy: number,
+        cropMinBz: number,
+        cropMaxBx: number,
+        cropMaxBy: number,
+        cropMaxBz: number,
         onProgress?: (done: number, total: number) => void
     ): BlockMaskBuffer {
         const acc = new BlockMaskBuffer();
@@ -284,9 +291,7 @@ class SparseVoxelGrid {
                         continue;
                     }
                     if (lo || hi) {
-                        const outIdx = (bx - cropMinBx) +
-                            (by - cropMinBy) * outNbx +
-                            (bz - cropMinBz) * outBStride;
+                        const outIdx = bx - cropMinBx + (by - cropMinBy) * outNbx + (bz - cropMinBz) * outBStride;
                         acc.addBlock(outIdx, lo, hi);
                     }
                 }
@@ -313,8 +318,12 @@ class SparseVoxelGrid {
      * @returns Newly allocated cropped grid.
      */
     cropTo(
-        cropMinBx: number, cropMinBy: number, cropMinBz: number,
-        cropMaxBx: number, cropMaxBy: number, cropMaxBz: number,
+        cropMinBx: number,
+        cropMinBy: number,
+        cropMinBz: number,
+        cropMaxBx: number,
+        cropMaxBy: number,
+        cropMaxBz: number,
         onProgress?: (done: number, total: number) => void
     ): SparseVoxelGrid {
         const outNbx = cropMaxBx - cropMinBx;
@@ -365,12 +374,16 @@ class SparseVoxelGrid {
                         bz++;
                     }
                 }
-                if (bx < cropMinBx || bx >= cropMaxBx ||
-                    by < cropMinBy || by >= cropMaxBy ||
-                    bz < cropMinBz || bz >= cropMaxBz) continue;
-                const outIdx = (bx - cropMinBx) +
-                    (by - cropMinBy) * outNbx +
-                    (bz - cropMinBz) * outBStride;
+                if (
+                    bx < cropMinBx ||
+                    bx >= cropMaxBx ||
+                    by < cropMinBy ||
+                    by >= cropMaxBy ||
+                    bz < cropMinBz ||
+                    bz >= cropMaxBz
+                )
+                    continue;
+                const outIdx = bx - cropMinBx + (by - cropMinBy) * outNbx + (bz - cropMinBz) * outBStride;
                 const bt = (word >>> (lane << 1)) & TYPE_MASK;
                 writeBlockType(outTypes, outIdx, bt);
                 if (bt === BLOCK_MIXED) {
@@ -408,8 +421,12 @@ class SparseVoxelGrid {
      * @returns Newly allocated cropped + inverted grid.
      */
     cropToInverted(
-        cropMinBx: number, cropMinBy: number, cropMinBz: number,
-        cropMaxBx: number, cropMaxBy: number, cropMaxBz: number,
+        cropMinBx: number,
+        cropMinBy: number,
+        cropMinBz: number,
+        cropMaxBx: number,
+        cropMaxBy: number,
+        cropMaxBz: number,
         onProgress?: (done: number, total: number) => void
     ): SparseVoxelGrid {
         const outNbx = cropMaxBx - cropMinBx;
@@ -472,12 +489,16 @@ class SparseVoxelGrid {
                         bz++;
                     }
                 }
-                if (bx < cropMinBx || bx >= cropMaxBx ||
-                    by < cropMinBy || by >= cropMaxBy ||
-                    bz < cropMinBz || bz >= cropMaxBz) continue;
-                const outIdx = (bx - cropMinBx) +
-                    (by - cropMinBy) * outNbx +
-                    (bz - cropMinBz) * outBStride;
+                if (
+                    bx < cropMinBx ||
+                    bx >= cropMaxBx ||
+                    by < cropMinBy ||
+                    by >= cropMaxBy ||
+                    bz < cropMinBz ||
+                    bz >= cropMaxBz
+                )
+                    continue;
+                const outIdx = bx - cropMinBx + (by - cropMinBy) * outNbx + (bz - cropMinBz) * outBStride;
                 const bt = (word >>> (lane << 1)) & TYPE_MASK;
                 if (bt === BLOCK_SOLID) {
                     // Source SOLID → dest EMPTY (overwrite the SOLID default).
@@ -486,7 +507,7 @@ class SparseVoxelGrid {
                     // Source MIXED → dest MIXED with inverted mask.
                     writeBlockType(outTypes, outIdx, BLOCK_MIXED);
                     const s = masks.slot(blockIdx);
-                    outMasks.set(outIdx, (~masks.lo[s]) >>> 0, (~masks.hi[s]) >>> 0);
+                    outMasks.set(outIdx, ~masks.lo[s] >>> 0, ~masks.hi[s] >>> 0);
                 }
             }
         }
@@ -500,16 +521,22 @@ class SparseVoxelGrid {
      * @param onProgress - Optional progress callback over `types` words.
      * @returns Block coordinate bounds, or null if no blocks are occupied.
      */
-    getOccupiedBlockBounds(
-        onProgress?: (done: number, total: number) => void
-    ): {
-        minBx: number; minBy: number; minBz: number;
-        maxBx: number; maxBy: number; maxBz: number;
+    getOccupiedBlockBounds(onProgress?: (done: number, total: number) => void): {
+        minBx: number;
+        minBy: number;
+        minBz: number;
+        maxBx: number;
+        maxBy: number;
+        maxBz: number;
     } | null {
         const { nbx, nby } = this;
         const totalBlocks = nbx * nby * this.nbz;
-        let minBx = nbx, minBy = nby, minBz = this.nbz;
-        let maxBx = 0, maxBy = 0, maxBz = 0;
+        let minBx = nbx,
+            minBy = nby,
+            minBz = this.nbz;
+        let maxBx = 0,
+            maxBy = 0,
+            maxBz = 0;
         let found = false;
         const PROGRESS_INTERVAL = 1 << 13;
         let nextTick = PROGRESS_INTERVAL;
@@ -569,11 +596,13 @@ class SparseVoxelGrid {
      * @param onProgress - Optional progress callback over `types` words.
      * @returns Block coordinate bounds, or null if every block is solid.
      */
-    getNavigableBlockBounds(
-        onProgress?: (done: number, total: number) => void
-    ): {
-        minBx: number; minBy: number; minBz: number;
-        maxBx: number; maxBy: number; maxBz: number;
+    getNavigableBlockBounds(onProgress?: (done: number, total: number) => void): {
+        minBx: number;
+        minBy: number;
+        minBz: number;
+        maxBx: number;
+        maxBy: number;
+        maxBz: number;
     } | null {
         const { nbx, nby } = this;
         const totalBlocks = nbx * nby * this.nbz;
@@ -587,12 +616,15 @@ class SparseVoxelGrid {
         // navMask in the last word: only the first `lastLanes` lanes are valid;
         // each lane occupies 2 bits, so the valid even-bit mask spans
         // 2 * lastLanes bits.
-        const lastNonEmptyMask = lastLanes >= BLOCKS_PER_WORD ?
-            EVEN_BITS :
-            (((1 << (lastLanes * 2)) - 1) >>> 0) & EVEN_BITS;
+        const lastNonEmptyMask =
+            lastLanes >= BLOCKS_PER_WORD ? EVEN_BITS : (((1 << (lastLanes * 2)) - 1) >>> 0) & EVEN_BITS;
 
-        let minBx = nbx, minBy = nby, minBz = this.nbz;
-        let maxBx = -1, maxBy = 0, maxBz = 0;
+        let minBx = nbx,
+            minBy = nby,
+            minBz = this.nbz;
+        let maxBx = -1,
+            maxBy = 0,
+            maxBz = 0;
 
         const PROGRESS_INTERVAL = 1 << 13;
         let nextTick = PROGRESS_INTERVAL;
@@ -655,7 +687,9 @@ class SparseVoxelGrid {
      */
     static findNearestFreeCell(
         blocked: SparseVoxelGrid,
-        seedIx: number, seedIy: number, seedIz: number,
+        seedIx: number,
+        seedIy: number,
+        seedIz: number,
         maxRadius: number
     ): { ix: number; iy: number; iz: number } | null {
         const { nx, ny, nz } = blocked;

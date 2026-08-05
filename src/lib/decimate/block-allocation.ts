@@ -1,4 +1,4 @@
-import { type BlockPlan } from './block-plan';
+import type { BlockPlan } from './block-plan';
 
 type PlanRecord = {
     a: number;
@@ -28,9 +28,10 @@ const allocatePlanPrefixes = (
 ): { prefixes: Uint32Array; removed: number } => {
     const prefixes = new Uint32Array(plans.length);
     const heap: HeapEntry[] = [];
-    const less = (a: HeapEntry, b: HeapEntry): boolean => a.cost < b.cost ||
-        (a.cost === b.cost && (a.block < b.block ||
-            (a.block === b.block && (a.a < b.a || (a.a === b.a && a.b < b.b)))));
+    const less = (a: HeapEntry, b: HeapEntry): boolean =>
+        a.cost < b.cost ||
+        (a.cost === b.cost &&
+            (a.block < b.block || (a.block === b.block && (a.a < b.a || (a.a === b.a && a.b < b.b)))));
     const entryAt = (block: number, index: number): HeapEntry => {
         const plan = plans[block];
         return { block, index, a: plan.pairs[index * 2], b: plan.pairs[index * 2 + 1], cost: plan.costs[index] };

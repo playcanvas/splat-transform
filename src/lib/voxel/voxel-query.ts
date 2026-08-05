@@ -1,26 +1,24 @@
+import { computeGaussianInverse, evaluateGaussianAt } from '../data-table';
+import type { GaussianColumns } from '../data-table';
+
 import { ABSENT, BlockIndexMap, SOLID } from './block-index-map';
-import { BlockMaskBuffer } from './block-mask-buffer';
-import {
-    computeGaussianInverse,
-    evaluateGaussianAt,
-    type GaussianColumns
-} from '../data-table';
+import type { BlockMaskBuffer } from './block-mask-buffer';
 
 /**
  * Pre-computed lookup structures for efficient voxel block queries.
  */
-interface BlockLookup {
+type BlockLookup = {
     /** Block index -> state: `SOLID`, a mixed-array slot (`>= 0`), or `ABSENT`. */
     blocks: BlockIndexMap;
     masks: Uint32Array;
     solidCount: number;
     mixedCount: number;
-}
+};
 
 /**
  * Grid parameters for block-based voxel queries.
  */
-interface BlockGridParams {
+type BlockGridParams = {
     gridMinX: number;
     gridMinY: number;
     gridMinZ: number;
@@ -31,7 +29,7 @@ interface BlockGridParams {
     numBlocksZ: number;
     strideY: number;
     strideZ: number;
-}
+};
 
 /**
  * Build block lookup structures from the buffer's linear block indices.
@@ -41,9 +39,7 @@ interface BlockGridParams {
  * @param buffer - Block mask buffer containing voxelized blocks.
  * @returns Block-state lookup, masks array, and solid/mixed counts.
  */
-const buildBlockLookup = (
-    buffer: BlockMaskBuffer
-): BlockLookup => {
+const buildBlockLookup = (buffer: BlockMaskBuffer): BlockLookup => {
     const solidIdx = buffer.getSolidBlocks();
     const mixed = buffer.getMixedBlocks();
     const blocks = new BlockIndexMap(solidIdx.length + mixed.blockIdx.length);
@@ -68,7 +64,9 @@ const buildBlockLookup = (
  * @returns True if the center is in an occupied (and optionally filtered) voxel.
  */
 const isCenterInOccupiedVoxel = (
-    px: number, py: number, pz: number,
+    px: number,
+    py: number,
+    pz: number,
     grid: BlockGridParams,
     lookup: BlockLookup,
     blockFilter?: Set<number>
@@ -77,9 +75,14 @@ const isCenterInOccupiedVoxel = (
     const centerBy = Math.floor((py - grid.gridMinY) / grid.blockSize);
     const centerBz = Math.floor((pz - grid.gridMinZ) / grid.blockSize);
 
-    if (centerBx < 0 || centerBx >= grid.numBlocksX ||
-        centerBy < 0 || centerBy >= grid.numBlocksY ||
-        centerBz < 0 || centerBz >= grid.numBlocksZ) {
+    if (
+        centerBx < 0 ||
+        centerBx >= grid.numBlocksX ||
+        centerBy < 0 ||
+        centerBy >= grid.numBlocksY ||
+        centerBz < 0 ||
+        centerBz >= grid.numBlocksZ
+    ) {
         return false;
     }
 
@@ -135,7 +138,7 @@ const gaussianContributesToVoxels = (
     lookup: BlockLookup,
     minContribution: number,
     blockFilter?: Set<number>,
-    minHits: number = 1
+    minHits = 1
 ): boolean => {
     const px = columns.posX[gaussianIdx];
     const py = columns.posY[gaussianIdx];
@@ -152,10 +155,14 @@ const gaussianContributesToVoxels = (
     const aabbMaxBz = Math.min(grid.numBlocksZ - 1, Math.floor((pz + ez - grid.gridMinZ) / grid.blockSize));
 
     const g = computeGaussianInverse(
-        columns.rotW[gaussianIdx], columns.rotX[gaussianIdx],
-        columns.rotY[gaussianIdx], columns.rotZ[gaussianIdx],
-        columns.scaleX[gaussianIdx], columns.scaleY[gaussianIdx],
-        columns.scaleZ[gaussianIdx], columns.opacity[gaussianIdx]
+        columns.rotW[gaussianIdx],
+        columns.rotX[gaussianIdx],
+        columns.rotY[gaussianIdx],
+        columns.rotZ[gaussianIdx],
+        columns.scaleX[gaussianIdx],
+        columns.scaleY[gaussianIdx],
+        columns.scaleZ[gaussianIdx],
+        columns.opacity[gaussianIdx]
     );
 
     let hits = 0;
@@ -174,8 +181,8 @@ const gaussianContributesToVoxels = (
                 const blockOriginY = grid.gridMinY + bby * grid.blockSize;
                 const blockOriginZ = grid.gridMinZ + bbz * grid.blockSize;
 
-                const lo = isSolid ? 0xFFFFFFFF : lookup.masks[state * 2];
-                const hi = isSolid ? 0xFFFFFFFF : lookup.masks[state * 2 + 1];
+                const lo = isSolid ? 0xffffffff : lookup.masks[state * 2];
+                const hi = isSolid ? 0xffffffff : lookup.masks[state * 2 + 1];
 
                 for (let lz = 0; lz < 4; lz++) {
                     const vz = blockOriginZ + (lz + 0.5) * grid.voxelResolution;

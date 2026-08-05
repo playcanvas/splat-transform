@@ -1,23 +1,21 @@
 import { Vec3 } from 'playcanvas';
 
-import { BlockMaskBuffer } from './block-mask-buffer';
 import type { Bounds } from '../data-table';
-import {
-    GpuVoxelization,
-    type BatchSpec,
-    type MultiBatchResult
-} from '../gpu';
-import { type GaussianBVH } from '../spatial';
+import { GpuVoxelization } from '../gpu';
+import type { BatchSpec, MultiBatchResult } from '../gpu';
+import type { GaussianBVH } from '../spatial';
 import { logger } from '../utils';
 
-interface PendingBatch extends BatchSpec {
+import { BlockMaskBuffer } from './block-mask-buffer';
+
+type PendingBatch = {
     bx: number;
     by: number;
     bz: number;
     numBlocksX: number;
     numBlocksY: number;
     numBlocksZ: number;
-}
+} & BatchSpec;
 
 /**
  * GPU-accelerated voxelization of Gaussian splat data into a block mask buffer.
@@ -97,7 +95,7 @@ const voxelizeToBuffer = async (
                 if (maskLo === 0 && maskHi === 0) continue;
 
                 const localX = blockIdx % batch.numBlocksX;
-                const localY = (blockIdx / batch.numBlocksX | 0) % batch.numBlocksY;
+                const localY = ((blockIdx / batch.numBlocksX) | 0) % batch.numBlocksY;
                 const localZ = (blockIdx / (batch.numBlocksX * batch.numBlocksY)) | 0;
 
                 const absBlockX = batch.bx + localX;
@@ -156,8 +154,12 @@ const voxelizeToBuffer = async (
                 const blockMaxZ = blockMinZ + currBatchZ * blockSize;
 
                 let overlappingCount = bvh.queryOverlappingRawInto(
-                    blockMinX, blockMinY, blockMinZ,
-                    blockMaxX, blockMaxY, blockMaxZ,
+                    blockMinX,
+                    blockMinY,
+                    blockMinZ,
+                    blockMaxX,
+                    blockMaxY,
+                    blockMaxZ,
                     slotIndexArrays[currentSlot],
                     indexOffset
                 );
@@ -170,8 +172,12 @@ const voxelizeToBuffer = async (
                 if (needed > slotCapacities[currentSlot]) {
                     ensureSlotIndexCapacity(currentSlot, needed, indexOffset);
                     overlappingCount = bvh.queryOverlappingRawInto(
-                        blockMinX, blockMinY, blockMinZ,
-                        blockMaxX, blockMaxY, blockMaxZ,
+                        blockMinX,
+                        blockMinY,
+                        blockMinZ,
+                        blockMaxX,
+                        blockMaxY,
+                        blockMaxZ,
                         slotIndexArrays[currentSlot],
                         indexOffset
                     );
@@ -224,8 +230,12 @@ const voxelizeToBuffer = async (
  * @returns Aligned bounds
  */
 function alignGridBounds(
-    minX: number, minY: number, minZ: number,
-    maxX: number, maxY: number, maxZ: number,
+    minX: number,
+    minY: number,
+    minZ: number,
+    maxX: number,
+    maxY: number,
+    maxZ: number,
     voxelResolution: number
 ): Bounds {
     const blockSize = 4 * voxelResolution;

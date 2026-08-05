@@ -16,7 +16,7 @@
  * Engine-free; pure resident-array computation, no IO.
  */
 
-import { type CandidateArrays } from './priority';
+import type { CandidateArrays } from './priority';
 
 /** Log-scaled cost buckets for the ordered agglomeration walk. */
 const COST_BUCKETS = 4096;
@@ -24,7 +24,7 @@ const COST_BUCKETS = 4096;
 /** Max gaussians merged into one group in a single generation. */
 const MAX_GROUP = 4;
 
-const NO_CANDIDATE = 0xFFFFFFFF;
+const NO_CANDIDATE = 0xffffffff;
 
 /**
  * The selected merge groups.
@@ -60,7 +60,9 @@ const selectMerges = (cand: CandidateArrays, N: number, K: number, mergesNeeded:
 
     // Finite candidate range (costs are ≥ 0; log-scale the positive ones so
     // cost ordering keeps resolution across the metric's huge dynamic range).
-    let hi = 0, loPos = Infinity, anyFinite = false;
+    let hi = 0,
+        loPos = Infinity,
+        anyFinite = false;
     for (let e = 0; e < E; e++) {
         if (cand.idx[e] === NO_CANDIDATE) continue;
         const c = cand.cost[e];
@@ -75,7 +77,7 @@ const selectMerges = (cand: CandidateArrays, N: number, K: number, mergesNeeded:
     const bucketOf = (c: number): number => {
         if (!(c > 0) || !useLog) return 0;
         const b = 1 + Math.floor(((Math.log(c) - logLo) / logSpan) * (COST_BUCKETS - 2));
-        return b < 0 ? 0 : (b >= COST_BUCKETS ? COST_BUCKETS - 1 : b);
+        return b < 0 ? 0 : b >= COST_BUCKETS ? COST_BUCKETS - 1 : b;
     };
 
     // Counting sort of finite candidate edges by bucket (cheapest first).
@@ -114,11 +116,14 @@ const selectMerges = (cand: CandidateArrays, N: number, K: number, mergesNeeded:
         const j = cand.idx[e];
         if (j === NO_CANDIDATE) continue;
         const i = (e / K) | 0;
-        let ri = find(i), rj = find(j);
+        let ri = find(i),
+            rj = find(j);
         if (ri === rj) continue;
         if (size[ri] + size[rj] > MAX_GROUP) continue;
         if (size[ri] < size[rj]) {
-            const tmp = ri; ri = rj; rj = tmp;
+            const tmp = ri;
+            ri = rj;
+            rj = tmp;
         }
         parent[rj] = ri;
         size[ri] += size[rj];

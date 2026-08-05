@@ -1,23 +1,17 @@
 import type { Bounds } from '../data-table';
-import {
-    BLOCK_EMPTY,
-    BLOCK_SOLID,
-    BLOCKS_PER_WORD,
-    EVEN_BITS,
-    SparseVoxelGrid,
-    readBlockType
-} from '../voxel/sparse-voxel-grid';
+import type { SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
+import { BLOCK_EMPTY, BLOCK_SOLID, BLOCKS_PER_WORD, EVEN_BITS, readBlockType } from '../voxel/sparse-voxel-grid';
 
 /**
  * A simple triangle mesh with positions and indices.
  */
-interface Mesh {
+type Mesh = {
     /** Vertex positions (3 floats per vertex) */
     positions: Float32Array;
 
     /** Triangle indices (3 indices per triangle) */
     indices: Uint32Array;
-}
+};
 
 /**
  * Result of marching cubes surface extraction.
@@ -27,14 +21,14 @@ type MarchingCubesMesh = Mesh;
 /**
  * Options for marching cubes extraction.
  */
-interface MarchingCubesOptions {
+type MarchingCubesOptions = {
     /**
      * Pre-merge exact full-face cells on flat axis-aligned regions before
      * creating the mesh. Ambiguous and bevel cases still use normal marching
      * cubes, so coplanarMerge can apply the final lossless optimization.
      */
     mergeFlatFaces?: boolean;
-}
+};
 
 // ============================================================================
 // Voxel bit helpers
@@ -120,7 +114,7 @@ function marchingCubes(
         for (let j = 0; j < oldCap; j++) {
             const k = oldKeys[j];
             if (k === -1) continue;
-            let i = (Math.imul(k | 0, 0x9E3779B9) >>> 0) & vMask;
+            let i = (Math.imul(k | 0, 0x9e3779b9) >>> 0) & vMask;
             while (vKeys[i] !== -1) i = (i + 1) & vMask;
             vKeys[i] = k;
             vVals[i] = oldVals[j];
@@ -141,7 +135,7 @@ function marchingCubes(
         for (let j = 0; j < oldCap; j++) {
             const k = oldKeys[j];
             if (k === -1) continue;
-            let i = (Math.imul(k | 0, 0x9E3779B9) >>> 0) & oMask;
+            let i = (Math.imul(k | 0, 0x9e3779b9) >>> 0) & oMask;
             while (oKeys[i] !== -1) i = (i + 1) & oMask;
             oKeys[i] = k;
         }
@@ -184,11 +178,13 @@ function marchingCubes(
     // Block coordinate of the block currently being processed. Captured by
     // isOccupiedLocal so it can fold the per-corner block lookup into a
     // direct typed-array index instead of a hash lookup.
-    let bx = 0, by = 0, bz = 0;
+    let bx = 0,
+        by = 0,
+        bz = 0;
 
     const isOccupiedLocal = (cx: number, cy: number, cz: number): boolean => {
         if (cx < 0 || cy < 0 || cz < 0) return false;
-        const idx = ((cx >> 2) - bx + 1) + ((cy >> 2) - by + 1) * 3 + ((cz >> 2) - bz + 1) * 9;
+        const idx = (cx >> 2) - bx + 1 + ((cy >> 2) - by + 1) * 3 + ((cz >> 2) - bz + 1) * 9;
         const entry = neighborEntry[idx];
         if (entry === NEIGHBOR_EMPTY) return false;
         if (entry === NEIGHBOR_SOLID) return true;
@@ -273,10 +269,10 @@ function marchingCubes(
     const getVertex = (vx: number, vy: number, vz: number, axis: number): number => {
         // Pack (vx, vy, vz, axis) into a single key. Offset by 1 so that
         // vx = -1 (from the boundary extension) maps to 0, keeping keys non-negative.
-        const key = ((vx + 1) + (vy + 1) * strideX + (vz + 1) * strideXY) * 3 + axis;
+        const key = (vx + 1 + (vy + 1) * strideX + (vz + 1) * strideXY) * 3 + axis;
 
         // Probe for either the matching slot or the next empty one.
-        let i = (Math.imul(key | 0, 0x9E3779B9) >>> 0) & vMask;
+        let i = (Math.imul(key | 0, 0x9e3779b9) >>> 0) & vMask;
         while (true) {
             const k = vKeys[i];
             if (k === key) return vVals[i];
@@ -324,8 +320,7 @@ function marchingCubes(
             faceCellKeys = grown;
         }
         faceCellKeys[faceCellLen++] =
-            (((bucket * faceCoordStride + (p + 1)) * faceCoordStride + (u + 1)) *
-                faceCoordStride + (v + 1));
+            ((bucket * faceCoordStride + (p + 1)) * faceCoordStride + (u + 1)) * faceCoordStride + (v + 1);
     };
 
     const addDiagCell = (bucket: number, plane: number, u: number, e: number): void => {
@@ -336,8 +331,9 @@ function marchingCubes(
             diagCellKeys = grown;
         }
         diagCellKeys[diagCellLen++] =
-            (((bucket * diagCoordStride + (plane + diagCoordOffset)) * diagCoordStride +
-                (u + diagCoordOffset)) * diagCoordStride + (e + diagCoordOffset));
+            ((bucket * diagCoordStride + (plane + diagCoordOffset)) * diagCoordStride + (u + diagCoordOffset)) *
+                diagCoordStride +
+            (e + diagCoordOffset);
     };
 
     const collectFlatFace = (cubeIndex: number, vx: number, vy: number, vz: number): boolean => {
@@ -379,7 +375,9 @@ function marchingCubes(
         return pair * 4 + signBits;
     };
 
-    const decodeDiagBucket = (bucket: number): {
+    const decodeDiagBucket = (
+        bucket: number
+    ): {
         axisA: number;
         axisB: number;
         axisE: number;
@@ -422,29 +420,74 @@ function marchingCubes(
         const y = vy * 2;
         const z = vz * 2;
         switch (edge) {
-            case 0: out[offset] = x + 1; out[offset + 1] = y; out[offset + 2] = z; break;
-            case 1: out[offset] = x + 2; out[offset + 1] = y + 1; out[offset + 2] = z; break;
-            case 2: out[offset] = x + 1; out[offset + 1] = y + 2; out[offset + 2] = z; break;
-            case 3: out[offset] = x; out[offset + 1] = y + 1; out[offset + 2] = z; break;
-            case 4: out[offset] = x + 1; out[offset + 1] = y; out[offset + 2] = z + 2; break;
-            case 5: out[offset] = x + 2; out[offset + 1] = y + 1; out[offset + 2] = z + 2; break;
-            case 6: out[offset] = x + 1; out[offset + 1] = y + 2; out[offset + 2] = z + 2; break;
-            case 7: out[offset] = x; out[offset + 1] = y + 1; out[offset + 2] = z + 2; break;
-            case 8: out[offset] = x; out[offset + 1] = y; out[offset + 2] = z + 1; break;
-            case 9: out[offset] = x + 2; out[offset + 1] = y; out[offset + 2] = z + 1; break;
-            case 10: out[offset] = x + 2; out[offset + 1] = y + 2; out[offset + 2] = z + 1; break;
-            default: out[offset] = x; out[offset + 1] = y + 2; out[offset + 2] = z + 1; break;
+            case 0:
+                out[offset] = x + 1;
+                out[offset + 1] = y;
+                out[offset + 2] = z;
+                break;
+            case 1:
+                out[offset] = x + 2;
+                out[offset + 1] = y + 1;
+                out[offset + 2] = z;
+                break;
+            case 2:
+                out[offset] = x + 1;
+                out[offset + 1] = y + 2;
+                out[offset + 2] = z;
+                break;
+            case 3:
+                out[offset] = x;
+                out[offset + 1] = y + 1;
+                out[offset + 2] = z;
+                break;
+            case 4:
+                out[offset] = x + 1;
+                out[offset + 1] = y;
+                out[offset + 2] = z + 2;
+                break;
+            case 5:
+                out[offset] = x + 2;
+                out[offset + 1] = y + 1;
+                out[offset + 2] = z + 2;
+                break;
+            case 6:
+                out[offset] = x + 1;
+                out[offset + 1] = y + 2;
+                out[offset + 2] = z + 2;
+                break;
+            case 7:
+                out[offset] = x;
+                out[offset + 1] = y + 1;
+                out[offset + 2] = z + 2;
+                break;
+            case 8:
+                out[offset] = x;
+                out[offset + 1] = y;
+                out[offset + 2] = z + 1;
+                break;
+            case 9:
+                out[offset] = x + 2;
+                out[offset + 1] = y;
+                out[offset + 2] = z + 1;
+                break;
+            case 10:
+                out[offset] = x + 2;
+                out[offset + 1] = y + 2;
+                out[offset + 2] = z + 1;
+                break;
+            default:
+                out[offset] = x;
+                out[offset + 1] = y + 2;
+                out[offset + 2] = z + 1;
+                break;
         }
     };
 
     const pairVerts = new Int32Array(18);
     const uniqueVerts = new Int32Array(12);
 
-    const samePoint = (
-        src: Int32Array,
-        a: number,
-        b: number
-    ): boolean => src[a] === src[b] && src[a + 1] === src[b + 1] && src[a + 2] === src[b + 2];
+    const samePoint = (src: Int32Array, a: number, b: number): boolean =>
+        src[a] === src[b] && src[a + 1] === src[b + 1] && src[a + 2] === src[b + 2];
 
     const pointInUnique = (x: number, y: number, z: number, uniqueCount: number): boolean => {
         for (let i = 0; i < uniqueCount; i++) {
@@ -479,9 +522,11 @@ function marchingCubes(
             let found = false;
             for (let j = 0; j < uniqueCount; j++) {
                 const dst = j * 3;
-                if (pairVerts[src] === uniqueVerts[dst] &&
+                if (
+                    pairVerts[src] === uniqueVerts[dst] &&
                     pairVerts[src + 1] === uniqueVerts[dst + 1] &&
-                    pairVerts[src + 2] === uniqueVerts[dst + 2]) {
+                    pairVerts[src + 2] === uniqueVerts[dst + 2]
+                ) {
                     found = true;
                     break;
                 }
@@ -503,11 +548,7 @@ function marchingCubes(
         const bx = pairVerts[6] - pairVerts[0];
         const by = pairVerts[7] - pairVerts[1];
         const bz = pairVerts[8] - pairVerts[2];
-        const normal = [
-            ay * bz - az * by,
-            az * bx - ax * bz,
-            ax * by - ay * bx
-        ];
+        const normal = [ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx];
         const absNormal = [Math.abs(normal[0]), Math.abs(normal[1]), Math.abs(normal[2])];
         let axisE = -1;
         let axisA = -1;
@@ -523,7 +564,8 @@ function marchingCubes(
         const signA = normal[axisA] > 0 ? 1 : -1;
         const signB = normal[axisB] > 0 ? 1 : -1;
         const bucket = diagBucket(axisA, axisB, signA, signB);
-        const plane = signA * coordByAxis(uniqueVerts[0], uniqueVerts[1], uniqueVerts[2], axisA) +
+        const plane =
+            signA * coordByAxis(uniqueVerts[0], uniqueVerts[1], uniqueVerts[2], axisA) +
             signB * coordByAxis(uniqueVerts[0], uniqueVerts[1], uniqueVerts[2], axisB);
         let minU = Infinity;
         let maxU = -Infinity;
@@ -547,10 +589,12 @@ function marchingCubes(
         const p10 = diagPoint(bucket, plane, maxU, minE);
         const p11 = diagPoint(bucket, plane, maxU, maxE);
         const p01 = diagPoint(bucket, plane, minU, maxE);
-        if (!pointInUnique(p00[0], p00[1], p00[2], uniqueCount) ||
+        if (
+            !pointInUnique(p00[0], p00[1], p00[2], uniqueCount) ||
             !pointInUnique(p10[0], p10[1], p10[2], uniqueCount) ||
             !pointInUnique(p11[0], p11[1], p11[2], uniqueCount) ||
-            !pointInUnique(p01[0], p01[1], p01[2], uniqueCount)) {
+            !pointInUnique(p01[0], p01[1], p01[2], uniqueCount)
+        ) {
             return false;
         }
 
@@ -649,10 +693,7 @@ function marchingCubes(
         addPerimeterVertex(getScaledVertex(x2, y2, z2), signA * a - signB * b, e);
     };
 
-    const addSplitSegment = (
-        x0: number, y0: number, z0: number,
-        x1: number, y1: number, z1: number
-    ): void => {
+    const addSplitSegment = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): void => {
         const changes = (x0 !== x1 ? 1 : 0) + (y0 !== y1 ? 1 : 0) + (z0 !== z1 ? 1 : 0);
         if (changes !== 1) return;
         if (x0 !== x1) {
@@ -672,8 +713,12 @@ function marchingCubes(
 
     const addSplitEdgeVertices = (
         axis: number,
-        x0: number, y0: number, z0: number,
-        x1: number, y1: number, z1: number,
+        x0: number,
+        y0: number,
+        z0: number,
+        x1: number,
+        y1: number,
+        z1: number,
         addPoint: (x2: number, y2: number, z2: number) => void = (px, py, pz) => {
             addPerimeterPoint(axis, px, py, pz);
         }
@@ -761,14 +806,7 @@ function marchingCubes(
         }
     };
 
-    const emitFaceRectangle = (
-        bucket: number,
-        p: number,
-        u0: number,
-        v0: number,
-        u1: number,
-        v1: number
-    ): void => {
+    const emitFaceRectangle = (bucket: number, p: number, u0: number, v0: number, u1: number, v1: number): void => {
         const axis = bucket >> 1;
         const positive = (bucket & 1) === 1;
         const a = scaledFacePoint(axis, p, u0, v0);
@@ -796,14 +834,7 @@ function marchingCubes(
         triangulateTwoSideChain(side2Start, side2End, side3Start, side3End, useLocalCcw);
     };
 
-    const emitDiagRectangle = (
-        bucket: number,
-        plane: number,
-        u0: number,
-        e0: number,
-        u1: number,
-        e1: number
-    ): void => {
+    const emitDiagRectangle = (bucket: number, plane: number, u0: number, e0: number, u1: number, e1: number): void => {
         const a = diagPoint(bucket, plane, u0, e0);
         const b = diagPoint(bucket, plane, u1, e0);
         const c = diagPoint(bucket, plane, u1, e1);
@@ -952,7 +983,7 @@ function marchingCubes(
 
             const hash = (key: number): number => {
                 const hi = (key / 0x100000000) | 0;
-                return (Math.imul((key | 0) ^ hi, 0x9E3779B9) >>> 0) & hMask;
+                return (Math.imul((key | 0) ^ hi, 0x9e3779b9) >>> 0) & hMask;
             };
 
             for (let i = 0; i < count; i++) {
@@ -1022,7 +1053,9 @@ function marchingCubes(
             diagCellKeys = new Float64Array(0);
             diagKeys.sort();
 
-            const decodeDiagKey = (key: number): {
+            const decodeDiagKey = (
+                key: number
+            ): {
                 bucket: number;
                 plane: number;
                 u: number;
@@ -1121,14 +1154,7 @@ function marchingCubes(
 
         collectSplitPoints = false;
         for (let r = 0; r < rectLen; r++) {
-            emitFaceRectangle(
-                rectBucket[r],
-                rectP[r],
-                rectU0[r],
-                rectV0[r],
-                rectU1[r],
-                rectV1[r]
-            );
+            emitFaceRectangle(rectBucket[r], rectP[r], rectU0[r], rectV0[r], rectU1[r], rectV1[r]);
         }
         for (let r = 0; r < diagRectLen; r++) {
             emitDiagRectangle(
@@ -1187,9 +1213,8 @@ function marchingCubes(
                     const nbY = by + dy;
                     for (let dx = -1; dx <= 1; dx++) {
                         const nbX = bx + dx;
-                        const slot = (dx + 1) + (dy + 1) * 3 + (dz + 1) * 9;
-                        if (nbX < 0 || nbY < 0 || nbZ < 0 ||
-                            nbX >= nbx || nbY >= nby || nbZ >= nbz) {
+                        const slot = dx + 1 + (dy + 1) * 3 + (dz + 1) * 9;
+                        if (nbX < 0 || nbY < 0 || nbZ < 0 || nbX >= nbx || nbY >= nby || nbZ >= nbz) {
                             neighborEntry[slot] = NEIGHBOR_EMPTY;
                             allNeighborsSolid = false;
                             continue;
@@ -1225,9 +1250,9 @@ function marchingCubes(
                 for (let ly = -1; ly < 4; ly++) {
                     const lyInside = ly >= 0 && ly <= 2;
                     for (let lx = -1; lx < 4; lx++) {
-                    // For solid blocks, the 27 cells with all axes in 0..2
-                    // are fully inside the block. All 8 corners are 1 so
-                    // cubeIndex == 255 and no triangles are emitted -- skip.
+                        // For solid blocks, the 27 cells with all axes in 0..2
+                        // are fully inside the block. All 8 corners are 1 so
+                        // cubeIndex == 255 and no triangles are emitted -- skip.
                         if (currentBlockIsSolid && lzInside && lyInside && lx >= 0 && lx <= 2) continue;
 
                         const vx = bx * 4 + lx;
@@ -1240,10 +1265,16 @@ function marchingCubes(
                         const ownerBz = vz >> 2;
 
                         if (ownerBx !== bx || ownerBy !== by || ownerBz !== bz) {
-                        // Cell belongs to a different block — skip if that
-                        // block is non-empty (it will process the cell itself).
-                            if (ownerBx >= 0 && ownerBy >= 0 && ownerBz >= 0 &&
-                            ownerBx < nbx && ownerBy < nby && ownerBz < nbz) {
+                            // Cell belongs to a different block — skip if that
+                            // block is non-empty (it will process the cell itself).
+                            if (
+                                ownerBx >= 0 &&
+                                ownerBy >= 0 &&
+                                ownerBz >= 0 &&
+                                ownerBx < nbx &&
+                                ownerBy < nby &&
+                                ownerBz < nbz
+                            ) {
                                 const ownerIdx = ownerBx + ownerBy * nbx + ownerBz * bStride;
                                 if (readBlockType(types, ownerIdx) !== BLOCK_EMPTY) continue;
                             }
@@ -1251,8 +1282,8 @@ function marchingCubes(
                             // Owner block doesn't exist or is out-of-bounds —
                             // deduplicate so only the first neighboring block to
                             // reach this cell emits triangles.
-                            const cellKey = (vx + 1) + (vy + 1) * strideX + (vz + 1) * strideXY;
-                            let oi = (Math.imul(cellKey | 0, 0x9E3779B9) >>> 0) & oMask;
+                            const cellKey = vx + 1 + (vy + 1) * strideX + (vz + 1) * strideXY;
+                            let oi = (Math.imul(cellKey | 0, 0x9e3779b9) >>> 0) & oMask;
                             let oFound = false;
                             while (true) {
                                 const ok = oKeys[oi];
@@ -1281,17 +1312,17 @@ function marchingCubes(
                         const c6 = isOccupiedLocal(vx + 1, vy + 1, vz + 1) ? 1 : 0;
                         const c7 = isOccupiedLocal(vx, vy + 1, vz + 1) ? 1 : 0;
 
-                        const cubeIndex = c0 | (c1 << 1) | (c2 << 2) | (c3 << 3) |
-                                      (c4 << 4) | (c5 << 5) | (c6 << 6) | (c7 << 7);
+                        const cubeIndex =
+                            c0 | (c1 << 1) | (c2 << 2) | (c3 << 3) | (c4 << 4) | (c5 << 5) | (c6 << 6) | (c7 << 7);
 
                         if (cubeIndex === 0 || cubeIndex === 255) continue;
 
                         if (collectFlatFace(cubeIndex, vx, vy, vz)) continue;
 
-                        const edges = EDGE_TABLE[cubeIndex]; // eslint-disable-line no-use-before-define
+                        const edges = EDGE_TABLE[cubeIndex];
                         if (edges === 0) continue;
 
-                        const triRow = TRI_TABLE[cubeIndex]; // eslint-disable-line no-use-before-define
+                        const triRow = TRI_TABLE[cubeIndex];
                         const triLen = triRow.length;
                         const usedMask = collectDiagFaces(triRow, vx, vy, vz);
                         let neededEdges = 0;
@@ -1306,18 +1337,18 @@ function marchingCubes(
 
                         // Compute vertices on edges used by triangles that
                         // were not absorbed into a merged binary-MC rectangle.
-                        if (neededEdges & 1)    edgeVerts[0]  = getVertex(vx, vy, vz, 0);       // edge 0: x-axis at (vx, vy, vz)
-                        if (neededEdges & 2)    edgeVerts[1]  = getVertex(vx + 1, vy, vz, 1);   // edge 1: y-axis at (vx+1, vy, vz)
-                        if (neededEdges & 4)    edgeVerts[2]  = getVertex(vx, vy + 1, vz, 0);   // edge 2: x-axis at (vx, vy+1, vz)
-                        if (neededEdges & 8)    edgeVerts[3]  = getVertex(vx, vy, vz, 1);       // edge 3: y-axis at (vx, vy, vz)
-                        if (neededEdges & 16)   edgeVerts[4]  = getVertex(vx, vy, vz + 1, 0);   // edge 4: x-axis at (vx, vy, vz+1)
-                        if (neededEdges & 32)   edgeVerts[5]  = getVertex(vx + 1, vy, vz + 1, 1); // edge 5: y-axis at (vx+1, vy, vz+1)
-                        if (neededEdges & 64)   edgeVerts[6]  = getVertex(vx, vy + 1, vz + 1, 0); // edge 6: x-axis at (vx, vy+1, vz+1)
-                        if (neededEdges & 128)  edgeVerts[7]  = getVertex(vx, vy, vz + 1, 1);   // edge 7: y-axis at (vx, vy, vz+1)
-                        if (neededEdges & 256)  edgeVerts[8]  = getVertex(vx, vy, vz, 2);       // edge 8: z-axis at (vx, vy, vz)
-                        if (neededEdges & 512)  edgeVerts[9]  = getVertex(vx + 1, vy, vz, 2);   // edge 9: z-axis at (vx+1, vy, vz)
+                        if (neededEdges & 1) edgeVerts[0] = getVertex(vx, vy, vz, 0); // edge 0: x-axis at (vx, vy, vz)
+                        if (neededEdges & 2) edgeVerts[1] = getVertex(vx + 1, vy, vz, 1); // edge 1: y-axis at (vx+1, vy, vz)
+                        if (neededEdges & 4) edgeVerts[2] = getVertex(vx, vy + 1, vz, 0); // edge 2: x-axis at (vx, vy+1, vz)
+                        if (neededEdges & 8) edgeVerts[3] = getVertex(vx, vy, vz, 1); // edge 3: y-axis at (vx, vy, vz)
+                        if (neededEdges & 16) edgeVerts[4] = getVertex(vx, vy, vz + 1, 0); // edge 4: x-axis at (vx, vy, vz+1)
+                        if (neededEdges & 32) edgeVerts[5] = getVertex(vx + 1, vy, vz + 1, 1); // edge 5: y-axis at (vx+1, vy, vz+1)
+                        if (neededEdges & 64) edgeVerts[6] = getVertex(vx, vy + 1, vz + 1, 0); // edge 6: x-axis at (vx, vy+1, vz+1)
+                        if (neededEdges & 128) edgeVerts[7] = getVertex(vx, vy, vz + 1, 1); // edge 7: y-axis at (vx, vy, vz+1)
+                        if (neededEdges & 256) edgeVerts[8] = getVertex(vx, vy, vz, 2); // edge 8: z-axis at (vx, vy, vz)
+                        if (neededEdges & 512) edgeVerts[9] = getVertex(vx + 1, vy, vz, 2); // edge 9: z-axis at (vx+1, vy, vz)
                         if (neededEdges & 1024) edgeVerts[10] = getVertex(vx + 1, vy + 1, vz, 2); // edge 10: z-axis at (vx+1, vy+1, vz)
-                        if (neededEdges & 2048) edgeVerts[11] = getVertex(vx, vy + 1, vz, 2);   // edge 11: z-axis at (vx, vy+1, vz)
+                        if (neededEdges & 2048) edgeVerts[11] = getVertex(vx, vy + 1, vz, 2); // edge 11: z-axis at (vx, vy+1, vz)
 
                         // Emit triangles (reversed winding to face outward)
                         ensureIndexCapacity(emitTriLen);
@@ -1350,38 +1381,22 @@ function marchingCubes(
 // TRI_TABLE: 256 entries, each an array of edge indices forming triangles.
 
 const EDGE_TABLE: number[] = [
-    0x000, 0x109, 0x203, 0x30a, 0x406, 0x50f, 0x605, 0x70c,
-    0x80c, 0x905, 0xa0f, 0xb06, 0xc0a, 0xd03, 0xe09, 0xf00,
-    0x190, 0x099, 0x393, 0x29a, 0x596, 0x49f, 0x795, 0x69c,
-    0x99c, 0x895, 0xb9f, 0xa96, 0xd9a, 0xc93, 0xf99, 0xe90,
-    0x230, 0x339, 0x033, 0x13a, 0x636, 0x73f, 0x435, 0x53c,
-    0xa3c, 0xb35, 0x83f, 0x936, 0xe3a, 0xf33, 0xc39, 0xd30,
-    0x3a0, 0x2a9, 0x1a3, 0x0aa, 0x7a6, 0x6af, 0x5a5, 0x4ac,
-    0xbac, 0xaa5, 0x9af, 0x8a6, 0xfaa, 0xea3, 0xda9, 0xca0,
-    0x460, 0x569, 0x663, 0x76a, 0x066, 0x16f, 0x265, 0x36c,
-    0xc6c, 0xd65, 0xe6f, 0xf66, 0x86a, 0x963, 0xa69, 0xb60,
-    0x5f0, 0x4f9, 0x7f3, 0x6fa, 0x1f6, 0x0ff, 0x3f5, 0x2fc,
-    0xdfc, 0xcf5, 0xfff, 0xef6, 0x9fa, 0x8f3, 0xbf9, 0xaf0,
-    0x650, 0x759, 0x453, 0x55a, 0x256, 0x35f, 0x055, 0x15c,
-    0xe5c, 0xf55, 0xc5f, 0xd56, 0xa5a, 0xb53, 0x859, 0x950,
-    0x7c0, 0x6c9, 0x5c3, 0x4ca, 0x3c6, 0x2cf, 0x1c5, 0x0cc,
-    0xfcc, 0xec5, 0xdcf, 0xcc6, 0xbca, 0xac3, 0x9c9, 0x8c0,
-    0x8c0, 0x9c9, 0xac3, 0xbca, 0xcc6, 0xdcf, 0xec5, 0xfcc,
-    0x0cc, 0x1c5, 0x2cf, 0x3c6, 0x4ca, 0x5c3, 0x6c9, 0x7c0,
-    0x950, 0x859, 0xb53, 0xa5a, 0xd56, 0xc5f, 0xf55, 0xe5c,
-    0x15c, 0x055, 0x35f, 0x256, 0x55a, 0x453, 0x759, 0x650,
-    0xaf0, 0xbf9, 0x8f3, 0x9fa, 0xef6, 0xfff, 0xcf5, 0xdfc,
-    0x2fc, 0x3f5, 0x0ff, 0x1f6, 0x6fa, 0x7f3, 0x4f9, 0x5f0,
-    0xb60, 0xa69, 0x963, 0x86a, 0xf66, 0xe6f, 0xd65, 0xc6c,
-    0x36c, 0x265, 0x16f, 0x066, 0x76a, 0x663, 0x569, 0x460,
-    0xca0, 0xda9, 0xea3, 0xfaa, 0x8a6, 0x9af, 0xaa5, 0xbac,
-    0x4ac, 0x5a5, 0x6af, 0x7a6, 0x0aa, 0x1a3, 0x2a9, 0x3a0,
-    0xd30, 0xc39, 0xf33, 0xe3a, 0x936, 0x83f, 0xb35, 0xa3c,
-    0x53c, 0x435, 0x73f, 0x636, 0x13a, 0x033, 0x339, 0x230,
-    0xe90, 0xf99, 0xc93, 0xd9a, 0xa96, 0xb9f, 0x895, 0x99c,
-    0x69c, 0x795, 0x49f, 0x596, 0x29a, 0x393, 0x099, 0x190,
-    0xf00, 0xe09, 0xd03, 0xc0a, 0xb06, 0xa0f, 0x905, 0x80c,
-    0x70c, 0x605, 0x50f, 0x406, 0x30a, 0x203, 0x109, 0x000
+    0x000, 0x109, 0x203, 0x30a, 0x406, 0x50f, 0x605, 0x70c, 0x80c, 0x905, 0xa0f, 0xb06, 0xc0a, 0xd03, 0xe09, 0xf00,
+    0x190, 0x099, 0x393, 0x29a, 0x596, 0x49f, 0x795, 0x69c, 0x99c, 0x895, 0xb9f, 0xa96, 0xd9a, 0xc93, 0xf99, 0xe90,
+    0x230, 0x339, 0x033, 0x13a, 0x636, 0x73f, 0x435, 0x53c, 0xa3c, 0xb35, 0x83f, 0x936, 0xe3a, 0xf33, 0xc39, 0xd30,
+    0x3a0, 0x2a9, 0x1a3, 0x0aa, 0x7a6, 0x6af, 0x5a5, 0x4ac, 0xbac, 0xaa5, 0x9af, 0x8a6, 0xfaa, 0xea3, 0xda9, 0xca0,
+    0x460, 0x569, 0x663, 0x76a, 0x066, 0x16f, 0x265, 0x36c, 0xc6c, 0xd65, 0xe6f, 0xf66, 0x86a, 0x963, 0xa69, 0xb60,
+    0x5f0, 0x4f9, 0x7f3, 0x6fa, 0x1f6, 0x0ff, 0x3f5, 0x2fc, 0xdfc, 0xcf5, 0xfff, 0xef6, 0x9fa, 0x8f3, 0xbf9, 0xaf0,
+    0x650, 0x759, 0x453, 0x55a, 0x256, 0x35f, 0x055, 0x15c, 0xe5c, 0xf55, 0xc5f, 0xd56, 0xa5a, 0xb53, 0x859, 0x950,
+    0x7c0, 0x6c9, 0x5c3, 0x4ca, 0x3c6, 0x2cf, 0x1c5, 0x0cc, 0xfcc, 0xec5, 0xdcf, 0xcc6, 0xbca, 0xac3, 0x9c9, 0x8c0,
+    0x8c0, 0x9c9, 0xac3, 0xbca, 0xcc6, 0xdcf, 0xec5, 0xfcc, 0x0cc, 0x1c5, 0x2cf, 0x3c6, 0x4ca, 0x5c3, 0x6c9, 0x7c0,
+    0x950, 0x859, 0xb53, 0xa5a, 0xd56, 0xc5f, 0xf55, 0xe5c, 0x15c, 0x055, 0x35f, 0x256, 0x55a, 0x453, 0x759, 0x650,
+    0xaf0, 0xbf9, 0x8f3, 0x9fa, 0xef6, 0xfff, 0xcf5, 0xdfc, 0x2fc, 0x3f5, 0x0ff, 0x1f6, 0x6fa, 0x7f3, 0x4f9, 0x5f0,
+    0xb60, 0xa69, 0x963, 0x86a, 0xf66, 0xe6f, 0xd65, 0xc6c, 0x36c, 0x265, 0x16f, 0x066, 0x76a, 0x663, 0x569, 0x460,
+    0xca0, 0xda9, 0xea3, 0xfaa, 0x8a6, 0x9af, 0xaa5, 0xbac, 0x4ac, 0x5a5, 0x6af, 0x7a6, 0x0aa, 0x1a3, 0x2a9, 0x3a0,
+    0xd30, 0xc39, 0xf33, 0xe3a, 0x936, 0x83f, 0xb35, 0xa3c, 0x53c, 0x435, 0x73f, 0x636, 0x13a, 0x033, 0x339, 0x230,
+    0xe90, 0xf99, 0xc93, 0xd9a, 0xa96, 0xb9f, 0x895, 0x99c, 0x69c, 0x795, 0x49f, 0x596, 0x29a, 0x393, 0x099, 0x190,
+    0xf00, 0xe09, 0xd03, 0xc0a, 0xb06, 0xa0f, 0x905, 0x80c, 0x70c, 0x605, 0x50f, 0x406, 0x30a, 0x203, 0x109, 0x000
 ];
 
 const TRI_TABLE: number[][] = [

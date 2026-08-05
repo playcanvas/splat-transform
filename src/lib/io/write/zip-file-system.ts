@@ -1,5 +1,5 @@
 import { Crc } from './crc';
-import { type FileSystem, type Writer } from './file-system';
+import type { FileSystem, Writer } from './file-system';
 
 // https://gist.github.com/rvaiya/4a2192df729056880a027789ae3cd4b7
 
@@ -88,9 +88,9 @@ class ZipFileSystem implements FileSystem {
             const view = new DataView(header.buffer);
 
             view.setUint32(0, 0x04034b50, true);
-            view.setUint16(4, 20, true);            // version needed to extract = 2.0
-            view.setUint16(6, 0x8 | 0x800, true);   // indicate crc and size comes after, utf-8 encoding
-            view.setUint16(8, 0, true);             // method = 0 (store)
+            view.setUint16(4, 20, true); // version needed to extract = 2.0
+            view.setUint16(6, 0x8 | 0x800, true); // indicate crc and size comes after, utf-8 encoding
+            view.setUint16(8, 0, true); // method = 0 (store)
             view.setUint16(10, dosTime, true);
             view.setUint16(12, dosDate, true);
             view.setUint16(26, nameLen, true);
@@ -112,7 +112,9 @@ class ZipFileSystem implements FileSystem {
             // when the archive crosses 4 GiB rather than silently writing
             // wrapped offsets (an unreadable file).
             if (offset >= 0xffffffff) {
-                throw new Error('Zip output exceeds 4 GiB and zip64 is not supported — write unbundled output instead.');
+                throw new Error(
+                    'Zip output exceeds 4 GiB and zip64 is not supported — write unbundled output instead.'
+                );
             }
             const data = new Uint8Array(16);
             const view = new DataView(data.buffer);

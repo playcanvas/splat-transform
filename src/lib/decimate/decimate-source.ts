@@ -1,29 +1,32 @@
 import { join } from 'pathe';
-import { type GraphicsDevice } from 'playcanvas';
+import type { GraphicsDevice } from 'playcanvas';
+
+import { compact } from '../chunk';
+import type { ChunkDataPool, ChunkSource, ChunkSourceMetadata } from '../chunk';
+import type { ReadFileSystem } from '../io/read';
+import type { FileSystem } from '../io/write';
+import { bakeTransform } from '../ops';
+import { readPly } from '../readers/read-ply';
+import type { DeviceCreator } from '../types';
+import { fmtBytes, fmtCount, logger, Transform } from '../utils';
+import { writePlyStreaming } from '../writers/write-ply-streaming';
 
 import { allocatePlanPrefixes } from './block-allocation';
 import { blockPlanMergeStream } from './block-merge-stream';
-import { planBlockMerges, type BlockPlan } from './block-plan';
-import { prepareGpuBlock, type PreparedBlock } from './block-prepare';
-import { createBlockProducerSource, type DestBuffers } from './block-producer';
+import { planBlockMerges } from './block-plan';
+import type { BlockPlan } from './block-plan';
+import { prepareGpuBlock } from './block-prepare';
+import type { PreparedBlock } from './block-prepare';
+import { createBlockProducerSource } from './block-producer';
+import type { DestBuffers } from './block-producer';
 import { mergeStream } from './merge-stream';
-import { buildBlockHalo, kdPartition, coherenceRuns, type ResidentPositions } from './partition';
-import { runPriorityPass, type CandidateArrays } from './priority';
-import { selectMerges, type SelectionResult } from './select';
+import { buildBlockHalo, kdPartition, coherenceRuns } from './partition';
+import type { ResidentPositions } from './partition';
+import { runPriorityPass } from './priority';
+import type { CandidateArrays } from './priority';
+import { selectMerges } from './select';
+import type { SelectionResult } from './select';
 import { selectMergesRecosted, CACHE_STRIDE } from './select-recost';
-import {
-    compact,
-    type ChunkDataPool,
-    type ChunkSource,
-    type ChunkSourceMetadata
-} from '../chunk';
-import { type ReadFileSystem } from '../io/read';
-import { type FileSystem } from '../io/write';
-import { bakeTransform } from '../ops';
-import { readPly } from '../readers/read-ply';
-import { type DeviceCreator } from '../types';
-import { fmtBytes, fmtCount, logger, Transform } from '../utils';
-import { writePlyStreaming } from '../writers/write-ply-streaming';
 
 /** Neighbours per query — unchanged from legacy. */
 const KNN_K = 16;
@@ -105,16 +108,17 @@ const chooseBlockSize = (
         budget - residentInputBytes - residentIndex - n * PLAN_BYTES_PER_GAUSSIAN - outputPositionBytes
     );
     let blockSize = Math.min(BLOCK_SIZE, Math.max(1 << 16, Math.floor(available / MULTI_BLOCK_BYTES_PER_CORE)));
-    const limits = (device as unknown as {
-        limits?: {
-            maxStorageBufferBindingSize?: number;
-            maxBufferSize?: number;
-        };
-    } | undefined)?.limits;
-    const bindingLimit = Math.min(
-        limits?.maxStorageBufferBindingSize ?? Infinity,
-        limits?.maxBufferSize ?? Infinity
-    );
+    const limits = (
+        device as unknown as
+            | {
+                  limits?: {
+                      maxStorageBufferBindingSize?: number;
+                      maxBufferSize?: number;
+                  };
+              }
+            | undefined
+    )?.limits;
+    const bindingLimit = Math.min(limits?.maxStorageBufferBindingSize ?? Infinity, limits?.maxBufferSize ?? Infinity);
     if (Number.isFinite(bindingLimit)) {
         // The largest local binding is one half of the core+halo cache:
         // approximately coreCount × CACHE_STRIDE × sizeof(f32).
@@ -242,7 +246,9 @@ const decimateSource = async (
             partSub.end();
 
             if (generation === 1 && N >= COHERENCE_MIN_N) {
-                const runs = blocks.map(b => coherenceRuns(order, b.start, b.end, COHERENCE_GAP_ROWS)).sort((a, b) => a - b);
+                const runs = blocks
+                    .map((b) => coherenceRuns(order, b.start, b.end, COHERENCE_GAP_ROWS))
+                    .sort((a, b) => a - b);
                 const median = runs[runs.length >> 1] ?? 0;
                 if (median > INCOHERENT_RUNS_PER_BLOCK) {
                     logger.warn(
@@ -269,7 +275,7 @@ const decimateSource = async (
                 if (!device) {
                     throw new Error(
                         `multi-block adaptive decimation requires WebGPU (${fmtCount(N)} splats, ` +
-                    `${fmtCount(blockSize)}-splat cores); provide a device, or use --decimate`
+                            `${fmtCount(blockSize)}-splat cores); provide a device, or use --decimate`
                     );
                 }
 
@@ -289,7 +295,6 @@ const decimateSource = async (
                 let allocationMs = 0;
                 let preparedNext: Promise<PreparedBlock> | null = null;
 
-                // eslint-disable-next-line no-loop-func
                 const prepare = (bi: number): Promise<PreparedBlock> => {
                     const coreCount = blocks[bi].end - blocks[bi].start;
                     const halo = buildBlockHalo(positions!, partition, bi, coreCount);
@@ -343,7 +348,7 @@ const decimateSource = async (
                         try {
                             await preparedNext;
                         } catch {
-                        // Preserve the active planning failure.
+                            // Preserve the active planning failure.
                         }
                     }
                     throw err;
@@ -352,16 +357,16 @@ const decimateSource = async (
                 }
                 logger.info(
                     `local merge stats: ${fmtCount(cappedHalos)} capped halo${cappedHalos === 1 ? '' : 's'}, ` +
-                `${fmtCount(frozen)} freezes, ${fmtCount(unfrozen)} unfreezes, ${fmtCount(removed!)} removals`
+                        `${fmtCount(frozen)} freezes, ${fmtCount(unfrozen)} unfreezes, ${fmtCount(removed!)} removals`
                 );
                 logger.info(
                     `local planner work: ${fmtCount(planned)} planned, ${fmtCount(waves)} waves, ` +
-                `${fmtCount(refreshes)} refreshes, ${fmtCount(reverseInvalidations)} reverse invalidations, ` +
-                `${fmtCount(heapPops)} heap pops (${fmtCount(staleHeapPops)} stale)`
+                        `${fmtCount(refreshes)} refreshes, ${fmtCount(reverseInvalidations)} reverse invalidations, ` +
+                        `${fmtCount(heapPops)} heap pops (${fmtCount(staleHeapPops)} stale)`
                 );
                 logger.info(
                     `local timings: KNN/gather ${(knnMs / 1000).toFixed(2)}s, ` +
-                `refresh/plan ${(refreshMs / 1000).toFixed(2)}s, allocation ${(allocationMs / 1000).toFixed(2)}s`
+                        `refresh/plan ${(refreshMs / 1000).toFixed(2)}s, allocation ${(allocationMs / 1000).toFixed(2)}s`
                 );
             } else {
                 const baseBytes = residentInputBytes + N * (12 + K * 8 + K * 4 + 4) + 3 * 2 ** 30;
@@ -369,26 +374,33 @@ const decimateSource = async (
 
                 // One block deliberately follows the pre-existing path with no
                 // staging, halos, plan files, or k-way coordination.
-                const cand: CandidateArrays | undefined = recost ?
-                    undefined :
-                    {
-                        idx: new Uint32Array(N * K).fill(0xFFFFFFFF),
-                        cost: new Float32Array(N * K).fill(Infinity)
-                    };
+                const cand: CandidateArrays | undefined = recost
+                    ? undefined
+                    : {
+                          idx: new Uint32Array(N * K).fill(0xffffffff),
+                          cost: new Float32Array(N * K).fill(Infinity)
+                      };
                 const cacheOut = recost ? new Float32Array(N * CACHE_STRIDE) : undefined;
                 const neighborsOut = recost ? new Uint32Array(N * k) : undefined;
                 const priorityBar = logger.bar('computing merge priorities', N);
                 await runPriorityPass(
                     { source: src, pool, pos: positions, order, blocks, device, K, k, cacheOut, neighborsOut },
                     cand,
-                    n => priorityBar.tick(n)
+                    (n) => priorityBar.tick(n)
                 );
                 priorityBar.end();
 
                 const selectSub = logger.group(recost ? 'Selecting merges (re-costed)' : 'Selecting merges');
-                selection = cacheOut ?
-                    await selectMergesRecosted({ splatCache: cacheOut, neighbors: neighborsOut!, D: k, N, mergesNeeded: needed, device }) :
-                    selectMerges(cand!, N, K, needed);
+                selection = cacheOut
+                    ? await selectMergesRecosted({
+                          splatCache: cacheOut,
+                          neighbors: neighborsOut!,
+                          D: k,
+                          N,
+                          mergesNeeded: needed,
+                          device
+                      })
+                    : selectMerges(cand!, N, K, needed);
                 selectSub.end();
                 removed = selection.removed;
             }
@@ -398,18 +410,18 @@ const decimateSource = async (
                     boundaryRetries++;
                     logger.warn(
                         `no productive local cores at jitter ${generation}; repartitioning unchanged input ` +
-                    `(${boundaryRetries}/8 boundary retries)`
+                            `(${boundaryRetries}/8 boundary retries)`
                     );
                     gen.end();
                     continue;
                 }
                 gen.end();
-                const cause = device ?
-                    'the GPU step likely failed (e.g. out-of-memory) or produced non-finite costs' :
-                    'cost computation produced no finite merge candidates (e.g. non-finite inputs)';
+                const cause = device
+                    ? 'the GPU step likely failed (e.g. out-of-memory) or produced non-finite costs'
+                    : 'cost computation produced no finite merge candidates (e.g. non-finite inputs)';
                 throw new Error(
                     `decimation found no valid merges at ${N} splats (target ${targetCount}) — ${cause}. ` +
-                'Refusing to return an incompletely-decimated scene.'
+                        'Refusing to return an incompletely-decimated scene.'
                 );
             }
             boundaryRetries = 0;
@@ -418,9 +430,9 @@ const decimateSource = async (
                 gen.end();
                 throw new Error(
                     `decimation stalled at ${N} splats (target ${targetCount}): a generation removed only ` +
-                `${removed} splat${removed === 1 ? '' : 's'} (${(removedFraction * 100).toFixed(3)}% of ${N}) — ` +
-                'the nearest-neighbour graph is too degenerate to merge further (e.g. many coincident splats). ' +
-                'Refusing to grind toward the target.'
+                        `${removed} splat${removed === 1 ? '' : 's'} (${(removedFraction * 100).toFixed(3)}% of ${N}) — ` +
+                        'the nearest-neighbour graph is too degenerate to merge further (e.g. many coincident splats). ' +
+                        'Refusing to grind toward the target.'
                 );
             }
 
@@ -440,56 +452,64 @@ const decimateSource = async (
             };
 
             const isFinal = outCount <= targetCount;
-            const nextPositions: ResidentPositions | undefined = isFinal ? undefined : {
-                x: new Float32Array(outCount),
-                y: new Float32Array(outCount),
-                z: new Float32Array(outCount)
-            };
+            const nextPositions: ResidentPositions | undefined = isFinal
+                ? undefined
+                : {
+                      x: new Float32Array(outCount),
+                      y: new Float32Array(outCount),
+                      z: new Float32Array(outCount)
+                  };
 
             // `src` is reassigned each generation; capture this generation's
             // values for the deferred producer closures.
             const genSrc = src;
             const genChunkSize = genSrc.meta.chunkSize;
             const genPositions = positions;
-            const createStream = (
-                tick: (n: number) => void
-            ): AsyncGenerator<number, void, DestBuffers> => {
+            const createStream = (tick: (n: number) => void): AsyncGenerator<number, void, DestBuffers> => {
                 if (plans) {
-                    return blockPlanMergeStream({
+                    return blockPlanMergeStream(
+                        {
+                            source: genSrc,
+                            pool,
+                            pos: genPositions,
+                            order,
+                            blocks,
+                            plans,
+                            prefixes: planPrefixes!,
+                            nextPositions
+                        },
+                        genChunkSize,
+                        tick
+                    );
+                }
+                return mergeStream(
+                    {
                         source: genSrc,
                         pool,
                         pos: genPositions,
                         order,
                         blocks,
-                        plans,
-                        prefixes: planPrefixes!,
+                        selection: selection!,
                         nextPositions
-                    }, genChunkSize, tick);
-                }
-                return mergeStream({
-                    source: genSrc,
-                    pool,
-                    pos: genPositions,
-                    order,
-                    blocks,
-                    selection: selection!,
-                    nextPositions
-                }, genChunkSize, tick);
+                    },
+                    genChunkSize,
+                    tick
+                );
             };
 
             if (isFinal) {
-            // The producer reads the input lazily while the consumer pulls
-            // chunks: the input chain (and any pending spill) is released on
-            // close. The merge bar lives outside the generation group since
-            // streaming happens after this function returns.
+                // The producer reads the input lazily while the consumer pulls
+                // chunks: the input chain (and any pending spill) is released on
+                // close. The merge bar lives outside the generation group since
+                // streaming happens after this function returns.
                 gen.end();
                 const mergeBar = logger.bar('merging', N);
-                const producer = createBlockProducerSource(outMeta, () => createStream(n => mergeBar.tick(n)));
+                const producer = createBlockProducerSource(outMeta, () => createStream((n) => mergeBar.tick(n)));
                 const disposeSpill = disposeCurrentInput;
                 let closed = false;
                 return {
                     meta: producer.meta,
-                    read: request => producer.read(request),
+                    read: (request) => producer.read(request),
                     close: async () => {
                         if (closed) return;
                         closed = true;
@@ -508,7 +528,7 @@ const decimateSource = async (
             }
 
             const mergeBar = logger.bar('merging', N);
-            const producer = createBlockProducerSource(outMeta, () => createStream(n => mergeBar.tick(n)));
+            const producer = createBlockProducerSource(outMeta, () => createStream((n) => mergeBar.tick(n)));
 
             // Intermediate generation: materialize (RAM when comfortably within
             // budget, else temp PLY spill), then advance the loop. This
@@ -526,11 +546,14 @@ const decimateSource = async (
                 if (!opts.spill) {
                     throw new Error(
                         `decimation intermediate generation needs ${fmtBytes(estBytes)}, over the in-memory budget — ` +
-                    'a spill location is required (opts.spill / --scratch-dir)'
+                            'a spill location is required (opts.spill / --scratch-dir)'
                     );
                 }
                 const spill = opts.spill;
-                const filename = join(spill.scratchDir, `.decimate-gen${generation}.${Date.now().toString(36)}.tmp.ply`);
+                const filename = join(
+                    spill.scratchDir,
+                    `.decimate-gen${generation}.${Date.now().toString(36)}.tmp.ply`
+                );
                 let plySrc: ChunkSource;
                 try {
                     await writePlyStreaming(producer, pool, { filename }, spill.writeFs);

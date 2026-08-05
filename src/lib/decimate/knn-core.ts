@@ -1,7 +1,7 @@
-import { type FlatKdTree } from '../spatial/kd-tree';
+import type { FlatKdTree } from '../spatial/kd-tree';
 
 /** Marks an unfilled neighbour slot (fewer than k non-self points available). */
-const KNN_SENTINEL = 0xFFFFFFFF;
+const KNN_SENTINEL = 0xffffffff;
 
 /** A forest part: flat KD subtree (GLOBAL splat ids) plus its point AABB. */
 type ForestPart = FlatKdTree & {
@@ -68,7 +68,7 @@ const knnForestQuery = (
             stack[sp++] = part.rootIdx;
             while (sp > 0) {
                 const packed = stack[--sp];
-                const nodeIdx = packed & 0x3FFFFFFF;
+                const nodeIdx = packed & 0x3fffffff;
                 const axis = packed >>> 30;
 
                 const np = nodeIdx * 3;
@@ -78,7 +78,9 @@ const knnForestQuery = (
                 const splatId = nodeSplatIdx[nodeIdx];
 
                 if (splatId !== qid) {
-                    const dx = nx - qx, dy = ny - qy, dz = nz - qz;
+                    const dx = nx - qx,
+                        dy = ny - qy,
+                        dz = nz - qz;
                     const d2 = dx * dx + dy * dy + dz * dz;
                     if (d2 < worst) {
                         topDist[worstIdx] = d2;
@@ -87,7 +89,8 @@ const knnForestQuery = (
                         let wi = 0;
                         for (let i = 1; i < k; i++) {
                             if (topDist[i] > w) {
-                                w = topDist[i]; wi = i;
+                                w = topDist[i];
+                                wi = i;
                             }
                         }
                         worst = w;
@@ -95,8 +98,8 @@ const knnForestQuery = (
                     }
                 }
 
-                const qAxisVal = axis === 0 ? qx : (axis === 1 ? qy : qz);
-                const nAxisVal = axis === 0 ? nx : (axis === 1 ? ny : nz);
+                const qAxisVal = axis === 0 ? qx : axis === 1 ? qy : qz;
+                const nAxisVal = axis === 0 ? nx : axis === 1 ? ny : nz;
                 const delta = qAxisVal - nAxisVal;
                 const nextAxis = axis + 1 >= 3 ? 0 : axis + 1;
                 const nextAxisPacked = nextAxis << 30;

@@ -1,22 +1,22 @@
 import { basename, dirname, resolve } from 'pathe';
 
-import { logWrittenFile } from './utils';
-import {
-    createChunkDataPool,
-    type ChunkDataPool,
-    type ChunkSource
-} from '../chunk';
+import { createChunkDataPool } from '../chunk';
+import type { ChunkDataPool, ChunkSource } from '../chunk';
 import { dataTableToChunkSource } from '../compat/data-table';
-import { type DataTable, shRestNames } from '../data-table';
-import { type FileSystem, writeFile, ZipFileSystem } from '../io/write';
+import { shRestNames } from '../data-table';
+import type { DataTable } from '../data-table';
+import { writeFile, ZipFileSystem } from '../io/write';
+import type { FileSystem } from '../io/write';
 import { bakeTransform } from '../ops';
 import { sortMortonInterleaved } from '../ops/morton-order';
 import { kmeansInterleaved } from '../spatial';
-import { type SplatModel } from '../splat-model';
+import type { SplatModel } from '../splat-model';
 import type { DeviceCreator } from '../types';
 import { logger, sigmoid, Transform } from '../utils';
 import { version } from '../version';
 import { runEncodeWebp, runQuantize1dColumns } from '../workers';
+
+import { logWrittenFile } from './utils';
 
 const GEOMETRIC_COLS = ['rot_0', 'rot_1', 'rot_2', 'rot_3', 'scale_0', 'scale_1', 'scale_2', 'opacity'];
 
@@ -123,7 +123,7 @@ type WriteSogSourceOptions = {
 
 type ShNMeta = { count: number; bands: number; codebook: number[]; files: string[] };
 
-type Clustering = { centroids: Float32Array, labels: Uint32Array };
+type Clustering = { centroids: Float32Array; labels: Uint32Array };
 
 // One SOG write between its two phases: the gathered layers plus the worker
 // and GPU jobs already running on them.
@@ -176,7 +176,7 @@ const startSogWrite = async (
     if (options.indices && options.indices.length !== numRows) {
         throw new Error(
             `writeSogSource: indices length ${options.indices.length} must equal the source's gaussian count ${numRows} ` +
-            '(indices is a full-length ordering, not a subset filter — filter the source upstream with filterSource)'
+                '(indices is a full-length ordering, not a subset filter — filter the source upstream with filterSource)'
         );
     }
 
@@ -191,7 +191,7 @@ const startSogWrite = async (
     if (width > 16383 || height > 16383) {
         throw new Error(
             `SOG output is capped at 16383x16383 WebP texels (~268M gaussians); got ${numRows}. ` +
-            'Write streamed SOG (lod-meta.json output) instead — recommended for any scene beyond ~1-2M gaussians.'
+                'Write streamed SOG (lod-meta.json output) instead — recommended for any scene beyond ~1-2M gaussians.'
         );
     }
 
@@ -203,25 +203,41 @@ const startSogWrite = async (
     const [, , , , s0, s1, s2] = layers.geometric;
     const [fdc0, fdc1, fdc2] = layers.colorDc;
     const scalesQuant = runQuantize1dColumns([
-        { name: 'scale_0', data: s0 }, { name: 'scale_1', data: s1 }, { name: 'scale_2', data: s2 }
+        { name: 'scale_0', data: s0 },
+        { name: 'scale_1', data: s1 },
+        { name: 'scale_2', data: s2 }
     ]);
     const colorsQuant = runQuantize1dColumns([
-        { name: 'f_dc_0', data: fdc0 }, { name: 'f_dc_1', data: fdc1 }, { name: 'f_dc_2', data: fdc2 }
+        { name: 'f_dc_0', data: fdc0 },
+        { name: 'f_dc_1', data: fdc1 },
+        { name: 'f_dc_2', data: fdc2 }
     ]);
     const restCount = [0, 9, 24, 45][shBands];
     const paletteSize = Math.min(64, 2 ** Math.floor(Math.log2(numRows / 1024))) * 1024;
     const progress: SogWriteState['progress'] = { done: 0, report: null };
-    const shCluster = shBands > 0 ? (async () => {
-        const gpuDevice = createDevice ? await createDevice() : undefined;
-        return kmeansInterleaved(layers.shRest, numRows, restCount, paletteSize, iterations, gpuDevice, () => {
-            progress.done++;
-            progress.report?.(progress.done);
-        });
-    })() : null;
+    const shCluster =
+        shBands > 0
+            ? (async () => {
+                  const gpuDevice = createDevice ? await createDevice() : undefined;
+                  return kmeansInterleaved(
+                      layers.shRest,
+                      numRows,
+                      restCount,
+                      paletteSize,
+                      iterations,
+                      gpuDevice,
+                      () => {
+                          progress.done++;
+                          progress.report?.(progress.done);
+                      }
+                  );
+              })()
+            : null;
     // If the finish phase throws (or never runs), these settle later; mark
     // their rejections handled so the original error propagates instead of an
     // unhandled rejection.
-    [scalesQuant, colorsQuant, shCluster].forEach(p => p?.catch(() => {}));
+    // eslint-disable-next-line @typescript-eslint/no-empty-function -- preserve rejection-only control flow
+    [scalesQuant, colorsQuant, shCluster].forEach((p) => p?.catch(() => {}));
 
     return {
         numRows,
@@ -282,6 +298,7 @@ const finishSogWrite = async (
                 logWrittenFile(filename, webp.byteLength);
             }
         });
+        // eslint-disable-next-line @typescript-eslint/no-empty-function -- preserve rejection-only control flow
         writeChain = write.catch(() => {});
         return write;
     };
@@ -313,11 +330,17 @@ const finishSogWrite = async (
         // its bar opens here so it nests under this write's scope. For a write
         // started ahead of time (LOD units) the bar times the remaining wait.
         if (shCluster) {
-            logger.debug(`running k-means clustering: dims=${restCount} points=${numRows} clusters=${paletteSize} iterations=${iterations}`);
+            logger.debug(
+                `running k-means clustering: dims=${restCount} points=${numRows} clusters=${paletteSize} iterations=${iterations}`
+            );
             const bar = logger.bar('k-means', iterations);
             bar.update(progress.done);
-            progress.report = done => bar.update(done);
-            shCluster.then(() => bar.end(), () => {});
+            progress.report = (done) => bar.update(done);
+            shCluster.then(
+                () => bar.end(),
+                // eslint-disable-next-line @typescript-eslint/no-empty-function -- preserve rejection-only control flow
+                () => {}
+            );
         }
 
         const [r0, r1, r2, r3, , , , op] = layers.geometric;
@@ -327,7 +350,11 @@ const finishSogWrite = async (
             const pos = layers.position;
             if (!externalOrder) sortMortonInterleaved(pos, indices);
 
-            const mm = [[Infinity, -Infinity], [Infinity, -Infinity], [Infinity, -Infinity]];
+            const mm = [
+                [Infinity, -Infinity],
+                [Infinity, -Infinity],
+                [Infinity, -Infinity]
+            ];
             for (let g = 0; g < numRows; g++) {
                 for (let a = 0; a < 3; a++) {
                     const v = pos[g * 3 + a];
@@ -335,14 +362,14 @@ const finishSogWrite = async (
                     if (v > mm[a][1]) mm[a][1] = v;
                 }
             }
-            const minMax = mm.map(v => v.map(logTransform));
+            const minMax = mm.map((v) => v.map(logTransform));
             const meansL = new Uint8Array(width * height * channels);
             const meansU = new Uint8Array(width * height * channels);
             for (let i = 0; i < numRows; ++i) {
                 const g = indices[i];
-                const x = 65535 * (logTransform(pos[g * 3 + 0]) - minMax[0][0]) / (minMax[0][1] - minMax[0][0]);
-                const y = 65535 * (logTransform(pos[g * 3 + 1]) - minMax[1][0]) / (minMax[1][1] - minMax[1][0]);
-                const z = 65535 * (logTransform(pos[g * 3 + 2]) - minMax[2][0]) / (minMax[2][1] - minMax[2][0]);
+                const x = (65535 * (logTransform(pos[g * 3 + 0]) - minMax[0][0])) / (minMax[0][1] - minMax[0][0]);
+                const y = (65535 * (logTransform(pos[g * 3 + 1]) - minMax[1][0])) / (minMax[1][1] - minMax[1][0]);
+                const z = (65535 * (logTransform(pos[g * 3 + 2]) - minMax[2][0])) / (minMax[2][1] - minMax[2][0]);
                 const ti = i;
                 meansL[ti * 4] = x & 0xff;
                 meansL[ti * 4 + 1] = y & 0xff;
@@ -354,7 +381,7 @@ const finishSogWrite = async (
                 meansU[ti * 4 + 3] = 0xff;
             }
             pending.push(writeWebp('means_l.webp', meansL), writeWebp('means_u.webp', meansU));
-            return { mins: minMax.map(v => v[0]), maxs: minMax.map(v => v[1]) };
+            return { mins: minMax.map((v) => v[0]), maxs: minMax.map((v) => v[1]) };
         })();
 
         // ---- quats: largest-3 packed quaternions.
@@ -363,21 +390,35 @@ const finishSogWrite = async (
             const q = [0, 0, 0, 0];
             const sqrt2 = Math.sqrt(2);
             // Largest-3 component orders, indexed by the dropped component.
-            const quatIdx = [[1, 2, 3], [0, 2, 3], [0, 1, 3], [0, 1, 2]];
+            const quatIdx = [
+                [1, 2, 3],
+                [0, 2, 3],
+                [0, 1, 3],
+                [0, 1, 2]
+            ];
             for (let i = 0; i < numRows; ++i) {
                 const g = indices[i];
-                q[0] = r0[g]; q[1] = r1[g]; q[2] = r2[g]; q[3] = r3[g];
+                q[0] = r0[g];
+                q[1] = r1[g];
+                q[2] = r2[g];
+                q[3] = r3[g];
                 const l = Math.sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
-                q[0] /= l; q[1] /= l; q[2] /= l; q[3] /= l;
+                q[0] /= l;
+                q[1] /= l;
+                q[2] /= l;
+                q[3] /= l;
                 let maxComp = 0;
                 if (Math.abs(q[1]) > Math.abs(q[maxComp])) maxComp = 1;
                 if (Math.abs(q[2]) > Math.abs(q[maxComp])) maxComp = 2;
                 if (Math.abs(q[3]) > Math.abs(q[maxComp])) maxComp = 3;
                 const s = (q[maxComp] < 0 ? -1 : 1) * sqrt2;
-                q[0] *= s; q[1] *= s; q[2] *= s; q[3] *= s;
+                q[0] *= s;
+                q[1] *= s;
+                q[2] *= s;
+                q[3] *= s;
                 const idx = quatIdx[maxComp];
                 const ti = i;
-                quats[ti * 4]     = 255 * (q[idx[0]] * 0.5 + 0.5);
+                quats[ti * 4] = 255 * (q[idx[0]] * 0.5 + 0.5);
                 quats[ti * 4 + 1] = 255 * (q[idx[1]] * 0.5 + 0.5);
                 quats[ti * 4 + 2] = 255 * (q[idx[2]] * 0.5 + 0.5);
                 quats[ti * 4 + 3] = 252 + maxComp;
@@ -387,7 +428,13 @@ const finishSogWrite = async (
 
         // ---- scales: quantized log-scales.
         const sd = await scalesQuant;
-        pending.push(writeLabels('scales.webp', sd.labels.map(c => c.data), indices));
+        pending.push(
+            writeLabels(
+                'scales.webp',
+                sd.labels.map((c) => c.data),
+                indices
+            )
+        );
         const scalesCodebook = Array.from(sd.centroids);
 
         // ---- sh0: quantized DC + sigmoid(opacity).
@@ -396,7 +443,7 @@ const finishSogWrite = async (
             opacityData[i] = Math.max(0, Math.min(255, sigmoid(op[i]) * 255));
         }
         const cd = await colorsQuant;
-        pending.push(writeLabels('sh0.webp', [...cd.labels.map(c => c.data), opacityData], indices));
+        pending.push(writeLabels('sh0.webp', [...cd.labels.map((c) => c.data), opacityData], indices));
         const colorsCodebook = Array.from(cd.centroids);
 
         // ---- shN: k-means palette + per-gaussian labels.
@@ -408,7 +455,7 @@ const finishSogWrite = async (
 
             // quantize the centroid palette to a uint8 codebook. De-interleave
             // the (small) centroids into restCount columns for the quantizer.
-            const cbCols: { name: string, data: Float32Array }[] = [];
+            const cbCols: { name: string; data: Float32Array }[] = [];
             for (let j = 0; j < restCount; ++j) {
                 const col = new Float32Array(numCentroids);
                 for (let i = 0; i < numCentroids; ++i) col[i] = centroids[i * restCount + j];
@@ -427,7 +474,7 @@ const finishSogWrite = async (
             }
 
             const cb = await codebookPromise;
-            const cbLabels = cb.labels.map(c => c.data); // restCount columns, length numCentroids
+            const cbLabels = cb.labels.map((c) => c.data); // restCount columns, length numCentroids
             const centroidsBuf = new Uint8Array(64 * shCoeffs * Math.ceil(numCentroids / 64) * channels);
             for (let i = 0; i < numCentroids; ++i) {
                 for (let j = 0; j < shCoeffs; ++j) {
@@ -464,7 +511,7 @@ const finishSogWrite = async (
             sh0: { codebook: colorsCodebook, files: ['sh0.webp'] },
             ...(shN ? { shN } : {})
         };
-        const metaJson = (new TextEncoder()).encode(JSON.stringify(metaObj));
+        const metaJson = new TextEncoder().encode(JSON.stringify(metaObj));
         const metaFilename = zipFs ? 'meta.json' : outputFilename;
         await writeFile(outputFs, metaFilename, metaJson);
         if (emitInfo && !zipFs) {

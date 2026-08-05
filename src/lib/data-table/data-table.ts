@@ -3,7 +3,8 @@ import { Transform } from '../utils';
 /**
  * Union of all typed array types supported for column data.
  */
-type TypedArray = Int8Array | Uint8Array | Int16Array | Uint16Array | Int32Array | Uint32Array | Float32Array | Float64Array;
+type TypedArray =
+    Int8Array | Uint8Array | Int16Array | Uint16Array | Int32Array | Uint32Array | Float32Array | Float64Array;
 
 /**
  * String identifiers for typed array element types.
@@ -33,14 +34,22 @@ class Column {
 
     get dataType(): ColumnType | null {
         switch (this.data.constructor) {
-            case Int8Array: return 'int8';
-            case Uint8Array: return 'uint8';
-            case Int16Array: return 'int16';
-            case Uint16Array: return 'uint16';
-            case Int32Array: return 'int32';
-            case Uint32Array: return 'uint32';
-            case Float32Array: return 'float32';
-            case Float64Array: return 'float64';
+            case Int8Array:
+                return 'int8';
+            case Uint8Array:
+                return 'uint8';
+            case Int16Array:
+                return 'int16';
+            case Uint16Array:
+                return 'uint16';
+            case Int32Array:
+                return 'int32';
+            case Uint32Array:
+                return 'uint32';
+            case Float32Array:
+                return 'float32';
+            case Float64Array:
+                return 'float64';
         }
         return null;
     }
@@ -54,9 +63,7 @@ class Column {
  * A row object mapping column names to numeric values.
  * @ignore
  */
-type Row = {
-    [colName: string]: number;
-};
+type Row = Record<string, number>;
 
 /**
  * A table of columnar data representing Gaussian splat properties.
@@ -96,7 +103,9 @@ class DataTable {
         // check all columns have the same lengths
         for (let i = 1; i < columns.length; i++) {
             if (columns[i].data.length !== columns[0].data.length) {
-                throw new Error(`Column '${columns[i].name}' has inconsistent number of rows: expected ${columns[0].data.length}, got ${columns[i].data.length}`);
+                throw new Error(
+                    `Column '${columns[i].name}' has inconsistent number of rows: expected ${columns[0].data.length}, got ${columns[i].data.length}`
+                );
             }
         }
 
@@ -119,7 +128,7 @@ class DataTable {
 
     setRow(index: number, row: Row, columns = this.columns) {
         for (const column of columns) {
-            if (row.hasOwnProperty(column.name)) {
+            if (Object.hasOwn(row, column.name)) {
                 column.data[index] = row[column.name];
             }
         }
@@ -140,15 +149,15 @@ class DataTable {
     }
 
     get columnNames() {
-        return this.columns.map(column => column.name);
+        return this.columns.map((column) => column.name);
     }
 
     get columnData() {
-        return this.columns.map(column => column.data);
+        return this.columns.map((column) => column.data);
     }
 
     get columnTypes() {
-        return this.columns.map(column => column.dataType);
+        return this.columns.map((column) => column.dataType);
     }
 
     getColumn(index: number): Column {
@@ -156,26 +165,28 @@ class DataTable {
     }
 
     getColumnIndex(name: string): number {
-        return this.columns.findIndex(column => column.name === name);
+        return this.columns.findIndex((column) => column.name === name);
     }
 
     getColumnByName(name: string): Column | null {
-        return this.columns.find(column => column.name === name);
+        return this.columns.find((column) => column.name === name);
     }
 
     hasColumn(name: string): boolean {
-        return this.columns.some(column => column.name === name);
+        return this.columns.some((column) => column.name === name);
     }
 
     addColumn(column: Column) {
         if (column.data.length !== this.numRows) {
-            throw new Error(`Column '${column.name}' has inconsistent number of rows: expected ${this.numRows}, got ${column.data.length}`);
+            throw new Error(
+                `Column '${column.name}' has inconsistent number of rows: expected ${this.numRows}, got ${column.data.length}`
+            );
         }
         this.columns.push(column);
     }
 
     removeColumn(name: string) {
-        const index = this.columns.findIndex(column => column.name === name);
+        const index = this.columns.findIndex((column) => column.name === name);
         if (index === -1) {
             return false;
         }
@@ -216,24 +227,30 @@ class DataTable {
                 throw new Error(`DataTable.clone: duplicate column name(s): ${[...new Set(dupes)].join(', ')}`);
             }
 
-            const missingColumns = columnNames.filter(name => !this.getColumnByName(name));
+            const missingColumns = columnNames.filter((name) => !this.getColumnByName(name));
             if (missingColumns.length > 0) {
                 throw new Error(`DataTable.clone: unknown column name(s): ${missingColumns.join(', ')}`);
             }
 
-            srcColumns = columnNames.map(name => this.getColumnByName(name)!);
+            srcColumns = columnNames.map((name) => this.getColumnByName(name)!);
         } else {
             srcColumns = this.columns;
         }
 
         if (!rows) {
-            return new DataTable(srcColumns.map(c => c.clone()), this.transform);
+            return new DataTable(
+                srcColumns.map((c) => c.clone()),
+                this.transform
+            );
         }
 
-        const result = new DataTable(srcColumns.map((c) => {
-            const constructor = c.data.constructor as new (length: number) => TypedArray;
-            return new Column(c.name, new constructor(rows.length));
-        }), this.transform);
+        const result = new DataTable(
+            srcColumns.map((c) => {
+                const constructor = c.data.constructor as new (length: number) => TypedArray;
+                return new Column(c.name, new constructor(rows.length));
+            }),
+            this.transform
+        );
 
         for (let i = 0; i < result.numColumns; ++i) {
             const src = srcColumns[i].data;

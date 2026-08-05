@@ -1,4 +1,4 @@
-import { type GraphicsDevice } from 'playcanvas';
+import type { GraphicsDevice } from 'playcanvas';
 
 /**
  * Centralised render-time tunables. Constants that today live as magic
@@ -114,7 +114,6 @@ export const TILE_SIZE = 16;
  */
 export const POLE_EPS = 0.005;
 
-
 /**
  * Total GPU memory budget for ALL pair-sized buffers combined: the
  * tile-key and splat-value buffers the rasterizer owns (2× pairsCap × 4 B)
@@ -158,10 +157,18 @@ export const storageBindingLimit = (device: GraphicsDevice): number => {
  * @param budgetBytes - Total bytes for all pair-sized buffers; {@link PAIR_BUFFER_BUDGET_BYTES} by default.
  * @returns The chunk cap, at least 1.
  */
-export const rasterChunkCap = (device: GraphicsDevice, maxCoveragePerSplat: number, budgetBytes = PAIR_BUFFER_BUDGET_BYTES): number => Math.max(1, Math.min(
-    Math.floor(storageBindingLimit(device) / (maxCoveragePerSplat * 4)),
-    Math.floor(budgetBytes / (maxCoveragePerSplat * PAIR_BUFFER_TOTAL_BYTES_PER_ELEMENT))
-));
+export const rasterChunkCap = (
+    device: GraphicsDevice,
+    maxCoveragePerSplat: number,
+    budgetBytes = PAIR_BUFFER_BUDGET_BYTES
+): number =>
+    Math.max(
+        1,
+        Math.min(
+            Math.floor(storageBindingLimit(device) / (maxCoveragePerSplat * 4)),
+            Math.floor(budgetBytes / (maxCoveragePerSplat * PAIR_BUFFER_TOTAL_BYTES_PER_ELEMENT))
+        )
+    );
 
 /**
  * Screen-size clamp, as a fraction of the shorter image edge. A splat

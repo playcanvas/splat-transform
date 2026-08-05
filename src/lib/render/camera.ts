@@ -92,11 +92,7 @@ type CameraBasis = {
 };
 
 const sub = (a: Vec3, b: Vec3) => new Vec3(a.x - b.x, a.y - b.y, a.z - b.z);
-const cross = (a: Vec3, b: Vec3) => new Vec3(
-    a.y * b.z - a.z * b.y,
-    a.z * b.x - a.x * b.z,
-    a.x * b.y - a.y * b.x
-);
+const cross = (a: Vec3, b: Vec3) => new Vec3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
 const normalize = (v: Vec3): Vec3 => {
     const len = Math.hypot(v.x, v.y, v.z);
     if (len === 0) return new Vec3(0, 0, 0);
@@ -172,7 +168,7 @@ const buildApertureCameras = (camera: RenderCamera, radius: number, samples: num
         const pair = Math.floor((i - triple) / 2);
         const area = i < triple ? 1.5 : triple + 2 * pair + 1;
         const r = samples === 1 ? 0 : radius * Math.sqrt(area / samples);
-        const angle = i < triple ? i * 2 * Math.PI / 3 : pair * goldenAngle;
+        const angle = i < triple ? (i * 2 * Math.PI) / 3 : pair * goldenAngle;
         const sign = i < triple || (i - triple) % 2 === 0 ? 1 : -1;
         const x = sign * r * Math.cos(angle);
         const y = sign * r * Math.sin(angle);
@@ -181,8 +177,8 @@ const buildApertureCameras = (camera: RenderCamera, radius: number, samples: num
             ...camera,
             position: camera.position.clone().add(offset),
             target: camera.target.clone().add(offset),
-            offsetX: (camera.offsetX ?? 0) + basis.focalX * x / camera.focusDistance!,
-            offsetY: (camera.offsetY ?? 0) + basis.focalY * y / camera.focusDistance!,
+            offsetX: (camera.offsetX ?? 0) + (basis.focalX * x) / camera.focusDistance!,
+            offsetY: (camera.offsetY ?? 0) + (basis.focalY * y) / camera.focusDistance!,
             apertureScale: 0
         };
     });

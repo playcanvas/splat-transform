@@ -1,7 +1,10 @@
 import { Mat3, Quat, Vec3 } from 'playcanvas';
 
-import { Column, DataTable, TypedArray } from './data-table';
-import { Transform, RotateSH } from '../utils';
+import type { Transform } from '../utils';
+import { RotateSH } from '../utils';
+
+import type { TypedArray } from './data-table';
+import { Column, DataTable } from './data-table';
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 
@@ -28,7 +31,11 @@ const computeWriteTransform = (transform: Transform, outputFormatTransform: Tran
  * @ignore
  */
 const detectSHBands = (dataTable: DataTable): number => {
-    return ({ '9': 1, '24': 2, '-1': 3 } as Record<string, number>)[String(shNames.findIndex(n => !dataTable.hasColumn(n)))] ?? 0;
+    return (
+        ({ '9': 1, '24': 2, '-1': 3 } as Record<string, number>)[
+            String(shNames.findIndex((n) => !dataTable.hasColumn(n)))
+        ] ?? 0
+    );
 };
 
 /**
@@ -42,7 +49,12 @@ const detectSHBands = (dataTable: DataTable): number => {
  * @param inPlace - If true, mutate the DataTable's existing column arrays instead of allocating new ones.
  * @returns A map of column name to typed array.
  */
-const transformColumns = (dataTable: DataTable, columnNames: string[], delta: Transform | null, inPlace = false): Map<string, TypedArray> => {
+const transformColumns = (
+    dataTable: DataTable,
+    columnNames: string[],
+    delta: Transform | null,
+    inPlace = false
+): Map<string, TypedArray> => {
     const result = new Map<string, TypedArray>();
 
     if (!delta || delta.isIdentity()) {
@@ -62,16 +74,17 @@ const transformColumns = (dataTable: DataTable, columnNames: string[], delta: Tr
     const rotNames = ['rot_0', 'rot_1', 'rot_2', 'rot_3'];
     const scaleNames = ['scale_0', 'scale_1', 'scale_2'];
 
-    const hasPos = posNames.every(n => dataTable.hasColumn(n));
-    const needPos = hasPos && posNames.some(n => columnNames.includes(n));
-    const hasRot = rotNames.every(n => dataTable.hasColumn(n));
-    const needRot = hasRot && rotNames.some(n => columnNames.includes(n));
-    const needScale = scaleNames.some(n => columnNames.includes(n) && dataTable.hasColumn(n)) && s !== 1;
+    const hasPos = posNames.every((n) => dataTable.hasColumn(n));
+    const needPos = hasPos && posNames.some((n) => columnNames.includes(n));
+    const hasRot = rotNames.every((n) => dataTable.hasColumn(n));
+    const needRot = hasRot && rotNames.some((n) => columnNames.includes(n));
+    const needScale = scaleNames.some((n) => columnNames.includes(n) && dataTable.hasColumn(n)) && s !== 1;
 
     const shBands = detectSHBands(dataTable);
     const shCoeffsPerChannel = [0, 3, 8, 15][shBands];
     const rotIsIdentity = Math.abs(Math.abs(r.w) - 1) < 1e-6;
-    const requestedSH = shBands > 0 && !rotIsIdentity && shNames.slice(0, shCoeffsPerChannel * 3).some(n => columnNames.includes(n));
+    const requestedSH =
+        shBands > 0 && !rotIsIdentity && shNames.slice(0, shCoeffsPerChannel * 3).some((n) => columnNames.includes(n));
 
     // Position columns
     if (needPos) {
@@ -212,11 +225,10 @@ const convertToSpace = (dataTable: DataTable, targetTransform: Transform, inPlac
 
     const allNames = dataTable.columnNames;
     const cols = transformColumns(dataTable, allNames, delta);
-    return new DataTable(allNames.map(name => new Column(name, cols.get(name)!)), targetTransform);
+    return new DataTable(
+        allNames.map((name) => new Column(name, cols.get(name)!)),
+        targetTransform
+    );
 };
 
-export {
-    transformColumns,
-    computeWriteTransform,
-    convertToSpace
-};
+export { transformColumns, computeWriteTransform, convertToSpace };

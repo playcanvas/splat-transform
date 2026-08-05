@@ -1,4 +1,5 @@
 import type { ExperienceSettings } from '@playcanvas/supersplat-viewer/settings';
+import type { GraphicsDevice } from 'playcanvas';
 
 import type { CameraTrack } from './render/camera-track';
 
@@ -199,6 +200,6 @@ type Param = {
  *
  * @returns Promise resolving to a GraphicsDevice instance.
  */
-type DeviceCreator = () => Promise<import('playcanvas').GraphicsDevice>;
+type DeviceCreator = () => Promise<GraphicsDevice>;
 
 export type { CollisionMeshShape, Options, Param, DeviceCreator };

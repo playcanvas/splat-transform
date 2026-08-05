@@ -1,16 +1,6 @@
 import { Vec3 } from 'playcanvas';
 
-import { readExact, sortGatherSlots, gatherRuns } from './reader-utils';
 import {
-    type ChunkData,
-    type ChunkDataPool,
-    type ChunkLayer,
-    type ReadRequest,
-    type ChunkSource,
-    type ChunkSourceMetadata,
-    type ExtraColumn,
-    type LayerLayout,
-    type SHBands,
     POSITION_STRIDE,
     GEOMETRIC_STRIDE,
     colorStride,
@@ -19,11 +9,25 @@ import {
     colorFields,
     otherLayout
 } from '../chunk';
+import type {
+    ChunkData,
+    ChunkDataPool,
+    ChunkLayer,
+    ReadRequest,
+    ChunkSource,
+    ChunkSourceMetadata,
+    ExtraColumn,
+    LayerLayout,
+    SHBands
+} from '../chunk';
 import { dataTableToChunkSource } from '../compat/data-table';
 import { Column, DataTable } from '../data-table';
-import { dirname, join, ReadFileSystem, ReadSource, readFile } from '../io/read';
-import { Options } from '../types';
+import type { ReadFileSystem, ReadSource } from '../io/read';
+import { dirname, join, readFile } from '../io/read';
+import type { Options } from '../types';
 import { logger, Transform } from '../utils';
+
+import { readExact, sortGatherSlots, gatherRuns } from './reader-utils';
 
 const kSH_C0 = 0.28209479177387814;
 const SQRT_2 = 1.414213562373095;
@@ -33,34 +37,34 @@ const IO_CONCURRENCY = 16;
 
 // lod data in data.bin
 type LccLod = {
-    points: number;     // number of splats
-    offset: bigint;     // offset
-    size: number;       // data size
-}
+    points: number; // number of splats
+    offset: bigint; // offset
+    size: number; // data size
+};
 
 // The scene uses a quadtree for spatial partitioning,
 // with each unit having its own xy index (starting from 0) and multiple layers of lod data
 type LccUnitInfo = {
-    x: number;          // x index
-    y: number;          // y index
-    lods: Array<LccLod>;    //  lods
-}
+    x: number; // x index
+    y: number; // y index
+    lods: LccLod[]; //  lods
+};
 
 // Used to decompress scale in data.bin and sh in shcoef.bin
 type CompressInfo = {
-    scaleMin: Vec3;         // min scale
-    scaleMax: Vec3;         // max scale
-    shMin: Vec3;            // min sh
-    shMax: Vec3;            // max sh
-    envScaleMin: Vec3;      // min environment scale
-    envScaleMax: Vec3;      // max environment scale
-    envShMin: Vec3;         // min environment sh
-    envShMax: Vec3;         // max environment sh
-}
+    scaleMin: Vec3; // min scale
+    scaleMax: Vec3; // max scale
+    shMin: Vec3; // min sh
+    shMax: Vec3; // max sh
+    envScaleMin: Vec3; // min environment scale
+    envScaleMax: Vec3; // max environment scale
+    envShMin: Vec3; // min environment sh
+    envShMax: Vec3; // max environment sh
+};
 
 // parse .lcc files, such as meta.lcc
 const parseMeta = (obj: any): CompressInfo => {
-    const attributes: { [key: string]: any } = {};
+    const attributes: Record<string, any> = {};
     obj.attributes.forEach((attr: any) => {
         attributes[attr.name] = attr;
     });
@@ -77,11 +81,11 @@ const parseMeta = (obj: any): CompressInfo => {
     return { scaleMin, scaleMax, shMin, shMax, envScaleMin, envScaleMax, envShMin, envShMax };
 };
 
-const parseIndexBin = (raw: ArrayBuffer, meta: any): Array<LccUnitInfo> => {
+const parseIndexBin = (raw: ArrayBuffer, meta: any): LccUnitInfo[] => {
     let offset = 0;
 
     const buff = new DataView(raw);
-    const infos: Array<LccUnitInfo> = [];
+    const infos: LccUnitInfo[] = [];
     while (true) {
         if (offset > buff.byteLength - 1) {
             break;
@@ -92,7 +96,7 @@ const parseIndexBin = (raw: ArrayBuffer, meta: any): Array<LccUnitInfo> => {
         const y = buff.getInt16(offset, true);
         offset += 2;
 
-        const lods: Array<LccLod> = [];
+        const lods: LccLod[] = [];
         for (let i = 0; i < meta.totalLevel; i++) {
             const ldPoints = buff.getInt32(offset, true);
             offset += 4;
@@ -108,7 +112,6 @@ const parseIndexBin = (raw: ArrayBuffer, meta: any): Array<LccUnitInfo> => {
                 offset: ldOffset,
                 size: ldSize
             });
-
         }
         const info: LccUnitInfo = {
             x,
@@ -139,12 +142,23 @@ const mix = (min: number, max: number, s: number): number => {
 };
 
 const floatProps = [
-    'x', 'y', 'z',
-    'nx', 'ny', 'nz',
+    'x',
+    'y',
+    'z',
+    'nx',
+    'ny',
+    'nz',
     'opacity',
-    'rot_0', 'rot_1', 'rot_2', 'rot_3',
-    'f_dc_0', 'f_dc_1', 'f_dc_2',
-    'scale_0', 'scale_1', 'scale_2'
+    'rot_0',
+    'rot_1',
+    'rot_2',
+    'rot_3',
+    'f_dc_0',
+    'f_dc_1',
+    'f_dc_2',
+    'scale_0',
+    'scale_1',
+    'scale_2'
 ];
 
 const initProperties = (length: number): Record<string, Float32Array> => {
@@ -160,7 +174,10 @@ const initProperties = (length: number): Record<string, Float32Array> => {
 // indicating which component was omitted (the largest, which is reconstructed).
 const decodeRotationInto = (
     v: number,
-    rot0: Float32Array, rot1: Float32Array, rot2: Float32Array, rot3: Float32Array,
+    rot0: Float32Array,
+    rot1: Float32Array,
+    rot2: Float32Array,
+    rot3: Float32Array,
     idx: number
 ) => {
     const d0 = (v & 1023) / 1023.0;
@@ -176,13 +193,25 @@ const decodeRotationInto = (
     // Reconstruct full quaternion with qw inserted at position d3.
     // Output mapping matches original: rot_0 = q[3], rot_1 = q[0], rot_2 = q[1], rot_3 = q[2]
     if (d3 === 0) {
-        rot0[idx] = qz; rot1[idx] = qw; rot2[idx] = qx; rot3[idx] = qy;
+        rot0[idx] = qz;
+        rot1[idx] = qw;
+        rot2[idx] = qx;
+        rot3[idx] = qy;
     } else if (d3 === 1) {
-        rot0[idx] = qz; rot1[idx] = qx; rot2[idx] = qw; rot3[idx] = qy;
+        rot0[idx] = qz;
+        rot1[idx] = qx;
+        rot2[idx] = qw;
+        rot3[idx] = qy;
     } else if (d3 === 2) {
-        rot0[idx] = qz; rot1[idx] = qx; rot2[idx] = qy; rot3[idx] = qw;
+        rot0[idx] = qz;
+        rot1[idx] = qx;
+        rot2[idx] = qy;
+        rot3[idx] = qw;
     } else {
-        rot0[idx] = qw; rot1[idx] = qx; rot2[idx] = qy; rot3[idx] = qz;
+        rot0[idx] = qw;
+        rot1[idx] = qx;
+        rot2[idx] = qy;
+        rot3[idx] = qz;
     }
 };
 
@@ -213,7 +242,9 @@ const processUnit = async (
     const dataBytes = await dataSource.read(offset, offset + size).readAll();
     const expectedDataSize = unitSplats * 32;
     if (dataBytes.byteLength < expectedDataSize) {
-        throw new Error(`LCC unit data too short: expected ${expectedDataSize} bytes for ${unitSplats} splats, got ${dataBytes.byteLength}`);
+        throw new Error(
+            `LCC unit data too short: expected ${expectedDataSize} bytes for ${unitSplats} splats, got ${dataBytes.byteLength}`
+        );
     }
 
     // Typed array views over the same buffer -- avoids DataView overhead.
@@ -229,7 +260,9 @@ const processUnit = async (
         const shBytes = await shSource.read(offset * 2, offset * 2 + size * 2).readAll();
         const expectedShSize = unitSplats * 64;
         if (shBytes.byteLength < expectedShSize) {
-            throw new Error(`LCC unit SH data too short: expected ${expectedShSize} bytes for ${unitSplats} splats, got ${shBytes.byteLength}`);
+            throw new Error(
+                `LCC unit SH data too short: expected ${expectedShSize} bytes for ${unitSplats} splats, got ${shBytes.byteLength}`
+            );
         }
         shU32 = new Uint32Array(shBytes.buffer, shBytes.byteOffset, shBytes.byteLength >> 2);
     }
@@ -253,10 +286,18 @@ const processUnit = async (
     const ps1 = properties.property_scale_1;
     const ps2 = properties.property_scale_2;
 
-    const sMinX = compressInfo.scaleMin.x, sMinY = compressInfo.scaleMin.y, sMinZ = compressInfo.scaleMin.z;
-    const sMaxX = compressInfo.scaleMax.x, sMaxY = compressInfo.scaleMax.y, sMaxZ = compressInfo.scaleMax.z;
-    const shMinX = compressInfo.shMin.x, shMinY = compressInfo.shMin.y, shMinZ = compressInfo.shMin.z;
-    const shMaxX = compressInfo.shMax.x, shMaxY = compressInfo.shMax.y, shMaxZ = compressInfo.shMax.z;
+    const sMinX = compressInfo.scaleMin.x,
+        sMinY = compressInfo.scaleMin.y,
+        sMinZ = compressInfo.scaleMin.z;
+    const sMaxX = compressInfo.scaleMax.x,
+        sMaxY = compressInfo.scaleMax.y,
+        sMaxZ = compressInfo.scaleMax.z;
+    const shMinX = compressInfo.shMin.x,
+        shMinY = compressInfo.shMin.y,
+        shMinZ = compressInfo.shMin.z;
+    const shMaxX = compressInfo.shMax.x,
+        shMaxY = compressInfo.shMax.y,
+        shMaxZ = compressInfo.shMax.z;
 
     for (let i = 0; i < unitSplats; i++) {
         const g = propertyOffset + i;
@@ -292,9 +333,9 @@ const processUnit = async (
             const si = i << 4;
             for (let j = 0; j < 15; j++) {
                 const enc = shU32[si + j];
-                properties_f_rest[j][g] = mix(shMinX, shMaxX, (enc & 0x7FF) / 2047.0);
-                properties_f_rest[j + 15][g] = mix(shMinY, shMaxY, ((enc >> 11) & 0x3FF) / 1023.0);
-                properties_f_rest[j + 30][g] = mix(shMinZ, shMaxZ, ((enc >> 21) & 0x7FF) / 2047.0);
+                properties_f_rest[j][g] = mix(shMinX, shMaxX, (enc & 0x7ff) / 2047.0);
+                properties_f_rest[j + 15][g] = mix(shMinY, shMaxY, ((enc >> 11) & 0x3ff) / 1023.0);
+                properties_f_rest[j + 30][g] = mix(shMinZ, shMaxZ, ((enc >> 21) & 0x7ff) / 2047.0);
             }
         }
     }
@@ -328,15 +369,19 @@ const decodeUnitsForLod = async (
             const idx = nextUnit++;
             if (idx >= unitInfos.length) break;
             await processUnit(
-                unitInfos[idx], targetLod, dataSource, shSource,
-                compressInfo, offsets[idx], properties, properties_f_rest,
+                unitInfos[idx],
+                targetLod,
+                dataSource,
+                shSource,
+                compressInfo,
+                offsets[idx],
+                properties,
+                properties_f_rest,
                 onUnitDone
             );
         }
     };
-    await Promise.all(
-        Array.from({ length: Math.min(IO_CONCURRENCY, unitInfos.length) }, () => worker())
-    );
+    await Promise.all(Array.from({ length: Math.min(IO_CONCURRENCY, unitInfos.length) }, () => worker()));
 };
 
 const deserializeEnvironment = (raw: Uint8Array, compressInfo: CompressInfo, hasSH: boolean) => {
@@ -349,11 +394,23 @@ const deserializeEnvironment = (raw: Uint8Array, compressInfo: CompressInfo, has
     }
 
     const columns = [
-        'x', 'y', 'z',
-        'f_dc_0', 'f_dc_1', 'f_dc_2', 'opacity',
-        'scale_0', 'scale_1', 'scale_2',
-        'rot_0', 'rot_1', 'rot_2', 'rot_3'
-    ].concat(hasSH ? new Array(45).fill('').map((_, i) => `f_rest_${i}`) : []).map(name => new Column(name, new Float32Array(numGaussians)));
+        'x',
+        'y',
+        'z',
+        'f_dc_0',
+        'f_dc_1',
+        'f_dc_2',
+        'opacity',
+        'scale_0',
+        'scale_1',
+        'scale_2',
+        'rot_0',
+        'rot_1',
+        'rot_2',
+        'rot_3'
+    ]
+        .concat(hasSH ? new Array(45).fill('').map((_, i) => `f_rest_${i}`) : [])
+        .map((name) => new Column(name, new Float32Array(numGaussians)));
 
     const scaleMin = compressInfo.envScaleMin;
     const scaleMax = compressInfo.envScaleMax;
@@ -370,14 +427,14 @@ const deserializeEnvironment = (raw: Uint8Array, compressInfo: CompressInfo, has
     for (let i = 0; i < numGaussians; i++) {
         const off = i * stride;
 
-        columns[0].data[i] = dataView.getFloat32(off + 0, true);   // x
-        columns[1].data[i] = dataView.getFloat32(off + 4, true);   // y
-        columns[2].data[i] = dataView.getFloat32(off + 8, true);   // z
+        columns[0].data[i] = dataView.getFloat32(off + 0, true); // x
+        columns[1].data[i] = dataView.getFloat32(off + 4, true); // y
+        columns[2].data[i] = dataView.getFloat32(off + 8, true); // z
 
-        columns[3].data[i] = invSH0ToColor(dataView.getUint8(off + 12) / 255.0);   // f_dc_0
-        columns[4].data[i] = invSH0ToColor(dataView.getUint8(off + 13) / 255.0);   // f_dc_1
-        columns[5].data[i] = invSH0ToColor(dataView.getUint8(off + 14) / 255.0);   // f_dc_2
-        columns[6].data[i] = invSigmoid(dataView.getUint8(off + 15) / 255.0);      // opacity
+        columns[3].data[i] = invSH0ToColor(dataView.getUint8(off + 12) / 255.0); // f_dc_0
+        columns[4].data[i] = invSH0ToColor(dataView.getUint8(off + 13) / 255.0); // f_dc_1
+        columns[5].data[i] = invSH0ToColor(dataView.getUint8(off + 14) / 255.0); // f_dc_2
+        columns[6].data[i] = invSigmoid(dataView.getUint8(off + 15) / 255.0); // opacity
 
         columns[7].data[i] = invLinearScale(mix(scaleMin.x, scaleMax.x, dataView.getUint16(off + 16, true) / 65535.0)); // scale_0
         columns[8].data[i] = invLinearScale(mix(scaleMin.y, scaleMax.y, dataView.getUint16(off + 18, true) / 65535.0)); // scale_1
@@ -390,9 +447,9 @@ const deserializeEnvironment = (raw: Uint8Array, compressInfo: CompressInfo, has
         if (hasSH) {
             for (let j = 0; j < 15; ++j) {
                 const enc = dataView.getUint32(off + 32 + j * 4, true);
-                const nx = (enc & 0x7FF) / 2047.0;
-                const ny = ((enc >> 11) & 0x3FF) / 1023.0;
-                const nz = ((enc >> 21) & 0x7FF) / 2047.0;
+                const nx = (enc & 0x7ff) / 2047.0;
+                const ny = ((enc >> 11) & 0x3ff) / 1023.0;
+                const nz = ((enc >> 21) & 0x7ff) / 2047.0;
                 columns[14 + j].data[i] = mix(shMin.x, shMax.x, nx);
                 columns[14 + j + 15].data[i] = mix(shMin.y, shMax.y, ny);
                 columns[14 + j + 30].data[i] = mix(shMin.z, shMax.z, nz);
@@ -465,15 +522,19 @@ const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Op
         dataSource = await openSource('data.bin');
         if (hasSH) shSource = await openSource('shcoef.bin');
 
-        const unitInfos: LccUnitInfo[] = parseIndexBin(indexData.buffer.slice(indexData.byteOffset, indexData.byteOffset + indexData.byteLength) as ArrayBuffer, lccJson);
+        const unitInfos: LccUnitInfo[] = parseIndexBin(
+            indexData.buffer.slice(indexData.byteOffset, indexData.byteOffset + indexData.byteLength) as ArrayBuffer,
+            lccJson
+        );
 
         // build table of input -> output lods
         const lodSelect = options.lodSelect ?? [];
-        const lods = lodSelect.length > 0 ?
-            lodSelect
-            .map(lod => (lod < 0 ? splats.length + lod : lod))    // negative indices map from the end of lod
-            .filter(lod => lod >= 0 && lod < splats.length) :
-            new Array(splats.length).fill(0).map((_, i) => i);
+        const lods =
+            lodSelect.length > 0
+                ? lodSelect
+                      .map((lod) => (lod < 0 ? splats.length + lod : lod)) // negative indices map from the end of lod
+                      .filter((lod) => lod >= 0 && lod < splats.length)
+                : new Array(splats.length).fill(0).map((_, i) => i);
 
         if (lods.length === 0) {
             throw new Error(`No valid LODs selected for LCC input file: ${filename} lods: ${JSON.stringify(lods)}`);
@@ -502,8 +563,14 @@ const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Op
             const totalSplats = splats[inputLod];
 
             await decodeUnitsForLod(
-                unitInfos, inputLod, dataSource, shSource ?? undefined,
-                compressInfo, lodOffset, properties, properties_f_rest,
+                unitInfos,
+                inputLod,
+                dataSource,
+                shSource ?? undefined,
+                compressInfo,
+                lodOffset,
+                properties,
+                properties_f_rest,
                 tick
             );
 
@@ -512,7 +579,7 @@ const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Op
         }
 
         const columns = [
-            ...floatProps.map(name => new Column(name, properties[`property_${name}`])),
+            ...floatProps.map((name) => new Column(name, properties[`property_${name}`])),
             ...(properties_f_rest ? properties_f_rest.map((storage, i) => new Column(`f_rest_${i}`, storage)) : []),
             new Column('lod', lodColumn)
         ];
@@ -544,9 +611,8 @@ const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Op
     } catch (err) {
         const code = (err as { code?: string })?.code;
         const message = (err as Error)?.message ?? '';
-        const isMissing = code === 'ENOENT' ||
-            message.startsWith('Entry not found') ||
-            message.startsWith('HTTP error 404');
+        const isMissing =
+            code === 'ENOENT' || message.startsWith('Entry not found') || message.startsWith('HTTP error 404');
         if (!isMissing) {
             logger.warn(`failed to load environment.bin: ${message || err}`);
         }
@@ -614,11 +680,12 @@ const readLccSource = async (
 
     // input -> output LOD mapping (mirrors readLcc).
     const lodSelect = options.lodSelect ?? [];
-    const lods = lodSelect.length > 0 ?
-        lodSelect
-        .map(lod => (lod < 0 ? splats.length + lod : lod))
-        .filter(lod => lod >= 0 && lod < splats.length) :
-        new Array(splats.length).fill(0).map((_, i) => i);
+    const lods =
+        lodSelect.length > 0
+            ? lodSelect
+                  .map((lod) => (lod < 0 ? splats.length + lod : lod))
+                  .filter((lod) => lod >= 0 && lod < splats.length)
+            : new Array(splats.length).fill(0).map((_, i) => i);
     if (lods.length === 0) {
         throw new Error(`No valid LODs selected for LCC input file: ${filename} lods: ${JSON.stringify(lods)}`);
     }
@@ -682,7 +749,7 @@ const readLccSource = async (
         numLods: lods.length,
         lodCounts,
         chunkSize,
-        numChunks: lodCounts.map(c => Math.ceil(c / chunkSize)),
+        numChunks: lodCounts.map((c) => Math.ceil(c / chunkSize)),
         shBands,
         model: 'default', // lcc carries no training-model tag
         extraColumns,
@@ -692,15 +759,25 @@ const readLccSource = async (
     };
 
     // Global (scene-wide) dequant constants, hoisted once (see processUnit).
-    const sMinX = compressInfo.scaleMin.x, sMinY = compressInfo.scaleMin.y, sMinZ = compressInfo.scaleMin.z;
-    const sMaxX = compressInfo.scaleMax.x, sMaxY = compressInfo.scaleMax.y, sMaxZ = compressInfo.scaleMax.z;
-    const shMinX = compressInfo.shMin.x, shMinY = compressInfo.shMin.y, shMinZ = compressInfo.shMin.z;
-    const shMaxX = compressInfo.shMax.x, shMaxY = compressInfo.shMax.y, shMaxZ = compressInfo.shMax.z;
+    const sMinX = compressInfo.scaleMin.x,
+        sMinY = compressInfo.scaleMin.y,
+        sMinZ = compressInfo.scaleMin.z;
+    const sMaxX = compressInfo.scaleMax.x,
+        sMaxY = compressInfo.scaleMax.y,
+        sMaxZ = compressInfo.scaleMax.z;
+    const shMinX = compressInfo.shMin.x,
+        shMinY = compressInfo.shMin.y,
+        shMinZ = compressInfo.shMin.z;
+    const shMaxX = compressInfo.shMax.x,
+        shMaxY = compressInfo.shMax.y,
+        shMaxZ = compressInfo.shMax.z;
     const colorSw = 3 + restCount;
 
     // Largest run index r with starts[r] <= g.
     const findRun = (starts: number[], g: number): number => {
-        let lo = 0, hi = starts.length - 1, ans = 0;
+        let lo = 0,
+            hi = starts.length - 1,
+            ans = 0;
         while (lo <= hi) {
             const mid = (lo + hi) >> 1;
             if (starts[mid] <= g) {
@@ -716,9 +793,7 @@ const readLccSource = async (
     // Per-record dequantizer bound to the caller's output layer buffers. `srcIdx`
     // indexes the current source views (rebound per sub-block / gather run via
     // setViews); `dstRow` is the output gaussian row. Mirrors processUnit exactly.
-    const makeDecoder = (
-        position?: ChunkData, geometric?: ChunkData, color?: ChunkData, other?: ChunkData
-    ) => {
+    const makeDecoder = (position?: ChunkData, geometric?: ChunkData, color?: ChunkData, other?: ChunkData) => {
         const pos = position ? new Float32Array(position.data) : null;
         const geo = geometric ? new Float32Array(geometric.data) : null;
         const col = color ? new Float32Array(color.data) : null;
@@ -728,13 +803,18 @@ const readLccSource = async (
         let u8!: Uint8Array;
         let shU32: Uint32Array | null = null;
         const setViews = (df: Float32Array, du16: Uint16Array, du8: Uint8Array, dsh: Uint32Array | null) => {
-            f32 = df; u16 = du16; u8 = du8; shU32 = dsh;
+            f32 = df;
+            u16 = du16;
+            u8 = du8;
+            shU32 = dsh;
         };
         const decode = (srcIdx: number, dstRow: number) => {
             if (pos) {
                 const fi = srcIdx << 3;
                 const o = dstRow * 3;
-                pos[o] = f32[fi]; pos[o + 1] = f32[fi + 1]; pos[o + 2] = f32[fi + 2];
+                pos[o] = f32[fi];
+                pos[o + 1] = f32[fi + 1];
+                pos[o + 2] = f32[fi + 2];
             }
             if (geo) {
                 const bi = srcIdx << 5;
@@ -752,13 +832,25 @@ const readLccSource = async (
                 const qz = d2 * SQRT_2 - SQRT_2_INV;
                 const qw = Math.sqrt(1 - Math.min(1.0, qx * qx + qy * qy + qz * qz));
                 if (d3 === 0) {
-                    geo[o] = qz; geo[o + 1] = qw; geo[o + 2] = qx; geo[o + 3] = qy;
+                    geo[o] = qz;
+                    geo[o + 1] = qw;
+                    geo[o + 2] = qx;
+                    geo[o + 3] = qy;
                 } else if (d3 === 1) {
-                    geo[o] = qz; geo[o + 1] = qx; geo[o + 2] = qw; geo[o + 3] = qy;
+                    geo[o] = qz;
+                    geo[o + 1] = qx;
+                    geo[o + 2] = qw;
+                    geo[o + 3] = qy;
                 } else if (d3 === 2) {
-                    geo[o] = qz; geo[o + 1] = qx; geo[o + 2] = qy; geo[o + 3] = qw;
+                    geo[o] = qz;
+                    geo[o + 1] = qx;
+                    geo[o + 2] = qy;
+                    geo[o + 3] = qw;
                 } else {
-                    geo[o] = qw; geo[o + 1] = qx; geo[o + 2] = qy; geo[o + 3] = qz;
+                    geo[o] = qw;
+                    geo[o + 1] = qx;
+                    geo[o + 2] = qy;
+                    geo[o + 3] = qz;
                 }
                 geo[o + 4] = invLinearScale(mix(sMinX, sMaxX, u16[hi + 8] / 65535.0));
                 geo[o + 5] = invLinearScale(mix(sMinY, sMaxY, u16[hi + 9] / 65535.0));
@@ -775,16 +867,18 @@ const readLccSource = async (
                     const si = srcIdx << 4;
                     for (let j = 0; j < 15; j++) {
                         const enc = shU32[si + j];
-                        col[o + 3 + j] = mix(shMinX, shMaxX, (enc & 0x7FF) / 2047.0);
-                        col[o + 3 + j + 15] = mix(shMinY, shMaxY, ((enc >> 11) & 0x3FF) / 1023.0);
-                        col[o + 3 + j + 30] = mix(shMinZ, shMaxZ, ((enc >> 21) & 0x7FF) / 2047.0);
+                        col[o + 3 + j] = mix(shMinX, shMaxX, (enc & 0x7ff) / 2047.0);
+                        col[o + 3 + j + 15] = mix(shMinY, shMaxY, ((enc >> 11) & 0x3ff) / 1023.0);
+                        col[o + 3 + j + 30] = mix(shMinZ, shMaxZ, ((enc >> 21) & 0x7ff) / 2047.0);
                     }
                 }
             }
             if (oth) {
                 const hi = srcIdx << 4;
                 const o = dstRow * 3;
-                oth[o] = u16[hi + 13]; oth[o + 1] = u16[hi + 14]; oth[o + 2] = u16[hi + 15];
+                oth[o] = u16[hi + 13];
+                oth[o + 1] = u16[hi + 14];
+                oth[o + 2] = u16[hi + 15];
             }
         };
         return { setViews, decode, wantColor: !!col };
@@ -792,10 +886,10 @@ const readLccSource = async (
 
     // Sub-block size: bounds the raw record scratch independent of chunkSize.
     const SUB_BLOCK = 1 << 16;
-    let dScratch: Uint8Array | null = null;     // SUB_BLOCK * 32 (data records)
-    let sScratch: Uint8Array | null = null;     // SUB_BLOCK * 64 (sh records)
-    let gScratch: Uint8Array | null = null;     // readRows data gather
-    let gShScratch: Uint8Array | null = null;   // readRows sh gather
+    let dScratch: Uint8Array | null = null; // SUB_BLOCK * 32 (data records)
+    let sScratch: Uint8Array | null = null; // SUB_BLOCK * 64 (sh records)
+    let gScratch: Uint8Array | null = null; // readRows data gather
+    let gShScratch: Uint8Array | null = null; // readRows sh gather
 
     const read = async (request: ReadRequest): Promise<void> => {
         const lod = request.lod ?? 0;
@@ -823,18 +917,18 @@ const readLccSource = async (
                 const run = runs[findRun(starts, g)];
                 boff[j] = run.dataByteOffset + (g - run.globalStart) * 32;
             }
-            const slot = sortGatherSlots(count, s => boff[s]);
+            const slot = sortGatherSlots(count, (s) => boff[s]);
             const wantSh = !!(shSource && dec.wantColor);
             const costBytes = 32 + (wantSh ? 64 : 0);
 
-            for (const gr of gatherRuns(count, t => boff[slot[t]], 32, costBytes)) {
+            for (const gr of gatherRuns(count, (t) => boff[slot[t]], 32, costBytes)) {
                 const first = gr.firstByte;
                 const rc = gr.recordCount;
 
                 const need = rc * 32;
                 if (!gScratch || gScratch.length < need) gScratch = new Uint8Array(need);
                 const dataBytes = gScratch.subarray(0, need);
-                if (await readExact(dataSource.read(first, first + need), dataBytes, 0, need) !== need) {
+                if ((await readExact(dataSource.read(first, first + need), dataBytes, 0, need)) !== need) {
                     throw new Error(`readLcc: short gather read at byte ${first}`);
                 }
                 let shU32: Uint32Array | null = null;
@@ -843,7 +937,7 @@ const readLccSource = async (
                     const shStart = first * 2;
                     if (!gShScratch || gShScratch.length < shNeed) gShScratch = new Uint8Array(shNeed);
                     const shBytes = gShScratch.subarray(0, shNeed);
-                    if (await readExact(shSource!.read(shStart, shStart + shNeed), shBytes, 0, shNeed) !== shNeed) {
+                    if ((await readExact(shSource!.read(shStart, shStart + shNeed), shBytes, 0, shNeed)) !== shNeed) {
                         throw new Error(`readLcc: short sh gather read at byte ${shStart}`);
                     }
                     shU32 = new Uint32Array(shBytes.buffer, shBytes.byteOffset, rc * 16);
@@ -880,7 +974,10 @@ const readLccSource = async (
                 const dataStart = run.dataByteOffset + off * 32;
                 dScratch ??= new Uint8Array(SUB_BLOCK * 32);
                 const dataBytes = dScratch.subarray(0, bb * 32);
-                if (await readExact(dataSource.read(dataStart, dataStart + bb * 32), dataBytes, 0, bb * 32) !== bb * 32) {
+                if (
+                    (await readExact(dataSource.read(dataStart, dataStart + bb * 32), dataBytes, 0, bb * 32)) !==
+                    bb * 32
+                ) {
                     throw new Error(`readLcc: short data read for chunk ${request.chunkIndex}`);
                 }
                 let shU32: Uint32Array | null = null;
@@ -888,7 +985,7 @@ const readLccSource = async (
                     const shStart = run.dataByteOffset * 2 + off * 64;
                     sScratch ??= new Uint8Array(SUB_BLOCK * 64);
                     const shBytes = sScratch.subarray(0, bb * 64);
-                    if (await readExact(shSource.read(shStart, shStart + bb * 64), shBytes, 0, bb * 64) !== bb * 64) {
+                    if ((await readExact(shSource.read(shStart, shStart + bb * 64), shBytes, 0, bb * 64)) !== bb * 64) {
                         throw new Error(`readLcc: short sh read for chunk ${request.chunkIndex}`);
                     }
                     shU32 = new Uint32Array(shBytes.buffer, shBytes.byteOffset, bb * 16);
@@ -957,9 +1054,8 @@ const readLccEnvironmentSource = async (
         // case (signalled differently per backend; mirror readLcc's suppression).
         const code = (err as { code?: string })?.code;
         const message = (err as Error)?.message ?? '';
-        const isMissing = code === 'ENOENT' ||
-            message.startsWith('Entry not found') ||
-            message.startsWith('HTTP error 404');
+        const isMissing =
+            code === 'ENOENT' || message.startsWith('Entry not found') || message.startsWith('HTTP error 404');
         if (!isMissing) {
             logger.warn(`failed to load environment.bin: ${message || err}`);
         }

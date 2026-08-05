@@ -1,5 +1,5 @@
 import { knnQueryBlock, KNN_SENTINEL } from './knn-core';
-import { type BlockRange, type ResidentPositions } from './partition';
+import type { BlockRange, ResidentPositions } from './partition';
 
 /**
  * A block's local point set: owned gaussians first (in the block's sorted
@@ -16,7 +16,7 @@ type BlockLocals = {
 };
 
 /** Local-slot marker: neighbour was fixed by verification; resolve via its global id. */
-const KNN_FIXED = 0xFFFFFFFE;
+const KNN_FIXED = 0xfffffffe;
 
 // Density-based halo radius: haloFactor × the Poisson estimate of the k-NN
 // radius from the block's AABB volume and count. Degenerate blocks (planar /
@@ -196,7 +196,14 @@ const toGlobalNeighbors = (locals: BlockLocals, nbLocal: Uint32Array): Uint32Arr
 };
 
 // Insert (g, d2) into the k-best arrays (ascending by distance).
-const kBestInsert = (bestIds: Uint32Array, bestD2: Float64Array, size: number, k: number, g: number, d2: number): number => {
+const kBestInsert = (
+    bestIds: Uint32Array,
+    bestD2: Float64Array,
+    size: number,
+    k: number,
+    g: number,
+    d2: number
+): number => {
     if (size === k && d2 >= bestD2[k - 1]) return size;
     let at = size < k ? size : k - 1;
     while (at > 0 && bestD2[at - 1] > d2) {
@@ -254,7 +261,9 @@ const verifyAndFixKnn = (
 
     for (let qi = 0; qi < locals.ownedCount; qi++) {
         const g = locals.ids[qi];
-        const qx = pos.x[g], qy = pos.y[g], qz = pos.z[g];
+        const qx = pos.x[g],
+            qy = pos.y[g],
+            qz = pos.z[g];
 
         let dkSq = 0;
         let sentinels = false;
@@ -264,17 +273,25 @@ const verifyAndFixKnn = (
                 sentinels = true;
                 continue;
             }
-            const dx = pos.x[nb] - qx, dy = pos.y[nb] - qy, dz = pos.z[nb] - qz;
+            const dx = pos.x[nb] - qx,
+                dy = pos.y[nb] - qy,
+                dz = pos.z[nb] - qz;
             const d2 = dx * dx + dy * dy + dz * dz;
             if (d2 > dkSq) dkSq = d2;
         }
 
         // Depth of q inside the block AABB (0 at/outside the boundary).
-        const depth = Math.max(0, Math.min(
-            qx - block.aabb[0], block.aabb[3] - qx,
-            qy - block.aabb[1], block.aabb[4] - qy,
-            qz - block.aabb[2], block.aabb[5] - qz
-        ));
+        const depth = Math.max(
+            0,
+            Math.min(
+                qx - block.aabb[0],
+                block.aabb[3] - qx,
+                qy - block.aabb[1],
+                block.aabb[4] - qy,
+                qz - block.aabb[2],
+                block.aabb[5] - qz
+            )
+        );
 
         const needFix = (sentinels && N - 1 >= k) || Math.sqrt(dkSq) > depth + h;
         if (!needFix) continue;
@@ -305,7 +322,9 @@ const verifyAndFixKnn = (
             for (let i = other.start; i < other.end; i++) {
                 const cand = order[i];
                 if (cand === g) continue;
-                const dx = pos.x[cand] - qx, dy = pos.y[cand] - qy, dz = pos.z[cand] - qz;
+                const dx = pos.x[cand] - qx,
+                    dy = pos.y[cand] - qy,
+                    dz = pos.z[cand] - qz;
                 const d2 = dx * dx + dy * dy + dz * dz;
                 if (size < k || d2 < bestD2[size - 1]) {
                     size = kBestInsert(bestIds, bestD2, size, k, cand, d2);
@@ -321,12 +340,4 @@ const verifyAndFixKnn = (
     return fixed;
 };
 
-export {
-    collectBlock,
-    knnBlockCpu,
-    toGlobalNeighbors,
-    verifyAndFixKnn,
-    haloRadius,
-    KNN_FIXED,
-    type BlockLocals
-};
+export { collectBlock, knnBlockCpu, toGlobalNeighbors, verifyAndFixKnn, haloRadius, KNN_FIXED, type BlockLocals };

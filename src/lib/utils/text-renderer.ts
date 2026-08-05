@@ -1,9 +1,11 @@
 import { fmtBytes, fmtTime } from './fmt';
-import { logger, verbosityRank, type LogEvent, type Renderer } from './logger';
+import { logger, verbosityRank } from './logger';
+import type { LogEvent, Renderer } from './logger';
 
 /**
  * Output streams and optional memory-usage probe for {@link TextRenderer}.
  */
+// eslint-disable-next-line @typescript-eslint/consistent-type-definitions -- preserve public declaration merging
 interface TextRendererOptions {
     /**
      * Receives all status chunks (scopes, bars, messages). May contain
@@ -122,8 +124,8 @@ class TextRenderer implements Renderer {
             case 'scopeStart': {
                 if (this.rank() < verbosityRank.normal) return;
                 this.commitDirty();
-                const numbered = event.index !== undefined && event.total !== undefined ?
-                    `[${event.index}/${event.total}] ` : '';
+                const numbered =
+                    event.index !== undefined && event.total !== undefined ? `[${event.index}/${event.total}] ` : '';
                 this.write(`${indent(event.depth)}\u25b8 ${numbered}${event.name}\n`);
                 return;
             }
@@ -150,8 +152,8 @@ class TextRenderer implements Renderer {
             case 'barTick': {
                 if (!this.lineDirty) return;
                 if (this.rank() < verbosityRank.normal) return;
-                const target = event.total <= 0 ? 0 :
-                    Math.min(BAR_WIDTH, Math.floor((event.current / event.total) * BAR_WIDTH));
+                const target =
+                    event.total <= 0 ? 0 : Math.min(BAR_WIDTH, Math.floor((event.current / event.total) * BAR_WIDTH));
                 if (target > this.barFilled) {
                     this.write('#'.repeat(target - this.barFilled));
                     this.barFilled = target;
@@ -160,9 +162,9 @@ class TextRenderer implements Renderer {
             }
             case 'barEnd': {
                 if (this.rank() < verbosityRank.normal) return;
-                const suffix = event.failed ?
-                    `] (failed) ${fmtTime(event.durationMs)}` :
-                    `] ${fmtTime(event.durationMs)}`;
+                const suffix = event.failed
+                    ? `] (failed) ${fmtTime(event.durationMs)}`
+                    : `] ${fmtTime(event.durationMs)}`;
                 if (this.lineDirty) {
                     const remaining = Math.max(0, BAR_WIDTH - this.barFilled);
                     this.write(`${'.'.repeat(remaining)}${suffix}${this.memSuffix()}\n`);
@@ -173,8 +175,10 @@ class TextRenderer implements Renderer {
                     // event (e.g. a child group/message). Emit a recap
                     // line whose fill reflects actual progress, so bars
                     // that ended early or failed don't read as complete.
-                    const filled = event.total <= 0 ? 0 :
-                        Math.min(BAR_WIDTH, Math.floor((event.current / event.total) * BAR_WIDTH));
+                    const filled =
+                        event.total <= 0
+                            ? 0
+                            : Math.min(BAR_WIDTH, Math.floor((event.current / event.total) * BAR_WIDTH));
                     const bar = `${'#'.repeat(filled)}${'.'.repeat(BAR_WIDTH - filled)}`;
                     this.write(`${indent(event.depth)}\u25b8 ${event.name} [${bar}${suffix}${this.memSuffix()}\n`);
                 }

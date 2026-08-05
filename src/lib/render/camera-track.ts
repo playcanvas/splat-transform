@@ -42,14 +42,14 @@ type TrackPose = {
 const DEFAULT_UP: Vec3Like = { x: 0, y: 1, z: 0 };
 
 /** A camera animation track evaluated in frame time. */
-interface CameraTrack {
+type CameraTrack = {
     /** Frames per second. */
     frameRate: number;
     /** Frames the track defines, rendered as `0 … frameCount − 1`. */
     frameCount: number;
     /** Pose at a (fractional) frame time. */
     poseAt(frame: number): TrackPose;
-}
+};
 
 /**
  * Cubic Hermite spline over multi-dimensional points; a port of the
@@ -190,7 +190,15 @@ const finiteNumber = (v: unknown, what: string, dflt?: number): number => {
  * @param up - Up vector shared by every pose (the formats have no per-key up).
  * @returns The track.
  */
-const splineTrack = (keys: Keyframes, frameRate: number, frameCount: number, smoothness: number, loopLength: number | null, step: boolean, up: Vec3Like): CameraTrack => {
+const splineTrack = (
+    keys: Keyframes,
+    frameRate: number,
+    frameCount: number,
+    smoothness: number,
+    loopLength: number | null,
+    step: boolean,
+    up: Vec3Like
+): CameraTrack => {
     const { times, points } = keys;
     const result = new Array<number>(7);
     const toPose = (): TrackPose => ({
@@ -200,7 +208,12 @@ const splineTrack = (keys: Keyframes, frameRate: number, frameCount: number, smo
         fov: result[6]
     });
     if (times.length === 1) {
-        const p: TrackPose = { position: { x: points[0], y: points[1], z: points[2] }, target: { x: points[3], y: points[4], z: points[5] }, up, fov: points[6] };
+        const p: TrackPose = {
+            position: { x: points[0], y: points[1], z: points[2] },
+            target: { x: points[3], y: points[4], z: points[5] },
+            up,
+            fov: points[6]
+        };
         return { frameRate, frameCount, poseAt: () => p };
     }
     if (step) {
@@ -215,9 +228,10 @@ const splineTrack = (keys: Keyframes, frameRate: number, frameCount: number, smo
             }
         };
     }
-    const spline = loopLength !== null ?
-        CubicSpline.fromPointsLooping(loopLength, times, points, smoothness) :
-        CubicSpline.fromPoints(times, points, smoothness);
+    const spline =
+        loopLength !== null
+            ? CubicSpline.fromPointsLooping(loopLength, times, points, smoothness)
+            : CubicSpline.fromPoints(times, points, smoothness);
     return {
         frameRate,
         frameCount,
@@ -251,9 +265,9 @@ const fromEditorDocument = (doc: any, defaultFov: number, up: Vec3Like): CameraT
         throw new Error('camera track: the project has no camera poses');
     }
     const ordered = poses
-    .map((p, i) => ({ frame: finiteNumber(p.frame, `poses[${i}].frame`, i * frameRate), p }))
-    .filter(e => e.frame < frameCount)
-    .sort((a, b) => a.frame - b.frame);
+        .map((p, i) => ({ frame: finiteNumber(p.frame, `poses[${i}].frame`, i * frameRate), p }))
+        .filter((e) => e.frame < frameCount)
+        .sort((a, b) => a.frame - b.frame);
     if (ordered.length === 0) {
         throw new Error('camera track: every pose lies past the end of the timeline');
     }
@@ -263,7 +277,15 @@ const fromEditorDocument = (doc: any, defaultFov: number, up: Vec3Like): CameraT
         const position = vec3Of(p.position, 'pose position');
         const target = vec3Of(p.target, 'pose target');
         times.push(frame);
-        points.push(position.x, position.y, position.z, target.x, target.y, target.z, finiteNumber(p.fov, 'pose fov', docFov));
+        points.push(
+            position.x,
+            position.y,
+            position.z,
+            target.x,
+            target.y,
+            target.z,
+            finiteNumber(p.fov, 'pose fov', docFov)
+        );
     }
     return splineTrack({ times, points }, frameRate, frameCount, smoothness, loop ? frameCount : null, false, up);
 };
@@ -300,7 +322,15 @@ const fromViewerSettings = (settings: any, up: Vec3Like): CameraTrack => {
     const extra = duration === times[times.length - 1] / frameRate ? 1 : 0;
     const loopLength = track.loopMode === 'repeat' ? (duration + extra) * frameRate : null;
     const frameCount = Math.round(duration * frameRate);
-    return splineTrack({ times, points }, frameRate, frameCount, smoothness, loopLength, track.interpolation === 'step', up);
+    return splineTrack(
+        { times, points },
+        frameRate,
+        frameCount,
+        smoothness,
+        loopLength,
+        track.interpolation === 'step',
+        up
+    );
 };
 
 const unitVec3 = (v: Vec3Like, what: string): Vec3Like => {
@@ -344,21 +374,29 @@ const fromFrameList = (json: any, defaultFov: number, defaultUp: Vec3Like): Came
         const b = poses[i].up;
         let mid: Vec3Like | null = null;
         if (a.x * b.x + a.y * b.y + a.z * b.z < -1 + 1e-6) {
-            const fx = target.x - position.x, fy = target.y - position.y, fz = target.z - position.z;
-            const rx = fy * a.z - fz * a.y, ry = fz * a.x - fx * a.z, rz = fx * a.y - fy * a.x;
+            const fx = target.x - position.x,
+                fy = target.y - position.y,
+                fz = target.z - position.z;
+            const rx = fy * a.z - fz * a.y,
+                ry = fz * a.x - fx * a.z,
+                rz = fx * a.y - fy * a.x;
             const rlen = Math.hypot(rx, ry, rz);
             // A degenerate frame (target at the position, or up along the view) has no
             // right vector; leave it for the renderer's pose checks to report.
             if (rlen > 0) {
                 mid = { x: rx / rlen, y: ry / rlen, z: rz / rlen };
-                logger.warn(`camera track: frames[${i - 1}].up and frames[${i}].up point in opposite directions; rolling through the camera's right side`);
+                logger.warn(
+                    `camera track: frames[${i - 1}].up and frames[${i}].up point in opposite directions; rolling through the camera's right side`
+                );
             }
         }
         mids.push(mid);
     }
     const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
     const nlerpUp = (a: Vec3Like, b: Vec3Like, t: number): Vec3Like => {
-        const ux = lerp(a.x, b.x, t), uy = lerp(a.y, b.y, t), uz = lerp(a.z, b.z, t);
+        const ux = lerp(a.x, b.x, t),
+            uy = lerp(a.y, b.y, t),
+            uz = lerp(a.z, b.z, t);
         const ulen = Math.hypot(ux, uy, uz) || 1;
         return { x: ux / ulen, y: uy / ulen, z: uz / ulen };
     };
@@ -370,13 +408,25 @@ const fromFrameList = (json: any, defaultFov: number, defaultUp: Vec3Like): Came
             const i0 = Math.floor(f);
             const i1 = Math.min(i0 + 1, poses.length - 1);
             const t = f - i0;
-            const a = poses[i0], b = poses[i1];
+            const a = poses[i0],
+                b = poses[i1];
             const mid = i0 < i1 ? mids[i0] : null;
-            const up = !mid ? nlerpUp(a.up, b.up, t) :
-                t < 0.5 ? nlerpUp(a.up, mid, t * 2) : nlerpUp(mid, b.up, t * 2 - 1);
+            const up = !mid
+                ? nlerpUp(a.up, b.up, t)
+                : t < 0.5
+                  ? nlerpUp(a.up, mid, t * 2)
+                  : nlerpUp(mid, b.up, t * 2 - 1);
             return {
-                position: { x: lerp(a.position.x, b.position.x, t), y: lerp(a.position.y, b.position.y, t), z: lerp(a.position.z, b.position.z, t) },
-                target: { x: lerp(a.target.x, b.target.x, t), y: lerp(a.target.y, b.target.y, t), z: lerp(a.target.z, b.target.z, t) },
+                position: {
+                    x: lerp(a.position.x, b.position.x, t),
+                    y: lerp(a.position.y, b.position.y, t),
+                    z: lerp(a.position.z, b.position.z, t)
+                },
+                target: {
+                    x: lerp(a.target.x, b.target.x, t),
+                    y: lerp(a.target.y, b.target.y, t),
+                    z: lerp(a.target.z, b.target.z, t)
+                },
                 up,
                 fov: lerp(a.fov, b.fov, t)
             };
@@ -402,7 +452,9 @@ const loadCameraTrack = (json: unknown, defaultFov: number, defaultUp: Vec3Like 
     if (Array.isArray(j.poseSets) && j.timeline) return fromEditorDocument(j, defaultFov, defaultUp);
     if (Array.isArray(j.animTracks)) return fromViewerSettings(j, defaultUp);
     if (Array.isArray(j.frames)) return fromFrameList(j, defaultFov, defaultUp);
-    throw new Error('camera track: unrecognised format (expected an editor document with poseSets/timeline, viewer settings with animTracks, or a frames list)');
+    throw new Error(
+        'camera track: unrecognised format (expected an editor document with poseSets/timeline, viewer settings with animTracks, or a frames list)'
+    );
 };
 
 export { loadCameraTrack, CubicSpline, type CameraTrack, type TrackPose };

@@ -19,7 +19,7 @@
  *
  * @returns WGSL source for the binned-rasterize compute shader.
  */
-const rasterizeBinnedWgsl = () => /* wgsl */`
+const rasterizeBinnedWgsl = () => /* wgsl */ `
 #include "uniformsStruct"
 #include "constants"
 

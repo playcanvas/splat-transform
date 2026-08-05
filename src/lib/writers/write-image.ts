@@ -1,16 +1,20 @@
 import { basename } from 'pathe';
 import { Vec3 } from 'playcanvas';
 
-import { frameFilename, logWrittenFile } from './utils';
-import { type ChunkDataPool, type ChunkSource } from '../chunk';
+import type { ChunkDataPool, ChunkSource } from '../chunk';
 import { computeWriteTransform } from '../data-table';
-import { type FileSystem, writeFile } from '../io/write';
-import { SceneRenderer, type SceneTier } from '../render';
-import { type Projection, type RenderCamera, buildApertureCameras } from '../render/camera';
-import { type CameraTrack } from '../render/camera-track';
+import { writeFile } from '../io/write';
+import type { FileSystem } from '../io/write';
+import { SceneRenderer } from '../render';
+import type { SceneTier } from '../render';
+import { buildApertureCameras } from '../render/camera';
+import type { Projection, RenderCamera } from '../render/camera';
+import type { CameraTrack } from '../render/camera-track';
 import type { DeviceCreator } from '../types';
 import { fmtBytes, fmtTime, logger, Transform, WebPCodec } from '../utils';
 import { runEncodeWebp, WorkerQueue } from '../workers';
+
+import { frameFilename, logWrittenFile } from './utils';
 
 type Vec3Like = { x: number; y: number; z: number };
 
@@ -239,10 +243,14 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     let { fov, width, height } = options;
     if (projection === 'equirect') {
         if (fov !== undefined) {
-            throw new Error('writeImage: --camera-fov is not valid with --projection equirect (the projection covers a full 360°×180° sphere).');
+            throw new Error(
+                'writeImage: --camera-fov is not valid with --projection equirect (the projection covers a full 360°×180° sphere).'
+            );
         }
         if (fStop !== undefined) {
-            throw new Error('writeImage: --f-stop is not valid with --projection equirect (defocus blur needs a focal length, which the equirect projection does not have).');
+            throw new Error(
+                'writeImage: --f-stop is not valid with --projection equirect (defocus blur needs a focal length, which the equirect projection does not have).'
+            );
         }
         if (dofSamples !== undefined) {
             throw new Error('writeImage: --dof-samples is not valid with --projection equirect.');
@@ -257,7 +265,9 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
             width = 2048;
             height = 1024;
         } else if (width === undefined || height === undefined) {
-            throw new Error('writeImage: equirect requires either both width and height, or neither (defaults to 2048x1024).');
+            throw new Error(
+                'writeImage: equirect requires either both width and height, or neither (defaults to 2048x1024).'
+            );
         }
         if (width !== 2 * height) {
             throw new Error(`writeImage: equirect requires width === 2 × height (got ${width}x${height}).`);
@@ -291,9 +301,11 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     // for missing `camera-target-end` / `camera-up-end` so pure translations
     // don't need redundant flags. Along a track it is enabled by `--shutter`.
     if (cameraTrack && cameraEndPosition) {
-        throw new Error('writeImage: --camera-pos-end is not valid with --camera-track; motion blur along a track comes from --shutter.');
+        throw new Error(
+            'writeImage: --camera-pos-end is not valid with --camera-track; motion blur along a track comes from --shutter.'
+        );
     }
-    const motionEnabled = cameraTrack ? (shutter !== undefined && shutter > 0) : cameraEndPosition !== undefined;
+    const motionEnabled = cameraTrack ? shutter !== undefined && shutter > 0 : cameraEndPosition !== undefined;
     const motionN = motionEnabled ? (motionSamples ?? DEFAULT_MOTION_SAMPLES) : 1;
     const motionShutter = motionEnabled ? (shutter ?? 0.5) : 0;
     if (motionEnabled && (motionShutter < 0 || motionShutter > 1)) {
@@ -313,7 +325,9 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
             throw new Error(`writeImage: invalid frame range ${frameStart}-${frameEnd}.`);
         }
         if (frameEnd >= cameraTrack.frameCount) {
-            throw new Error(`writeImage: frame range ${frameStart}-${frameEnd} exceeds the track's ${cameraTrack.frameCount} frames (0-${cameraTrack.frameCount - 1}).`);
+            throw new Error(
+                `writeImage: frame range ${frameStart}-${frameEnd} exceeds the track's ${cameraTrack.frameCount} frames (0-${cameraTrack.frameCount - 1}).`
+            );
         }
     }
     const frameCount = frameEnd - frameStart + 1;
@@ -354,28 +368,33 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     // pose (normalized lerp for `up` so it stays unit-length when the two
     // differ in direction) and the shutter window is centered on 0.5. Along
     // a track, t is a frame time and the window is centered on the frame.
-    const poseAt: (t: number) => Pose = cameraTrack ?
-        (t) => {
-            const p = cameraTrack.poseAt(t);
-            return { pos: toDataPoint(p.position), tgt: toDataPoint(p.target), up: p.up ? toDataDir(p.up) : upStart, fov: projection === 'equirect' ? 0 : p.fov };
-        } :
-        (t) => {
-            const pos = {
-                x: camStart.x + (camEnd.x - camStart.x) * t,
-                y: camStart.y + (camEnd.y - camStart.y) * t,
-                z: camStart.z + (camEnd.z - camStart.z) * t
-            };
-            const tgt = {
-                x: lookStart.x + (lookEnd.x - lookStart.x) * t,
-                y: lookStart.y + (lookEnd.y - lookStart.y) * t,
-                z: lookStart.z + (lookEnd.z - lookStart.z) * t
-            };
-            const ux = upStart.x + (upEndR.x - upStart.x) * t;
-            const uy = upStart.y + (upEndR.y - upStart.y) * t;
-            const uz = upStart.z + (upEndR.z - upStart.z) * t;
-            const ulen = Math.hypot(ux, uy, uz) || 1;
-            return { pos, tgt, up: { x: ux / ulen, y: uy / ulen, z: uz / ulen }, fov: optionFov };
-        };
+    const poseAt: (t: number) => Pose = cameraTrack
+        ? (t) => {
+              const p = cameraTrack.poseAt(t);
+              return {
+                  pos: toDataPoint(p.position),
+                  tgt: toDataPoint(p.target),
+                  up: p.up ? toDataDir(p.up) : upStart,
+                  fov: projection === 'equirect' ? 0 : p.fov
+              };
+          }
+        : (t) => {
+              const pos = {
+                  x: camStart.x + (camEnd.x - camStart.x) * t,
+                  y: camStart.y + (camEnd.y - camStart.y) * t,
+                  z: camStart.z + (camEnd.z - camStart.z) * t
+              };
+              const tgt = {
+                  x: lookStart.x + (lookEnd.x - lookStart.x) * t,
+                  y: lookStart.y + (lookEnd.y - lookStart.y) * t,
+                  z: lookStart.z + (lookEnd.z - lookStart.z) * t
+              };
+              const ux = upStart.x + (upEndR.x - upStart.x) * t;
+              const uy = upStart.y + (upEndR.y - upStart.y) * t;
+              const uz = upStart.z + (upEndR.z - upStart.z) * t;
+              const ulen = Math.hypot(ux, uy, uz) || 1;
+              return { pos, tgt, up: { x: ux / ulen, y: uy / ulen, z: uz / ulen }, fov: optionFov };
+          };
 
     const g = logger.group('Render');
 
@@ -394,7 +413,9 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
             } else {
                 const fwdLen = Math.hypot(tgt.x - pos.x, tgt.y - pos.y, tgt.z - pos.z);
                 if (fwdLen === 0) {
-                    throw new Error('writeImage: cannot derive default --focus-distance because the camera position equals its target.');
+                    throw new Error(
+                        'writeImage: cannot derive default --focus-distance because the camera position equals its target.'
+                    );
                 }
                 fDist = fwdLen;
             }
@@ -421,12 +442,16 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     if (projection === 'equirect') {
         logger.info(`${width}x${height} equirect`);
     } else if (dofEnabled) {
-        logger.info(`${width}x${height} fov ${+firstPose.fov.toFixed(3)}° f/${fStop} focus ${startCamera.focusDistance!.toFixed(3)} sensor ${options.sensorSize ?? 0.024}, ${dofN} aperture samples`);
+        logger.info(
+            `${width}x${height} fov ${+firstPose.fov.toFixed(3)}° f/${fStop} focus ${startCamera.focusDistance!.toFixed(3)} sensor ${options.sensorSize ?? 0.024}, ${dofN} aperture samples`
+        );
     } else {
         logger.info(`${width}x${height} fov ${+firstPose.fov.toFixed(3)}°`);
     }
     if (cameraTrack) {
-        logger.info(`camera track: frames ${frameStart}-${frameEnd} of ${cameraTrack.frameCount} at ${cameraTrack.frameRate} fps`);
+        logger.info(
+            `camera track: frames ${frameStart}-${frameEnd} of ${cameraTrack.frameCount} at ${cameraTrack.frameRate} fps`
+        );
     }
     if (motionEnabled) {
         logger.info(`motion blur: shutter ${motionShutter}, ${motionN} sample${motionN === 1 ? '' : 's'}`);
@@ -444,7 +469,7 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         residentBudget
     });
     const tierNote: Record<SceneTier, string> = {
-        'resident': 'scene resident on GPU',
+        resident: 'scene resident on GPU',
         'streamed-gpu': 'scene streamed per pass, positions and depth sort on GPU',
         'streamed-cpu': 'scene streamed per pass, depth sort on CPU'
     };
@@ -479,7 +504,7 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
             // of pixels.
             const instants: RenderCamera[] = [];
             for (let i = 0; i < motionN; i++) {
-                instants.push(...apertureViews(buildCamera(poseAt(t0 + (t1 - t0) * (i + 0.5) / motionN))));
+                instants.push(...apertureViews(buildCamera(poseAt(t0 + ((t1 - t0) * (i + 0.5)) / motionN))));
             }
             return scene.renderSlices(instants);
         };
@@ -518,7 +543,9 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
                 const t0 = performance.now();
                 const rgba = await renderFrame(f, halfWin);
                 renderMs += performance.now() - t0;
-                const job: Promise<void> = encodeFrame(rgba, frameFilename(filename, f, frameEnd)).finally(() => pending.delete(job));
+                const job: Promise<void> = encodeFrame(rgba, frameFilename(filename, f, frameEnd)).finally(() =>
+                    pending.delete(job)
+                );
                 pending.add(job);
                 if (pending.size >= MAX_PENDING_ENCODES) await Promise.race(pending);
                 if (encodeError) throw encodeError;
@@ -530,7 +557,9 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
             const first = basename(frameFilename(filename, frameStart, frameEnd));
             const last = basename(frameFilename(filename, frameEnd, frameEnd));
             const where = WorkerQueue.isInline ? 'inline' : 'on worker threads';
-            logger.info(`${frameCount} frames ${first} … ${last} (${fmtBytes(totalBytes)}): render ${fmtTime(renderMs)}, total ${fmtTime(performance.now() - tStart)} with encode ${where}`);
+            logger.info(
+                `${frameCount} frames ${first} … ${last} (${fmtBytes(totalBytes)}): render ${fmtTime(renderMs)}, total ${fmtTime(performance.now() - tStart)} with encode ${where}`
+            );
         }
     } finally {
         scene.destroy();

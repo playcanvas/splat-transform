@@ -11,7 +11,7 @@
  * The output covariance feeds the Jacobian chunks (pinhole / equirect)
  * to derive the 2D screen-space covariance via cov2D = J · cov3D · Jᵀ.
  */
-const covariance3D = /* wgsl */`
+const covariance3D = /* wgsl */ `
     let sx = exp(lsX);
     let sy = exp(lsY);
     let sz = exp(lsZ);

@@ -18,7 +18,7 @@
  * j[1][0] != 0, so cov = J·Σ·Jᵀ carries the extra u00·jy0 / u10·jy0 /
  * u11·jy0 terms that the pinhole simplification dropped.
  */
-const jacobianEquirect = /* wgsl */`
+const jacobianEquirect = /* wgsl */ `
     let kx = imgWf * invTwoPi;
     let ky = imgHf * invPi;
     let invRxzC2 = 1.0 / (rxzClamped * rxzClamped);

@@ -9,7 +9,7 @@
  * radiance. Channel-major SH layout: `f_rest_0..N-1` red, then green,
  * then blue.
  */
-const shBand1 = /* wgsl */`
+const shBand1 = /* wgsl */ `
     {
         let n = COEFFS_PER_CHANNEL;
         let b0 = -SH_C1 * dirY;

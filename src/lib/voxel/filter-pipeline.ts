@@ -1,20 +1,22 @@
-import { type BlockGridParams } from './voxel-query';
-import { Column, DataTable, computeGaussianExtents, type Bounds, type GaussianExtentsResult, type GaussianColumns, computeWriteTransform, transformColumns } from '../data-table';
+import { Column, DataTable, computeGaussianExtents, computeWriteTransform, transformColumns } from '../data-table';
+import type { Bounds, GaussianExtentsResult, GaussianColumns } from '../data-table';
 import { GpuVoxelization } from '../gpu';
 import { GaussianBVH } from '../spatial';
 import type { DeviceCreator } from '../types';
 import { Transform } from '../utils';
 
+import type { BlockGridParams } from './voxel-query';
+
 /**
  * Context produced by the shared voxel filter setup pipeline.
  */
-interface VoxelFilterContext {
+type VoxelFilterContext = {
     pcDataTable: DataTable;
     extentsResult: GaussianExtentsResult;
     sceneBounds: Bounds;
     bvh: GaussianBVH;
     gpuVoxelization: GpuVoxelization | null;
-}
+};
 
 /**
  * Set up the common voxelization pipeline used by both filterCluster and filterFloaters.
@@ -26,25 +28,29 @@ interface VoxelFilterContext {
  * @param createDevice - Function to create a GPU device for voxelization.
  * @returns Context containing all shared resources.
  */
-const setupVoxelFilter = async (
-    dataTable: DataTable,
-    createDevice: DeviceCreator
-): Promise<VoxelFilterContext> => {
+const setupVoxelFilter = async (dataTable: DataTable, createDevice: DeviceCreator): Promise<VoxelFilterContext> => {
     const voxelColumns = [
-        'x', 'y', 'z',
-        'rot_0', 'rot_1', 'rot_2', 'rot_3',
-        'scale_0', 'scale_1', 'scale_2',
+        'x',
+        'y',
+        'z',
+        'rot_0',
+        'rot_1',
+        'rot_2',
+        'rot_3',
+        'scale_0',
+        'scale_1',
+        'scale_2',
         'opacity'
     ];
     const delta = computeWriteTransform(dataTable.transform, Transform.IDENTITY);
     const cols = transformColumns(dataTable, voxelColumns, delta);
 
-    const missing = voxelColumns.filter(name => !cols.has(name));
+    const missing = voxelColumns.filter((name) => !cols.has(name));
     if (missing.length > 0) {
         throw new Error(`setupVoxelFilter: input DataTable is missing required columns: ${missing.join(', ')}`);
     }
 
-    const pcDataTable = new DataTable(voxelColumns.map(name => new Column(name, cols.get(name)!)));
+    const pcDataTable = new DataTable(voxelColumns.map((name) => new Column(name, cols.get(name)!)));
 
     const extentsResult = computeGaussianExtents(pcDataTable);
     const sceneBounds = extentsResult.sceneBounds;
@@ -113,9 +119,4 @@ const buildBlockGridParams = (gridBounds: Bounds, voxelResolution: number): Bloc
     };
 };
 
-export {
-    setupVoxelFilter,
-    buildGaussianColumns,
-    buildBlockGridParams,
-    type VoxelFilterContext
-};
+export { setupVoxelFilter, buildGaussianColumns, buildBlockGridParams, type VoxelFilterContext };

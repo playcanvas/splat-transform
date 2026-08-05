@@ -1,18 +1,11 @@
-import {
-    setupVoxelFilter,
-    buildGaussianColumns,
-    buildBlockGridParams,
-    type VoxelFilterContext
-} from './filter-pipeline';
-import {
-    buildBlockLookup,
-    isCenterInOccupiedVoxel,
-    gaussianContributesToVoxels
-} from './voxel-query';
-import { alignGridBounds, voxelizeToBuffer } from './voxelize';
-import { DataTable } from '../data-table';
+import type { DataTable } from '../data-table';
 import type { DeviceCreator } from '../types';
 import { fmtCount, fmtDistance, logger } from '../utils';
+
+import { setupVoxelFilter, buildGaussianColumns, buildBlockGridParams } from './filter-pipeline';
+import type { VoxelFilterContext } from './filter-pipeline';
+import { buildBlockLookup, isCenterInOccupiedVoxel, gaussianContributesToVoxels } from './voxel-query';
+import { alignGridBounds, voxelizeToBuffer } from './voxelize';
 
 /**
  * Remove Gaussians that don't meaningfully contribute to any solid voxel.
@@ -32,8 +25,8 @@ import { fmtCount, fmtDistance, logger } from '../utils';
 const filterFloaters = async (
     dataTable: DataTable,
     createDevice: DeviceCreator,
-    voxelResolution: number = 0.05,
-    opacityCutoff: number = 0.1,
+    voxelResolution = 0.05,
+    opacityCutoff = 0.1,
     minContribution: number = 1 / 255
 ): Promise<DataTable> => {
     if (!Number.isFinite(voxelResolution) || voxelResolution <= 0) {
@@ -71,8 +64,12 @@ const filterFloaters = async (
         const sceneExtentZ = ctx.sceneBounds.max.z - ctx.sceneBounds.min.z;
 
         const gridBounds = alignGridBounds(
-            ctx.sceneBounds.min.x, ctx.sceneBounds.min.y, ctx.sceneBounds.min.z,
-            ctx.sceneBounds.max.x, ctx.sceneBounds.max.y, ctx.sceneBounds.max.z,
+            ctx.sceneBounds.min.x,
+            ctx.sceneBounds.min.y,
+            ctx.sceneBounds.min.z,
+            ctx.sceneBounds.max.x,
+            ctx.sceneBounds.max.y,
+            ctx.sceneBounds.max.z,
             voxelResolution
         );
 
@@ -82,10 +79,16 @@ const filterFloaters = async (
         const nz = grid.numBlocksZ * 4;
         const totalVoxels = nx * ny * nz;
 
-        logger.info(`scene: ${fmtDistance(sceneExtentX)} x ${fmtDistance(sceneExtentY)} x ${fmtDistance(sceneExtentZ)}, grid: ${nx} x ${ny} x ${nz} voxels (${fmtCount(totalVoxels)}) @ ${fmtDistance(voxelResolution)}`);
+        logger.info(
+            `scene: ${fmtDistance(sceneExtentX)} x ${fmtDistance(sceneExtentY)} x ${fmtDistance(sceneExtentZ)}, grid: ${nx} x ${ny} x ${nz} voxels (${fmtCount(totalVoxels)}) @ ${fmtDistance(voxelResolution)}`
+        );
 
         const buffer = await voxelizeToBuffer(
-            ctx.bvh, ctx.gpuVoxelization!, gridBounds, voxelResolution, opacityCutoff
+            ctx.bvh,
+            ctx.gpuVoxelization!,
+            gridBounds,
+            voxelResolution,
+            opacityCutoff
         );
 
         ctx.gpuVoxelization.destroy();
@@ -93,7 +96,9 @@ const filterFloaters = async (
 
         const lookup = buildBlockLookup(buffer);
 
-        logger.info(`occupied blocks: ${fmtCount(lookup.solidCount + lookup.mixedCount)} (${fmtCount(lookup.solidCount)} solid, ${fmtCount(lookup.mixedCount)} mixed)`);
+        logger.info(
+            `occupied blocks: ${fmtCount(lookup.solidCount + lookup.mixedCount)} (${fmtCount(lookup.solidCount)} solid, ${fmtCount(lookup.mixedCount)} mixed)`
+        );
 
         const gaussianCols = buildGaussianColumns(ctx);
         const keepIndices: number[] = [];

@@ -17,7 +17,7 @@
  * `BlockMaskMap.slot` formula so the GPU's hash probe lands in the same
  * slot.
  */
-const dilationConstants = /* wgsl */`
+const dilationConstants = /* wgsl */ `
 const BLOCK_EMPTY: u32 = 0u;
 const BLOCK_SOLID: u32 = 1u;
 const BLOCK_MIXED: u32 = 2u;
@@ -38,7 +38,7 @@ const FIBONACCI_HASH: u32 = 0x9E3779B9u;
  *
  * @returns WGSL source for the extract compute shader.
  */
-const extractWgsl = () => /* wgsl */`
+const extractWgsl = () => /* wgsl */ `
 ${dilationConstants}
 
 struct ExtractUniforms {
@@ -145,7 +145,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
  *
  * @returns WGSL source for the compact compute shader.
  */
-const compactWgsl = () => /* wgsl */`
+const compactWgsl = () => /* wgsl */ `
 ${dilationConstants}
 
 struct CompactUniforms {
@@ -227,7 +227,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
  *
  * @returns WGSL source for the clear compute shader.
  */
-const clearWgsl = () => /* wgsl */`
+const clearWgsl = () => /* wgsl */ `
 struct ClearUniforms {
     clearNumWords: u32,
     clearRowStride: u32
@@ -263,7 +263,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
  *
  * @returns WGSL source for the X-axis dilation compute shader.
  */
-const dilateXWgsl = () => /* wgsl */`
+const dilateXWgsl = () => /* wgsl */ `
 struct DilateXUniforms {
     numXWords: u32,
     ny: u32,
@@ -340,7 +340,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
  *
  * @returns WGSL source for the Y/Z-axis dilation compute shader.
  */
-const dilateYZWgsl = () => /* wgsl */`
+const dilateYZWgsl = () => /* wgsl */ `
 struct DilateYZUniforms {
     numXWords: u32,
     ny: u32,

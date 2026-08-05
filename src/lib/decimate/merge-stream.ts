@@ -1,8 +1,10 @@
-import { type DestBuffers } from './block-producer';
-import { type ResidentPositions } from './partition';
-import { gatherBlockView, indexOfSorted, type PriorityContext } from './priority';
-import { type SelectionResult } from './select';
 import { WorkerQueue } from '../workers';
+
+import type { DestBuffers } from './block-producer';
+import type { ResidentPositions } from './partition';
+import { gatherBlockView, indexOfSorted } from './priority';
+import type { PriorityContext } from './priority';
+import type { SelectionResult } from './select';
 
 /** Context for the merge stream: the priority context plus the selection. */
 type MergeStreamContext = Pick<PriorityContext, 'source' | 'pool' | 'pos' | 'order' | 'blocks'> & {
@@ -32,7 +34,7 @@ type MergeStreamContext = Pick<PriorityContext, 'source' | 'pool' | 'pos' | 'ord
  * @param tick - Optional progress callback (owned gaussians processed).
  * @yields The filled row count for each completed chunk.
  */
-async function *mergeStream(
+async function* mergeStream(
     ctx: MergeStreamContext,
     chunkSize: number,
     tick?: (n: number) => void
@@ -47,7 +49,7 @@ async function *mergeStream(
 
     let rows = 0;
     let emitted = 0;
-    let dest = yield 0;   // priming handshake: the first real chunk's views
+    let dest = yield 0; // priming handshake: the first real chunk's views
 
     for (let bi = 0; bi < blocks.length; bi++) {
         const block = blocks[bi];
@@ -110,17 +112,25 @@ async function *mergeStream(
                     mi++;
                 }
             }
-            const transfer: ArrayBuffer[] = [mPos.buffer as ArrayBuffer, mGeo.buffer as ArrayBuffer, mColor.buffer as ArrayBuffer];
+            const transfer: ArrayBuffer[] = [
+                mPos.buffer as ArrayBuffer,
+                mGeo.buffer as ArrayBuffer,
+                mColor.buffer as ArrayBuffer
+            ];
             if (mOther) transfer.push(mOther.buffer as ArrayBuffer);
-            const merged = await WorkerQueue.run('mergeGroups', {
-                pos: mPos,
-                geo: mGeo,
-                color: mColor,
-                sizes,
-                colorDim,
-                other: mOther,
-                otherDim
-            }, transfer);
+            const merged = await WorkerQueue.run(
+                'mergeGroups',
+                {
+                    pos: mPos,
+                    geo: mGeo,
+                    color: mColor,
+                    sizes,
+                    colorDim,
+                    other: mOther,
+                    otherDim
+                },
+                transfer
+            );
             mergedPos = merged.pos;
             mergedGeo = merged.geo;
             mergedColor = merged.color;
@@ -132,7 +142,7 @@ async function *mergeStream(
         for (let i = 0; i < nOwned; i++) {
             const g = owned[i];
             const mg = memberGroup[g];
-            if (mg !== -1 && groupMin[mg] !== g) continue;   // consumed member
+            if (mg !== -1 && groupMin[mg] !== g) continue; // consumed member
 
             let px: number, py: number, pz: number;
             if (mg === -1) {
@@ -150,8 +160,10 @@ async function *mergeStream(
                 py = mergedPos![mi * 3 + 1];
                 pz = mergedPos![mi * 3 + 2];
                 if (dest.geometric) dest.geometric.set(mergedGeo!.subarray(mi * 8, mi * 8 + 8), rows * 8);
-                if (dest.color) dest.color.set(mergedColor!.subarray(mi * colorDim, (mi + 1) * colorDim), rows * colorDim);
-                if (dest.other) dest.other.set(mergedOther!.subarray(mi * otherDim, (mi + 1) * otherDim), rows * otherDim);
+                if (dest.color)
+                    dest.color.set(mergedColor!.subarray(mi * colorDim, (mi + 1) * colorDim), rows * colorDim);
+                if (dest.other)
+                    dest.other.set(mergedOther!.subarray(mi * otherDim, (mi + 1) * otherDim), rows * otherDim);
             }
             if (dest.position) {
                 dest.position[rows * 3] = px;

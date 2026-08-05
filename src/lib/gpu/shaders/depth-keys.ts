@@ -20,7 +20,7 @@
  *
  * @returns WGSL source.
  */
-const depthKeysWgsl = (): string => /* wgsl */`
+const depthKeysWgsl = (): string => /* wgsl */ `
 #include "uniformsStruct"
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;

@@ -1,14 +1,6 @@
 import { decompress as decompressZstd } from 'fzstd';
 
-import { fileChunkSource } from './reader-utils';
 import {
-    type ReadRequest,
-    type ChunkSource,
-    type ChunkSourceMetadata,
-    type ChunkDataPool,
-    type ChunkLayer,
-    type LayerLayout,
-    type SHBands,
     SH_REST_COUNTS,
     POSITION_STRIDE,
     GEOMETRIC_STRIDE,
@@ -17,8 +9,19 @@ import {
     geometricFields,
     colorFields
 } from '../chunk';
-import { ReadSource } from '../io/read';
+import type {
+    ReadRequest,
+    ChunkSource,
+    ChunkSourceMetadata,
+    ChunkDataPool,
+    ChunkLayer,
+    LayerLayout,
+    SHBands
+} from '../chunk';
+import type { ReadSource } from '../io/read';
 import { Transform } from '../utils';
+
+import { fileChunkSource } from './reader-utils';
 
 // Niantic Spatial .spz format. Pure-JS, lazy/layered decode (no WASM): v2/v3 are
 // a single gzip stream with a 16-byte header; v4 is a 32-byte plaintext header +
@@ -88,7 +91,8 @@ const parseSpz = async (source: ReadSource): Promise<SpzStreams | null> => {
     }
 
     const magicView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset, MIN_HEADER_SIZE);
-    if (magicView.getUint32(0, true) !== 0x5053474e) { // 'NGSP'
+    if (magicView.getUint32(0, true) !== 0x5053474e) {
+        // 'NGSP'
         throw new Error('invalid .spz file header');
     }
 
@@ -117,10 +121,10 @@ const parseSpz = async (source: ReadSource): Promise<SpzStreams | null> => {
     const shBands = shDegree as SHBands;
 
     const harmonicsComponentCount = HARMONICS_COMPONENT_COUNT[shDegree];
-    const positionsByteSize = numSplats * 9;                                 // 3 × int24
-    const alphasByteSize = numSplats;                                        // u8
-    const colorsByteSize = numSplats * 3;                                    // u8 × 3
-    const scalesByteSize = numSplats * 3;                                    // u8 × 3
+    const positionsByteSize = numSplats * 9; // 3 × int24
+    const alphasByteSize = numSplats; // u8
+    const colorsByteSize = numSplats * 3; // u8 × 3
+    const scalesByteSize = numSplats * 3; // u8 × 3
     const rotationsByteSize = numSplats * (version === MIN_SPZ_VERSION ? 3 : 4);
     const shByteSize = numSplats * harmonicsComponentCount;
 
@@ -172,19 +176,43 @@ const parseSpz = async (source: ReadSource): Promise<SpzStreams | null> => {
     }
 
     // v2/v3: the (already-gunzipped) buffer holds the attribute blocks sequentially.
-    const required = HEADER_SIZE + positionsByteSize + alphasByteSize + colorsByteSize + scalesByteSize + rotationsByteSize + shByteSize;
+    const required =
+        HEADER_SIZE +
+        positionsByteSize +
+        alphasByteSize +
+        colorsByteSize +
+        scalesByteSize +
+        rotationsByteSize +
+        shByteSize;
     if (totalSize < required) {
         throw new Error(`File too small for .spz payload: expected at least ${required} bytes, got ${totalSize}`);
     }
     const buf = fileBuffer.buffer;
     let off = fileBuffer.byteOffset + HEADER_SIZE;
-    const positions = new DataView(buf, off, positionsByteSize); off += positionsByteSize;
-    const alphas = new DataView(buf, off, alphasByteSize); off += alphasByteSize;
-    const colors = new DataView(buf, off, colorsByteSize); off += colorsByteSize;
-    const scales = new DataView(buf, off, scalesByteSize); off += scalesByteSize;
-    const rotations = new DataView(buf, off, rotationsByteSize); off += rotationsByteSize;
+    const positions = new DataView(buf, off, positionsByteSize);
+    off += positionsByteSize;
+    const alphas = new DataView(buf, off, alphasByteSize);
+    off += alphasByteSize;
+    const colors = new DataView(buf, off, colorsByteSize);
+    off += colorsByteSize;
+    const scales = new DataView(buf, off, scalesByteSize);
+    off += scalesByteSize;
+    const rotations = new DataView(buf, off, rotationsByteSize);
+    off += rotationsByteSize;
     const sh = new DataView(buf, off, shByteSize);
-    return { version, numSplats, shBands, fractionalBits, antialiased, positions, alphas, colors, scales, rotations, sh };
+    return {
+        version,
+        numSplats,
+        shBands,
+        fractionalBits,
+        antialiased,
+        positions,
+        alphas,
+        colors,
+        scales,
+        rotations,
+        sh
+    };
 };
 
 // Reusable scratch for smallest-three quaternion decoding.
@@ -253,7 +281,7 @@ const readSpz = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
 
         if (posOut) {
             const o = r * 3;
-            posOut[o]     = getFixed24(positions, s, 0) * positionScale;
+            posOut[o] = getFixed24(positions, s, 0) * positionScale;
             posOut[o + 1] = getFixed24(positions, s, 1) * positionScale;
             posOut[o + 2] = getFixed24(positions, s, 2) * positionScale;
         }
@@ -266,7 +294,7 @@ const readSpz = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
                 const x = rotations.getUint8(s * 3 + 0) / 127.5 - 1.0;
                 const y = rotations.getUint8(s * 3 + 1) / 127.5 - 1.0;
                 const z = rotations.getUint8(s * 3 + 2) / 127.5 - 1.0;
-                geoOut[o]     = Math.sqrt(Math.max(0.0, 1.0 - (x * x + y * y + z * z)));
+                geoOut[o] = Math.sqrt(Math.max(0.0, 1.0 - (x * x + y * y + z * z)));
                 geoOut[o + 1] = x;
                 geoOut[o + 2] = y;
                 geoOut[o + 3] = z;
@@ -282,14 +310,14 @@ const readSpz = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
                         const mag = packed & cMask;
                         const neg = (packed >>> 9) & 1;
                         packed >>>= 10;
-                        let v = Math.SQRT1_2 * mag / cMask;
+                        let v = (Math.SQRT1_2 * mag) / cMask;
                         if (neg === 1) v = -v;
                         tmpQuat[j] = v;
                         sumSq += v * v;
                     }
                 }
                 tmpQuat[largest] = Math.sqrt(Math.max(0.0, 1.0 - sumSq));
-                geoOut[o]     = tmpQuat[3]; // w
+                geoOut[o] = tmpQuat[3]; // w
                 geoOut[o + 1] = tmpQuat[0]; // x
                 geoOut[o + 2] = tmpQuat[1]; // y
                 geoOut[o + 3] = tmpQuat[2]; // z
@@ -308,7 +336,7 @@ const readSpz = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
 
         if (colOut) {
             const o = r * colStride32; // [dc0..2, f_rest_0..N]
-            colOut[o]     = inverseColorFromSpz(colors.getUint8(s * 3 + 0));
+            colOut[o] = inverseColorFromSpz(colors.getUint8(s * 3 + 0));
             colOut[o + 1] = inverseColorFromSpz(colors.getUint8(s * 3 + 1));
             colOut[o + 2] = inverseColorFromSpz(colors.getUint8(s * 3 + 2));
             // spherical harmonics: 8-bit signed, channel-inner -> de-interleave to f_rest

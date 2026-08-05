@@ -11,7 +11,7 @@
  *
  * @returns WGSL source for the find-boundaries compute shader.
  */
-const findBoundariesWgsl = () => /* wgsl */`
+const findBoundariesWgsl = () => /* wgsl */ `
 #include "uniformsStruct"
 #include "constants"
 

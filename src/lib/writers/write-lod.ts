@@ -1,20 +1,23 @@
 import { basename, dirname, resolve } from 'pathe';
 import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
-import { logWrittenFile } from './utils';
-import { finishSogWrite, startSogWrite, writeSogSource } from './write-sog.js';
-import { type ChunkDataPool, type ChunkSource, type ReadRequest, createChunkDataPool } from '../chunk';
+import { createChunkDataPool } from '../chunk';
+import type { ChunkDataPool, ChunkSource, ReadRequest } from '../chunk';
 import { Column, DataTable } from '../data-table';
-import { type FileSystem } from '../io/write';
+import type { FileSystem } from '../io/write';
 import { bakeTransform, permuteSource, sortMortonColumns } from '../ops';
-import { BTreeNode, BTree } from '../spatial';
+import type { BTreeNode } from '../spatial';
+import { BTree } from '../spatial';
 import type { DeviceCreator } from '../types';
 import { logger, Transform } from '../utils';
 import { version } from '../version';
 
+import { logWrittenFile } from './utils';
+import { finishSogWrite, startSogWrite, writeSogSource } from './write-sog.js';
+
 type Aabb = {
-    min: number[],
-    max: number[]
+    min: number[];
+    max: number[];
 };
 
 type MetaLod = {
@@ -26,7 +29,7 @@ type MetaLod = {
 type MetaNode = {
     bound: Aabb;
     children?: MetaNode[];
-    lods?: { [key: number]: MetaLod };
+    lods?: Record<number, MetaLod>;
 };
 
 type LodMeta = {
@@ -77,7 +80,9 @@ const boundUnion = (result: Aabb, a: Aabb, b: Aabb) => {
  * SH degree — the point of the streaming LOD writer for very large scenes.
  */
 type SlimColumns = {
-    x: Float32Array; y: Float32Array; z: Float32Array;
+    x: Float32Array;
+    y: Float32Array;
+    z: Float32Array;
 };
 
 /**
@@ -103,14 +108,18 @@ const positionsFromSlim = (parent: ChunkSource, slim: SlimColumns, flat: Uint32A
             const { indices, indexOffset, count } = request;
             for (let j = 0; j < count; j++) {
                 const g = flat[indices[indexOffset + j]];
-                out[j * 3] = slim.x[g]; out[j * 3 + 1] = slim.y[g]; out[j * 3 + 2] = slim.z[g];
+                out[j * 3] = slim.x[g];
+                out[j * 3 + 1] = slim.y[g];
+                out[j * 3 + 2] = slim.z[g];
             }
         } else {
             const base = request.chunkIndex * chunkSize;
             const count = Math.min(chunkSize, flat.length - base);
             for (let j = 0; j < count; j++) {
                 const g = flat[base + j];
-                out[j * 3] = slim.x[g]; out[j * 3 + 1] = slim.y[g]; out[j * 3 + 2] = slim.z[g];
+                out[j * 3] = slim.x[g];
+                out[j * 3 + 1] = slim.y[g];
+                out[j * 3 + 2] = slim.z[g];
             }
         }
         if (request.geometric || request.color || request.other) {
@@ -125,8 +134,12 @@ const positionsFromSlim = (parent: ChunkSource, slim: SlimColumns, flat: Uint32A
 // pass can run over gathered batches; the math mirrors the legacy per-gaussian
 // path exactly (quaternion order (rot_1, rot_2, rot_3, rot_0); scale = exp).
 const accumulateBound = (
-    min: number[], max: number[],
-    pos: Float32Array, rot: Float32Array, scale: Float32Array, count: number
+    min: number[],
+    max: number[],
+    pos: Float32Array,
+    rot: Float32Array,
+    scale: Float32Array,
+    count: number
 ): void => {
     const p = new Vec3();
     const r = new Quat();
@@ -163,10 +176,10 @@ const accumulateBound = (
     }
 };
 
-const invalidGaussian = (lod: number, row: number, what: string): Error => new Error(
-    `LOD ${lod} gaussian ${row} has ${what}; ` +
-    'run --filter-nan to drop invalid gaussians before writing LODs'
-);
+const invalidGaussian = (lod: number, row: number, what: string): Error =>
+    new Error(
+        `LOD ${lod} gaussian ${row} has ${what}; ` + 'run --filter-nan to drop invalid gaussians before writing LODs'
+    );
 
 /**
  * Reject a batch of gaussians whose geometry is not finite. The bounds pass reads
@@ -186,8 +199,12 @@ const invalidGaussian = (lod: number, row: number, what: string): Error => new E
  * @param lod - Structural LOD the batch was read from.
  */
 const assertFiniteGeometry = (
-    pos: Float32Array, geo: Float32Array, count: number,
-    rows: Uint32Array, offset: number, lod: number
+    pos: Float32Array,
+    geo: Float32Array,
+    count: number,
+    rows: Uint32Array,
+    offset: number,
+    lod: number
 ): void => {
     const reject = (i: number, what: string) => {
         throw invalidGaussian(lod, rows[offset + i], what);
@@ -229,8 +246,12 @@ const assertFiniteGeometry = (
  * @param lod - Structural LOD the batch was read from.
  */
 const assertFiniteColor = (
-    color: Float32Array, count: number, colorDim: number,
-    rows: Uint32Array, offset: number, lod: number
+    color: Float32Array,
+    count: number,
+    colorDim: number,
+    rows: Uint32Array,
+    offset: number,
+    lod: number
 ): void => {
     for (let i = 0; i < count; i++) {
         const base = i * colorDim;
@@ -249,7 +270,10 @@ const assertFiniteColor = (
 // (flat index `g` -> local row `g - cum[lod]`). The colour layer rides along on
 // the same record read purely to be validated.
 const calcBound = async (
-    source: ChunkSource, pool: ChunkDataPool, bins: Map<number, Uint32Array>, cum: number[],
+    source: ChunkSource,
+    pool: ChunkDataPool,
+    bins: Map<number, Uint32Array>,
+    cum: number[],
     tick?: (n: number) => void
 ): Promise<Aabb> => {
     const min = [Infinity, Infinity, Infinity];
@@ -269,16 +293,23 @@ const calcBound = async (
             const pos = pool.acquire('position', layouts.position!, count);
             const geo = pool.acquire('geometric', layouts.geometric!, count);
             const color = pool.acquire('color', layouts.color!, count);
-            await source.read({ indices: local, indexOffset: off, count, lod: lodValue, position: pos, geometric: geo, color });
+            await source.read({
+                indices: local,
+                indexOffset: off,
+                count,
+                lod: lodValue,
+                position: pos,
+                geometric: geo,
+                color
+            });
             // position is full-stride packed xyz — read the pool buffer in place
             // rather than copying it out per batch
             const posBatch = new Float32Array(pos.data, 0, count * 3);
-            assertFiniteGeometry(
-                posBatch, new Float32Array(geo.data, 0, count * 8), count, local, off, lodValue
-            );
+            assertFiniteGeometry(posBatch, new Float32Array(geo.data, 0, count * 8), count, local, off, lodValue);
             assertFiniteColor(new Float32Array(color.data, 0, count * colorDim), count, colorDim, local, off, lodValue);
             accumulateBound(
-                min, max,
+                min,
+                max,
                 posBatch,
                 geo.field('rotation') as Float32Array,
                 geo.field('scale') as Float32Array,
@@ -377,7 +408,9 @@ const extractSlim = async (source: ChunkSource, pool: ChunkDataPool): Promise<Sl
             const p = new Float32Array(pos.data, 0, count * 3);
             for (let i = 0; i < count; i++) {
                 const di = base + i;
-                cols.x[di] = p[i * 3]; cols.y[di] = p[i * 3 + 1]; cols.z[di] = p[i * 3 + 2];
+                cols.x[di] = p[i * 3];
+                cols.y[di] = p[i * 3 + 1];
+                cols.z[di] = p[i * 3 + 2];
             }
             base += count;
             pos.release();
@@ -439,7 +472,17 @@ type WriteLodSourceOptions = {
  * @ignore
  */
 const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) => {
-    const { filename, envSource, iterations, webpEffort, createDevice, chunkCount, chunkExtent, chunkMin = 8, fileCounts } = options;
+    const {
+        filename,
+        envSource,
+        iterations,
+        webpEffort,
+        createDevice,
+        chunkCount,
+        chunkExtent,
+        chunkMin = 8,
+        fileCounts
+    } = options;
 
     // Bake the pending coordinate-space transform to PLY once, up front, so the
     // partition/bounds passes (extractSlim, calcBound, morton) and the per-unit
@@ -475,11 +518,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     await fs.mkdir(outputDir);
 
     // construct a kd-tree based on centroids from all lods
-    const centroidsTable = new DataTable([
-        new Column('x', slim.x),
-        new Column('y', slim.y),
-        new Column('z', slim.z)
-    ]);
+    const centroidsTable = new DataTable([new Column('x', slim.x), new Column('y', slim.y), new Column('z', slim.z)]);
 
     let bTree: BTree | null = new BTree(centroidsTable);
 
@@ -487,12 +526,13 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     const binSize = chunkCount * 1024;
     const binDim = chunkExtent;
     const binMin = chunkMin * 1024;
-    const unitSize = (lod: number) => (fileCounts?.length ? fileCounts[Math.min(lod, fileCounts.length - 1)] : chunkCount) * 1024;
+    const unitSize = (lod: number) =>
+        (fileCounts?.length ? fileCounts[Math.min(lod, fileCounts.length - 1)] : chunkCount) * 1024;
 
     // map of lod -> file units -> subunits (each subunit a tight Uint32Array of
     // gaussian indices). This is the bulk retained bookkeeping; Uint32Array keeps
     // it off the V8 heap at 4 B/gaussian.
-    const lodFiles: Map<number, Uint32Array[][]> = new Map();
+    const lodFiles = new Map<number, Uint32Array[][]>();
     const filenames: string[] = [];
     let lodLevels = 0;
 
@@ -503,11 +543,11 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     const build = async (node: BTreeNode): Promise<MetaNode> => {
         // Split when the node holds more than a unit, or when it is wider than the
         // extent limit and holds enough gaussians to be worth two leaves.
-        if (!node.indices && (node.count > binSize || (node.aabb && node.aabb.largestDim() > binDim && node.count > binMin))) {
-            const children = [
-                await build(node.left),
-                await build(node.right)
-            ];
+        if (
+            !node.indices &&
+            (node.count > binSize || (node.aabb && node.aabb.largestDim() > binDim && node.count > binMin))
+        ) {
+            const children = [await build(node.left), await build(node.right)];
 
             const bound = {
                 min: [0, 0, 0],
@@ -518,7 +558,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
             return { bound, children };
         }
 
-        const lods: { [key: number]: MetaLod } = { };
+        const lods: Record<number, MetaLod> = {};
         const bins = binIndices(node, lodOf);
 
         for (const [lodValue, indices] of bins) {
@@ -551,7 +591,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
         }
 
         // Bound over the leaf's full structural LOD data.
-        const bound = await calcBound(mainSource, pool, bins, cum, n => chunkingBar.tick(n));
+        const bound = await calcBound(mainSource, pool, bins, cum, (n) => chunkingBar.tick(n));
         return { bound, lods };
     };
 
@@ -634,7 +674,14 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
             await writeSogSource(
                 envSource!,
                 pool,
-                { filename: envPathname, bundle: false, iterations, webpEffort, createDevice: sharedCreateDevice, logging: 'flat' },
+                {
+                    filename: envPathname,
+                    bundle: false,
+                    iterations,
+                    webpEffort,
+                    createDevice: sharedCreateDevice,
+                    logging: 'flat'
+                },
                 fs
             );
         } finally {
@@ -643,14 +690,14 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     }
 
     // write lod-meta.json
-    const metaJson = (new TextEncoder()).encode(JSON.stringify(meta, replacer));
+    const metaJson = new TextEncoder().encode(JSON.stringify(meta, replacer));
     const writer = await fs.createWriter(filename);
     await writer.write(metaJson);
     await writer.close();
     logWrittenFile(basename(filename), writer.bytesWritten);
 
     // write file units
-    const units: { lodValue: number, index: number, fileUnit: Uint32Array[] }[] = [];
+    const units: { lodValue: number; index: number; fileUnit: Uint32Array[] }[] = [];
     for (const [lodValue, fileUnits] of lodFiles) {
         for (let i = 0; i < fileUnits.length; ++i) {
             if (fileUnits[i].length > 0) {
@@ -660,7 +707,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     }
 
     // Gather a unit and start its SOG write (quantization, GPU k-means).
-    const startUnit = ({ lodValue, fileUnit }: typeof units[number]) => {
+    const startUnit = ({ lodValue, fileUnit }: (typeof units)[number]) => {
         // Morton-order each subunit and concatenate into the unit's
         // global (flat) row order.
         const totalIndices = fileUnit.reduce((acc, curr) => acc + curr.length, 0);
@@ -683,12 +730,16 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
         // writer's own Morton pass.
         const unitSource = positionsFromSlim(
             permuteSource(mainSource, orderedLocal, { lod: lodValue }),
-            slim, orderedIndices
+            slim,
+            orderedIndices
         );
         const identity = new Uint32Array(totalIndices);
         for (let j = 0; j < totalIndices; ++j) identity[j] = j;
 
-        return { identity, state: startSogWrite(unitSource, pool, { iterations, createDevice: sharedCreateDevice, indices: identity }) };
+        return {
+            identity,
+            state: startSogWrite(unitSource, pool, { iterations, createDevice: sharedCreateDevice, indices: identity })
+        };
     };
 
     // Units are pipelined one deep: once a unit is gathered and its k-means
@@ -705,6 +756,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
         const state = await current.state;
 
         next = u + 1 < units.length ? startUnit(units[u + 1]) : null;
+        // eslint-disable-next-line @typescript-eslint/no-empty-function -- preserve rejection-only control flow
         next?.state.catch(() => {});
 
         sogIndex++;
@@ -715,13 +767,17 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
             const pathname = resolve(outputDir, `${lodValue}_${index}/meta.json`);
             await fs.mkdir(dirname(pathname));
 
-            await finishSogWrite(state, {
-                filename: pathname,
-                bundle: false,
-                webpEffort,
-                indices: current.identity,
-                logging: 'flat'
-            }, fs);
+            await finishSogWrite(
+                state,
+                {
+                    filename: pathname,
+                    bundle: false,
+                    webpEffort,
+                    indices: current.identity,
+                    logging: 'flat'
+                },
+                fs
+            );
         } finally {
             unitGroup.end();
         }

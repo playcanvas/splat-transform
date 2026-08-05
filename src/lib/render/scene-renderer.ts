@@ -1,10 +1,14 @@
-import { GraphicsDevice } from 'playcanvas';
+import type { GraphicsDevice } from 'playcanvas';
 
-import { type Projection, type RenderCamera, buildCameraBasis } from './camera';
+import { colorStride } from '../chunk';
+import type { ChunkDataPool, ChunkSource, SHBands } from '../chunk';
+import { GpuSceneRasterizer, ResidentUploadError } from '../gpu/gpu-scene-rasterizer';
+import type { SceneView, SortedOrder, StreamedRange } from '../gpu/gpu-scene-rasterizer';
+
+import { buildCameraBasis } from './camera';
+import type { Projection, RenderCamera } from './camera';
 import { TILE_SIZE, storageBindingLimit } from './config';
 import { SortScratch, sortCandidatesByDepth } from './preprocess';
-import { type ChunkDataPool, type ChunkSource, type SHBands, colorStride } from '../chunk';
-import { GpuSceneRasterizer, ResidentUploadError, type SceneView, type SortedOrder, type StreamedRange } from '../gpu/gpu-scene-rasterizer';
 
 /**
  * Pixel budget of one group (sub-frame): 4096², a 256 MB running-state
@@ -27,12 +31,12 @@ const WORKING_BYTES = PROJECTION_BYTES + 4 + 4;
 /** Per-gaussian bytes of the depth sort: keys plus the sorter's three ping-pong buffers. */
 const SORT_BYTES = 4 + 12;
 
-interface BackgroundRGBA {
+type BackgroundRGBA = {
     r: number;
     g: number;
     b: number;
     a: number;
-}
+};
 
 /**
  * How the scene is held for rendering, from most to least GPU memory:
@@ -44,7 +48,7 @@ interface BackgroundRGBA {
 type SceneTier = 'resident' | 'streamed-gpu' | 'streamed-cpu';
 
 /** Fixed per-scene render settings; the camera pose varies per {@link SceneRenderer.render}. */
-interface SceneRendererOptions {
+type SceneRendererOptions = {
     projection: Projection;
     width: number;
     height: number;
@@ -55,7 +59,7 @@ interface SceneRendererOptions {
     residentBudget?: number;
     /** Use this tier regardless of fit (tests); default picks the first that fits. */
     tier?: SceneTier;
-}
+};
 
 /**
  * Bytes of GPU memory the resident tier holds for a scene: the three layers
@@ -134,7 +138,9 @@ class SceneRenderer {
         const groupTilesX = options.projection === 'equirect' ? imageTilesX : Math.min(imageTilesX, maxGroupTiles);
         const groupTilesY = Math.min(imageTilesY, Math.floor(maxGroupTiles / groupTilesX));
         if (groupTilesY < 1) {
-            throw new Error(`SceneRenderer: a ${options.width}-pixel tile row exceeds the device's storage binding limit`);
+            throw new Error(
+                `SceneRenderer: a ${options.width}-pixel tile row exceeds the device's storage binding limit`
+            );
         }
         const bg = options.background;
         this.raster = new GpuSceneRasterizer(device, {
@@ -164,7 +170,10 @@ class SceneRenderer {
         const forced = options.tier;
         const rangeBytes = this.rangeRows * (12 + 32 + colorStride(bands) + WORKING_BYTES + 4);
 
-        if (forced === 'resident' || (forced === undefined && residentSceneFits(device, n, bands) && residentSceneBytes(n, bands) <= budget)) {
+        if (
+            forced === 'resident' ||
+            (forced === undefined && residentSceneFits(device, n, bands) && residentSceneBytes(n, bands) <= budget)
+        ) {
             try {
                 await this.raster.uploadScene(source, pool);
                 return this.chose('resident', residentSceneBytes(n, bands));
@@ -173,7 +182,10 @@ class SceneRenderer {
             }
         }
         const streamedBytes = n * (12 + SORT_BYTES) + rangeBytes;
-        if (forced === 'streamed-gpu' || (forced === undefined && 12 * n <= storageBindingLimit(device) && streamedBytes <= budget)) {
+        if (
+            forced === 'streamed-gpu' ||
+            (forced === undefined && 12 * n <= storageBindingLimit(device) && streamedBytes <= budget)
+        ) {
             try {
                 await this.raster.uploadPositions(source, pool, this.rangeRows);
                 return this.chose('streamed-gpu', streamedBytes);
@@ -218,7 +230,7 @@ class SceneRenderer {
         const { projection, width, height } = this.options;
         const views = cameras.map((camera) => {
             if ((camera.projection ?? 'pinhole') !== projection || camera.width !== width || camera.height !== height) {
-                throw new Error('SceneRenderer: camera projection or size differs from the renderer\'s');
+                throw new Error("SceneRenderer: camera projection or size differs from the renderer's");
             }
             return {
                 basis: buildCameraBasis(camera),
@@ -230,7 +242,7 @@ class SceneRenderer {
         if (this.tier === 'resident') {
             return this.raster.render(views);
         }
-        return this.raster.renderStreamed(views, view => this.ranges(view));
+        return this.raster.renderStreamed(views, (view) => this.ranges(view));
     }
 
     /**
@@ -304,7 +316,9 @@ class SceneRenderer {
         } else {
             const nearSq = near * near;
             for (let i = 0; i < n; i++) {
-                const dx = x[i] - eye.x, dy = y[i] - eye.y, dz = z[i] - eye.z;
+                const dx = x[i] - eye.x,
+                    dy = y[i] - eye.y,
+                    dz = z[i] - eye.z;
                 if (dx * dx + dy * dy + dz * dz > nearSq) candidates[count++] = i;
             }
         }

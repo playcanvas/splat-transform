@@ -6,9 +6,18 @@
 // Core contract + pool
 export { createChunkDataPool } from './chunk';
 export type {
-    ChunkSource, ChunkSourceMetadata, ReadRequest, ReadTarget,
-    ChunkData, ChunkDataPool,
-    ChunkLayer, SHBands, ChunkField, ChunkFieldMap, LayerLayout, ExtraColumn
+    ChunkSource,
+    ChunkSourceMetadata,
+    ReadRequest,
+    ReadTarget,
+    ChunkData,
+    ChunkDataPool,
+    ChunkLayer,
+    SHBands,
+    ChunkField,
+    ChunkFieldMap,
+    LayerLayout,
+    ExtraColumn
 } from './chunk';
 
 // Structural combinators (lazy views over sources)
@@ -79,7 +88,17 @@ export { processDataTable } from './process';
 export { readKsplat, readMjs, readPly, readSog, readSplat, readSpz } from './readers';
 
 // Individual writers (advanced use; DataTable-input compat set)
-export { writeSog, writeSpz, writePly, writeCompressedPly, writeCsv, writeHtml, writeImage, writeGlb, writeVoxel } from './writers';
+export {
+    writeSog,
+    writeSpz,
+    writePly,
+    writeCompressedPly,
+    writeCsv,
+    writeHtml,
+    writeImage,
+    writeGlb,
+    writeVoxel
+} from './writers';
 export type { WriteImageOptions, WriteVoxelOptions, VoxelMetadata } from './writers';
 
 // Camera animation tracks for multi-frame image output (editor project,
@@ -92,10 +111,7 @@ export type { CameraTrack, TrackPose } from './render/camera-track';
 // ---------------------------------------------------------------------------
 
 // Utils
-export {
-    fmtBytes, fmtCount, fmtTime,
-    logger, TextRenderer, Transform, WebPCodec
-} from './utils';
+export { fmtBytes, fmtCount, fmtTime, logger, TextRenderer, Transform, WebPCodec } from './utils';
 export type { Bar, Group, LogEvent, Logger, MessageKind, Renderer, TextRendererOptions, Verbosity } from './utils';
 
 // Worker pool for CPU-heavy tasks

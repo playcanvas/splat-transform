@@ -1,6 +1,8 @@
-import { taskHandlers, type TaskName, type TaskArgs, type TaskResult, type WorkerMessage } from './tasks';
-import { workerBundled } from './worker-bundled';
 import { WebPCodec } from '../utils/webp-codec';
+
+import { taskHandlers } from './tasks';
+import type { TaskName, TaskArgs, TaskResult, WorkerMessage } from './tasks';
+import { workerBundled } from './worker-bundled';
 
 type PendingTask = {
     task: TaskName;
@@ -151,7 +153,7 @@ async function spawnSlot(slot: Slot) {
             slot.post = (message, transfer) => worker.postMessage(message, transfer);
             slot.terminate = () => worker.terminate();
             worker.onmessage = (event: MessageEvent) => onSlotMessage(slot, event.data);
-            worker.onerror = event => onSlotDeath(slot, new Error(event.message || 'worker load failed'));
+            worker.onerror = (event) => onSlotDeath(slot, new Error(event.message || 'worker load failed'));
         }
 
         if (slot.dead) {
@@ -178,24 +180,24 @@ async function ensureSpawned() {
     spawnLoopActive = true;
     try {
         if (resolvedMaxWorkers === null) {
-            const cores = isNode ?
-                (await import('node:os')).availableParallelism() :
-                (navigator.hardwareConcurrency || 2);
+            const cores = isNode
+                ? (await import('node:os')).availableParallelism()
+                : navigator.hardwareConcurrency || 2;
             resolvedMaxWorkers = Math.max(1, Math.min(4, cores - 1));
         }
 
         const max = maxWorkers ?? resolvedMaxWorkers;
-        let available = slots.filter(s => s.state !== 'busy').length;
+        let available = slots.filter((s) => s.state !== 'busy').length;
 
         while (slots.length < max && available < queue.length) {
             const slot: Slot = {
                 state: 'starting',
                 current: null,
                 dead: false,
-                post: () => {},
-                terminate: () => {},
-                ref: () => {},
-                unref: () => {}
+                post: () => undefined,
+                terminate: () => undefined,
+                ref: () => undefined,
+                unref: () => undefined
             };
             slots.push(slot);
             spawnSlot(slot);
@@ -213,7 +215,7 @@ async function ensureSpawned() {
 
 function dispatch() {
     while (queue.length > 0) {
-        const slot = slots.find(s => s.state === 'idle');
+        const slot = slots.find((s) => s.state === 'idle');
         if (!slot) {
             ensureSpawned();
             break;
@@ -257,6 +259,7 @@ const enqueue = <T extends TaskName>(task: T, args: TaskArgs<T>, transfer: Array
     });
 
     outstanding.add(promise);
+    // eslint-disable-next-line @typescript-eslint/no-empty-function -- preserve rejection-only control flow
     promise.catch(() => {}).then(() => outstanding.delete(promise));
 
     return promise;
@@ -286,6 +289,7 @@ const destroyPool = async () => {
  * every task runs inline on the calling thread instead - same code, same
  * results, just serial.
  */
+// eslint-disable-next-line @typescript-eslint/no-extraneous-class
 class WorkerQueue {
     /**
      * Sets the URL of the worker script (the shipped dist/worker.mjs). Set

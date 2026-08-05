@@ -1,4 +1,4 @@
-import { TypedArray } from '../data-table';
+import type { TypedArray } from '../data-table';
 
 /**
  * Partition indices around the k-th smallest element using quickselect

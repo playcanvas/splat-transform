@@ -1,8 +1,4 @@
-import {
-    UNIFORMTYPE_FLOAT,
-    UNIFORMTYPE_UINT,
-    UniformFormat
-} from 'playcanvas';
+import { UNIFORMTYPE_FLOAT, UNIFORMTYPE_UINT, UniformFormat } from 'playcanvas';
 
 /**
  * Shared WGSL declaration of the `struct Uniforms` block consumed by
@@ -19,7 +15,7 @@ import {
  * `playcanvas/src/platform/graphics/shader.js` for the preprocessor
  * wiring (the `cincludes` Map on the `Shader` constructor's definition).
  */
-const uniformsStruct = /* wgsl */`
+const uniformsStruct = /* wgsl */ `
 struct Uniforms {
     rightX: f32, rightY: f32, rightZ: f32, _p0: f32,
     downX: f32, downY: f32, downZ: f32, _p1: f32,

@@ -1,6 +1,8 @@
-import { DataTable, getSHBands } from '../data-table';
-import { type CameraBasis, type Projection } from './camera';
+import type { DataTable } from '../data-table';
+import { getSHBands } from '../data-table';
 import { RadixSortScratch, radixSortIndicesByFloat } from '../spatial/radix-sort';
+
+import type { CameraBasis, Projection } from './camera';
 
 /**
  * Number of SH coefficients per color channel for the scene's SH band
@@ -88,10 +90,14 @@ const sortCandidatesByDepth = (
     scratch.ensure(count);
     const { x, y, z } = cols;
     const { depth, radix } = scratch;
-    const ex = camera.eye.x, ey = camera.eye.y, ez = camera.eye.z;
+    const ex = camera.eye.x,
+        ey = camera.eye.y,
+        ez = camera.eye.z;
 
     if (projection === 'pinhole') {
-        const fx = camera.forward.x, fy = camera.forward.y, fz = camera.forward.z;
+        const fx = camera.forward.x,
+            fy = camera.forward.y,
+            fz = camera.forward.z;
         for (let i = 0; i < count; i++) {
             const s = candidateIndices[i];
             depth[i] = fx * (x[s] - ex) + fy * (y[s] - ey) + fz * (z[s] - ez);
@@ -191,11 +197,7 @@ const packChunkInput = (
 ): void => {
     const stride = splatInputStride(numSHBands);
     const numShFloats = numSHCoeffsPerChannel(numSHBands) * 3;
-    const {
-        x, y, z, rotW, rotX, rotY, rotZ,
-        scaleX, scaleY, scaleZ, opacity,
-        fdcR, fdcG, fdcB, shRest
-    } = cols;
+    const { x, y, z, rotW, rotX, rotY, rotZ, scaleX, scaleY, scaleZ, opacity, fdcR, fdcG, fdcB, shRest } = cols;
 
     for (let i = 0; i < chunkSize; i++) {
         const s = chunkIndices[chunkStart + i];

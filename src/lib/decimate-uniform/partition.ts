@@ -97,7 +97,8 @@ const kdPartition = (pos: ResidentPositions, blockSize: number): { order: Uint32
             blocks.push({ start, end, aabb });
             return;
         }
-        let axis = 0, ext = -Infinity;
+        let axis = 0,
+            ext = -Infinity;
         for (let c = 0; c < 3; c++) {
             const e = aabb[3 + c] - aabb[c];
             if (e > ext) {
@@ -119,17 +120,30 @@ const kdPartition = (pos: ResidentPositions, blockSize: number): { order: Uint32
         const { lo, hi } = outlierFence(pos);
         let out = 0;
         for (let i = 0; i < n; i++) {
-            if (cols[0][i] < lo[0] || cols[0][i] > hi[0] ||
-                cols[1][i] < lo[1] || cols[1][i] > hi[1] ||
-                cols[2][i] < lo[2] || cols[2][i] > hi[2]) out++;
+            if (
+                cols[0][i] < lo[0] ||
+                cols[0][i] > hi[0] ||
+                cols[1][i] < lo[1] ||
+                cols[1][i] > hi[1] ||
+                cols[2][i] < lo[2] ||
+                cols[2][i] > hi[2]
+            )
+                out++;
         }
         if (out > 0 && out <= n * OUTLIER_MAX_FRACTION) {
             coreEnd = n - out;
-            let c = 0, o = coreEnd;
+            let c = 0,
+                o = coreEnd;
             for (let i = 0; i < n; i++) {
-                if (cols[0][i] < lo[0] || cols[0][i] > hi[0] ||
-                    cols[1][i] < lo[1] || cols[1][i] > hi[1] ||
-                    cols[2][i] < lo[2] || cols[2][i] > hi[2]) order[o++] = i;
+                if (
+                    cols[0][i] < lo[0] ||
+                    cols[0][i] > hi[0] ||
+                    cols[1][i] < lo[1] ||
+                    cols[1][i] > hi[1] ||
+                    cols[2][i] < lo[2] ||
+                    cols[2][i] > hi[2]
+                )
+                    order[o++] = i;
                 else order[c++] = i;
             }
         }

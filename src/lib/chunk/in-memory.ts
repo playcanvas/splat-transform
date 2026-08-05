@@ -1,21 +1,19 @@
-import { type SplatModel } from '../splat-model';
-import { type Transform } from '../utils';
-import { type ChunkData } from './data';
+import type { SplatModel } from '../splat-model';
+import type { Transform } from '../utils';
+
+import type { ChunkData } from './data';
 import {
     colorFields,
     colorStride,
     GEOMETRIC_STRIDE,
     geometricFields,
-    type ExtraColumn,
-    type ChunkLayer,
-    type LayerLayout,
     otherLayout,
     positionFields,
-    POSITION_STRIDE,
-    type SHBands
+    POSITION_STRIDE
 } from './layout';
-import { type ChunkDataPool } from './pool';
-import { type ChunkSource, type ReadRequest, type ChunkSourceMetadata } from './source';
+import type { ExtraColumn, ChunkLayer, LayerLayout, SHBands } from './layout';
+import type { ChunkDataPool } from './pool';
+import type { ChunkSource, ReadRequest, ChunkSourceMetadata } from './source';
 
 /**
  * Per-layer, per-LOD, per-chunk CPU-resident byte storage.
@@ -23,9 +21,7 @@ import { type ChunkSource, type ReadRequest, type ChunkSourceMetadata } from './
  * Indexed as `buffers[layer][lod][chunkIndex]`. `undefined` for layers the
  * source doesn't carry. Each stored buffer is exactly `count * stride` bytes.
  */
-type LayerChunkBuffers = {
-    [L in ChunkLayer]?: ReadonlyArray<ReadonlyArray<ArrayBuffer>>;
-};
+type LayerChunkBuffers = Partial<Record<ChunkLayer, readonly (readonly ArrayBuffer[])[]>>;
 
 /**
  * Lightweight CPU-resident source. Constructed directly from a set of
@@ -43,7 +39,7 @@ class InMemoryChunkSource implements ChunkSource {
     private buffers: LayerChunkBuffers | null;
     // One u32 view per chunk buffer, per (layer, lod), built on first use and
     // reused — a gather pass touches every chunk, so views are made once.
-    private viewCache: Map<string, Uint32Array[]> = new Map();
+    private viewCache = new Map<string, Uint32Array[]>();
 
     constructor(meta: ChunkSourceMetadata, buffers: LayerChunkBuffers) {
         this.meta = meta;
@@ -112,7 +108,7 @@ class InMemoryChunkSource implements ChunkSource {
             if (!layerBuffers) {
                 throw new Error(`InMemoryChunkSource.gatherRows: layer '${layer}' not available`);
             }
-            views = layerBuffers[lod].map(b => new Uint32Array(b));
+            views = layerBuffers[lod].map((b) => new Uint32Array(b));
             this.viewCache.set(key, views);
         }
         return views;
@@ -166,7 +162,7 @@ class InMemoryChunkSource implements ChunkSource {
     }
 }
 
-type LayerBuffers = ReadonlyArray<ReadonlyArray<ArrayBuffer>>;
+type LayerBuffers = readonly (readonly ArrayBuffer[])[];
 
 /**
  * Convenience constructor for an `InMemoryChunkSource` built from raw layer buffers.
@@ -192,22 +188,19 @@ const createInMemoryChunkSource = (params: {
     numGaussians: number;
     chunkSize: number;
     shBands: SHBands;
-    extraColumns?: ReadonlyArray<ExtraColumn>;
+    extraColumns?: readonly ExtraColumn[];
     /** How the scene was trained; untagged sources are `default`. */
     model?: SplatModel;
     transform: Transform;
     /** Gaussians per LOD. `lodCounts[0]` must equal `numGaussians`. */
-    lodCounts: ReadonlyArray<number>;
+    lodCounts: readonly number[];
     /** Per-LOD per-chunk layer buffers, or `undefined` if the source lacks the layer. */
     position?: LayerBuffers;
     geometric?: LayerBuffers;
     color?: LayerBuffers;
     other?: LayerBuffers;
 }): InMemoryChunkSource => {
-    const {
-        numGaussians, chunkSize, shBands, transform, lodCounts,
-        position, geometric, color, other
-    } = params;
+    const { numGaussians, chunkSize, shBands, transform, lodCounts, position, geometric, color, other } = params;
     const extras = params.extraColumns ?? [];
 
     if (lodCounts.length === 0) {
@@ -220,7 +213,7 @@ const createInMemoryChunkSource = (params: {
     }
 
     const numLods = lodCounts.length;
-    const numChunks = lodCounts.map(c => Math.ceil(c / chunkSize));
+    const numChunks = lodCounts.map((c) => Math.ceil(c / chunkSize));
 
     const availableLayers = new Set<ChunkLayer>();
     const layouts: Partial<Record<ChunkLayer, LayerLayout>> = {};
@@ -228,9 +221,7 @@ const createInMemoryChunkSource = (params: {
 
     const register = (layer: ChunkLayer, data: LayerBuffers, layout: LayerLayout): void => {
         if (data.length !== numLods) {
-            throw new Error(
-                `createInMemoryChunkSource: layer '${layer}' has ${data.length} LODs, expected ${numLods}`
-            );
+            throw new Error(`createInMemoryChunkSource: layer '${layer}' has ${data.length} LODs, expected ${numLods}`);
         }
         for (let l = 0; l < numLods; l++) {
             if (data[l].length !== numChunks[l]) {
@@ -288,15 +279,13 @@ const createInMemoryChunkSource = (params: {
  * @param pool - The `ChunkData` pool used for the temporary read buffers.
  * @returns A fresh `InMemoryChunkSource` holding the materialized data.
  */
-const compact = async (
-    src: ChunkSource,
-    pool: ChunkDataPool
-): Promise<InMemoryChunkSource> => {
+const compact = async (src: ChunkSource, pool: ChunkDataPool): Promise<InMemoryChunkSource> => {
     const { meta } = src;
-    const layers: ChunkLayer[] = (['position', 'geometric', 'color', 'other'] as ChunkLayer[])
-    .filter(l => meta.availableLayers.has(l));
+    const layers: ChunkLayer[] = (['position', 'geometric', 'color', 'other'] as ChunkLayer[]).filter((l) =>
+        meta.availableLayers.has(l)
+    );
 
-    const out: { [L in ChunkLayer]?: ArrayBuffer[][] } = {};
+    const out: Partial<Record<ChunkLayer, ArrayBuffer[][]>> = {};
     for (const l of layers) {
         out[l] = meta.lodCounts.map((): ArrayBuffer[] => []);
     }

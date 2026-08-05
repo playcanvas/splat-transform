@@ -1,15 +1,10 @@
 import type { Bounds } from '../data-table';
-import type { Mesh } from './marching-cubes';
-import {
-    BLOCK_EMPTY,
-    BLOCK_SOLID,
-    BLOCKS_PER_WORD,
-    EVEN_BITS,
-    SparseVoxelGrid,
-    readBlockType
-} from '../voxel/sparse-voxel-grid';
+import type { SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
+import { BLOCK_EMPTY, BLOCK_SOLID, BLOCKS_PER_WORD, EVEN_BITS, readBlockType } from '../voxel/sparse-voxel-grid';
 
-const HASH_MUL = 0x9E3779B9;
+import type { Mesh } from './marching-cubes';
+
+const HASH_MUL = 0x9e3779b9;
 
 /**
  * Extract a watertight voxel-boundary mesh from a SparseVoxelGrid.
@@ -24,11 +19,7 @@ const HASH_MUL = 0x9E3779B9;
  * @param voxelResolution - Size of each voxel in world units.
  * @returns Mesh with positions and indices.
  */
-const voxelFaces = (
-    grid: SparseVoxelGrid,
-    gridBounds: Bounds,
-    voxelResolution: number
-): Mesh => {
+const voxelFaces = (grid: SparseVoxelGrid, gridBounds: Bounds, voxelResolution: number): Mesh => {
     const { nbx, nby, nbz, bStride, types, masks, nx, ny, nz } = grid;
     const totalBlocks = nbx * nby * nbz;
     const coordStride = Math.max(nx, ny, nz) + 1;
@@ -44,8 +35,7 @@ const voxelFaces = (
             grown.set(faceKeys);
             faceKeys = grown;
         }
-        faceKeys[faceLen++] =
-            (((bucket * coordStride + p) * coordStride + u) * coordStride + v);
+        faceKeys[faceLen++] = ((bucket * coordStride + p) * coordStride + u) * coordStride + v;
     };
 
     const blockTypeAt = (bx: number, by: number, bz: number): number => {
@@ -57,9 +47,7 @@ const voxelFaces = (
 
     const isVoxelSetLocal = (lo: number, hi: number, lx: number, ly: number, lz: number): boolean => {
         const bitIdx = lx + (ly << 2) + (lz << 4);
-        return bitIdx < 32 ?
-            ((lo >>> bitIdx) & 1) !== 0 :
-            ((hi >>> (bitIdx - 32)) & 1) !== 0;
+        return bitIdx < 32 ? ((lo >>> bitIdx) & 1) !== 0 : ((hi >>> (bitIdx - 32)) & 1) !== 0;
     };
 
     const isVoxelSetGlobal = (ix: number, iy: number, iz: number): boolean => {
@@ -76,12 +64,24 @@ const voxelFaces = (
 
     const addVoxelFace = (ix: number, iy: number, iz: number, bucket: number): void => {
         switch (bucket) {
-            case 0: addFace(0, ix, iy, iz); break;         // -X
-            case 1: addFace(1, ix + 1, iy, iz); break;     // +X
-            case 2: addFace(2, iy, ix, iz); break;         // -Y
-            case 3: addFace(3, iy + 1, ix, iz); break;     // +Y
-            case 4: addFace(4, iz, ix, iy); break;         // -Z
-            default: addFace(5, iz + 1, ix, iy); break;    // +Z
+            case 0:
+                addFace(0, ix, iy, iz);
+                break; // -X
+            case 1:
+                addFace(1, ix + 1, iy, iz);
+                break; // +X
+            case 2:
+                addFace(2, iy, ix, iz);
+                break; // -Y
+            case 3:
+                addFace(3, iy + 1, ix, iz);
+                break; // +Y
+            case 4:
+                addFace(4, iz, ix, iy);
+                break; // -Z
+            default:
+                addFace(5, iz + 1, ix, iy);
+                break; // +Z
         }
     };
 
@@ -326,12 +326,7 @@ const voxelFaces = (
         groupStart = groupEnd;
     }
 
-    const globalPoint = (
-        axis: number,
-        p: number,
-        u: number,
-        v: number
-    ): [number, number, number] => {
+    const globalPoint = (axis: number, p: number, u: number, v: number): [number, number, number] => {
         if (axis === 0) return [p, u, v];
         if (axis === 1) return [u, p, v];
         return [u, v, p];
@@ -354,10 +349,7 @@ const voxelFaces = (
         points.push(value);
     };
 
-    const addLineSegment = (
-        x0: number, y0: number, z0: number,
-        x1: number, y1: number, z1: number
-    ): void => {
+    const addLineSegment = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): void => {
         if (x0 !== x1) {
             const key = lineKey(0, x0, y0, z0);
             addLinePoint(key, x0);
@@ -426,7 +418,7 @@ const voxelFaces = (
     };
 
     const vertexKey = (x: number, y: number, z: number): number => {
-        return (x + y * coordStride + z * coordStride * coordStride);
+        return x + y * coordStride + z * coordStride * coordStride;
     };
 
     const getVertex = (x: number, y: number, z: number): number => {
@@ -483,8 +475,12 @@ const voxelFaces = (
 
     const addEdgeVertices = (
         axis: number,
-        x0: number, y0: number, z0: number,
-        x1: number, y1: number, z1: number
+        x0: number,
+        y0: number,
+        z0: number,
+        x1: number,
+        y1: number,
+        z1: number
     ): void => {
         let varAxis: number;
         let start: number;
@@ -605,12 +601,7 @@ const voxelFaces = (
             const b = triNext[a];
             const c = triNext[b];
             if (isConvexEar(a, b, c)) {
-                appendOrientedTri(
-                    perimeterScratch[a],
-                    perimeterScratch[b],
-                    perimeterScratch[c],
-                    useLocalCcw
-                );
+                appendOrientedTri(perimeterScratch[a], perimeterScratch[b], perimeterScratch[c], useLocalCcw);
             }
         }
     };

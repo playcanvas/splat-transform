@@ -18,7 +18,7 @@
  * @param maxCoveragePerSplat - Hard upper bound on per-splat tile count.
  * @returns WGSL source for the pinhole tile-coverage block.
  */
-const tileAabbPinhole = (maxCoveragePerSplat: number) => /* wgsl */`
+const tileAabbPinhole = (maxCoveragePerSplat: number) => /* wgsl */ `
     let minTX = max(0, i32(floor((screenX - radius - gox) / tsz)));
     let maxTX = min(i32(uniforms.groupTilesX) - 1, i32(floor((screenX + radius - gox) / tsz)));
     let minTY = max(0, i32(floor((screenY - radius - goy) / tsz)));
