@@ -7,35 +7,33 @@ import { logger } from '../lib';
 const initializeGlobals = () => {
     Object.assign(globalThis, globals);
 
-    // window stub
-    (globalThis as any).window = {
-        navigator: { userAgent: 'node.js' }
-    };
-
-    // document stub
-    (globalThis as any).document = {
-        createElement: (type: string) => {
-            if (type === 'canvas') {
-                return {
-                    getContext: (): null => {
-                        return null;
-                    },
-                    getBoundingClientRect: () => {
-                        return {
-                            left: 0,
-                            top: 0,
-                            width: 300,
-                            height: 150,
-                            right: 300,
-                            bottom: 150
-                        };
-                    },
-                    width: 300,
-                    height: 150
-                };
+    // window and document stubs
+    Object.assign(globalThis, {
+        window: { navigator: { userAgent: 'node.js' } },
+        document: {
+            createElement: (type: string) => {
+                if (type === 'canvas') {
+                    return {
+                        getContext: (): null => {
+                            return null;
+                        },
+                        getBoundingClientRect: () => {
+                            return {
+                                left: 0,
+                                top: 0,
+                                width: 300,
+                                height: 150,
+                                right: 300,
+                                bottom: 150
+                            };
+                        },
+                        width: 300,
+                        height: 150
+                    };
+                }
             }
         }
-    };
+    });
 };
 
 initializeGlobals();
@@ -150,8 +148,8 @@ const createDevice = async (adapterName?: string, backend?: string): Promise<Gra
     // LOD chain ended up with several identical full-resolution levels. Handling
     // it here once means every GPU consumer (decimate, filters, voxelization, …)
     // fails loudly without wrapping each call site in its own error scope.
-    // @ts-ignore - wgpu is private on WebgpuGraphicsDevice but exposed in practice
-    const wgpu = (graphicsDevice as any).wgpu;
+    // wgpu is private on WebgpuGraphicsDevice but exposed in practice
+    const wgpu: GPUDevice | undefined = graphicsDevice['wgpu'];
 
     // A corrupted GPU result must never be written out, so we escalate to a hard
     // failure: re-raise on the next tick so main()'s uncaughtException handler
@@ -165,7 +163,7 @@ const createDevice = async (adapterName?: string, backend?: string): Promise<Gra
         });
     };
 
-    wgpu?.addEventListener?.('uncapturederror', (ev: any) => {
+    wgpu?.addEventListener?.('uncapturederror', (ev) => {
         const e = ev?.error;
         const kind = e?.constructor?.name === 'GPUOutOfMemoryError' ? 'out-of-memory' : 'error';
         escalateGpuError(`${kind}: ${e?.message || '(no message)'}`);
@@ -173,7 +171,7 @@ const createDevice = async (adapterName?: string, backend?: string): Promise<Gra
 
     // Skip the `destroyed` reason — that fires on intentional device.destroy()
     // during normal shutdown.
-    wgpu?.lost?.then((info: any) => {
+    wgpu?.lost?.then((info) => {
         if (info?.reason === 'destroyed') return;
         escalateGpuError(`device lost: reason=${info?.reason || 'unknown'}, message=${info?.message || '(none)'}`);
     });
@@ -188,11 +186,10 @@ const createDevice = async (adapterName?: string, backend?: string): Promise<Gra
     // captured. Blind spots: engine-internal readback staging buffers
     // bypass `_vram`, and Dawn's own overhead (pipelines, heap padding)
     // is invisible — the peak is a lower bound on true device memory.
-    // @ts-ignore - _vram is private on GraphicsDevice
-    const vram = (graphicsDevice as any)._vram;
-    (graphicsDevice as any)._vram = new Proxy(vram, {
+    const vram = graphicsDevice._vram;
+    graphicsDevice._vram = new Proxy(vram, {
         set(target, prop, value) {
-            target[prop] = value;
+            Reflect.set(target, prop, value);
             const total = target.tex + target.vb + target.ib + target.ub + target.sb;
             if (total > peakGpuBytes) {
                 peakGpuBytes = total;

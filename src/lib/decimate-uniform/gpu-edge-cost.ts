@@ -361,7 +361,8 @@ class GpuEdgeCost {
         // the limit; the widest appearance chunk and rotR are the candidates.
         // posScalars (8 floats/splat) is strictly smaller than rotR (9), so the
         // rotR check already bounds it — no separate check needed.
-        const maxStorage = (device as any).limits?.maxStorageBufferBindingSize;
+        const maxStorage = (device as GraphicsDevice & { limits?: { maxStorageBufferBindingSize?: number } }).limits
+            ?.maxStorageBufferBindingSize;
         if (typeof maxStorage === 'number') {
             const checkLimit = (label: string, bytes: number) => {
                 if (bytes > maxStorage) {

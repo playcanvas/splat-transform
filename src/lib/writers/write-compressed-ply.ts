@@ -2,7 +2,7 @@ import { basename } from 'pathe';
 
 import type { ChunkSource, ChunkDataPool } from '../chunk';
 import { materializeToDataTable } from '../compat/data-table';
-import type { DataTable } from '../data-table';
+import type { DataTable, Row } from '../data-table';
 import { sortMortonOrder, convertToSpace, getSHBands, shRestNames } from '../data-table';
 import type { FileSystem } from '../io/write';
 import type { SplatModel } from '../splat-model';
@@ -105,7 +105,7 @@ const writeCompressedPly = async (options: WriteCompressedPlyOptions, fs: FileSy
     }
     sortMortonOrder(dataTable, sortIndices);
 
-    const row: any = {};
+    const row: Row = {};
 
     const chunk = new CompressedChunk();
 

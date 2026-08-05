@@ -27,6 +27,31 @@ import { logger } from '../utils';
 
 type Vec3Like = { x: number; y: number; z: number };
 
+// parsed json shapes; leaf values stay unknown until validated
+type EditorPose = { frame?: unknown; position?: unknown; target?: unknown; fov?: unknown };
+
+type EditorDocument = {
+    timeline?: { frames?: unknown; frameRate?: unknown; smoothness?: unknown; loop?: boolean };
+    camera?: { fov?: unknown };
+    poseSets?: { poses?: EditorPose[] }[];
+};
+
+type ViewerSettings = {
+    animTracks?: {
+        frameRate?: unknown;
+        duration?: unknown;
+        smoothness?: unknown;
+        keyframes?: { times?: number[]; values?: { position?: number[]; target?: number[]; fov?: unknown[] } };
+        loopMode?: string;
+        interpolation?: string;
+    }[];
+};
+
+type FrameList = {
+    frameRate?: unknown;
+    frames?: { position?: unknown; target?: unknown; up?: unknown; fov?: unknown }[];
+};
+
 /**
  * A camera pose on a track: position, look-at target, vertical fov in
  * degrees and, optionally, a unit up vector (the renderer's `up` option
@@ -253,14 +278,14 @@ const splineTrack = (
  * @param up - Up vector for every pose.
  * @returns The track.
  */
-const fromEditorDocument = (doc: any, defaultFov: number, up: Vec3Like): CameraTrack => {
+const fromEditorDocument = (doc: EditorDocument, defaultFov: number, up: Vec3Like): CameraTrack => {
     const timeline = doc.timeline ?? {};
     const frameCount = Math.floor(finiteNumber(timeline.frames, 'timeline.frames'));
     const frameRate = finiteNumber(timeline.frameRate, 'timeline.frameRate', 30);
     const smoothness = finiteNumber(timeline.smoothness, 'timeline.smoothness', 1);
     const loop = timeline.loop ?? true;
     const docFov = typeof doc.camera?.fov === 'number' ? doc.camera.fov : defaultFov;
-    const poses: any[] = doc.poseSets?.[0]?.poses ?? [];
+    const poses = doc.poseSets?.[0]?.poses ?? [];
     if (poses.length === 0) {
         throw new Error('camera track: the project has no camera poses');
     }
@@ -300,7 +325,7 @@ const fromEditorDocument = (doc: any, defaultFov: number, up: Vec3Like): CameraT
  * @param up - Up vector for every pose.
  * @returns The track.
  */
-const fromViewerSettings = (settings: any, up: Vec3Like): CameraTrack => {
+const fromViewerSettings = (settings: ViewerSettings, up: Vec3Like): CameraTrack => {
     const track = settings.animTracks?.[0];
     if (!track) {
         throw new Error('camera track: the settings have no animation tracks');
@@ -308,7 +333,7 @@ const fromViewerSettings = (settings: any, up: Vec3Like): CameraTrack => {
     const frameRate = finiteNumber(track.frameRate, 'animTrack.frameRate', 30);
     const duration = finiteNumber(track.duration, 'animTrack.duration');
     const smoothness = finiteNumber(track.smoothness, 'animTrack.smoothness', 1);
-    const times: number[] = track.keyframes?.times ?? [];
+    const times = track.keyframes?.times ?? [];
     const { position = [], target = [], fov = [] } = track.keyframes?.values ?? {};
     if (times.length === 0 || position.length !== times.length * 3 || target.length !== times.length * 3) {
         throw new Error('camera track: malformed animTrack keyframes');
@@ -354,8 +379,8 @@ const unitVec3 = (v: Vec3Like, what: string): Vec3Like => {
  * @param defaultUp - Fallback up vector for frames without one.
  * @returns The track.
  */
-const fromFrameList = (json: any, defaultFov: number, defaultUp: Vec3Like): CameraTrack => {
-    const frames: any[] = json.frames;
+const fromFrameList = (json: FrameList, defaultFov: number, defaultUp: Vec3Like): CameraTrack => {
+    const frames = json.frames;
     if (!Array.isArray(frames) || frames.length === 0) {
         throw new Error('camera track: `frames` must be a non-empty array');
     }
@@ -448,7 +473,7 @@ const loadCameraTrack = (json: unknown, defaultFov: number, defaultUp: Vec3Like 
     if (!json || typeof json !== 'object') {
         throw new Error('camera track: expected a JSON object');
     }
-    const j = json as any;
+    const j = json as EditorDocument & ViewerSettings & FrameList;
     if (Array.isArray(j.poseSets) && j.timeline) return fromEditorDocument(j, defaultFov, defaultUp);
     if (Array.isArray(j.animTracks)) return fromViewerSettings(j, defaultUp);
     if (Array.isArray(j.frames)) return fromFrameList(j, defaultFov, defaultUp);

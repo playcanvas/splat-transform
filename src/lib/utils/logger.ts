@@ -160,7 +160,7 @@ const now = (): number => {
     return Date.now();
 };
 
-const fmtArgs = (args: any[]): string => {
+const fmtArgs = (args: unknown[]): string => {
     return args
         .map((a) => {
             if (a instanceof Error) return a.stack ?? a.message;
@@ -492,7 +492,7 @@ const logger = {
      * Emit an info message indented under the innermost active scope.
      * @param args - Message parts (joined with a space).
      */
-    info(...args: any[]): void {
+    info(...args: unknown[]): void {
         if (!core.isLevelVisible('info')) return;
         core.message('info', fmtArgs(args));
     },
@@ -501,7 +501,7 @@ const logger = {
      * Emit a warning indented under the innermost active scope.
      * @param args - Message parts.
      */
-    warn(...args: any[]): void {
+    warn(...args: unknown[]): void {
         if (!core.isLevelVisible('warn')) return;
         core.message('warn', fmtArgs(args));
     },
@@ -511,7 +511,7 @@ const logger = {
      * an automatic unwind of all open scopes, marking each as failed.
      * @param args - Message parts.
      */
-    error(...args: any[]): void {
+    error(...args: unknown[]): void {
         core.message('error', fmtArgs(args));
     },
 
@@ -519,7 +519,7 @@ const logger = {
      * Emit a debug message. Shown only at `verbose` verbosity.
      * @param args - Message parts.
      */
-    debug(...args: any[]): void {
+    debug(...args: unknown[]): void {
         if (!core.isLevelVisible('debug')) return;
         core.message('debug', fmtArgs(args));
     },

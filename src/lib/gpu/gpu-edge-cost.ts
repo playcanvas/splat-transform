@@ -219,7 +219,8 @@ class GpuEdgeCost {
 
         // Pre-flight the per-N splat buffer against the device's storage limit
         // so we fail with a clear message instead of a driver-side error.
-        const maxStorage = (device as any).limits?.maxStorageBufferBindingSize;
+        const maxStorage = (device as GraphicsDevice & { limits?: { maxStorageBufferBindingSize?: number } }).limits
+            ?.maxStorageBufferBindingSize;
         if (typeof maxStorage === 'number') {
             const bytes = maxN * SPLAT_STRIDE * 4;
             if (bytes > maxStorage) {

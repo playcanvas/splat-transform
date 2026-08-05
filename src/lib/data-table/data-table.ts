@@ -128,7 +128,7 @@ class DataTable {
 
     setRow(index: number, row: Row, columns = this.columns) {
         for (const column of columns) {
-            if (Object.hasOwn(row, column.name)) {
+            if (Reflect.apply(row.hasOwnProperty, row, [column.name])) {
                 column.data[index] = row[column.name];
             }
         }

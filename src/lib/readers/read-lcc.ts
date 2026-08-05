@@ -62,10 +62,23 @@ type CompressInfo = {
     envShMax: Vec3; // max environment sh
 };
 
+type LccAttribute = {
+    name: string;
+    min: number[];
+    max: number[];
+};
+
+type LccMeta = {
+    attributes: LccAttribute[];
+    totalLevel: number;
+    splats: number[];
+    fileType?: string;
+};
+
 // parse .lcc files, such as meta.lcc
-const parseMeta = (obj: any): CompressInfo => {
-    const attributes: Record<string, any> = {};
-    obj.attributes.forEach((attr: any) => {
+const parseMeta = (obj: LccMeta): CompressInfo => {
+    const attributes: Record<string, LccAttribute> = {};
+    obj.attributes.forEach((attr) => {
         attributes[attr.name] = attr;
     });
 
@@ -81,7 +94,7 @@ const parseMeta = (obj: any): CompressInfo => {
     return { scaleMin, scaleMax, shMin, shMax, envScaleMin, envScaleMax, envShMin, envShMax };
 };
 
-const parseIndexBin = (raw: ArrayBuffer, meta: any): LccUnitInfo[] => {
+const parseIndexBin = (raw: ArrayBuffer, meta: LccMeta): LccUnitInfo[] => {
     let offset = 0;
 
     const buff = new DataView(raw);
@@ -479,7 +492,7 @@ const deserializeEnvironment = (raw: Uint8Array, compressInfo: CompressInfo, has
 const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Options): Promise<DataTable[]> => {
     const lccData = await readFile(fileSystem, filename);
     const lccText = new TextDecoder().decode(lccData);
-    const lccJson = JSON.parse(lccText);
+    const lccJson = JSON.parse(lccText) as LccMeta;
 
     const determineSH = () => {
         if (lccJson.fileType === 'Portable') {
@@ -491,7 +504,7 @@ const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Op
         }
 
         // before version 4 sh seems to have always been present, but we test for shcoef attribute anyway
-        return lccJson.attributes.findIndex((attr: any) => attr.name === 'shcoef') !== -1;
+        return lccJson.attributes.findIndex((attr) => attr.name === 'shcoef') !== -1;
     };
 
     // FIXME: it seems some meta.lcc files at https://developer.xgrids.com/#/download?page=sampledata do not have
@@ -625,11 +638,11 @@ const readLcc = async (fileSystem: ReadFileSystem, filename: string, options: Op
 const LCC_TRANSFORM = (): Transform => new Transform().fromEulers(90, 0, 180);
 
 // Whether this LCC scene carries spherical harmonics (mirrors readLcc).
-const lccHasSH = (lccJson: any): boolean => {
+const lccHasSH = (lccJson: LccMeta): boolean => {
     if (lccJson.fileType === 'Portable') return false;
     if (lccJson.fileType === 'Quality') return true;
     // Pre-v4 / missing fileType: assume SH if a shcoef attribute is present.
-    return lccJson.attributes.findIndex((attr: any) => attr.name === 'shcoef') !== -1;
+    return lccJson.attributes.findIndex((attr) => attr.name === 'shcoef') !== -1;
 };
 
 /**
@@ -665,7 +678,7 @@ const readLccSource = async (
     options: Options,
     pool: ChunkDataPool
 ): Promise<ChunkSource> => {
-    const lccJson = JSON.parse(new TextDecoder().decode(await readFile(fileSystem, filename)));
+    const lccJson = JSON.parse(new TextDecoder().decode(await readFile(fileSystem, filename))) as LccMeta;
     const hasSH = lccHasSH(lccJson);
     const compressInfo = parseMeta(lccJson);
     const splats = lccJson.splats;
@@ -1034,7 +1047,7 @@ const readLccEnvironmentSource = async (
     filename: string,
     pool: ChunkDataPool
 ): Promise<ChunkSource | null> => {
-    const lccJson = JSON.parse(new TextDecoder().decode(await readFile(fileSystem, filename)));
+    const lccJson = JSON.parse(new TextDecoder().decode(await readFile(fileSystem, filename))) as LccMeta;
     const hasSH = lccHasSH(lccJson);
     const compressInfo = parseMeta(lccJson);
 

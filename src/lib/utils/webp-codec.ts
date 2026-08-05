@@ -14,9 +14,9 @@ class WebPCodec {
      */
     static wasmUrl: string | null = null;
 
-    private static modulePromise: Promise<any> | null = null;
+    private static modulePromise: ReturnType<typeof createModule> | null = null;
 
-    Module: any;
+    Module: Awaited<ReturnType<typeof createModule>>;
 
     /**
      * The effective webp.wasm location to hand to worker threads (which can't
