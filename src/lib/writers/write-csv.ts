@@ -1,9 +1,10 @@
 import { basename } from 'pathe';
 
-import { logWrittenFile } from './utils';
-import { DataTable } from '../data-table';
-import { type FileSystem } from '../io/write';
+import type { DataTable } from '../data-table';
+import type { FileSystem } from '../io/write';
 import { logger } from '../utils';
+
+import { logWrittenFile } from './utils';
 
 type WriteCSVOptions = {
     filename: string;
@@ -34,7 +35,7 @@ const writeCsv = async (options: WriteCSVOptions, fs: FileSystem) => {
     // write header
     await writer.write(textEncoder.encode(`${dataTable.columnNames.join(',')}\n`));
 
-    const columns = dataTable.columns.map(c => c.data);
+    const columns = dataTable.columns.map((c) => c.data);
 
     // write rows
     for (let i = 0; i < len; ++i) {

@@ -1,4 +1,5 @@
-import { type ReadFileSystem, type ProgressCallback, type ReadSource, ReadStream } from './file-system';
+import { ReadStream } from './file-system';
+import type { ReadFileSystem, ProgressCallback, ReadSource } from './file-system';
 
 /**
  * Metadata for a zip file entry.
@@ -7,8 +8,8 @@ type ZipEntry = {
     name: string;
     compressedSize: number;
     uncompressedSize: number;
-    offset: number;        // Local header offset
-    method: number;        // 0=store, 8=deflate
+    offset: number; // Local header offset
+    method: number; // 0=store, 8=deflate
 };
 
 /**
@@ -41,9 +42,9 @@ class DeflateEntryReadStream extends ReadStream {
     private sourceStream: ReadStream;
     private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
     private buffer: Uint8Array | null = null;
-    private bufferOffset: number = 0;
-    private closed: boolean = false;
-    private initialized: boolean = false;
+    private bufferOffset = 0;
+    private closed = false;
+    private initialized = false;
 
     constructor(sourceStream: ReadStream, expectedSize: number) {
         super(expectedSize);
@@ -152,7 +153,7 @@ class ZipEntrySource implements ReadSource {
     private source: ReadSource;
     private entry: ZipEntry;
     private dataOffset: number;
-    private closed: boolean = false;
+    private closed = false;
 
     constructor(source: ReadSource, entry: ZipEntry, dataOffset: number) {
         this.source = source;
@@ -172,10 +173,7 @@ class ZipEntrySource implements ReadSource {
             // Stored (uncompressed) - direct range read
             const rangeStart = start ?? 0;
             const rangeEnd = end ?? this.entry.uncompressedSize;
-            const sourceStream = this.source.read(
-                this.dataOffset + rangeStart,
-                this.dataOffset + rangeEnd
-            );
+            const sourceStream = this.source.read(this.dataOffset + rangeStart, this.dataOffset + rangeEnd);
             return new StoredEntryReadStream(sourceStream, rangeEnd - rangeStart);
         }
 
@@ -185,10 +183,7 @@ class ZipEntrySource implements ReadSource {
                 throw new Error('Range reads not supported on compressed zip entries');
             }
 
-            const sourceStream = this.source.read(
-                this.dataOffset,
-                this.dataOffset + this.entry.compressedSize
-            );
+            const sourceStream = this.source.read(this.dataOffset, this.dataOffset + this.entry.compressedSize);
             return new DeflateEntryReadStream(sourceStream, this.entry.uncompressedSize);
         }
 
@@ -208,7 +203,7 @@ class ZipReadFileSystem implements ReadFileSystem {
     private source: ReadSource;
     private entries: Map<string, ZipEntry> | null = null;
     private parsePromise: Promise<Map<string, ZipEntry>> | null = null;
-    private closed: boolean = false;
+    private closed = false;
 
     constructor(source: ReadSource) {
         this.source = source;
@@ -238,10 +233,12 @@ class ZipReadFileSystem implements ReadFileSystem {
         // Find EOCD signature (0x06054b50)
         let eocdOffset = -1;
         for (let i = eocdData.length - 22; i >= 0; i--) {
-            if (eocdData[i] === 0x50 &&
+            if (
+                eocdData[i] === 0x50 &&
                 eocdData[i + 1] === 0x4b &&
                 eocdData[i + 2] === 0x05 &&
-                eocdData[i + 3] === 0x06) {
+                eocdData[i + 3] === 0x06
+            ) {
                 eocdOffset = i;
                 break;
             }

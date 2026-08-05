@@ -1,9 +1,12 @@
-import { readBlockPlanPrefix, type PlanScratch, type StoredBlockPlan } from './block-allocation';
-import { replayBlockPlan } from './block-plan';
-import { type DestBuffers } from './block-producer';
-import { type ResidentPositions } from './partition';
-import { gatherBlockView, type PriorityContext } from './priority';
 import { WorkerQueue } from '../workers';
+
+import { readBlockPlanPrefix } from './block-allocation';
+import type { PlanScratch, StoredBlockPlan } from './block-allocation';
+import { replayBlockPlan } from './block-plan';
+import type { DestBuffers } from './block-producer';
+import type { ResidentPositions } from './partition';
+import { gatherBlockView } from './priority';
+import type { PriorityContext } from './priority';
 
 type BlockMergeStreamContext = Pick<PriorityContext, 'source' | 'pool' | 'pos' | 'order' | 'blocks'> & {
     plans: StoredBlockPlan[];
@@ -21,7 +24,7 @@ type BlockMergeStreamContext = Pick<PriorityContext, 'source' | 'pool' | 'pos' |
  * @param tick - Progress callback.
  * @yields Filled destination row counts.
  */
-async function *blockPlanMergeStream(
+async function* blockPlanMergeStream(
     ctx: BlockMergeStreamContext,
     chunkSize: number,
     tick?: (n: number) => void
@@ -72,15 +75,19 @@ async function *blockPlanMergeStream(
                 mColor.buffer as ArrayBuffer
             ];
             if (mOther) transfer.push(mOther.buffer as ArrayBuffer);
-            const merged = await WorkerQueue.run('mergeGroups', {
-                pos: mPos,
-                geo: mGeo,
-                color: mColor,
-                sizes,
-                colorDim,
-                other: mOther,
-                otherDim
-            }, transfer);
+            const merged = await WorkerQueue.run(
+                'mergeGroups',
+                {
+                    pos: mPos,
+                    geo: mGeo,
+                    color: mColor,
+                    sizes,
+                    colorDim,
+                    other: mOther,
+                    otherDim
+                },
+                transfer
+            );
             mergedPos = merged.pos;
             mergedGeo = merged.geo;
             mergedColor = merged.color;
@@ -106,8 +113,10 @@ async function *blockPlanMergeStream(
                 py = mergedPos![mi * 3 + 1];
                 pz = mergedPos![mi * 3 + 2];
                 if (dest.geometric) dest.geometric.set(mergedGeo!.subarray(mi * 8, mi * 8 + 8), rows * 8);
-                if (dest.color) dest.color.set(mergedColor!.subarray(mi * colorDim, (mi + 1) * colorDim), rows * colorDim);
-                if (dest.other) dest.other.set(mergedOther!.subarray(mi * otherDim, (mi + 1) * otherDim), rows * otherDim);
+                if (dest.color)
+                    dest.color.set(mergedColor!.subarray(mi * colorDim, (mi + 1) * colorDim), rows * colorDim);
+                if (dest.other)
+                    dest.other.set(mergedOther!.subarray(mi * otherDim, (mi + 1) * otherDim), rows * otherDim);
             }
             if (dest.position) {
                 dest.position[rows * 3] = px;

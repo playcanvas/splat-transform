@@ -11,12 +11,12 @@
  * arbitrary for k-means centroid assignment. `buildFlatKdTree` is 3D only.
  */
 
-interface KdTreeNode {
+type KdTreeNode = {
     index: number;
-    count: number;          // self + children indices
+    count: number; // self + children indices
     left?: KdTreeNode;
     right?: KdTreeNode;
-}
+};
 
 /**
  * A kd-tree in GPU-friendly flat typed arrays (the exact layout GpuKnn
@@ -37,7 +37,9 @@ type FlatKdTree = {
 const nthElement = (arr: Uint32Array, lo: number, hi: number, k: number, values: ArrayLike<number>) => {
     while (lo < hi) {
         const mid = (lo + hi) >> 1;
-        const va = values[arr[lo]], vb = values[arr[mid]], vc = values[arr[hi]];
+        const va = values[arr[lo]],
+            vb = values[arr[mid]],
+            vc = values[arr[hi]];
         let pivotIdx: number;
         if ((vb - va) * (vc - vb) >= 0) pivotIdx = mid;
         else if ((va - vb) * (vc - va) >= 0) pivotIdx = lo;
@@ -51,15 +53,22 @@ const nthElement = (arr: Uint32Array, lo: number, hi: number, k: number, values:
         // elements, so an all-equal range shrank by one per pass and degenerated
         // to O(N^2) — fatal for inputs where many points share a coordinate
         // (e.g. a splat with every gaussian at the origin).
-        let lt = lo, gt = hi, i = lo;
+        let lt = lo,
+            gt = hi,
+            i = lo;
         let tmp: number;
         while (i <= gt) {
             const v = values[arr[i]];
             if (v < pivotVal) {
-                tmp = arr[i]; arr[i] = arr[lt]; arr[lt] = tmp;
-                lt++; i++;
+                tmp = arr[i];
+                arr[i] = arr[lt];
+                arr[lt] = tmp;
+                lt++;
+                i++;
             } else if (v > pivotVal) {
-                tmp = arr[i]; arr[i] = arr[gt]; arr[gt] = tmp;
+                tmp = arr[i];
+                arr[i] = arr[gt];
+                arr[gt] = tmp;
                 gt--;
             } else {
                 i++;
@@ -96,7 +105,7 @@ const buildFlatKdTree = (x: Float32Array, y: Float32Array, z: Float32Array): Fla
 
     const nodeSplatIdx = new Uint32Array(n);
     const nodePositions = new Float32Array(n * 3);
-    const nodeChildren = new Uint32Array(n * 2).fill(0xFFFFFFFF);
+    const nodeChildren = new Uint32Array(n * 2).fill(0xffffffff);
 
     let cursor = 0;
     const emit = (splat: number): number => {
@@ -118,7 +127,9 @@ const buildFlatKdTree = (x: Float32Array, y: Float32Array, z: Float32Array): Fla
 
         if (count === 2) {
             if (values[indices[lo]] > values[indices[hi]]) {
-                const tmp = indices[lo]; indices[lo] = indices[hi]; indices[hi] = tmp;
+                const tmp = indices[lo];
+                indices[lo] = indices[hi];
+                indices[hi] = tmp;
             }
             const t = emit(indices[lo]);
             nodeChildren[t * 2 + 1] = emit(indices[hi]);
@@ -164,7 +175,9 @@ class KdTree {
 
             if (count === 2) {
                 if (values[indices[lo]] > values[indices[hi]]) {
-                    const tmp = indices[lo]; indices[lo] = indices[hi]; indices[hi] = tmp;
+                    const tmp = indices[lo];
+                    indices[lo] = indices[hi];
+                    indices[hi] = tmp;
                 }
                 return {
                     index: indices[lo],
@@ -202,7 +215,7 @@ class KdTree {
 
         const recurse = (node: KdTreeNode, axis: number) => {
             const distance = point[axis] - colData[axis][node.index];
-            const next = (distance > 0) ? node.right : node.left;
+            const next = distance > 0 ? node.right : node.left;
             const nextAxis = axis + 1 < numCols ? axis + 1 : 0;
 
             cnt++;
@@ -259,8 +272,12 @@ class KdTree {
                 while (pos > 0) {
                     const parent = (pos - 1) >> 1;
                     if (heapDist[parent] < heapDist[pos]) {
-                        const td = heapDist[parent]; heapDist[parent] = heapDist[pos]; heapDist[pos] = td;
-                        const ti = heapIdx[parent]; heapIdx[parent] = heapIdx[pos]; heapIdx[pos] = ti;
+                        const td = heapDist[parent];
+                        heapDist[parent] = heapDist[pos];
+                        heapDist[pos] = td;
+                        const ti = heapIdx[parent];
+                        heapIdx[parent] = heapIdx[pos];
+                        heapIdx[pos] = ti;
                         pos = parent;
                     } else {
                         break;
@@ -277,8 +294,12 @@ class KdTree {
                     if (left < k && heapDist[left] > heapDist[largest]) largest = left;
                     if (right < k && heapDist[right] > heapDist[largest]) largest = right;
                     if (largest === pos) break;
-                    const td = heapDist[pos]; heapDist[pos] = heapDist[largest]; heapDist[largest] = td;
-                    const ti = heapIdx[pos]; heapIdx[pos] = heapIdx[largest]; heapIdx[largest] = ti;
+                    const td = heapDist[pos];
+                    heapDist[pos] = heapDist[largest];
+                    heapDist[largest] = td;
+                    const ti = heapIdx[pos];
+                    heapIdx[pos] = heapIdx[largest];
+                    heapIdx[largest] = ti;
                     pos = largest;
                 }
             }
@@ -286,7 +307,7 @@ class KdTree {
 
         const recurse = (node: KdTreeNode, axis: number) => {
             const distance = point[axis] - colData[axis][node.index];
-            const next = (distance > 0) ? node.right : node.left;
+            const next = distance > 0 ? node.right : node.left;
             const nextAxis = axis + 1 < numCols ? axis + 1 : 0;
 
             if (next) {

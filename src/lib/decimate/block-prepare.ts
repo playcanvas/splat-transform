@@ -1,10 +1,12 @@
-import { type GraphicsDevice } from 'playcanvas';
+import type { GraphicsDevice } from 'playcanvas';
+
+import { GpuKnn } from '../gpu/gpu-knn';
+import { WorkerQueue } from '../workers';
 
 import { buildSplatCache, CACHE_STRIDE } from './edge-cost-cpu';
 import { KNN_SENTINEL } from './knn-core';
-import { type BlockView, gatherBlockView, type PriorityContext } from './priority';
-import { GpuKnn } from '../gpu/gpu-knn';
-import { WorkerQueue } from '../workers';
+import { gatherBlockView } from './priority';
+import type { BlockView, PriorityContext } from './priority';
 
 type PreparedBlock = BlockView & {
     cache: Float32Array;
@@ -68,7 +70,9 @@ const prepareGpuBlock = async (
     const cand = new Uint32Array(k);
     for (let q = 0; q < ownedCount; q++) {
         let count = 0;
-        const qx = view.pos[q * 3], qy = view.pos[q * 3 + 1], qz = view.pos[q * 3 + 2];
+        const qx = view.pos[q * 3],
+            qy = view.pos[q * 3 + 1],
+            qz = view.pos[q * 3 + 2];
         for (let s = 0; s < k; s++) {
             const id = coreNeighbors[q * k + s];
             if (id === KNN_SENTINEL) continue;

@@ -1,8 +1,9 @@
 import { join } from 'pathe';
 
-import { type BlockPlan } from './block-plan';
-import { type ReadSource, type ReadStream } from '../io/read';
-import { type FileSystem } from '../io/write';
+import type { ReadSource, ReadStream } from '../io/read';
+import type { FileSystem } from '../io/write';
+
+import type { BlockPlan } from './block-plan';
 
 const RECORD_BYTES = 12;
 const CURSOR_RECORDS = 4096;
@@ -88,7 +89,10 @@ class PlanCursor {
     private offset = 0;
     private consumed = 0;
 
-    constructor(source: ReadSource, readonly plan: StoredBlockPlan) {
+    constructor(
+        source: ReadSource,
+        readonly plan: StoredBlockPlan
+    ) {
         this.source = source;
         this.stream = source.read();
     }
@@ -97,7 +101,10 @@ class PlanCursor {
         if (this.consumed === this.plan.count) return null;
         if (this.offset === this.buffered) {
             const remaining = (this.plan.count - this.consumed) * RECORD_BYTES;
-            this.buffered = await pullExact(this.stream, this.buffer.subarray(0, Math.min(this.buffer.length, remaining)));
+            this.buffered = await pullExact(
+                this.stream,
+                this.buffer.subarray(0, Math.min(this.buffer.length, remaining))
+            );
             this.offset = 0;
             if (this.buffered < RECORD_BYTES) throw new Error(`truncated decimation plan '${this.plan.path}'`);
         }
@@ -142,9 +149,11 @@ const allocatePlanPrefixes = async (
     const prefixes = new Uint32Array(plans.length);
     const heap: HeapEntry[] = [];
     const cursors: PlanCursor[] = [];
-    const less = (a: HeapEntry, b: HeapEntry): boolean => a.cost < b.cost ||
-        (a.cost === b.cost && (a.cursor.plan.blockIndex < b.cursor.plan.blockIndex ||
-            (a.cursor.plan.blockIndex === b.cursor.plan.blockIndex && (a.a < b.a || (a.a === b.a && a.b < b.b)))));
+    const less = (a: HeapEntry, b: HeapEntry): boolean =>
+        a.cost < b.cost ||
+        (a.cost === b.cost &&
+            (a.cursor.plan.blockIndex < b.cursor.plan.blockIndex ||
+                (a.cursor.plan.blockIndex === b.cursor.plan.blockIndex && (a.a < b.a || (a.a === b.a && a.b < b.b)))));
     const push = (entry: HeapEntry): void => {
         let i = heap.length;
         heap.push(entry);
@@ -188,11 +197,7 @@ const allocatePlanPrefixes = async (
         let removed = 0;
         while (removed < needed && heap.length > 0) {
             const entry = pop();
-            onSelect?.(
-                entry.cursor.plan.blockIndex,
-                prefixes[entry.cursor.plan.blockIndex],
-                entry
-            );
+            onSelect?.(entry.cursor.plan.blockIndex, prefixes[entry.cursor.plan.blockIndex], entry);
             prefixes[entry.cursor.plan.blockIndex]++;
             removed++;
             const next = await entry.cursor.next();
@@ -225,7 +230,8 @@ const readBlockPlanPrefix = async (
     const stream = source.read(0, count * RECORD_BYTES);
     try {
         const bytes = new Uint8Array(count * RECORD_BYTES);
-        if (await pullExact(stream, bytes) !== bytes.length) throw new Error(`truncated decimation plan '${stored.path}'`);
+        if ((await pullExact(stream, bytes)) !== bytes.length)
+            throw new Error(`truncated decimation plan '${stored.path}'`);
         const view = new DataView(bytes.buffer);
         for (let i = 0; i < count; i++) {
             pairs[i * 2] = view.getUint32(i * RECORD_BYTES, true);
@@ -239,10 +245,4 @@ const readBlockPlanPrefix = async (
     }
 };
 
-export {
-    allocatePlanPrefixes,
-    readBlockPlanPrefix,
-    storeBlockPlan,
-    type PlanScratch,
-    type StoredBlockPlan
-};
+export { allocatePlanPrefixes, readBlockPlanPrefix, storeBlockPlan, type PlanScratch, type StoredBlockPlan };

@@ -5,10 +5,11 @@ import { dataTableToChunkSource, materializeToDataTable } from './compat/data-ta
 import { Column, DataTable, sortMortonOrder, convertToSpace, getSHBands } from './data-table';
 import { decimateSource } from './decimate';
 import { computeSourceStats } from './ops';
-import { type InputFormat } from './read';
+import type { InputFormat } from './read';
 import { formatSourceInfo, formatSourceStats } from './source-info';
 import type { DeviceCreator } from './types';
-import { fmtCount, type Group, logger, Transform } from './utils';
+import { fmtCount, logger, Transform } from './utils';
+import type { Group } from './utils';
 import { inverseTransforms, rawColumnMap, isTransformColumn } from './value-transforms';
 import { filterCluster as filterClusterFn } from './voxel/filter-cluster';
 import { filterFloaters as filterFloatersFn } from './voxel/filter-floaters';
@@ -235,7 +236,22 @@ type ProcessOptions = {
  * - `mortonOrder` - Reorder splats by Morton code for spatial locality
  * - `decimate` - Simplify to target count via progressive pairwise merging
  */
-type ProcessAction = Translate | Rotate | Scale | FilterNaN | FilterByValue | FilterBands | FilterBox | FilterSphere | FilterFloaters | FilterCluster | Param | Stats | Info | MortonOrder | Decimate;
+type ProcessAction =
+    | Translate
+    | Rotate
+    | Scale
+    | FilterNaN
+    | FilterByValue
+    | FilterBands
+    | FilterBox
+    | FilterSphere
+    | FilterFloaters
+    | FilterCluster
+    | Param
+    | Stats
+    | Info
+    | MortonOrder
+    | Decimate;
 
 // Describe a delta as "removed N" / "added N" relative to the previous count.
 const describeDelta = (delta: number, noun: string): string => {
@@ -295,7 +311,11 @@ const filter = (dataTable: DataTable, predicate: (row: any, rowIndex: number) =>
  * ]);
  * ```
  */
-const processDataTable = async (dataTable: DataTable, processActions: ProcessAction[], options?: ProcessOptions): Promise<DataTable> => {
+const processDataTable = async (
+    dataTable: DataTable,
+    processActions: ProcessAction[],
+    options?: ProcessOptions
+): Promise<DataTable> => {
     let result = dataTable;
 
     for (let i = 0; i < processActions.length; i++) {
@@ -306,11 +326,9 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 result.transform = new Transform(processAction.value).mul(result.transform);
                 break;
             case 'rotate':
-                result.transform = new Transform().fromEulers(
-                    processAction.value.x,
-                    processAction.value.y,
-                    processAction.value.z
-                ).mul(result.transform);
+                result.transform = new Transform()
+                    .fromEulers(processAction.value.x, processAction.value.y, processAction.value.z)
+                    .mul(result.transform);
                 break;
             case 'scale':
                 result.transform = new Transform(undefined, undefined, processAction.value).mul(result.transform);
@@ -321,7 +339,7 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 const infOk = new Set(['opacity']);
                 const negInfOk = new Set(['scale_0', 'scale_1', 'scale_2']);
                 const columnNames = result.columnNames;
-                const hasRotation = ['rot_0', 'rot_1', 'rot_2', 'rot_3'].every(c => columnNames.includes(c));
+                const hasRotation = ['rot_0', 'rot_1', 'rot_2', 'rot_3'].every((c) => columnNames.includes(c));
 
                 const predicate = (row: any) => {
                     // a zero-norm rotation quaternion cannot be normalized, so the
@@ -354,7 +372,9 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                     columnName = rawColumnMap[columnName];
                 } else if (inverseTransforms[columnName]) {
                     if (columnName === 'opacity' && (value <= 0 || value >= 1)) {
-                        throw new Error(`filterByValue: opacity value must be between 0 and 1 (exclusive), got ${value}`);
+                        throw new Error(
+                            `filterByValue: opacity value must be between 0 and 1 (exclusive), got ${value}`
+                        );
                     }
                     value = inverseTransforms[columnName](value);
                 }
@@ -368,16 +388,18 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 }
 
                 const Predicates = {
-                    'lt': (row: any) => row[columnName] < value,
-                    'lte': (row: any) => row[columnName] <= value,
-                    'gt': (row: any) => row[columnName] > value,
-                    'gte': (row: any) => row[columnName] >= value,
-                    'eq': (row: any) => row[columnName] === value,
-                    'neq': (row: any) => row[columnName] !== value
+                    lt: (row: any) => row[columnName] < value,
+                    lte: (row: any) => row[columnName] <= value,
+                    gt: (row: any) => row[columnName] > value,
+                    gte: (row: any) => row[columnName] >= value,
+                    eq: (row: any) => row[columnName] === value,
+                    neq: (row: any) => row[columnName] !== value
                 };
                 const predicate = Predicates[comparator as keyof typeof Predicates];
                 if (!predicate) {
-                    throw new Error(`filterByValue: unknown comparator '${comparator}', expected one of: ${Object.keys(Predicates).join(', ')}`);
+                    throw new Error(
+                        `filterByValue: unknown comparator '${comparator}', expected one of: ${Object.keys(Predicates).join(', ')}`
+                    );
                 }
                 result = filter(result, predicate);
                 endFilterGroup(g, prev, result);
@@ -402,14 +424,18 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                         }
                     }
 
-                    result = new DataTable(result.columns.map((column) => {
-                        if (map.hasOwnProperty(column.name)) {
-                            const name = map[column.name];
-                            return name ? new Column(name, column.data) : null;
-                        }
-                        return column;
-
-                    }).filter(c => c !== null), result.transform);
+                    result = new DataTable(
+                        result.columns
+                            .map((column) => {
+                                if (Object.hasOwn(map, column.name)) {
+                                    const name = map[column.name];
+                                    return name ? new Column(name, column.data) : null;
+                                }
+                                return column;
+                            })
+                            .filter((c) => c !== null),
+                        result.transform
+                    );
                 }
                 endFilterGroup(g, prev, result);
                 break;
@@ -422,9 +448,7 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 if (result.transform.isIdentity()) {
                     const predicate = (row: any) => {
                         const { x, y, z } = row;
-                        return x >= min.x && x <= max.x &&
-                               y >= min.y && y <= max.y &&
-                               z >= min.z && z <= max.z;
+                        return x >= min.x && x <= max.x && y >= min.y && y <= max.y && z >= min.z && z <= max.z;
                     };
                     result = filter(result, predicate);
                 } else {
@@ -515,7 +539,7 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 if (processAction.count !== null) {
                     keepCount = Math.min(processAction.count, result.numRows);
                 } else {
-                    keepCount = Math.round(result.numRows * (processAction.percent ?? 100) / 100);
+                    keepCount = Math.round((result.numRows * (processAction.percent ?? 100)) / 100);
                 }
                 keepCount = Math.max(0, keepCount);
 
@@ -573,7 +597,6 @@ const processDataTable = async (dataTable: DataTable, processActions: ProcessAct
                 break;
             }
         }
-
     }
 
     return result;

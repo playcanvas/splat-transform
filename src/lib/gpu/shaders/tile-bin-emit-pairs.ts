@@ -22,7 +22,7 @@
  *
  * @returns WGSL source for the emit-pairs compute shader.
  */
-const tileBinEmitPairsWgsl = () => /* wgsl */`
+const tileBinEmitPairsWgsl = () => /* wgsl */ `
 #include "uniformsStruct"
 #include "constants"
 

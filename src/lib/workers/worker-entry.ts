@@ -1,5 +1,7 @@
-import { taskHandlers, type HostMessage, type WorkerMessage } from './tasks';
 import { WebPCodec } from '../utils/webp-codec';
+
+import { taskHandlers } from './tasks';
+import type { HostMessage, WorkerMessage } from './tasks';
 
 /**
  * Worker-side entry point, built and shipped as `dist/worker.mjs` (see
@@ -23,11 +25,14 @@ const bind = (
             const { result, transfer } = await taskHandlers[message.task](message.args);
             post({ type: 'result', result }, transfer);
         } catch (err) {
-            post({
-                type: 'error',
-                message: err instanceof Error ? err.message : String(err),
-                stack: err instanceof Error ? err.stack : undefined
-            }, []);
+            post(
+                {
+                    type: 'error',
+                    message: err instanceof Error ? err.message : String(err),
+                    stack: err instanceof Error ? err.stack : undefined
+                },
+                []
+            );
         }
     });
 
@@ -46,7 +51,7 @@ if (typeof process !== 'undefined' && !!process.versions?.node && (process as an
     import('node:worker_threads').then(({ parentPort }) => {
         bind(
             (message, transfer) => parentPort.postMessage(message, transfer),
-            handler => parentPort.on('message', handler)
+            (handler) => parentPort.on('message', handler)
         );
     });
 } else {

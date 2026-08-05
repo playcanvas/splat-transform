@@ -1,4 +1,4 @@
-import { type ChunkDataPool, type ChunkSource } from './chunk';
+import type { ChunkDataPool, ChunkSource } from './chunk';
 import { dataTableToChunkSource, materializeToDataTable } from './compat/data-table';
 import {
     computeSourceStats,
@@ -12,7 +12,8 @@ import {
     permuteSource,
     reduceBandsSource
 } from './ops';
-import { processDataTable, type ProcessAction, type ProcessOptions } from './process';
+import { processDataTable } from './process';
+import type { ProcessAction, ProcessOptions } from './process';
 import { formatSourceInfo, formatSourceStats } from './source-info';
 import { logger, Transform } from './utils';
 
@@ -22,10 +23,18 @@ import { logger, Transform } from './utils';
  * {@link processSourceBridged} as a `processDataTable` island.
  */
 const SOURCE_ACTION_KINDS: ReadonlySet<ProcessAction['kind']> = new Set([
-    'translate', 'rotate', 'scale',
-    'filterNaN', 'filterByValue', 'filterBox', 'filterSphere', 'filterBands',
+    'translate',
+    'rotate',
+    'scale',
+    'filterNaN',
+    'filterByValue',
+    'filterBox',
+    'filterSphere',
+    'filterBands',
     'mortonOrder',
-    'stats', 'info', 'param'
+    'stats',
+    'info',
+    'param'
 ]);
 
 /**
@@ -98,7 +107,14 @@ const processSource = async (
                 // source's current, unbaked values — matching processDataTable
                 // for every ordering except a transform-baking filterByValue
                 // immediately followed by stats (a rare case).
-                logger.output(formatSourceStats(src.meta, await computeSourceStats(src, pool), action.format, options?.sourceFormat));
+                logger.output(
+                    formatSourceStats(
+                        src.meta,
+                        await computeSourceStats(src, pool),
+                        action.format,
+                        options?.sourceFormat
+                    )
+                );
                 break;
             case 'info':
                 // Structural metadata only (meta-level) — no materialization; the

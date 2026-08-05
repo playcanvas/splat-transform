@@ -16,7 +16,7 @@
  * @param maxCoveragePerSplat - Hard upper bound on per-splat tile count.
  * @returns WGSL source for the equirect tile-coverage block.
  */
-const tileAabbEquirect = (maxCoveragePerSplat: number) => /* wgsl */`
+const tileAabbEquirect = (maxCoveragePerSplat: number) => /* wgsl */ `
     let minTXraw = i32(floor((screenX - radius - gox) / tsz));
     let maxTXraw = i32(floor((screenX + radius - gox) / tsz));
     let txCountRaw = maxTXraw - minTXraw + 1;

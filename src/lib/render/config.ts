@@ -111,7 +111,6 @@ export const TILE_SIZE = 16;
  */
 export const POLE_EPS = 0.005;
 
-
 /**
  * Total GPU memory budget for ALL pair-sized buffers combined: the
  * tile-key and splat-value buffers the rasterizer owns (2× pairsCap × 4 B)

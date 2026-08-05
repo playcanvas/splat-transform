@@ -1,5 +1,5 @@
-import { type ChunkSource, type ChunkSourceMetadata } from '../chunk';
-import { type Transform } from '../utils';
+import type { ChunkSource, ChunkSourceMetadata } from '../chunk';
+import type { Transform } from '../utils';
 
 /**
  * Pre-apply a coordinate-space transform onto a {@link ChunkSource}, lazily.
@@ -20,7 +20,7 @@ const mapSource = (src: ChunkSource, transform: Transform): ChunkSource => {
     const meta: ChunkSourceMetadata = { ...src.meta, transform: composed };
     return {
         meta,
-        read: req => src.read(req),
+        read: (req) => src.read(req),
         close: () => src.close()
     };
 };

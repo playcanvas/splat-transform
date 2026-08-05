@@ -1,8 +1,10 @@
-import { type ChunkPayload } from './block-producer';
-import { type ResidentPositions } from './partition';
-import { gatherBlockView, indexOfSorted, type PriorityContext } from './priority';
-import { type SelectionResult } from './select';
 import { WorkerQueue } from '../workers';
+
+import type { ChunkPayload } from './block-producer';
+import type { ResidentPositions } from './partition';
+import { gatherBlockView, indexOfSorted } from './priority';
+import type { PriorityContext } from './priority';
+import type { SelectionResult } from './select';
 
 /** Context for the merge stream: the priority context plus the selection. */
 type MergeStreamContext = Pick<PriorityContext, 'source' | 'pool' | 'pos' | 'order' | 'blocks'> & {
@@ -26,7 +28,7 @@ type MergeStreamContext = Pick<PriorityContext, 'source' | 'pool' | 'pos' | 'ord
  * @param tick - Optional progress callback (owned gaussians processed).
  * @yields One {@link ChunkPayload} per output chunk, in order.
  */
-async function *mergeStream(
+async function* mergeStream(
     ctx: MergeStreamContext,
     chunkSize: number,
     tick?: (n: number) => void
@@ -113,17 +115,25 @@ async function *mergeStream(
                     mi++;
                 }
             }
-            const transfer: ArrayBuffer[] = [mPos.buffer as ArrayBuffer, mGeo.buffer as ArrayBuffer, mColor.buffer as ArrayBuffer];
+            const transfer: ArrayBuffer[] = [
+                mPos.buffer as ArrayBuffer,
+                mGeo.buffer as ArrayBuffer,
+                mColor.buffer as ArrayBuffer
+            ];
             if (mOther) transfer.push(mOther.buffer as ArrayBuffer);
-            const merged = await WorkerQueue.run('mergeGroups', {
-                pos: mPos,
-                geo: mGeo,
-                color: mColor,
-                sizes,
-                colorDim,
-                other: mOther,
-                otherDim
-            }, transfer);
+            const merged = await WorkerQueue.run(
+                'mergeGroups',
+                {
+                    pos: mPos,
+                    geo: mGeo,
+                    color: mColor,
+                    sizes,
+                    colorDim,
+                    other: mOther,
+                    otherDim
+                },
+                transfer
+            );
             mergedPos = merged.pos;
             mergedGeo = merged.geo;
             mergedColor = merged.color;
@@ -135,7 +145,7 @@ async function *mergeStream(
         for (let i = 0; i < nOwned; i++) {
             const g = owned[i];
             const mg = memberGroup[g];
-            if (mg !== -1 && groupMin[mg] !== g) continue;   // consumed member
+            if (mg !== -1 && groupMin[mg] !== g) continue; // consumed member
 
             if (mg === -1) {
                 // Survivor pass-through: position from resident arrays,

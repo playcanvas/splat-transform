@@ -1,14 +1,18 @@
-import { type GraphicsDevice } from 'playcanvas';
+import type { GraphicsDevice } from 'playcanvas';
+
+import type { ChunkData, ChunkDataPool, ChunkSource } from '../chunk';
+import { createMergeScratch, makeGaussianSamples, sigmoid, ellipsoidArea } from '../decimate/moment-match';
+import type { SplatView } from '../decimate/moment-match';
+import { WorkerQueue } from '../workers';
 
 import { buildCostCache, computeEdgeCostView } from './edge-cost-cpu';
-import { APP_CHUNK, GpuEdgeCost, type EdgeCostCache } from './gpu-edge-cost';
+import { APP_CHUNK, GpuEdgeCost } from './gpu-edge-cost';
+import type { EdgeCostCache } from './gpu-edge-cost';
 import { GpuKnn } from './gpu-knn';
-import { collectBlock, verifyAndFixKnn, toGlobalNeighbors, KNN_FIXED, type BlockLocals } from './knn-blocks';
+import { collectBlock, verifyAndFixKnn, toGlobalNeighbors, KNN_FIXED } from './knn-blocks';
+import type { BlockLocals } from './knn-blocks';
 import { KNN_SENTINEL } from './knn-core';
-import { type BlockRange, type ResidentPositions } from './partition';
-import { type ChunkData, type ChunkDataPool, type ChunkSource } from '../chunk';
-import { createMergeScratch, makeGaussianSamples, sigmoid, ellipsoidArea, type SplatView } from '../decimate/moment-match';
-import { WorkerQueue } from '../workers';
+import type { BlockRange, ResidentPositions } from './partition';
 
 /** Halo radius multiplier on the density-estimated k-NN radius. */
 const HALO_FACTOR = 2.5;
@@ -137,7 +141,8 @@ const gatherBlockView = async (
 
 // Binary search `g` in the sorted array; -1 when absent.
 const indexOfSorted = (sorted: Uint32Array, g: number): number => {
-    let lo = 0, hi = sorted.length - 1;
+    let lo = 0,
+        hi = sorted.length - 1;
     while (lo <= hi) {
         const mid = (lo + hi) >> 1;
         const v = sorted[mid];
@@ -172,20 +177,39 @@ const packGpuCache = (view: SplatView): EdgeCostCache => {
         posScalars[o + 1] = pos[i * 3 + 1];
         posScalars[o + 2] = pos[i * 3 + 2];
         posScalars[o + 3] = linAlpha * ellipsoidArea(sx, sy, sz) + 1e-12;
-        posScalars[o + 4] = Math.log(Math.max(vx, 1e-30)) + Math.log(Math.max(vy, 1e-30)) + Math.log(Math.max(vz, 1e-30));
+        posScalars[o + 4] =
+            Math.log(Math.max(vx, 1e-30)) + Math.log(Math.max(vy, 1e-30)) + Math.log(Math.max(vz, 1e-30));
         posScalars[o + 5] = vx;
         posScalars[o + 6] = vy;
         posScalars[o + 7] = vz;
 
-        let qw = geo[i8], qx = geo[i8 + 1], qy = geo[i8 + 2], qz = geo[i8 + 3];
+        let qw = geo[i8],
+            qx = geo[i8 + 1],
+            qy = geo[i8 + 2],
+            qz = geo[i8 + 3];
         const invq = 1 / Math.max(Math.hypot(qw, qx, qy, qz), 1e-12);
-        qw *= invq; qx *= invq; qy *= invq; qz *= invq;
-        const xx = qx * qx, yy = qy * qy, zz = qz * qz;
-        const wx = qw * qx, wy = qw * qy, wz = qw * qz;
-        const xy = qx * qy, xz = qx * qz, yz = qy * qz;
-        rot[0] = 1 - 2 * (yy + zz); rot[1] = 2 * (xy - wz); rot[2] = 2 * (xz + wy);
-        rot[3] = 2 * (xy + wz); rot[4] = 1 - 2 * (xx + zz); rot[5] = 2 * (yz - wx);
-        rot[6] = 2 * (xz - wy); rot[7] = 2 * (yz + wx); rot[8] = 1 - 2 * (xx + yy);
+        qw *= invq;
+        qx *= invq;
+        qy *= invq;
+        qz *= invq;
+        const xx = qx * qx,
+            yy = qy * qy,
+            zz = qz * qz;
+        const wx = qw * qx,
+            wy = qw * qy,
+            wz = qw * qz;
+        const xy = qx * qy,
+            xz = qx * qz,
+            yz = qy * qz;
+        rot[0] = 1 - 2 * (yy + zz);
+        rot[1] = 2 * (xy - wz);
+        rot[2] = 2 * (xz + wy);
+        rot[3] = 2 * (xy + wz);
+        rot[4] = 1 - 2 * (xx + zz);
+        rot[5] = 2 * (yz - wx);
+        rot[6] = 2 * (xz - wy);
+        rot[7] = 2 * (yz + wx);
+        rot[8] = 1 - 2 * (xx + yy);
         rotR.set(rot, i * 9);
     }
 
@@ -248,10 +272,14 @@ const runPriorityPass = async (
             const run = Promise.all([treePromise, gpuKnnQueue]).then(([flat]) => {
                 return gpuKnn!.execute(flat, locals.positions, locals.ids.length, locals.ownedCount, out);
             });
-            gpuKnnQueue = run.catch(() => { /* surfaced by the awaiting block */ });
+            gpuKnnQueue = run.catch(() => {
+                /* surfaced by the awaiting block */
+            });
             return { locals, nb: run.then(() => out) };
         }
-        const nb = WorkerQueue.run('knnBlock', { positions: copy, ownedCount: locals.ownedCount, k }, [copy.buffer as ArrayBuffer]);
+        const nb = WorkerQueue.run('knnBlock', { positions: copy, ownedCount: locals.ownedCount, k }, [
+            copy.buffer as ArrayBuffer
+        ]);
         return { locals, nb };
     };
 
@@ -305,8 +333,8 @@ const runPriorityPass = async (
             // Edge lists in owned-major order (view-local endpoints).
             const edgeI = new Uint32Array(nOwned * k);
             const edgeJ = new Uint32Array(nOwned * k);
-            const edgeNb = new Uint32Array(nOwned * k);   // global neighbour per edge
-            const edgeOf = new Uint32Array(nOwned + 1);   // CSR into the edge list per owned row
+            const edgeNb = new Uint32Array(nOwned * k); // global neighbour per edge
+            const edgeOf = new Uint32Array(nOwned + 1); // CSR into the edge list per owned row
             let e = 0;
             for (let qi = 0; qi < nOwned; qi++) {
                 edgeOf[qi] = e;
@@ -361,7 +389,7 @@ const runPriorityPass = async (
                 }
                 const g = owned[qi];
                 for (let s = 0; s < K; s++) {
-                    cand.idx[g * K + s] = s < size ? bestIdx[s] : 0xFFFFFFFF;
+                    cand.idx[g * K + s] = s < size ? bestIdx[s] : 0xffffffff;
                     cand.cost[g * K + s] = s < size ? bestCost[s] : Infinity;
                 }
             }

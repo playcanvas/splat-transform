@@ -1,11 +1,11 @@
 import { Column, DataTable } from '../data-table';
-import { ReadSource } from '../io/read';
+import type { ReadSource } from '../io/read';
 import { logger, Transform } from '../utils';
 
 const TICK_BATCH = 1 << 16;
 
 // Format configuration for different compression modes
-interface CompressionConfig {
+type CompressionConfig = {
     centerBytes: number;
     scaleBytes: number;
     rotationBytes: number;
@@ -16,7 +16,7 @@ interface CompressionConfig {
     colorStartByte: number;
     harmonicsStartByte: number;
     scaleQuantRange: number;
-}
+};
 
 // Half-precision floating point decoder
 function decodeFloat16(encoded: number): number {
@@ -144,7 +144,11 @@ const readKsplat = async (source: ReadSource): Promise<DataTable> => {
     let maxHarmonicsDegree = 0;
     for (let sectionIdx = 0; sectionIdx < maxSections; sectionIdx++) {
         const sectionHeaderOffset = MAIN_HEADER_SIZE + sectionIdx * SECTION_HEADER_SIZE;
-        const sectionHeader = new DataView(fileBuffer.buffer, fileBuffer.byteOffset + sectionHeaderOffset, SECTION_HEADER_SIZE);
+        const sectionHeader = new DataView(
+            fileBuffer.buffer,
+            fileBuffer.byteOffset + sectionHeaderOffset,
+            SECTION_HEADER_SIZE
+        );
 
         const sectionSplatCount = sectionHeader.getUint32(0, true);
         if (sectionSplatCount === 0) continue; // Skip empty sections
@@ -198,7 +202,11 @@ const readKsplat = async (source: ReadSource): Promise<DataTable> => {
     // Process each section
     for (let sectionIdx = 0; sectionIdx < maxSections; sectionIdx++) {
         const sectionHeaderOffset = MAIN_HEADER_SIZE + sectionIdx * SECTION_HEADER_SIZE;
-        const sectionHeader = new DataView(fileBuffer.buffer, fileBuffer.byteOffset + sectionHeaderOffset, SECTION_HEADER_SIZE);
+        const sectionHeader = new DataView(
+            fileBuffer.buffer,
+            fileBuffer.byteOffset + sectionHeaderOffset,
+            SECTION_HEADER_SIZE
+        );
 
         const sectionSplatCount = sectionHeader.getUint32(0, true);
         const maxSectionSplats = sectionHeader.getUint32(4, true);
@@ -216,8 +224,8 @@ const readKsplat = async (source: ReadSource): Promise<DataTable> => {
         const partialBucketMetaSize = partialBuckets * 4;
         const totalBucketStorageSize = bucketStorageSize * bucketCount + partialBucketMetaSize;
         const harmonicsComponentCount = HARMONICS_COMPONENT_COUNT[harmonicsDegree];
-        const bytesPerSplat = centerBytes + scaleBytes + rotationBytes +
-                             colorBytes + harmonicsComponentCount * harmonicsBytes;
+        const bytesPerSplat =
+            centerBytes + scaleBytes + rotationBytes + colorBytes + harmonicsComponentCount * harmonicsBytes;
         const sectionDataSize = bytesPerSplat * maxSectionSplats;
 
         // Calculate decompression parameters
@@ -225,10 +233,18 @@ const readKsplat = async (source: ReadSource): Promise<DataTable> => {
 
         // Get bucket centers
         const bucketCentersOffset = currentSectionDataOffset + partialBucketMetaSize;
-        const bucketCenters = new Float32Array(fileBuffer.buffer, fileBuffer.byteOffset + bucketCentersOffset, bucketCount * 3);
+        const bucketCenters = new Float32Array(
+            fileBuffer.buffer,
+            fileBuffer.byteOffset + bucketCentersOffset,
+            bucketCount * 3
+        );
 
         // Get partial bucket sizes
-        const partialBucketSizes = new Uint32Array(fileBuffer.buffer, fileBuffer.byteOffset + currentSectionDataOffset, partialBuckets);
+        const partialBucketSizes = new Uint32Array(
+            fileBuffer.buffer,
+            fileBuffer.byteOffset + currentSectionDataOffset,
+            partialBuckets
+        );
 
         // Get splat data
         const splatDataOffset = currentSectionDataOffset + totalBucketStorageSize;
@@ -278,9 +294,15 @@ const readKsplat = async (source: ReadSource): Promise<DataTable> => {
                 y = splatData.getFloat32(splatByteOffset + 4, true);
                 z = splatData.getFloat32(splatByteOffset + 8, true);
             } else {
-                x = (splatData.getUint16(splatByteOffset, true) - quantizationRange) * positionScale + bucketCenters[bucketIdx * 3];
-                y = (splatData.getUint16(splatByteOffset + 2, true) - quantizationRange) * positionScale + bucketCenters[bucketIdx * 3 + 1];
-                z = (splatData.getUint16(splatByteOffset + 4, true) - quantizationRange) * positionScale + bucketCenters[bucketIdx * 3 + 2];
+                x =
+                    (splatData.getUint16(splatByteOffset, true) - quantizationRange) * positionScale +
+                    bucketCenters[bucketIdx * 3];
+                y =
+                    (splatData.getUint16(splatByteOffset + 2, true) - quantizationRange) * positionScale +
+                    bucketCenters[bucketIdx * 3 + 1];
+                z =
+                    (splatData.getUint16(splatByteOffset + 4, true) - quantizationRange) * positionScale +
+                    bucketCenters[bucketIdx * 3 + 2];
             }
 
             // Decode scales
@@ -353,11 +375,11 @@ const readKsplat = async (source: ReadSource): Promise<DataTable> => {
                     coeff = i % 3;
                 } else if (i < 24) {
                     channel = Math.floor((i - 9) / 5);
-                    coeff = (i - 9) % 5 + 3;
+                    coeff = ((i - 9) % 5) + 3;
                 } else {
                     // don't think 3 bands are supported, but here just in case
                     channel = Math.floor((i - 24) / 7);
-                    coeff = (i - 24) % 7 + 8;
+                    coeff = ((i - 24) % 7) + 8;
                 }
 
                 const col = channel * (harmonicsComponentCount / 3) + coeff;

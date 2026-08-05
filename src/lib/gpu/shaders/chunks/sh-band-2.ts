@@ -6,7 +6,7 @@
  *          SH_C2_0, SH_C2_1, SH_C2_2, SH_C2_3, SH_C2_4
  * Defines: (mutates) cR, cG, cB
  */
-const shBand2 = /* wgsl */`
+const shBand2 = /* wgsl */ `
     {
         let n = COEFFS_PER_CHANNEL;
         let shBase = base + 14u;

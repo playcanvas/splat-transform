@@ -40,7 +40,7 @@ const wgslF32 = (n: number): string => {
  * Included via `#include "constants"` (see `sharedCincludes` in
  * `gpu-splat-rasterizer.ts`).
  */
-const constantsChunk = /* wgsl */`
+const constantsChunk = /* wgsl */ `
 const TILE_SIZE: u32 = ${TILE_SIZE}u;
 const SIGMA_CUTOFF: f32 = ${wgslF32(SIGMA_CUTOFF)};
 const GAUSSIAN_FLOOR: f32 = ${wgslF32(GAUSSIAN_FLOOR)};

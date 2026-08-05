@@ -1,10 +1,21 @@
-import { type ChunkDataPool, type ChunkLayer, type ChunkSource } from './chunk';
+import type { ChunkDataPool, ChunkLayer, ChunkSource } from './chunk';
 import { materializeToDataTable } from './compat/data-table';
 import { DataTable } from './data-table';
-import { type FileSystem } from './io/write';
-import { type SplatModel } from './splat-model';
-import { type DeviceCreator, type Options } from './types';
-import { writeCompressedPly, writeCsv, writeGlb, writeHtml, writeImage, writePly, writeSog, writeSogSource, writeSpz, writeVoxel } from './writers';
+import type { FileSystem } from './io/write';
+import type { SplatModel } from './splat-model';
+import type { DeviceCreator, Options } from './types';
+import {
+    writeCompressedPly,
+    writeCsv,
+    writeGlb,
+    writeHtml,
+    writeImage,
+    writePly,
+    writeSog,
+    writeSogSource,
+    writeSpz,
+    writeVoxel
+} from './writers';
 import { splatModelComment } from './writers/utils';
 import { writeCompressedPlySource } from './writers/write-compressed-ply';
 import { writePlyStreaming } from './writers/write-ply-streaming';
@@ -27,7 +38,20 @@ import { writeSplatStreaming } from './writers/write-splat-streaming';
  * - `voxel` - Sparse voxel octree format for collision detection
  * - `image` - Rasterized RGBA image (lossless WebP) rendered from a camera view
  */
-type OutputFormat = 'csv' | 'sog' | 'sog-bundle' | 'lod' | 'compressed-ply' | 'ply' | 'splat' | 'spz' | 'glb' | 'html' | 'html-bundle' | 'voxel' | 'image';
+type OutputFormat =
+    | 'csv'
+    | 'sog'
+    | 'sog-bundle'
+    | 'lod'
+    | 'compressed-ply'
+    | 'ply'
+    | 'splat'
+    | 'spz'
+    | 'glb'
+    | 'html'
+    | 'html-bundle'
+    | 'voxel'
+    | 'image';
 
 /**
  * Options for writing a Gaussian splat file.
@@ -126,17 +150,22 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
             break;
         case 'sog':
         case 'sog-bundle':
-            await writeSog({
-                filename,
-                dataTable,
-                model,
-                bundle: outputFormat === 'sog-bundle',
-                iterations: options.iterations ?? 10,
-                createDevice
-            }, fs);
+            await writeSog(
+                {
+                    filename,
+                    dataTable,
+                    model,
+                    bundle: outputFormat === 'sog-bundle',
+                    iterations: options.iterations ?? 10,
+                    createDevice
+                },
+                fs
+            );
             break;
         case 'lod':
-            throw new Error('lod-meta.json output is written from a multi-LOD ChunkSource via writeLodSource, not from a DataTable.');
+            throw new Error(
+                'lod-meta.json output is written from a multi-LOD ChunkSource via writeLodSource, not from a DataTable.'
+            );
         case 'compressed-ply':
             await writeCompressedPly({ filename, dataTable, model }, fs);
             break;
@@ -146,83 +175,100 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
             const comment = splatModelComment(model);
             // 2DGS has no third scale axis: it was materialized on read to keep
             // the pipeline uniform, so drop it again here.
-            const columns = model === '2dgs' ?
-                dataTable.columns.filter(c => c.name !== 'scale_2') :
-                dataTable.columns;
-            await writePly({
-                filename,
-                plyData: {
-                    comments: comment ? [comment] : [],
-                    elements: [{
-                        name: 'vertex',
-                        dataTable: columns.length === dataTable.columns.length ?
-                            dataTable :
-                            new DataTable(columns, dataTable.transform)
-                    }]
-                }
-            }, fs);
+            const columns =
+                model === '2dgs' ? dataTable.columns.filter((c) => c.name !== 'scale_2') : dataTable.columns;
+            await writePly(
+                {
+                    filename,
+                    plyData: {
+                        comments: comment ? [comment] : [],
+                        elements: [
+                            {
+                                name: 'vertex',
+                                dataTable:
+                                    columns.length === dataTable.columns.length
+                                        ? dataTable
+                                        : new DataTable(columns, dataTable.transform)
+                            }
+                        ]
+                    }
+                },
+                fs
+            );
             break;
         }
         case 'spz':
-            await writeSpz({
-                filename,
-                dataTable,
-                model,
-                version: options.spzVersion ?? 4
-            }, fs);
+            await writeSpz(
+                {
+                    filename,
+                    dataTable,
+                    model,
+                    version: options.spzVersion ?? 4
+                },
+                fs
+            );
             break;
         case 'glb':
             await writeGlb({ filename, dataTable }, fs);
             break;
         case 'html':
         case 'html-bundle':
-            await writeHtml({
-                filename,
-                dataTable,
-                viewerSettingsJson: options.viewerSettingsJson,
-                bundle: outputFormat === 'html-bundle',
-                iterations: options.iterations ?? 10,
-                createDevice
-            }, fs);
+            await writeHtml(
+                {
+                    filename,
+                    dataTable,
+                    viewerSettingsJson: options.viewerSettingsJson,
+                    bundle: outputFormat === 'html-bundle',
+                    iterations: options.iterations ?? 10,
+                    createDevice
+                },
+                fs
+            );
             break;
         case 'voxel':
-            await writeVoxel({
-                filename,
-                dataTable,
-                voxelResolution: options.voxelResolution,
-                opacityCutoff: options.opacityCutoff,
-                navExteriorRadius: options.navExteriorRadius,
-                floorFill: options.floorFill,
-                floorFillDilation: options.floorFillDilation,
-                navCapsule: options.navCapsule,
-                navSeed: options.navSeed,
-                collisionMesh: options.collisionMesh,
-                createDevice
-            }, fs);
+            await writeVoxel(
+                {
+                    filename,
+                    dataTable,
+                    voxelResolution: options.voxelResolution,
+                    opacityCutoff: options.opacityCutoff,
+                    navExteriorRadius: options.navExteriorRadius,
+                    floorFill: options.floorFill,
+                    floorFillDilation: options.floorFillDilation,
+                    navCapsule: options.navCapsule,
+                    navSeed: options.navSeed,
+                    collisionMesh: options.collisionMesh,
+                    createDevice
+                },
+                fs
+            );
             break;
         case 'image':
-            await writeImage({
-                filename,
-                dataTable,
-                projection: options.renderProjection,
-                cameraPosition: options.renderCameraPosition,
-                lookAt: options.renderLookAt,
-                up: options.renderUp,
-                fov: options.renderFov,
-                width: options.renderWidth,
-                height: options.renderHeight,
-                near: options.renderNear,
-                background: options.renderBackground,
-                fStop: options.renderFStop,
-                focusDistance: options.renderFocusDistance,
-                sensorSize: options.renderSensorSize,
-                cameraEndPosition: options.renderCameraEndPosition,
-                lookAtEnd: options.renderLookAtEnd,
-                upEnd: options.renderUpEnd,
-                shutter: options.renderShutter,
-                motionSamples: options.renderMotionSamples,
-                createDevice
-            }, fs);
+            await writeImage(
+                {
+                    filename,
+                    dataTable,
+                    projection: options.renderProjection,
+                    cameraPosition: options.renderCameraPosition,
+                    lookAt: options.renderLookAt,
+                    up: options.renderUp,
+                    fov: options.renderFov,
+                    width: options.renderWidth,
+                    height: options.renderHeight,
+                    near: options.renderNear,
+                    background: options.renderBackground,
+                    fStop: options.renderFStop,
+                    focusDistance: options.renderFocusDistance,
+                    sensorSize: options.renderSensorSize,
+                    cameraEndPosition: options.renderCameraEndPosition,
+                    lookAtEnd: options.renderLookAtEnd,
+                    upEnd: options.renderUpEnd,
+                    shutter: options.renderShutter,
+                    motionSamples: options.renderMotionSamples,
+                    createDevice
+                },
+                fs
+            );
             break;
     }
 };
@@ -266,12 +312,17 @@ const writeSource = async (writeSourceOptions: WriteSourceOptions, fs: FileSyste
             break;
         case 'sog':
         case 'sog-bundle':
-            await writeSogSource(source, pool, {
-                filename,
-                bundle: outputFormat === 'sog-bundle',
-                iterations: options.iterations ?? 10,
-                createDevice
-            }, fs);
+            await writeSogSource(
+                source,
+                pool,
+                {
+                    filename,
+                    bundle: outputFormat === 'sog-bundle',
+                    iterations: options.iterations ?? 10,
+                    createDevice
+                },
+                fs
+            );
             break;
         case 'compressed-ply':
             await writeCompressedPlySource(source, pool, { filename }, fs);
@@ -286,7 +337,11 @@ const writeSource = async (writeSourceOptions: WriteSourceOptions, fs: FileSyste
             // x/y/z, rot, scale, opacity — no color/SH). Materialize just those
             // layers so color and SH are never loaded (they were previously read
             // into the full table and discarded).
-            const dataTable = await materializeToDataTable(source, pool, new Set<ChunkLayer>(['position', 'geometric']));
+            const dataTable = await materializeToDataTable(
+                source,
+                pool,
+                new Set<ChunkLayer>(['position', 'geometric'])
+            );
             await writeFile({ filename, outputFormat, dataTable, model: source.meta.model, options, createDevice }, fs);
             break;
         }

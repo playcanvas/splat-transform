@@ -1,10 +1,12 @@
 import { basename } from 'pathe';
 
-import { logWrittenFile } from './utils';
-import { DataTable, convertToSpace, getSHBands, shRestNames } from '../data-table';
-import { type FileSystem } from '../io/write';
+import type { DataTable } from '../data-table';
+import { convertToSpace, getSHBands, shRestNames } from '../data-table';
+import type { FileSystem } from '../io/write';
 import { logger, Transform, sigmoid } from '../utils';
 import { version } from '../version';
+
+import { logWrittenFile } from './utils';
 
 const SH_C0 = 0.2820947917738781;
 
@@ -21,10 +23,10 @@ const UNSIGNED_BYTE = 5121;
 const ARRAY_BUFFER = 34962;
 
 // GLB chunk types
-const GLB_MAGIC = 0x46546C67;
+const GLB_MAGIC = 0x46546c67;
 const GLB_VERSION = 2;
-const JSON_CHUNK_TYPE = 0x4E4F534A;
-const BIN_CHUNK_TYPE = 0x004E4942;
+const JSON_CHUNK_TYPE = 0x4e4f534a;
+const BIN_CHUNK_TYPE = 0x004e4942;
 
 /**
  * Computes POSITION accessor min/max bounds required by the glTF spec.
@@ -35,8 +37,12 @@ const BIN_CHUNK_TYPE = 0x004E4942;
  * @returns Object with min and max arrays.
  */
 const computePositionBounds = (x: Float32Array, y: Float32Array, z: Float32Array) => {
-    let minX = Infinity, minY = Infinity, minZ = Infinity;
-    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    let minX = Infinity,
+        minY = Infinity,
+        minZ = Infinity;
+    let maxX = -Infinity,
+        maxY = -Infinity,
+        maxZ = -Infinity;
 
     for (let i = 0; i < x.length; i++) {
         if (x[i] < minX) minX = x[i];
@@ -147,7 +153,7 @@ const buildBinaryBuffer = (dataTable: DataTable, numSplats: number, shBands: num
     // KHR_gaussian_splatting:ROTATION (VEC4 float, xyzw order)
     const rotData = new Float32Array(numSplats * 4);
     for (let i = 0; i < numSplats; i++) {
-        rotData[i * 4] = rot1[i];     // x
+        rotData[i * 4] = rot1[i]; // x
         rotData[i * 4 + 1] = rot2[i]; // y
         rotData[i * 4 + 2] = rot3[i]; // z
         rotData[i * 4 + 3] = rot0[i]; // w
@@ -209,8 +215,8 @@ const buildBinaryBuffer = (dataTable: DataTable, numSplats: number, shBands: num
     if (shDegrees > 0) {
         const restData: Float32Array[] = [];
         for (let k = 0; k < coeffsPerChannel; k++) {
-            restData.push(dataTable.getColumnByName(shRestNames[k])!.data as Float32Array);                     // red
-            restData.push(dataTable.getColumnByName(shRestNames[k + coeffsPerChannel])!.data as Float32Array);  // green
+            restData.push(dataTable.getColumnByName(shRestNames[k])!.data as Float32Array); // red
+            restData.push(dataTable.getColumnByName(shRestNames[k + coeffsPerChannel])!.data as Float32Array); // green
             restData.push(dataTable.getColumnByName(shRestNames[k + 2 * coeffsPerChannel])!.data as Float32Array); // blue
         }
 
@@ -320,20 +326,24 @@ const writeGlb = async (options: WriteGlbOptions, fs: FileSystem) => {
         buffers: [{ byteLength: binBuffer.byteLength }],
         bufferViews,
         accessors,
-        meshes: [{
-            primitives: [{
-                attributes,
-                mode: 0,
-                extensions: {
-                    KHR_gaussian_splatting: {
-                        kernel: 'ellipse',
-                        colorSpace: 'srgb_rec709_display',
-                        sortingMethod: 'cameraDistance',
-                        projection: 'perspective'
+        meshes: [
+            {
+                primitives: [
+                    {
+                        attributes,
+                        mode: 0,
+                        extensions: {
+                            KHR_gaussian_splatting: {
+                                kernel: 'ellipse',
+                                colorSpace: 'srgb_rec709_display',
+                                sortingMethod: 'cameraDistance',
+                                projection: 'perspective'
+                            }
+                        }
                     }
-                }
-            }]
-        }]
+                ]
+            }
+        ]
     };
 
     const jsonString = JSON.stringify(gltf);

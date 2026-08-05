@@ -17,7 +17,7 @@
  * lat > 0 → screenY in the bottom half. screenY = 0 maps to the zenith
  * (above the camera).
  */
-const projectionEquirect = /* wgsl */`
+const projectionEquirect = /* wgsl */ `
     let r2 = cx * cx + cy * cy + cz * cz;
     if (r2 <= uniforms.near * uniforms.near) { writeInvalid(i); return; }
     let r = sqrt(r2);

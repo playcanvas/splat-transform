@@ -1,6 +1,8 @@
+import type { TypedArray } from '../data-table/data-table';
+import { quantize1dColumns } from '../spatial/quantize-1d-core';
+import type { QuantizedColumns } from '../spatial/quantize-1d-core';
+
 import { WorkerQueue } from './worker-queue';
-import { type TypedArray } from '../data-table/data-table';
-import { quantize1dColumns, type QuantizedColumns } from '../spatial/quantize-1d-core';
 
 /**
  * Typed client wrappers around WorkerQueue tasks. These own the marshalling
@@ -17,7 +19,11 @@ import { quantize1dColumns, type QuantizedColumns } from '../spatial/quantize-1d
  * @returns Centroids (k Float32 codebook) and per-column Uint8 labels.
  * @ignore
  */
-const runQuantize1dColumns = async (columns: { name: string, data: TypedArray }[], k?: number, alpha?: number): Promise<QuantizedColumns> => {
+const runQuantize1dColumns = async (
+    columns: { name: string; data: TypedArray }[],
+    k?: number,
+    alpha?: number
+): Promise<QuantizedColumns> => {
     if (WorkerQueue.isInline) {
         // zero-copy: no point marshalling when running on this thread anyway
         return quantize1dColumns(columns, k, alpha);
@@ -25,8 +31,12 @@ const runQuantize1dColumns = async (columns: { name: string, data: TypedArray }[
 
     // compact copies: column data may be views into larger shared buffers,
     // and the originals must remain usable after the transfer
-    const copies = columns.map(c => ({ name: c.name, data: c.data.slice() }));
-    return await WorkerQueue.run('quantize1d', { columns: copies, k, alpha }, copies.map(c => c.data.buffer as ArrayBuffer));
+    const copies = columns.map((c) => ({ name: c.name, data: c.data.slice() }));
+    return await WorkerQueue.run(
+        'quantize1d',
+        { columns: copies, k, alpha },
+        copies.map((c) => c.data.buffer as ArrayBuffer)
+    );
 };
 
 /**

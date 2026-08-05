@@ -10,12 +10,12 @@
  * Engine-free; pure resident-array computation, no IO.
  */
 
-import { type CandidateArrays } from './priority';
+import type { CandidateArrays } from './priority';
 
 /** Cost-histogram buckets for the ordered greedy walk. */
 const SELECT_BUCKETS = 1024;
 
-const NO_CANDIDATE = 0xFFFFFFFF;
+const NO_CANDIDATE = 0xffffffff;
 
 /**
  * The selected merge groups.
@@ -50,7 +50,8 @@ const selectMerges = (cand: CandidateArrays, N: number, K: number, mergesNeeded:
     const E = N * K;
 
     // Pass 1: finite cost range.
-    let lo = Infinity, hi = -Infinity;
+    let lo = Infinity,
+        hi = -Infinity;
     for (let e = 0; e < E; e++) {
         const c = cand.cost[e];
         if (Number.isFinite(c)) {

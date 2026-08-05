@@ -8,7 +8,7 @@ import type { TypedArray } from '../data-table/data-table';
  */
 type QuantizedColumns = {
     centroids: Float32Array;
-    labels: { name: string, data: Uint8Array }[];
+    labels: { name: string; data: Uint8Array }[];
 };
 
 // The histogram + DP core over sorted finite values: returns up to kTarget
@@ -41,7 +41,7 @@ const quantizeFinite = (sortedData: Float32Array, N: number, kTarget: number, al
 
     const centers = new Float64Array(H);
     for (let i = 0; i < H; ++i) {
-        centers[i] = counts[i] > 0 ? sums[i] / counts[i] : vMin + (i + 0.5) / H * vRange;
+        centers[i] = counts[i] > 0 ? sums[i] / counts[i] : vMin + ((i + 0.5) / H) * vRange;
     }
 
     // compute weights: w = count^alpha (sub-linear density weighting)
@@ -175,7 +175,7 @@ const quantizeFinite = (sortedData: Float32Array, N: number, kTarget: number, al
  * `labels` (same column layout as input, each holding Uint8Array indices
  * into the codebook).
  */
-const quantize1dColumns = (columns: { name: string, data: TypedArray }[], k = 256, alpha = 0.5): QuantizedColumns => {
+const quantize1dColumns = (columns: { name: string; data: TypedArray }[], k = 256, alpha = 0.5): QuantizedColumns => {
     const numColumns = columns.length;
     const numRows = numColumns > 0 ? columns[0].data.length : 0;
 
@@ -185,7 +185,7 @@ const quantize1dColumns = (columns: { name: string, data: TypedArray }[], k = 25
     if (N === 0) {
         return {
             centroids: new Float32Array(k),
-            labels: columns.map(c => ({ name: c.name, data: new Uint8Array(numRows) }))
+            labels: columns.map((c) => ({ name: c.name, data: new Uint8Array(numRows) }))
         };
     }
 
@@ -229,7 +229,7 @@ const quantize1dColumns = (columns: { name: string, data: TypedArray }[], k = 25
 
         return {
             centroids,
-            labels: columns.map(c => ({ name: c.name, data: new Uint8Array(numRows) }))
+            labels: columns.map((c) => ({ name: c.name, data: new Uint8Array(numRows) }))
         };
     }
 
@@ -255,7 +255,7 @@ const quantize1dColumns = (columns: { name: string, data: TypedArray }[], k = 25
     // padded with the last][+Inf sentinel]
     const finalCentroids = new Float32Array(k);
     finalCentroids.set(centroidValues, loSlots);
-    const padValue = effectiveK > 0 ? centroidValues[effectiveK - 1] : (hasNegInf ? negInfCentroid : posInfCentroid);
+    const padValue = effectiveK > 0 ? centroidValues[effectiveK - 1] : hasNegInf ? negInfCentroid : posInfCentroid;
     for (let i = loSlots + effectiveK; i < k - hiSlots; ++i) {
         finalCentroids[i] = padValue;
     }

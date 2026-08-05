@@ -1,5 +1,5 @@
-import { type ChunkSource, type ChunkSourceMetadata, type ReadRequest } from '../chunk';
-import { type ReadSource, type ReadStream } from '../io/read';
+import type { ChunkSource, ChunkSourceMetadata, ReadRequest } from '../chunk';
+import type { ReadSource, ReadStream } from '../io/read';
 
 /**
  * Read exactly `length` bytes from `stream` into `buffer` at `offset`. A stream
@@ -75,7 +75,7 @@ const sortGatherSlots = (count: number, keyOf: (slot: number) => number): Uint32
  * files (e.g. data + SH), so the combined scratch stays bounded.
  * @yields One {@link GatherRun} per coalesced range read.
  */
-function *gatherRuns(
+function* gatherRuns(
     count: number,
     byteAt: (t: number) => number,
     recordBytes: number,
@@ -88,7 +88,7 @@ function *gatherRuns(
         let k = j + 1;
         while (k < count) {
             const nextByte = byteAt(k);
-            if ((nextByte - lastByte) / recordBytes * costBytes > GATHER_MERGE_GAP) break;
+            if (((nextByte - lastByte) / recordBytes) * costBytes > GATHER_MERGE_GAP) break;
             if (((nextByte - firstByte) / recordBytes + 1) * costBytes > GATHER_MAX_WINDOW) break;
             if ((nextByte - firstByte) % recordBytes !== 0) break;
             lastByte = nextByte;

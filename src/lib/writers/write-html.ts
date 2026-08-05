@@ -1,12 +1,14 @@
 import { html, css, js } from '@playcanvas/supersplat-viewer';
 import { basename, dirname, join } from 'pathe';
 
-import { logWrittenFile } from './utils';
-import { writeSog } from './write-sog';
-import { DataTable } from '../data-table';
-import { type FileSystem, MemoryFileSystem, writeFile } from '../io/write';
+import type { DataTable } from '../data-table';
+import { MemoryFileSystem, writeFile } from '../io/write';
+import type { FileSystem } from '../io/write';
 import type { DeviceCreator } from '../types';
 import { logger, toBase64 } from '../utils';
+
+import { logWrittenFile } from './utils';
+import { writeSog } from './write-sog';
 
 const defaultSettings = {
     version: 2,
@@ -21,13 +23,15 @@ const defaultSettings = {
         fringing: { enabled: false, intensity: 0.5 }
     },
     animTracks: [] as any[],
-    cameras: [{
-        initial: {
-            position: [2, 2, -2],
-            target: [0, 0, 0],
-            fov: 75
+    cameras: [
+        {
+            initial: {
+                position: [2, 2, -2],
+                target: [0, 0, 0],
+                fov: 75
+            }
         }
-    }],
+    ],
     annotations: [] as any[],
     startMode: 'default'
 };
@@ -56,7 +60,10 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
 
     const pad = (text: string, spaces: number) => {
         const whitespace = ' '.repeat(spaces);
-        return text.split('\n').map(line => whitespace + line).join('\n');
+        return text
+            .split('\n')
+            .map((line) => whitespace + line)
+            .join('\n');
     };
 
     const viewerSettings = viewerSettingsJson || defaultSettings;
@@ -67,29 +74,32 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
         const memoryFs = new MemoryFileSystem();
 
         const sogFilename = 'temp.sog';
-        await writeSog({
-            filename: sogFilename,
-            dataTable,
-            bundle: true,
-            iterations,
-            createDevice,
-            logging: 'silent'
-        }, memoryFs);
+        await writeSog(
+            {
+                filename: sogFilename,
+                dataTable,
+                bundle: true,
+                iterations,
+                createDevice,
+                logging: 'silent'
+            },
+            memoryFs
+        );
 
         // get the memory buffer
         const sogData = toBase64(memoryFs.results.get(sogFilename));
 
         const style = '<link rel="stylesheet" href="./index.css">';
-        const script = 'import { main } from \'./index.js\';';
+        const script = "import { main } from './index.js';";
         const settings = 'settings: fetch(settingsUrl).then(response => response.json())';
         const content = 'fetch(contentUrl)';
 
         const resultHtml = html
-        .replace(style, `<style>\n${pad(css, 12)}\n        </style>`)
-        .replace(script, js)
-        .replace(settings, `settings: ${JSON.stringify(viewerSettings)}`)
-        .replace(content, `fetch("data:application/octet-stream;base64,${sogData}")`)
-        .replace('.compressed.ply', '.sog');
+            .replace(style, `<style>\n${pad(css, 12)}\n        </style>`)
+            .replace(script, js)
+            .replace(settings, `settings: ${JSON.stringify(viewerSettings)}`)
+            .replace(content, `fetch("data:application/octet-stream;base64,${sogData}")`)
+            .replace('.compressed.ply', '.sog');
 
         const htmlBytes = encoder.encode(resultHtml);
 
@@ -107,14 +117,17 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
         const writingGroup = logger.group('Writing');
 
         // Write .sog file (its files are emitted flat into our Writing group)
-        await writeSog({
-            filename: sogPath,
-            dataTable,
-            bundle: true,
-            iterations,
-            createDevice,
-            logging: 'flat'
-        }, fs);
+        await writeSog(
+            {
+                filename: sogPath,
+                dataTable,
+                bundle: true,
+                iterations,
+                createDevice,
+                logging: 'flat'
+            },
+            fs
+        );
 
         // Write CSS file
         const cssPath = join(outputDir, 'index.css');
@@ -137,9 +150,7 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
         // Generate HTML with external references
         const content = 'fetch(contentUrl)';
 
-        const resultHtml = html
-        .replace(content, `fetch("${sogFilename}")`)
-        .replace('.compressed.ply', '.sog');
+        const resultHtml = html.replace(content, `fetch("${sogFilename}")`).replace('.compressed.ply', '.sog');
 
         const htmlBytes = encoder.encode(resultHtml);
         await writeFile(fs, filename, htmlBytes);

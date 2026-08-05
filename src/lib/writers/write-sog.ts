@@ -1,24 +1,22 @@
 import { basename, dirname, resolve } from 'pathe';
 
-import { logWrittenFile } from './utils';
-import {
-    createChunkDataPool,
-    type ChunkDataPool,
-    type ChunkLayer,
-    type ReadRequest,
-    type ChunkSource
-} from '../chunk';
+import { createChunkDataPool } from '../chunk';
+import type { ChunkDataPool, ChunkLayer, ReadRequest, ChunkSource } from '../chunk';
 import { dataTableToChunkSource } from '../compat/data-table';
-import { type DataTable, shRestNames } from '../data-table';
-import { type FileSystem, writeFile, ZipFileSystem } from '../io/write';
+import { shRestNames } from '../data-table';
+import type { DataTable } from '../data-table';
+import { writeFile, ZipFileSystem } from '../io/write';
+import type { FileSystem } from '../io/write';
 import { bakeTransform } from '../ops';
 import { sortMortonInterleaved } from '../ops/morton-order';
 import { kmeansInterleaved } from '../spatial';
-import { type SplatModel } from '../splat-model';
+import type { SplatModel } from '../splat-model';
 import type { DeviceCreator } from '../types';
 import { logger, sigmoid, Transform } from '../utils';
 import { version } from '../version';
 import { runEncodeWebp, runQuantize1dColumns } from '../workers';
+
+import { logWrittenFile } from './utils';
 
 const GEOMETRIC_COLS = ['rot_0', 'rot_1', 'rot_2', 'rot_3', 'scale_0', 'scale_1', 'scale_2', 'opacity'];
 
@@ -28,7 +26,11 @@ const logTransform = (value: number): number => {
 
 // Gather a layer's data as one interleaved Float32Array `[g0 words, g1 words, ...]`
 // (a contiguous copy per chunk — the layer is already packed).
-const gatherInterleaved = async (source: ChunkSource, pool: ChunkDataPool, layer: ChunkLayer): Promise<Float32Array> => {
+const gatherInterleaved = async (
+    source: ChunkSource,
+    pool: ChunkDataPool,
+    layer: ChunkLayer
+): Promise<Float32Array> => {
     const { meta } = source;
     const n = meta.numGaussians;
     const layout = meta.layouts[layer]!;
@@ -50,7 +52,12 @@ const gatherInterleaved = async (source: ChunkSource, pool: ChunkDataPool, layer
 // Gather a layer into per-column Float32Arrays, in the layer's canonical word
 // order (so `names[c]` maps to source word `c`). Used where downstream helpers
 // (quantize1d / kmeans) want individual columns.
-const gatherColumns = async (source: ChunkSource, pool: ChunkDataPool, layer: ChunkLayer, names: string[]): Promise<Float32Array[]> => {
+const gatherColumns = async (
+    source: ChunkSource,
+    pool: ChunkDataPool,
+    layer: ChunkLayer,
+    names: string[]
+): Promise<Float32Array[]> => {
     const { meta } = source;
     const n = meta.numGaussians;
     const layout = meta.layouts[layer]!;
@@ -132,7 +139,7 @@ const writeSogSource = async (
     if (options.indices && options.indices.length !== numRows) {
         throw new Error(
             `writeSogSource: indices length ${options.indices.length} must equal the source's gaussian count ${numRows} ` +
-            '(indices is a full-length ordering, not a subset filter — filter the source upstream with filterSource)'
+                '(indices is a full-length ordering, not a subset filter — filter the source upstream with filterSource)'
         );
     }
 
@@ -148,7 +155,7 @@ const writeSogSource = async (
     if (width > 16383 || height > 16383) {
         throw new Error(
             `SOG output is capped at 16383x16383 WebP texels (~268M gaussians); got ${numRows}. ` +
-            'Write streamed SOG (lod-meta.json output) instead — recommended for any scene beyond ~1-2M gaussians.'
+                'Write streamed SOG (lod-meta.json output) instead — recommended for any scene beyond ~1-2M gaussians.'
         );
     }
 
@@ -170,6 +177,7 @@ const writeSogSource = async (
                 logWrittenFile(filename, webp.byteLength);
             }
         });
+        // eslint-disable-next-line @typescript-eslint/no-empty-function -- preserve rejection-only control flow
         writeChain = write.catch(() => {});
         return write;
     };
@@ -204,7 +212,11 @@ const writeSogSource = async (
             const pos = await gatherInterleaved(baked, pool, 'position');
             if (!externalOrder) sortMortonInterleaved(pos, indices);
 
-            const mm = [[Infinity, -Infinity], [Infinity, -Infinity], [Infinity, -Infinity]];
+            const mm = [
+                [Infinity, -Infinity],
+                [Infinity, -Infinity],
+                [Infinity, -Infinity]
+            ];
             for (let g = 0; g < numRows; g++) {
                 for (let a = 0; a < 3; a++) {
                     const v = pos[g * 3 + a];
@@ -212,14 +224,14 @@ const writeSogSource = async (
                     if (v > mm[a][1]) mm[a][1] = v;
                 }
             }
-            const minMax = mm.map(v => v.map(logTransform));
+            const minMax = mm.map((v) => v.map(logTransform));
             const meansL = new Uint8Array(width * height * channels);
             const meansU = new Uint8Array(width * height * channels);
             for (let i = 0; i < numRows; ++i) {
                 const g = indices[i];
-                const x = 65535 * (logTransform(pos[g * 3 + 0]) - minMax[0][0]) / (minMax[0][1] - minMax[0][0]);
-                const y = 65535 * (logTransform(pos[g * 3 + 1]) - minMax[1][0]) / (minMax[1][1] - minMax[1][0]);
-                const z = 65535 * (logTransform(pos[g * 3 + 2]) - minMax[2][0]) / (minMax[2][1] - minMax[2][0]);
+                const x = (65535 * (logTransform(pos[g * 3 + 0]) - minMax[0][0])) / (minMax[0][1] - minMax[0][0]);
+                const y = (65535 * (logTransform(pos[g * 3 + 1]) - minMax[1][0])) / (minMax[1][1] - minMax[1][0]);
+                const z = (65535 * (logTransform(pos[g * 3 + 2]) - minMax[2][0])) / (minMax[2][1] - minMax[2][0]);
                 const ti = i;
                 meansL[ti * 4] = x & 0xff;
                 meansL[ti * 4 + 1] = y & 0xff;
@@ -231,7 +243,7 @@ const writeSogSource = async (
                 meansU[ti * 4 + 3] = 0xff;
             }
             pending.push(writeWebp('means_l.webp', meansL), writeWebp('means_u.webp', meansU));
-            return { mins: minMax.map(v => v[0]), maxs: minMax.map(v => v[1]) };
+            return { mins: minMax.map((v) => v[0]), maxs: minMax.map((v) => v[1]) };
         })();
 
         // ---- Phase 2: geometric — quaternions + scales. The 32 B/gaussian layer
@@ -244,21 +256,35 @@ const writeSogSource = async (
             const q = [0, 0, 0, 0];
             const sqrt2 = Math.sqrt(2);
             // Largest-3 component orders, indexed by the dropped component.
-            const quatIdx = [[1, 2, 3], [0, 2, 3], [0, 1, 3], [0, 1, 2]];
+            const quatIdx = [
+                [1, 2, 3],
+                [0, 2, 3],
+                [0, 1, 3],
+                [0, 1, 2]
+            ];
             for (let i = 0; i < numRows; ++i) {
                 const g = indices[i];
-                q[0] = r0[g]; q[1] = r1[g]; q[2] = r2[g]; q[3] = r3[g];
+                q[0] = r0[g];
+                q[1] = r1[g];
+                q[2] = r2[g];
+                q[3] = r3[g];
                 const l = Math.sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
-                q[0] /= l; q[1] /= l; q[2] /= l; q[3] /= l;
+                q[0] /= l;
+                q[1] /= l;
+                q[2] /= l;
+                q[3] /= l;
                 let maxComp = 0;
                 if (Math.abs(q[1]) > Math.abs(q[maxComp])) maxComp = 1;
                 if (Math.abs(q[2]) > Math.abs(q[maxComp])) maxComp = 2;
                 if (Math.abs(q[3]) > Math.abs(q[maxComp])) maxComp = 3;
                 const s = (q[maxComp] < 0 ? -1 : 1) * sqrt2;
-                q[0] *= s; q[1] *= s; q[2] *= s; q[3] *= s;
+                q[0] *= s;
+                q[1] *= s;
+                q[2] *= s;
+                q[3] *= s;
                 const idx = quatIdx[maxComp];
                 const ti = i;
-                quats[ti * 4]     = 255 * (q[idx[0]] * 0.5 + 0.5);
+                quats[ti * 4] = 255 * (q[idx[0]] * 0.5 + 0.5);
                 quats[ti * 4 + 1] = 255 * (q[idx[1]] * 0.5 + 0.5);
                 quats[ti * 4 + 2] = 255 * (q[idx[2]] * 0.5 + 0.5);
                 quats[ti * 4 + 3] = 252 + maxComp;
@@ -266,9 +292,17 @@ const writeSogSource = async (
             pending.push(writeWebp('quats.webp', quats));
 
             const sd = await runQuantize1dColumns([
-                { name: 'scale_0', data: s0 }, { name: 'scale_1', data: s1 }, { name: 'scale_2', data: s2 }
+                { name: 'scale_0', data: s0 },
+                { name: 'scale_1', data: s1 },
+                { name: 'scale_2', data: s2 }
             ]);
-            pending.push(writeLabels('scales.webp', sd.labels.map(c => c.data), indices));
+            pending.push(
+                writeLabels(
+                    'scales.webp',
+                    sd.labels.map((c) => c.data),
+                    indices
+                )
+            );
 
             const od = new Uint8Array(numRows);
             for (let i = 0; i < numRows; ++i) {
@@ -317,9 +351,11 @@ const writeSogSource = async (
             }
 
             const cd = await runQuantize1dColumns([
-                { name: 'f_dc_0', data: fdc0 }, { name: 'f_dc_1', data: fdc1 }, { name: 'f_dc_2', data: fdc2 }
+                { name: 'f_dc_0', data: fdc0 },
+                { name: 'f_dc_1', data: fdc1 },
+                { name: 'f_dc_2', data: fdc2 }
             ]);
-            pending.push(writeLabels('sh0.webp', [...cd.labels.map(c => c.data), opacityData], indices));
+            pending.push(writeLabels('sh0.webp', [...cd.labels.map((c) => c.data), opacityData], indices));
             const codebook = Array.from(cd.centroids);
 
             let shNLocal: ShNMeta | null = null;
@@ -327,12 +363,19 @@ const writeSogSource = async (
                 const shCoeffs = [0, 3, 8, 15][shBands];
                 const paletteSize = Math.min(64, 2 ** Math.floor(Math.log2(numRows / 1024))) * 1024;
                 const gpuDevice = createDevice ? await createDevice() : undefined;
-                const { centroids, labels } = await kmeansInterleaved(shRest, numRows, restCount, paletteSize, iterations, gpuDevice);
+                const { centroids, labels } = await kmeansInterleaved(
+                    shRest,
+                    numRows,
+                    restCount,
+                    paletteSize,
+                    iterations,
+                    gpuDevice
+                );
                 const numCentroids = centroids.length / restCount;
 
                 // quantize the centroid palette to a uint8 codebook. De-interleave
                 // the (small) centroids into restCount columns for the quantizer.
-                const cbCols: { name: string, data: Float32Array }[] = [];
+                const cbCols: { name: string; data: Float32Array }[] = [];
                 for (let j = 0; j < restCount; ++j) {
                     const col = new Float32Array(numCentroids);
                     for (let i = 0; i < numCentroids; ++i) col[i] = centroids[i * restCount + j];
@@ -351,7 +394,7 @@ const writeSogSource = async (
                 }
 
                 const cb = await codebookPromise;
-                const cbLabels = cb.labels.map(c => c.data); // restCount columns, length numCentroids
+                const cbLabels = cb.labels.map((c) => c.data); // restCount columns, length numCentroids
                 const centroidsBuf = new Uint8Array(64 * shCoeffs * Math.ceil(numCentroids / 64) * channels);
                 for (let i = 0; i < numCentroids; ++i) {
                     for (let j = 0; j < shCoeffs; ++j) {
@@ -390,7 +433,7 @@ const writeSogSource = async (
             sh0: { codebook: colorsCodebook, files: ['sh0.webp'] },
             ...(shN ? { shN } : {})
         };
-        const metaJson = (new TextEncoder()).encode(JSON.stringify(metaObj));
+        const metaJson = new TextEncoder().encode(JSON.stringify(metaObj));
         const metaFilename = zipFs ? 'meta.json' : outputFilename;
         await writeFile(outputFs, metaFilename, metaJson);
         if (emitInfo && !zipFs) {

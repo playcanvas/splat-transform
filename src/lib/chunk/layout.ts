@@ -95,14 +95,14 @@ const colorFields = (shBands: SHBands): ChunkFieldMap => {
 };
 
 /** Canonical layer order for reporting. */
-const LAYER_ORDER: ReadonlyArray<ChunkLayer> = ['position', 'geometric', 'color', 'other'];
+const LAYER_ORDER: readonly ChunkLayer[] = ['position', 'geometric', 'color', 'other'];
 
 /**
  * List a source's available layers in canonical ({@link LAYER_ORDER}) order.
  * @param layers - The source's available layers.
  * @returns The layers as an ordered array.
  */
-const orderedLayers = (layers: ReadonlySet<ChunkLayer>): ChunkLayer[] => LAYER_ORDER.filter(l => layers.has(l));
+const orderedLayers = (layers: ReadonlySet<ChunkLayer>): ChunkLayer[] => LAYER_ORDER.filter((l) => layers.has(l));
 
 /**
  * Whether a source's available layers constitute gaussian splat data:
@@ -129,9 +129,7 @@ type ExtraColumn = {
  * @param extras - The extra columns, in storage order.
  * @returns The byte stride and field map for the `other` layer.
  */
-const otherLayout = (
-    extras: ReadonlyArray<ExtraColumn>
-): { stride: number; fields: ChunkFieldMap } => {
+const otherLayout = (extras: readonly ExtraColumn[]): { stride: number; fields: ChunkFieldMap } => {
     const fields: Record<string, ChunkField> = {};
     let offset = 0;
     for (const e of extras) {

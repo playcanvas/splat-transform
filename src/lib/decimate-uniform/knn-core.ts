@@ -1,7 +1,7 @@
 import { KdTree } from '../spatial/kd-tree';
 
 /** Marks an unfilled neighbour slot (fewer than k non-self points available). */
-const KNN_SENTINEL = 0xFFFFFFFF;
+const KNN_SENTINEL = 0xffffffff;
 
 /**
  * Exact k-nearest-neighbours for the owned prefix of a local point set.

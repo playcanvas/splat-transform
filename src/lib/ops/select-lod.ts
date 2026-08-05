@@ -1,8 +1,4 @@
-import {
-    type ChunkSource,
-    type ChunkSourceMetadata,
-    type ReadRequest
-} from '../chunk';
+import type { ChunkSource, ChunkSourceMetadata, ReadRequest } from '../chunk';
 
 /**
  * View a single LOD level of a multi-LOD source as a single-LOD source — the
@@ -50,9 +46,7 @@ const selectLod = (src: ChunkSource, level: number): ChunkSource => {
  */
 const resolveLodLevels = (lodSelect: number[], numLods: number): number[] => {
     if (lodSelect.length > 0) {
-        return lodSelect
-        .map(lod => (lod < 0 ? numLods + lod : lod))
-        .filter(lod => lod >= 0 && lod < numLods);
+        return lodSelect.map((lod) => (lod < 0 ? numLods + lod : lod)).filter((lod) => lod >= 0 && lod < numLods);
     }
     return Array.from({ length: numLods }, (_, i) => i);
 };

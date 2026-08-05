@@ -39,7 +39,7 @@ class RadixSortScratch {
  * as comparator-sorting the original Float32s ascending.
  */
 const encodeFloatKey = (bits: number): number => {
-    return (bits & 0x80000000) !== 0 ? (~bits >>> 0) : ((bits ^ 0x80000000) >>> 0);
+    return (bits & 0x80000000) !== 0 ? ~bits >>> 0 : (bits ^ 0x80000000) >>> 0;
 };
 
 /**
@@ -84,8 +84,10 @@ const radixSortIndicesByFloat = (
 
     // 4-pass LSD radix sort, 8 bits per pass. After an even number of passes
     // (4) the sorted output is back in the originally-supplied indices buffer.
-    let kIn = keysWork, iIn = indices;
-    let kOut = keysAlt, iOut = indicesAlt;
+    let kIn = keysWork,
+        iIn = indices;
+    let kOut = keysAlt,
+        iOut = indicesAlt;
 
     for (let shift = 0; shift < 32; shift += 8) {
         counts.fill(0);
@@ -107,8 +109,12 @@ const radixSortIndicesByFloat = (
             iOut[pos] = iIn[i];
         }
         // Swap input/output.
-        const tk = kIn; kIn = kOut; kOut = tk;
-        const ti = iIn; iIn = iOut; iOut = ti;
+        const tk = kIn;
+        kIn = kOut;
+        kOut = tk;
+        const ti = iIn;
+        iIn = iOut;
+        iOut = ti;
     }
 };
 
@@ -120,7 +126,7 @@ const radixSortIndicesByFloat = (
  * @returns true if the value is NaN or infinite.
  */
 const isFloatBitsNonFinite = (bits: number): boolean => {
-    return (bits & 0x7F800000) === 0x7F800000;
+    return (bits & 0x7f800000) === 0x7f800000;
 };
 
 export { RadixSortScratch, radixSortIndicesByFloat, isFloatBitsNonFinite };

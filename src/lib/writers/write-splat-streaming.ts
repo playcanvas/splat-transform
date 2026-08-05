@@ -1,5 +1,5 @@
-import { type ChunkDataPool, type ChunkSource } from '../chunk';
-import { type FileSystem } from '../io/write';
+import type { ChunkDataPool, ChunkSource } from '../chunk';
+import type { FileSystem } from '../io/write';
 import { bakeTransform } from '../ops';
 import { logger, Transform } from '../utils';
 
@@ -60,11 +60,11 @@ const writeSplatStreaming = async (
 
             await baked.read({ chunkIndex: k, position: pos, geometric: geo, color: col });
 
-            const P = pos.field('position');   // count × 3
-            const R = geo.field('rotation');   // count × 4
-            const S = geo.field('scale');      // count × 3
-            const O = geo.field('opacity');    // count × 1
-            const C = col.field('dc');         // count × 3
+            const P = pos.field('position'); // count × 3
+            const R = geo.field('rotation'); // count × 4
+            const S = geo.field('scale'); // count × 3
+            const O = geo.field('opacity'); // count × 1
+            const C = col.field('dc'); // count × 3
 
             for (let i = 0; i < count; i++) {
                 const off = i * 32;

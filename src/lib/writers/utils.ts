@@ -1,4 +1,4 @@
-import { type SplatModel } from '../splat-model';
+import type { SplatModel } from '../splat-model';
 import { fmtBytes, logger } from '../utils';
 
 // Brush's spelling of the model, which its importer (brush-serde import.rs) and

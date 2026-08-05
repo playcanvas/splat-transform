@@ -1,7 +1,8 @@
+import { logger } from '../utils';
+
 import { BlockMaskBuffer } from './block-mask-buffer';
 import { popcount } from './morton';
 import { sortKeyMaskPairs } from './sort-key-mask';
-import { logger } from '../utils';
 
 // ============================================================================
 // Edge mask constants for 4x4x4 voxel blocks
@@ -15,15 +16,15 @@ const FACE_X0 = 0x11111111;
 /** lx=3 positions in each 32-bit word */
 const FACE_X3 = 0x88888888;
 /** ly=0 positions in each 32-bit word */
-const FACE_Y0 = 0x000F000F;
+const FACE_Y0 = 0x000f000f;
 /** ly=3 positions in each 32-bit word */
-const FACE_Y3 = 0xF000F000;
+const FACE_Y3 = 0xf000f000;
 /** lz=0 positions: lo bits 0-15 */
-const FACE_Z0_LO = 0x0000FFFF;
+const FACE_Z0_LO = 0x0000ffff;
 /** lz=3 positions: hi bits 16-31 */
-const FACE_Z3_HI = 0xFFFF0000 >>> 0;
+const FACE_Z3_HI = 0xffff0000 >>> 0;
 
-const SOLID_MASK = 0xFFFFFFFF >>> 0;
+const SOLID_MASK = 0xffffffff >>> 0;
 
 // ============================================================================
 // Main function
@@ -170,12 +171,18 @@ function filterAndFillBlocks(
             const origLo = masks[i * 2];
             const origHi = masks[i * 2 + 1];
             const w = local * 12;
-            const pxLo = work[w], pxHi = work[w + 1];
-            const mxLo = work[w + 2], mxHi = work[w + 3];
-            const pyLo = work[w + 4], pyHi = work[w + 5];
-            const myLo = work[w + 6], myHi = work[w + 7];
-            const pzLo = work[w + 8], pzHi = work[w + 9];
-            const mzLo = work[w + 10], mzHi = work[w + 11];
+            const pxLo = work[w],
+                pxHi = work[w + 1];
+            const mxLo = work[w + 2],
+                mxHi = work[w + 3];
+            const pyLo = work[w + 4],
+                pyHi = work[w + 5];
+            const myLo = work[w + 6],
+                myHi = work[w + 7];
+            const pzLo = work[w + 8],
+                pzHi = work[w + 9];
+            const mzLo = work[w + 10],
+                mzHi = work[w + 11];
             const neighborLo = pxLo | mxLo | pyLo | myLo | pzLo | mzLo;
             const neighborHi = pxHi | mxHi | pyHi | myHi | pzHi | mzHi;
             let lo = origLo & neighborLo;
@@ -188,12 +195,14 @@ function filterAndFillBlocks(
             newMasks[i * 2] = lo;
             newMasks[i * 2 + 1] = hi;
 
-            if ((lo >>> 0) === SOLID_MASK && (hi >>> 0) === SOLID_MASK) {
+            if (lo >>> 0 === SOLID_MASK && hi >>> 0 === SOLID_MASK) {
                 promotedSolidBlocks++;
             } else if (lo !== 0 || hi !== 0) {
                 mixedBlocks++;
                 if (mixedBlocks > maxMixedBlocks) {
-                    throw new Error(`Voxel output has more than ${maxMixedBlocks} mixed blocks. Use a coarser voxel resolution.`);
+                    throw new Error(
+                        `Voxel output has more than ${maxMixedBlocks} mixed blocks. Use a coarser voxel resolution.`
+                    );
                 }
             }
         }

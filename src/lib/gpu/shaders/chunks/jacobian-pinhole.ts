@@ -15,7 +15,7 @@
  * entries (j[0][1] = 0, j[1][0] = 0) let us drop the u01·jy0 / u10 /
  * u11·jy0 terms in cov = J·Σ·Jᵀ that the equirect path retains.
  */
-const jacobianPinhole = /* wgsl */`
+const jacobianPinhole = /* wgsl */ `
     let limX = JACOBIAN_LIMIT_FACTOR * (f32(uniforms.imageWidth) * 0.5) / uniforms.focalX;
     let limY = JACOBIAN_LIMIT_FACTOR * (f32(uniforms.imageHeight) * 0.5) / uniforms.focalY;
     let txtz = clamp(cx * invZ, -limX, limX);

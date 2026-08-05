@@ -50,20 +50,18 @@
     "webgpu": "0.4.0"
   },
   "devDependencies": {
-    "@playcanvas/eslint-config": "2.1.0",
+    "@playcanvas/eslint-config": "3.0.0-beta.8",
     "@playcanvas/supersplat-viewer": "1.28.0",
     "@rollup/plugin-json": "6.1.0",
     "@rollup/plugin-node-resolve": "16.0.3",
     "@rollup/plugin-replace": "6.0.3",
     "@rollup/plugin-typescript": "12.3.0",
     "@types/node": "24.13.3",
-    "@typescript-eslint/eslint-plugin": "8.65.0",
-    "@typescript-eslint/parser": "8.65.0",
     "eslint": "9.39.5",
-    "eslint-import-resolver-typescript": "4.4.5",
     "fzstd": "0.1.1",
     "pathe": "2.0.3",
     "playcanvas": "2.21.1",
+    "prettier": "3.9.6",
     "publint": "0.3.22",
     "rollup": "4.62.2",
     "tslib": "2.8.1",
@@ -78,13 +76,16 @@
   "scripts": {
     "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && rollup -c && node -e \"fs=require('fs');fs.copyFileSync('dist/lib/index.d.ts','dist/lib/index.d.cts')\"",
     "docs": "typedoc",
+    "fmt": "prettier --check src",
+    "fmt:fix": "prettier --write src",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",
     "publint": "publint",
     "watch": "rollup -c -w",
     "pretest": "npm run build",
     "test": "node --import tsx --test --test-force-exit test/*.test.mjs",
-    "test:fixtures": "node --import tsx test/fixtures/create-fixtures.mjs"
+    "test:fixtures": "node --import tsx test/fixtures/create-fixtures.mjs",
+    "typecheck": "tsc --noEmit"
   },
   "engines": {
     "node": ">=22.0.0"

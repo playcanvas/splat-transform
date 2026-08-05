@@ -1,4 +1,4 @@
 declare module '*.mjs' {
-  const mod: any;
-  export default mod;
+    const mod: any;
+    export default mod;
 }

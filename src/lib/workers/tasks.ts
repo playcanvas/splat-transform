@@ -1,9 +1,12 @@
 import type { TypedArray } from '../data-table/data-table';
-import { knnForestQuery, type ForestPart } from '../decimate/knn-core';
+import { knnForestQuery } from '../decimate/knn-core';
+import type { ForestPart } from '../decimate/knn-core';
 import { mergeGroup, createMergeScratch, splatMass } from '../decimate/moment-match';
 import { knnQueryBlock } from '../decimate-uniform/knn-core';
-import { buildFlatKdTree, type FlatKdTree } from '../spatial/kd-tree';
-import { quantize1dColumns, type QuantizedColumns } from '../spatial/quantize-1d-core';
+import { buildFlatKdTree } from '../spatial/kd-tree';
+import type { FlatKdTree } from '../spatial/kd-tree';
+import { quantize1dColumns } from '../spatial/quantize-1d-core';
+import type { QuantizedColumns } from '../spatial/quantize-1d-core';
 import { WebPCodec } from '../utils/webp-codec';
 
 /**
@@ -20,19 +23,25 @@ import { WebPCodec } from '../utils/webp-codec';
  * drags in the playcanvas engine.
  */
 
-type TaskOutput<T> = { result: T, transfer: ArrayBuffer[] };
+type TaskOutput<T> = { result: T; transfer: ArrayBuffer[] };
 
 const taskHandlers = {
-    quantize1d: (args: { columns: { name: string, data: TypedArray }[], k?: number, alpha?: number }):
-        TaskOutput<QuantizedColumns> => {
+    quantize1d: (args: {
+        columns: { name: string; data: TypedArray }[];
+        k?: number;
+        alpha?: number;
+    }): TaskOutput<QuantizedColumns> => {
         const result = quantize1dColumns(args.columns, args.k, args.alpha);
         return {
             result,
-            transfer: [result.centroids.buffer as ArrayBuffer, ...result.labels.map(c => c.data.buffer as ArrayBuffer)]
+            transfer: [
+                result.centroids.buffer as ArrayBuffer,
+                ...result.labels.map((c) => c.data.buffer as ArrayBuffer)
+            ]
         };
     },
 
-    encodeWebp: async (args: { rgba: Uint8Array, width: number, height: number }): Promise<TaskOutput<Uint8Array>> => {
+    encodeWebp: async (args: { rgba: Uint8Array; width: number; height: number }): Promise<TaskOutput<Uint8Array>> => {
         // create() memoizes the wasm module per realm (each worker compiles
         // its own copy on first use)
         const codec = await WebPCodec.create();
@@ -46,7 +55,11 @@ const taskHandlers = {
     // move to SharedArrayBuffers so knnForest query tasks read them without
     // copies (structured clone shares SABs).
     buildKdForestPart: (args: {
-        x: Float32Array, y: Float32Array, z: Float32Array, ids: Uint32Array, shared?: boolean
+        x: Float32Array;
+        y: Float32Array;
+        z: Float32Array;
+        ids: Uint32Array;
+        shared?: boolean;
     }): TaskOutput<ForestPart> => {
         const { x, y, z, ids } = args;
         const flat = buildFlatKdTree(x, y, z);
@@ -86,7 +99,10 @@ const taskHandlers = {
         return {
             result: { ...flat, aabb },
             transfer: [
-                flat.nodeSplatIdx.buffer, flat.nodePositions.buffer, flat.nodeChildren.buffer, aabb.buffer
+                flat.nodeSplatIdx.buffer,
+                flat.nodePositions.buffer,
+                flat.nodeChildren.buffer,
+                aabb.buffer
             ] as ArrayBuffer[]
         };
     },
@@ -94,7 +110,10 @@ const taskHandlers = {
     // Decimation CPU-fallback KNN: exact forest k-NN for a slice of queries,
     // as global ids. Part arrays are SAB-backed (shared, no copies).
     knnForest: (args: {
-        parts: ForestPart[], queryPos: Float32Array, queryIds: Uint32Array, k: number
+        parts: ForestPart[];
+        queryPos: Float32Array;
+        queryIds: Uint32Array;
+        k: number;
     }): TaskOutput<Uint32Array> => {
         const count = args.queryIds.length;
         const out = new Uint32Array(count * args.k);
@@ -119,15 +138,13 @@ const taskHandlers = {
         const flat = buildFlatKdTree(x, y, z);
         return {
             result: flat,
-            transfer: [
-                flat.nodeSplatIdx.buffer, flat.nodePositions.buffer, flat.nodeChildren.buffer
-            ] as ArrayBuffer[]
+            transfer: [flat.nodeSplatIdx.buffer, flat.nodePositions.buffer, flat.nodeChildren.buffer] as ArrayBuffer[]
         };
     },
 
     // `--decimate-uniform` CPU-fallback block KNN: exact k-NN of the owned
     // prefix within the local point set, as local indices. Frozen.
-    knnBlock: (args: { positions: Float32Array, ownedCount: number, k: number }): TaskOutput<Uint32Array> => {
+    knnBlock: (args: { positions: Float32Array; ownedCount: number; k: number }): TaskOutput<Uint32Array> => {
         const result = knnQueryBlock(args.positions, args.ownedCount, args.k);
         return { result, transfer: [result.buffer as ArrayBuffer] };
     },
@@ -137,14 +154,14 @@ const taskHandlers = {
     // per member, groups back to back per `sizes`); outputs are group-major.
     // `other` columns (when present) copy from the dominant-mass member.
     mergeGroups: (args: {
-        pos: Float32Array,
-        geo: Float32Array,
-        color: Float32Array,
-        sizes: Uint32Array,
-        colorDim: number,
-        other?: Uint32Array,
-        otherDim?: number
-    }): TaskOutput<{ pos: Float32Array, geo: Float32Array, color: Float32Array, other?: Uint32Array }> => {
+        pos: Float32Array;
+        geo: Float32Array;
+        color: Float32Array;
+        sizes: Uint32Array;
+        colorDim: number;
+        other?: Uint32Array;
+        otherDim?: number;
+    }): TaskOutput<{ pos: Float32Array; geo: Float32Array; color: Float32Array; other?: Uint32Array }> => {
         const { sizes, colorDim } = args;
         const g = sizes.length;
         const otherDim = args.otherDim ?? 0;
@@ -170,7 +187,8 @@ const taskHandlers = {
             outGeo.set(merged.geo, gi * 8);
             outColor.set(merged.color, gi * colorDim);
             if (outOther) {
-                let dominant = base, best = -Infinity;
+                let dominant = base,
+                    best = -Infinity;
                 for (let m = 0; m < size; m++) {
                     const mass = splatMass(args.geo, base + m);
                     if (mass > best) {
@@ -184,26 +202,26 @@ const taskHandlers = {
             }
             base += size;
         }
-        const transfer: ArrayBuffer[] = [outPos.buffer as ArrayBuffer, outGeo.buffer as ArrayBuffer, outColor.buffer as ArrayBuffer];
+        const transfer: ArrayBuffer[] = [
+            outPos.buffer as ArrayBuffer,
+            outGeo.buffer as ArrayBuffer,
+            outColor.buffer as ArrayBuffer
+        ];
         if (outOther) transfer.push(outOther.buffer as ArrayBuffer);
         return { result: { pos: outPos, geo: outGeo, color: outColor, other: outOther }, transfer };
     }
 };
 
 type TaskName = keyof typeof taskHandlers;
-type TaskArgs<T extends TaskName> = Parameters<typeof taskHandlers[T]>[0];
-type TaskResult<T extends TaskName> = Awaited<ReturnType<typeof taskHandlers[T]>>['result'];
+type TaskArgs<T extends TaskName> = Parameters<(typeof taskHandlers)[T]>[0];
+type TaskResult<T extends TaskName> = Awaited<ReturnType<(typeof taskHandlers)[T]>>['result'];
 
 // Message protocol between host and worker. There are no per-task ids: each
 // worker runs strictly one task at a time (enforced by the host's slot state
 // machine), so every reply pairs with the single in-flight `run`.
-type HostMessage =
-    | { type: 'init', wasmUrl: string }
-    | { type: 'run', task: TaskName, args: any };
+type HostMessage = { type: 'init'; wasmUrl: string } | { type: 'run'; task: TaskName; args: any };
 
 type WorkerMessage =
-    | { type: 'ready' }
-    | { type: 'result', result: any }
-    | { type: 'error', message: string, stack?: string };
+    { type: 'ready' } | { type: 'result'; result: any } | { type: 'error'; message: string; stack?: string };
 
 export { taskHandlers, type TaskName, type TaskArgs, type TaskResult, type HostMessage, type WorkerMessage };

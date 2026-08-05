@@ -7,7 +7,7 @@
  *
  * Splats with cz <= near are written invalid and the shader returns.
  */
-const projectionPinhole = /* wgsl */`
+const projectionPinhole = /* wgsl */ `
     if (cz <= uniforms.near) { writeInvalid(i); return; }
 
     let invZ = 1.0 / cz;

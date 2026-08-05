@@ -1,19 +1,17 @@
-import {
-    createInMemoryChunkSource,
+import { createInMemoryChunkSource, SH_REST_COUNTS, DEFAULT_CHUNK_SIZE } from '../chunk';
+import type {
     InMemoryChunkSource,
-    SH_REST_COUNTS,
-    DEFAULT_CHUNK_SIZE,
-    type ExtraColumn,
-    type ChunkData,
-    type ChunkDataPool,
-    type ChunkSource,
-    type ChunkSourceMetadata,
-    type ChunkLayer,
-    type SHBands
+    ExtraColumn,
+    ChunkData,
+    ChunkDataPool,
+    ChunkSource,
+    ChunkSourceMetadata,
+    ChunkLayer,
+    SHBands
 } from '../chunk';
 import { Column, DataTable } from '../data-table';
-import { type SplatModel } from '../splat-model';
-import { type Transform } from '../utils';
+import type { SplatModel } from '../splat-model';
+import type { Transform } from '../utils';
 
 /**
  * The legacy `DataTable` <-> `ChunkSource` compatibility bridge.
@@ -33,18 +31,10 @@ import { type Transform } from '../utils';
 
 /** Standard column names that map directly to the canonical layers. */
 const POSITION_COLS = ['x', 'y', 'z'] as const;
-const GEOMETRIC_COLS = [
-    'rot_0', 'rot_1', 'rot_2', 'rot_3',
-    'scale_0', 'scale_1', 'scale_2',
-    'opacity'
-] as const;
+const GEOMETRIC_COLS = ['rot_0', 'rot_1', 'rot_2', 'rot_3', 'scale_0', 'scale_1', 'scale_2', 'opacity'] as const;
 const COLOR_DC_COLS = ['f_dc_0', 'f_dc_1', 'f_dc_2'] as const;
 
-const standardColumnSet = new Set<string>([
-    ...POSITION_COLS,
-    ...GEOMETRIC_COLS,
-    ...COLOR_DC_COLS
-]);
+const standardColumnSet = new Set<string>([...POSITION_COLS, ...GEOMETRIC_COLS, ...COLOR_DC_COLS]);
 
 /**
  * Enumerate the canonical column names a source exposes, in the same order
@@ -97,9 +87,7 @@ const detectExtras = (dataTable: DataTable): ExtraColumn[] => {
     for (const c of dataTable.columns) {
         if (standardColumnSet.has(c.name)) continue;
         if (/^f_rest_\d+$/.test(c.name)) continue;
-        const type: 'float32' | 'uint32' = (
-            c.dataType === 'float32' || c.dataType === 'float64'
-        ) ? 'float32' : 'uint32';
+        const type: 'float32' | 'uint32' = c.dataType === 'float32' || c.dataType === 'float64' ? 'float32' : 'uint32';
         extras.push({ name: c.name, type });
     }
     return extras;
@@ -126,10 +114,7 @@ const splitToChunks = (
     let rowOffset = 0;
     while (rowsRemaining > 0) {
         const rows = Math.min(chunkSize, rowsRemaining);
-        const slice = interleaved.subarray(
-            rowOffset * elemsPerRow,
-            (rowOffset + rows) * elemsPerRow
-        );
+        const slice = interleaved.subarray(rowOffset * elemsPerRow, (rowOffset + rows) * elemsPerRow);
         // Copy into a fresh ArrayBuffer so each chunk owns its bytes.
         const ab = new ArrayBuffer(rows * elemsPerRow * 4);
         if (isFloat) {
@@ -177,81 +162,98 @@ const dataTableToChunkSource = (
     const extras = detectExtras(dataTable);
     const transform: Transform = dataTable.transform;
 
-    const hasPosition = POSITION_COLS.every(c => dataTable.hasColumn(c));
-    const hasGeometric = GEOMETRIC_COLS.every(c => dataTable.hasColumn(c));
-    const hasColor = COLOR_DC_COLS.every(c => dataTable.hasColumn(c));
+    const hasPosition = POSITION_COLS.every((c) => dataTable.hasColumn(c));
+    const hasGeometric = GEOMETRIC_COLS.every((c) => dataTable.hasColumn(c));
+    const hasColor = COLOR_DC_COLS.every((c) => dataTable.hasColumn(c));
     const hasOther = extras.length > 0;
 
     const col = (name: string): Float32Array => dataTable.getColumnByName(name)!.data as Float32Array;
     const srcRow = (i: number): number => (indices ? indices[i] : i);
 
-    const positionChunks: ArrayBuffer[] | undefined = hasPosition ? (() => {
-        const arr = new Float32Array(count * 3);
-        const x = col('x'), y = col('y'), z = col('z');
-        for (let i = 0; i < count; i++) {
-            const s = srcRow(i);
-            arr[i * 3 + 0] = x[s];
-            arr[i * 3 + 1] = y[s];
-            arr[i * 3 + 2] = z[s];
-        }
-        return splitToChunks(arr, count, 3, chunkSize);
-    })() : undefined;
+    const positionChunks: ArrayBuffer[] | undefined = hasPosition
+        ? (() => {
+              const arr = new Float32Array(count * 3);
+              const x = col('x'),
+                  y = col('y'),
+                  z = col('z');
+              for (let i = 0; i < count; i++) {
+                  const s = srcRow(i);
+                  arr[i * 3 + 0] = x[s];
+                  arr[i * 3 + 1] = y[s];
+                  arr[i * 3 + 2] = z[s];
+              }
+              return splitToChunks(arr, count, 3, chunkSize);
+          })()
+        : undefined;
 
-    const geometricChunks: ArrayBuffer[] | undefined = hasGeometric ? (() => {
-        const arr = new Float32Array(count * 8);
-        const r0 = col('rot_0'), r1 = col('rot_1'), r2 = col('rot_2'), r3 = col('rot_3');
-        const s0 = col('scale_0'), s1 = col('scale_1'), s2 = col('scale_2');
-        const op = col('opacity');
-        for (let i = 0; i < count; i++) {
-            const s = srcRow(i);
-            const o = i * 8;
-            arr[o + 0] = r0[s];
-            arr[o + 1] = r1[s];
-            arr[o + 2] = r2[s];
-            arr[o + 3] = r3[s];
-            arr[o + 4] = s0[s];
-            arr[o + 5] = s1[s];
-            arr[o + 6] = s2[s];
-            arr[o + 7] = op[s];
-        }
-        return splitToChunks(arr, count, 8, chunkSize);
-    })() : undefined;
+    const geometricChunks: ArrayBuffer[] | undefined = hasGeometric
+        ? (() => {
+              const arr = new Float32Array(count * 8);
+              const r0 = col('rot_0'),
+                  r1 = col('rot_1'),
+                  r2 = col('rot_2'),
+                  r3 = col('rot_3');
+              const s0 = col('scale_0'),
+                  s1 = col('scale_1'),
+                  s2 = col('scale_2');
+              const op = col('opacity');
+              for (let i = 0; i < count; i++) {
+                  const s = srcRow(i);
+                  const o = i * 8;
+                  arr[o + 0] = r0[s];
+                  arr[o + 1] = r1[s];
+                  arr[o + 2] = r2[s];
+                  arr[o + 3] = r3[s];
+                  arr[o + 4] = s0[s];
+                  arr[o + 5] = s1[s];
+                  arr[o + 6] = s2[s];
+                  arr[o + 7] = op[s];
+              }
+              return splitToChunks(arr, count, 8, chunkSize);
+          })()
+        : undefined;
 
-    const colorChunks: ArrayBuffer[] | undefined = hasColor ? (() => {
-        const elemsPerRow = 3 + numRest;
-        const arr = new Float32Array(count * elemsPerRow);
-        const dc0 = col('f_dc_0'), dc1 = col('f_dc_1'), dc2 = col('f_dc_2');
-        const restCols: Float32Array[] = [];
-        for (let r = 0; r < numRest; r++) restCols.push(col(`f_rest_${r}`));
-        for (let i = 0; i < count; i++) {
-            const s = srcRow(i);
-            const o = i * elemsPerRow;
-            arr[o + 0] = dc0[s];
-            arr[o + 1] = dc1[s];
-            arr[o + 2] = dc2[s];
-            for (let r = 0; r < numRest; r++) arr[o + 3 + r] = restCols[r][s];
-        }
-        return splitToChunks(arr, count, elemsPerRow, chunkSize);
-    })() : undefined;
+    const colorChunks: ArrayBuffer[] | undefined = hasColor
+        ? (() => {
+              const elemsPerRow = 3 + numRest;
+              const arr = new Float32Array(count * elemsPerRow);
+              const dc0 = col('f_dc_0'),
+                  dc1 = col('f_dc_1'),
+                  dc2 = col('f_dc_2');
+              const restCols: Float32Array[] = [];
+              for (let r = 0; r < numRest; r++) restCols.push(col(`f_rest_${r}`));
+              for (let i = 0; i < count; i++) {
+                  const s = srcRow(i);
+                  const o = i * elemsPerRow;
+                  arr[o + 0] = dc0[s];
+                  arr[o + 1] = dc1[s];
+                  arr[o + 2] = dc2[s];
+                  for (let r = 0; r < numRest; r++) arr[o + 3 + r] = restCols[r][s];
+              }
+              return splitToChunks(arr, count, elemsPerRow, chunkSize);
+          })()
+        : undefined;
 
-    const otherChunks: ArrayBuffer[] | undefined = hasOther ? (() => {
-        const elemsPerRow = extras.length;
-        const arr = new Uint32Array(count * elemsPerRow);
-        const f32View = new Float32Array(arr.buffer);
-        const cols = extras.map(e => dataTable.getColumnByName(e.name)!.data);
-        for (let i = 0; i < count; i++) {
-            const s = srcRow(i);
-            const o = i * elemsPerRow;
-            for (let e = 0; e < elemsPerRow; e++) {
-                if (extras[e].type === 'float32') {
-                    f32View[o + e] = cols[e][s] as number;
-                } else {
-                    arr[o + e] = cols[e][s] as number;
-                }
-            }
-        }
-        return splitToChunks(arr, count, elemsPerRow, chunkSize);
-    })() : undefined;
+    const otherChunks: ArrayBuffer[] | undefined = hasOther
+        ? (() => {
+              const elemsPerRow = extras.length;
+              const arr = new Uint32Array(count * elemsPerRow);
+              const f32View = new Float32Array(arr.buffer);
+              const cols = extras.map((e) => dataTable.getColumnByName(e.name)!.data);
+              for (let i = 0; i < count; i++) {
+                  const s = srcRow(i);
+                  const o = i * elemsPerRow;
+                  for (let e = 0; e < elemsPerRow; e++) {
+                      if (extras[e].type === 'float32') {
+                          f32View[o + e] = cols[e][s] as number;
+                      } else {
+                          arr[o + e] = cols[e][s] as number;
+                      }
+                  }
+              }
+              return splitToChunks(arr, count, elemsPerRow, chunkSize);
+          })()
+        : undefined;
 
     return createInMemoryChunkSource({
         numGaussians: count,
@@ -322,11 +324,13 @@ const materializeToDataTable = async (
     const numRest = SH_REST_COUNTS[meta.shBands];
     const restArrays: Float32Array[] = wantsColor ? Array.from({ length: numRest }, () => new Float32Array(N)) : [];
 
-    const extraArrays = wantsOther ? meta.extraColumns.map(e => ({
-        name: e.name,
-        type: e.type,
-        data: e.type === 'float32' ? new Float32Array(N) : new Uint32Array(N)
-    })) : [];
+    const extraArrays = wantsOther
+        ? meta.extraColumns.map((e) => ({
+              name: e.name,
+              type: e.type,
+              data: e.type === 'float32' ? new Float32Array(N) : new Uint32Array(N)
+          }))
+        : [];
 
     const chunkSize = meta.chunkSize;
 
@@ -350,8 +354,12 @@ const materializeToDataTable = async (
         const layouts = meta.layouts;
         const acquired: { layer: ChunkLayer; chunkData: ChunkData }[] = [];
         const req: {
-            chunkIndex: number; lod: number;
-            position?: ChunkData; geometric?: ChunkData; color?: ChunkData; other?: ChunkData;
+            chunkIndex: number;
+            lod: number;
+            position?: ChunkData;
+            geometric?: ChunkData;
+            color?: ChunkData;
+            other?: ChunkData;
         } = { chunkIndex: k, lod };
 
         if (wantsPosition) {
@@ -418,7 +426,8 @@ const materializeToDataTable = async (
                         restArrays[r][di] = f32[si + 3 + r];
                     }
                 }
-            } else { // 'other'
+            } else {
+                // 'other'
                 const f32 = new Float32Array(chunkData.data, 0, count * elemsPerRow);
                 const u32 = new Uint32Array(chunkData.data, 0, count * elemsPerRow);
                 const cols = extraArrays.length;
@@ -455,11 +464,7 @@ const materializeToDataTable = async (
         );
     }
     if (wantsColor) {
-        columns.push(
-            new Column('f_dc_0', dc0!),
-            new Column('f_dc_1', dc1!),
-            new Column('f_dc_2', dc2!)
-        );
+        columns.push(new Column('f_dc_0', dc0!), new Column('f_dc_1', dc1!), new Column('f_dc_2', dc2!));
         for (let r = 0; r < numRest; r++) {
             columns.push(new Column(`f_rest_${r}`, restArrays[r]));
         }

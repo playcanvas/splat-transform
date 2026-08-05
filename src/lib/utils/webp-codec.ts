@@ -79,12 +79,14 @@ class WebPCodec {
         const bytes = Module.HEAPU8.slice(outPtr, outPtr + outSize);
 
         Module._webp_free(outPtr);
-        Module._free(inPtr); Module._free(outPtrPtr); Module._free(outSizePtr);
+        Module._free(inPtr);
+        Module._free(outPtrPtr);
+        Module._free(outSizePtr);
 
         return bytes;
     }
 
-    decodeRGBA(webp: Uint8Array): { rgba: Uint8Array, width: number, height: number } {
+    decodeRGBA(webp: Uint8Array): { rgba: Uint8Array; width: number; height: number } {
         const { Module } = this;
 
         const input = webp;
@@ -98,7 +100,10 @@ class WebPCodec {
 
         const ok = Module._webp_decode_rgba(inPtr, input.length, outPtrPtr, widthPtr, heightPtr);
         if (!ok) {
-            Module._free(inPtr); Module._free(outPtrPtr); Module._free(widthPtr); Module._free(heightPtr);
+            Module._free(inPtr);
+            Module._free(outPtrPtr);
+            Module._free(widthPtr);
+            Module._free(heightPtr);
             throw new Error('WebP decode failed');
         }
 
@@ -109,7 +114,10 @@ class WebPCodec {
         const bytes = Module.HEAPU8.slice(outPtr, outPtr + size);
 
         Module._webp_free(outPtr);
-        Module._free(inPtr); Module._free(outPtrPtr); Module._free(widthPtr); Module._free(heightPtr);
+        Module._free(inPtr);
+        Module._free(outPtrPtr);
+        Module._free(widthPtr);
+        Module._free(heightPtr);
 
         return { rgba: bytes, width, height };
     }

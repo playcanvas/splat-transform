@@ -1,16 +1,14 @@
 import { Vec3 } from 'playcanvas';
 
+import type { Bounds } from '../data-table';
+import type { GpuDilation } from '../gpu';
+import { logger } from '../utils';
+
 import { gpuDilate3 } from './dilation';
 import type { NavSeed, NavSimplifyResult } from './fill-exterior';
 import { twoLevelBFS } from './flood-fill';
 import { computeEmptyGrid } from './grid-ops';
-import type { Bounds } from '../data-table';
-import type { GpuDilation } from '../gpu';
-import {
-    BLOCK_EMPTY,
-    SparseVoxelGrid
-} from './sparse-voxel-grid';
-import { logger } from '../utils';
+import { BLOCK_EMPTY, SparseVoxelGrid } from './sparse-voxel-grid';
 
 const carve = async (
     gridA: SparseVoxelGrid,
@@ -55,7 +53,9 @@ const carve = async (
         const maxRadius = Math.max(kernelR, yHalfExtent) * 2;
         const found = SparseVoxelGrid.findNearestFreeCell(blocked, seedIx, seedIy, seedIz, maxRadius);
         if (!found) {
-            logger.warn(`seed (${seed.x}, ${seed.y}, ${seed.z}) blocked after dilation, no free cell within ${maxRadius} voxels, skipping carve`);
+            logger.warn(
+                `seed (${seed.x}, ${seed.y}, ${seed.z}) blocked after dilation, no free cell within ${maxRadius} voxels, skipping carve`
+            );
             return { grid: gridA, gridBounds };
         }
         seedIx = found.ix;
@@ -72,10 +72,7 @@ const carve = async (
     // so the bar usually finishes shy of 100% (mixed/solid blocks aren't
     // counted). Good enough for visual feedback on a long BFS.
     const bfsBar = logger.bar('BFS', nbx * nby * nbz);
-    const visited = twoLevelBFS(
-        blocked, bSeeds, vSeeds, nx, ny, nz,
-        count => bfsBar.update(count)
-    );
+    const visited = twoLevelBFS(blocked, bSeeds, vSeeds, nx, ny, nz, (count) => bfsBar.update(count));
     bfsBar.end();
 
     const emptyGrid = computeEmptyGrid(visited, blocked);
@@ -83,7 +80,7 @@ const carve = async (
     const navRegion = await gpuDilate3(gpu, emptyGrid, kernelR, yHalfExtent);
 
     const boundsBar = logger.bar('Scanning bounds', navRegion.types.length);
-    const navBounds = navRegion.getOccupiedBlockBounds(done => boundsBar.update(done));
+    const navBounds = navRegion.getOccupiedBlockBounds((done) => boundsBar.update(done));
     boundsBar.end();
 
     if (!navBounds) {
@@ -118,10 +115,8 @@ const carve = async (
     };
 
     const buildBar = logger.bar('Building grid', navRegion.types.length);
-    const outGrid = navRegion.cropToInverted(
-        cropMinBx, cropMinBy, cropMinBz,
-        cropMaxBx, cropMaxBy, cropMaxBz,
-        done => buildBar.update(done)
+    const outGrid = navRegion.cropToInverted(cropMinBx, cropMinBy, cropMinBz, cropMaxBx, cropMaxBy, cropMaxBz, (done) =>
+        buildBar.update(done)
     );
     buildBar.end();
 

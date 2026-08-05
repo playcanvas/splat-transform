@@ -1,5 +1,6 @@
-import type { PlyData } from './read-ply';
 import { Column, DataTable } from '../data-table';
+
+import type { PlyData } from './read-ply';
 
 // Size of a chunk in the compressed PLY format (number of splats per chunk)
 const CHUNK_SIZE = 256;
@@ -27,26 +28,14 @@ const isCompressedPly = (ply: PlyData): boolean => {
         'max_scale_z'
     ];
 
-    const colorChunkProperties = [
-        'min_r',
-        'min_g',
-        'min_b',
-        'max_r',
-        'max_g',
-        'max_b'
-    ];
+    const colorChunkProperties = ['min_r', 'min_g', 'min_b', 'max_r', 'max_g', 'max_b'];
 
-    const vertexProperties = [
-        'packed_position',
-        'packed_rotation',
-        'packed_scale',
-        'packed_color'
-    ];
+    const vertexProperties = ['packed_position', 'packed_rotation', 'packed_scale', 'packed_color'];
 
     const numElements = ply.elements.length;
     if (numElements !== 2 && numElements !== 3) return false;
 
-    const chunk = ply.elements.find(e => e.name === 'chunk');
+    const chunk = ply.elements.find((e) => e.name === 'chunk');
     if (!chunk || !hasShape(chunk.dataTable, requiredChunkProperties, 'float32')) return false;
 
     // accept either 12 (no per-chunk color) or 18 (with per-chunk color) chunk properties
@@ -57,7 +46,7 @@ const isCompressedPly = (ply: PlyData): boolean => {
         return false;
     }
 
-    const vertex = ply.elements.find(e => e.name === 'vertex');
+    const vertex = ply.elements.find((e) => e.name === 'vertex');
     if (!vertex || !hasShape(vertex.dataTable, vertexProperties, 'uint32')) return false;
 
     if (Math.ceil(vertex.dataTable.numRows / CHUNK_SIZE) !== chunk.dataTable.numRows) {
@@ -66,7 +55,7 @@ const isCompressedPly = (ply: PlyData): boolean => {
 
     // check optional spherical harmonics
     if (numElements === 3) {
-        const sh = ply.elements.find(e => e.name === 'sh');
+        const sh = ply.elements.find((e) => e.name === 'sh');
         if (!sh) {
             return false;
         }
@@ -91,10 +80,10 @@ const isCompressedPly = (ply: PlyData): boolean => {
 
 // Detects the compressed PLY schema and returns a decompressed DataTable, or null if not compressed.
 const decompressPly = (ply: PlyData): DataTable => {
-    const chunkData = ply.elements.find(e => e.name === 'chunk').dataTable;
+    const chunkData = ply.elements.find((e) => e.name === 'chunk').dataTable;
     const getChunk = (name: string) => chunkData.getColumnByName(name)!.data as Float32Array;
 
-    const vertexData = ply.elements.find(e => e.name === 'vertex').dataTable;
+    const vertexData = ply.elements.find((e) => e.name === 'vertex').dataTable;
     const packed_position = vertexData.getColumnByName('packed_position')!.data as Uint32Array;
     const packed_rotation = vertexData.getColumnByName('packed_rotation')!.data as Uint32Array;
     const packed_scale = vertexData.getColumnByName('packed_scale')!.data as Uint32Array;
@@ -225,7 +214,7 @@ const decompressPly = (ply: PlyData): DataTable => {
     }
 
     // extract spherical harmonics
-    const shElem = ply.elements.find(e => e.name === 'sh');
+    const shElem = ply.elements.find((e) => e.name === 'sh');
     if (shElem) {
         const shData = shElem.dataTable;
         for (let k = 0; k < shData.numColumns; ++k) {
@@ -233,7 +222,7 @@ const decompressPly = (ply: PlyData): DataTable => {
             const src = col.data as Uint8Array;
             const dst = new Float32Array(numSplats);
             for (let i = 0; i < numSplats; ++i) {
-                const n = (src[i] === 0) ? 0 : (src[i] === 255) ? 1 : (src[i] + 0.5) / 256;
+                const n = src[i] === 0 ? 0 : src[i] === 255 ? 1 : (src[i] + 0.5) / 256;
                 dst[i] = (n - 0.5) * 8;
             }
             result.addColumn(new Column(col.name, dst));

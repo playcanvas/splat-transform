@@ -41,7 +41,9 @@ function twoLevelBFS(
     blocked: SparseVoxelGrid,
     blockSeeds: number[],
     voxelSeeds: { ix: number; iy: number; iz: number }[],
-    nx: number, ny: number, nz: number,
+    nx: number,
+    ny: number,
+    nz: number,
     onBlockFilled?: (count: number) => void
 ): SparseVoxelGrid {
     const visited = new SparseVoxelGrid(nx, ny, nz);
@@ -78,7 +80,9 @@ function twoLevelBFS(
 
     const growBlockQueue = (): void => {
         if (bqCap >= QUEUE_CAP_MAX) {
-            throw new Error(`flood-fill: block queue exceeded ${QUEUE_CAP_MAX} entries — scene likely contains pathologically large gaussians or a connected component too large to flood-fill at this resolution. Try a coarser --filter-cluster resolution or pre-filter outliers (e.g. --filter-box).`);
+            throw new Error(
+                `flood-fill: block queue exceeded ${QUEUE_CAP_MAX} entries — scene likely contains pathologically large gaussians or a connected component too large to flood-fill at this resolution. Try a coarser --filter-cluster resolution or pre-filter outliers (e.g. --filter-box).`
+            );
         }
         const newCap = bqCap * 2;
         const nb = new Uint32Array(newCap);
@@ -92,7 +96,9 @@ function twoLevelBFS(
 
     const growVoxelQueue = (): void => {
         if (vqCap >= QUEUE_CAP_MAX) {
-            throw new Error(`flood-fill: voxel queue exceeded ${QUEUE_CAP_MAX} entries — scene likely contains pathologically large gaussians or a connected component too large to flood-fill at this resolution. Try a coarser --filter-cluster resolution or pre-filter outliers (e.g. --filter-box).`);
+            throw new Error(
+                `flood-fill: voxel queue exceeded ${QUEUE_CAP_MAX} entries — scene likely contains pathologically large gaussians or a connected component too large to flood-fill at this resolution. Try a coarser --filter-cluster resolution or pre-filter outliers (e.g. --filter-box).`
+            );
         }
         const newCap = vqCap * 2;
         const nix = new Uint32Array(newCap);
@@ -147,7 +153,8 @@ function twoLevelBFS(
         if (vbt === BLOCK_SOLID) return;
 
         const bs = bMasks.slot(nBlockIdx);
-        let vLo = 0, vHi = 0;
+        let vLo = 0,
+            vHi = 0;
         let vs = -1;
         if (vbt === BLOCK_MIXED) {
             vs = vMasks.slot(nBlockIdx);
@@ -261,10 +268,7 @@ function twoLevelBFS(
             }
         } else {
             writeBlockType(visitedTypes, blockIdx, BLOCK_MIXED);
-            vMasks.set(blockIdx,
-                bitIdx < 32 ? (1 << bitIdx) >>> 0 : 0,
-                bitIdx >= 32 ? (1 << (bitIdx - 32)) >>> 0 : 0
-            );
+            vMasks.set(blockIdx, bitIdx < 32 ? (1 << bitIdx) >>> 0 : 0, bitIdx >= 32 ? (1 << (bitIdx - 32)) >>> 0 : 0);
         }
 
         enqueueVoxel(ix, iy, iz);

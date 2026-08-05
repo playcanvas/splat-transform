@@ -1,13 +1,16 @@
 import { basename } from 'pathe';
 import { Vec3 } from 'playcanvas';
 
-import { logWrittenFile } from './utils';
-import { convertToSpace, DataTable } from '../data-table';
-import { type FileSystem, writeFile } from '../io/write';
+import type { DataTable } from '../data-table';
+import { convertToSpace } from '../data-table';
+import { writeFile } from '../io/write';
+import type { FileSystem } from '../io/write';
 import { renderSplats } from '../render';
-import { type Projection, type RenderCamera } from '../render/camera';
+import type { Projection, RenderCamera } from '../render/camera';
 import type { DeviceCreator } from '../types';
 import { logger, Transform, WebPCodec } from '../utils';
+
+import { logWrittenFile } from './utils';
 
 /**
  * Options for writing a rendered splat image.
@@ -165,10 +168,14 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     let { fov, width, height } = options;
     if (projection === 'equirect') {
         if (fov !== undefined) {
-            throw new Error('writeImage: --camera-fov is not valid with --projection equirect (the projection covers a full 360°×180° sphere).');
+            throw new Error(
+                'writeImage: --camera-fov is not valid with --projection equirect (the projection covers a full 360°×180° sphere).'
+            );
         }
         if (fStop !== undefined) {
-            throw new Error('writeImage: --f-stop is not valid with --projection equirect (defocus blur needs a focal length, which the equirect projection does not have).');
+            throw new Error(
+                'writeImage: --f-stop is not valid with --projection equirect (defocus blur needs a focal length, which the equirect projection does not have).'
+            );
         }
         if (focusDistance !== undefined) {
             throw new Error('writeImage: --focus-distance is not valid with --projection equirect.');
@@ -180,7 +187,9 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
             width = 2048;
             height = 1024;
         } else if (width === undefined || height === undefined) {
-            throw new Error('writeImage: equirect requires either both width and height, or neither (defaults to 2048x1024).');
+            throw new Error(
+                'writeImage: equirect requires either both width and height, or neither (defaults to 2048x1024).'
+            );
         }
         if (width !== 2 * height) {
             throw new Error(`writeImage: equirect requires width === 2 × height (got ${width}x${height}).`);
@@ -230,8 +239,8 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     // depends on intrinsics (sensor, fov, height), not on the camera pose,
     // so it's safe to share across motion-blur sub-frames.
     const dofEnabled = projection !== 'equirect' && fStop !== undefined;
-    const focalRealWorld = dofEnabled ? (sensorSize / 2) / Math.tan(fovY * 0.5) : 0;
-    const focalYPx = dofEnabled ? (height / 2) / Math.tan(fovY * 0.5) : 0;
+    const focalRealWorld = dofEnabled ? sensorSize / 2 / Math.tan(fovY * 0.5) : 0;
+    const focalYPx = dofEnabled ? height / 2 / Math.tan(fovY * 0.5) : 0;
 
     // Resolve DoF for pinhole only. The project shader consumes a single
     // pre-baked scalar `apertureScale` (pixel CoC per unit relative
@@ -248,9 +257,11 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     // non-meter scenes. Focus defaults to the look-at point — which,
     // under motion blur, moves with the interpolated camera pose
     // (recomputed per sub-frame below).
-    const buildCamera = (pos: { x: number; y: number; z: number },
+    const buildCamera = (
+        pos: { x: number; y: number; z: number },
         tgt: { x: number; y: number; z: number },
-        u: { x: number; y: number; z: number }): RenderCamera => {
+        u: { x: number; y: number; z: number }
+    ): RenderCamera => {
         let fDist = 0;
         let aScale = 0;
         if (dofEnabled) {
@@ -259,11 +270,13 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
             } else {
                 const fwdLen = Math.hypot(tgt.x - pos.x, tgt.y - pos.y, tgt.z - pos.z);
                 if (fwdLen === 0) {
-                    throw new Error('writeImage: cannot derive default --focus-distance because --camera-pos equals --camera-target.');
+                    throw new Error(
+                        'writeImage: cannot derive default --focus-distance because --camera-pos equals --camera-target.'
+                    );
                 }
                 fDist = fwdLen;
             }
-            aScale = focalRealWorld * focalYPx / (fStop! * fDist);
+            aScale = (focalRealWorld * focalYPx) / (fStop! * fDist);
         }
         return {
             projection,
@@ -295,7 +308,9 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     if (projection === 'equirect') {
         logger.info(`${width}x${height} equirect`);
     } else if (startCamera.apertureScale! > 0) {
-        logger.info(`${width}x${height} fov ${fov}° f/${fStop} focus ${startCamera.focusDistance!.toFixed(3)} sensor ${sensorSize}`);
+        logger.info(
+            `${width}x${height} fov ${fov}° f/${fStop} focus ${startCamera.focusDistance!.toFixed(3)} sensor ${sensorSize}`
+        );
     } else {
         logger.info(`${width}x${height} fov ${fov}°`);
     }
