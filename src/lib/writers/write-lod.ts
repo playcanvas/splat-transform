@@ -165,6 +165,57 @@ const accumulateBound = (
     }
 };
 
+/**
+ * Reject a batch of gaussians whose geometry is not finite. The bounds pass reads
+ * every gaussian's geometric record once, so this is the one place the LOD writer
+ * sees the whole scene: everything downstream — the error metric above all, whose
+ * footprint mass runs through `sigmoid`/`exp` — may then assume finite input
+ * rather than each stage carrying its own opinion about invalid data.
+ *
+ * The rules mirror `filterNaNRows`, including its two deliberate exceptions
+ * (`scale_*` may be `-Infinity`, `opacity` may be `+Infinity`, both harmless
+ * here), so anything `--filter-nan` keeps is accepted.
+ *
+ * @param pos - Packed xyz for the batch.
+ * @param geo - Packed 8-float geometric records for the batch.
+ * @param count - Gaussians in the batch.
+ * @param rows - Rows local to `lod`, indexed from `offset`, for error messages.
+ * @param offset - Index of the batch's first row within `rows`.
+ * @param lod - Structural LOD the batch was read from.
+ */
+const assertFiniteGeometry = (
+    pos: Float32Array, geo: Float32Array, count: number,
+    rows: Uint32Array, offset: number, lod: number
+): void => {
+    const reject = (i: number, what: string) => {
+        throw new Error(
+            `LOD ${lod} gaussian ${rows[offset + i]} has ${what}; ` +
+            'run --filter-nan to drop invalid gaussians before writing LODs'
+        );
+    };
+
+    for (let i = 0; i < count; i++) {
+        const p = i * 3;
+        if (!isFinite(pos[p]) || !isFinite(pos[p + 1]) || !isFinite(pos[p + 2])) {
+            reject(i, 'a non-finite position');
+        }
+
+        const o = i * 8;
+        if (!isFinite(geo[o]) || !isFinite(geo[o + 1]) || !isFinite(geo[o + 2]) || !isFinite(geo[o + 3])) {
+            reject(i, 'a non-finite rotation');
+        }
+        if (geo[o] === 0 && geo[o + 1] === 0 && geo[o + 2] === 0 && geo[o + 3] === 0) {
+            reject(i, 'a zero-norm rotation');
+        }
+        for (let e = 4; e <= 6; e++) {
+            const v = geo[o + e];
+            if (!isFinite(v) && v !== -Infinity) reject(i, 'a non-finite scale');
+        }
+        const opacity = geo[o + 7];
+        if (!isFinite(opacity) && opacity !== Infinity) reject(i, 'a non-finite opacity');
+    }
+};
+
 // Per-leaf ellipsoid AABB, computed per structural LOD. Positions are resident,
 // but rotation/scale are gathered from the source by index so the geometric layer
 // is never wholly resident — the bounds-pass analog of the per-unit heavy gather.
@@ -190,11 +241,15 @@ const calcBound = async (
             const pos = pool.acquire('position', layouts.position!, count);
             const geo = pool.acquire('geometric', layouts.geometric!, count);
             await source.read({ indices: local, indexOffset: off, count, lod: lodValue, position: pos, geometric: geo });
+            // position is full-stride packed xyz — read the pool buffer in place
+            // rather than copying it out per batch
+            const posBatch = new Float32Array(pos.data, 0, count * 3);
+            assertFiniteGeometry(
+                posBatch, new Float32Array(geo.data, 0, count * 8), count, local, off, lodValue
+            );
             accumulateBound(
                 min, max,
-                // position is full-stride packed xyz — read the pool buffer
-                // in place rather than copying it out per batch
-                new Float32Array(pos.data, 0, count * 3),
+                posBatch,
                 geo.field('rotation') as Float32Array,
                 geo.field('scale') as Float32Array,
                 count
@@ -701,17 +756,9 @@ const calcErrors = async (
     // budget balancer ranks transitions by error reduction per splat *across*
     // nodes, so a coarser level must never advertise less error than the finer
     // one it stands in for.
-    //
-    // A NaN scale or opacity in the input poisons that splat's mass, and a NaN
-    // mass reaches the coverage term (unlike a NaN error, which the nearest
-    // match discards). Left alone it serializes as `null`, and a single
-    // non-finite error drops the engine back to distance-based allocation for the
-    // whole scene, so treat a level whose error is not a number as no better than
-    // the one before it.
     let previous = 0;
     for (const lod of [...bins.keys()].sort((a, b) => a - b)) {
-        const error = errors[lod];
-        previous = errors[lod] = Number.isFinite(error) ? Math.max(error, previous) : previous;
+        previous = errors[lod] = Math.max(errors[lod], previous);
     }
 
     return errors;

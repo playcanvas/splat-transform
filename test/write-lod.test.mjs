@@ -279,30 +279,35 @@ describe('writeLodSource: lod-meta.json contract', function () {
         assert.ok(Math.abs(errors[1] - 0.5) < 1e-6, `expected 0.5, got ${errors[1]}`);
     });
 
-    it('keeps the error table readable when a NaN input poisons a level', async function () {
-        // A NaN scale makes that splat's mass NaN, which reaches the coverage
-        // term; left alone it serializes as `null` and the reader rejects it.
-        const fs = new MemoryFileSystem();
-        await writeLodSource({
-            filename: '/scene/lod-meta.json',
-            mainSource: stackLods([
-                dataTableToChunkSource(makeSplatTable([{}, { scale: NaN }]), 1 << 20),
-                dataTableToChunkSource(makeSplatTable([{}]), 1 << 20)
-            ]),
-            envSource: null,
-            iterations: 1,
-            chunkCount: 1,
-            chunkExtent: 16
-        }, fs);
+    // Non-finite geometry is rejected up front rather than tolerated: a NaN scale
+    // or opacity would otherwise poison that splat's footprint mass, and the error
+    // table would quietly claim a coarse level costs nothing.
+    const rejects = [
+        ['a NaN scale', { scale: NaN }, /non-finite scale/],
+        ['a NaN opacity', { opacity: NaN }, /non-finite opacity/],
+        ['a NaN position', { x: NaN }, /non-finite position/],
+        ['a NaN rotation', { rot_0: NaN }, /non-finite rotation/],
+        ['a zero-norm rotation', { rot_0: 0 }, /zero-norm rotation/]
+    ];
 
-        const text = new TextDecoder().decode(fs.results.get('/scene/lod-meta.json'));
-        assert.ok(!text.includes('null'), 'no null slipped into the meta');
-        const meta = JSON.parse(text);
+    for (const [label, splat, expected] of rejects) {
+        it(`refuses to write LODs for input with ${label}`, async function () {
+            await assert.rejects(() => writeErrors([[{}, splat], [{}]]), (err) => {
+                assert.match(err.message, expected);
+                assert.match(err.message, /--filter-nan/);
+                return true;
+            });
+        });
+    }
+
+    it('accepts the non-finite values --filter-nan deliberately keeps', async function () {
+        // a flat splat (scale -Inf) and a fully opaque one (opacity +Inf) survive
+        // filterNaN, so the writer must not reject them
+        const errors = await writeErrors([[{}, { scale: -Infinity }, { opacity: Infinity }], [{}]]);
         assert.ok(
-            meta.tree.errors.every(error => Number.isFinite(error) && error >= 0),
-            `expected finite non-negative errors, got ${meta.tree.errors}`
+            errors.every(error => Number.isFinite(error) && error >= 0),
+            `expected finite non-negative errors, got ${errors}`
         );
-        assert.doesNotThrow(() => collectFilesByLod(meta, '/scene/lod-meta.json'));
     });
 
     it('keeps the error table monotone across levels', async function () {
