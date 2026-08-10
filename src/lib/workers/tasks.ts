@@ -103,7 +103,7 @@ const taskHandlers = {
     },
 
     // Build + flatten a KD-tree over interleaved LOCAL positions (the
-    // `--decimate-uniform` GPU path: node splat ids stay local and the
+    // `--decimate` GPU path: node splat ids stay local and the
     // flattened arrays upload straight into that path's GpuKnn). Serves
     // decimate-uniform/ — see its README before changing either handler.
     flattenKdTree: (args: { positions: Float32Array }): TaskOutput<FlatKdTree> => {
@@ -125,7 +125,7 @@ const taskHandlers = {
         };
     },
 
-    // `--decimate-uniform` CPU-fallback block KNN: exact k-NN of the owned
+    // `--decimate` CPU-fallback block KNN: exact k-NN of the owned
     // prefix within the local point set, as local indices. Frozen.
     knnBlock: (args: { positions: Float32Array, ownedCount: number, k: number }): TaskOutput<Uint32Array> => {
         const result = knnQueryBlock(args.positions, args.ownedCount, args.k);

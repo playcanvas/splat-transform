@@ -18,7 +18,7 @@ import {
 import { type FlatKdTree } from '../spatial/kd-tree';
 
 /**
- * Block-local GPU KNN for `--decimate-uniform`.
+ * Block-local GPU KNN for `--decimate`.
  *
  * Separate from the quality path's `gpu/gpu-knn.ts` because the two have
  * incompatible models: this one takes a max size and accepts a DIFFERENT tree

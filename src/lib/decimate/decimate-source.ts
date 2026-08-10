@@ -318,7 +318,7 @@ const decimateSource = async (
                 if (!device) {
                     throw new Error(
                         `multi-block adaptive decimation requires WebGPU (${fmtCount(N)} splats, ` +
-                    `${fmtCount(blockSize)}-splat cores); provide a device, or use --decimate-uniform`
+                    `${fmtCount(blockSize)}-splat cores); provide a device, or use --decimate`
                     );
                 }
                 if (!opts.spill) {

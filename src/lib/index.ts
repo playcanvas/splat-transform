@@ -43,14 +43,14 @@ export type {
     Decimate
 } from './process';
 
-// Chunk-native decimation
-export { decimateSource } from './decimate';
-export type { DecimateOptions, DecimateSpill } from './decimate';
+// Chunk-native decimation (--decimate): the frozen pre-3.2 decimator, which
+// removes at a uniform rate everywhere; see lib/decimate-uniform/README.md
+export { decimateSource } from './decimate-uniform';
+export type { DecimateOptions, DecimateSpill } from './decimate-uniform';
 
-// The frozen pre-3.2 decimator (--decimate-uniform); see
-// lib/decimate-uniform/README.md
-export { decimateSourceUniform } from './decimate-uniform';
-export type { DecimateUniformOptions, DecimateUniformSpill } from './decimate-uniform';
+// The adaptive decimator (--decimate-adaptive), allocating removal by local error
+export { decimateSourceAdaptive } from './decimate';
+export type { DecimateAdaptiveOptions, DecimateAdaptiveSpill } from './decimate';
 
 // Statistics
 export { computeStats } from './stats';

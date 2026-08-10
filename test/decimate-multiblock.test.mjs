@@ -3,7 +3,7 @@ import { after, before, describe, it } from 'node:test';
 
 import { makeSyntheticSource } from './helpers/synthetic-source.mjs';
 
-import { decimateSource } from '../src/lib/decimate/index.js';
+import { decimateSourceAdaptive } from '../src/lib/decimate/index.js';
 import { MemoryReadSource } from '../src/lib/io/read/memory-file-system.js';
 import { MemoryFileSystem } from '../src/lib/io/write/memory-file-system.js';
 
@@ -22,11 +22,11 @@ after(() => {
     device?.destroy?.();
 });
 
-describe('decimateSource multi-block adaptive path', () => {
+describe('decimateSourceAdaptive multi-block adaptive path', () => {
     it('fails clearly when the memory budget requires multiple blocks without WebGPU', async () => {
         const { source, pool } = await makeSyntheticSource(65540, 0, 123, { chunkSize: 1024 });
         await assert.rejects(
-            decimateSource(source, pool, { targetCount: 65000, memoryBudgetBytes: 1 }),
+            decimateSourceAdaptive(source, pool, { targetCount: 65000, memoryBudgetBytes: 1 }),
             /multi-block adaptive decimation requires WebGPU/
         );
     });
@@ -55,7 +55,7 @@ describe('decimateSource multi-block adaptive path', () => {
             }
         };
 
-        const out = await decimateSource(source, pool, {
+        const out = await decimateSourceAdaptive(source, pool, {
             targetCount,
             createDevice: async () => device,
             memoryBudgetBytes: 1,

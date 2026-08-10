@@ -16,7 +16,7 @@ import {
     DataTable,
     dataTableToChunkSource,
     decimateSource,
-    decimateSourceUniform,
+    decimateSourceAdaptive,
     fmtBytes,
     fmtCount,
     fmtTime,
@@ -127,12 +127,12 @@ const resolveInput = (arg: string): ResolvedInput => {
 // never dispatched as a data operation).
 type CliAction = ProcessAction | { kind: 'lod'; value: number };
 
-// `--decimate` and `--decimate-uniform` both produce a decimate action, so
+// `--decimate` and `--decimate-adaptive` both produce a decimate action, so
 // which decimator to run rides on the action itself rather than on global
 // options — that way it always describes the action actually executed, with no
 // dependence on flag ordering or on the "exactly one decimate action" check.
 // The extra field is stripped before actions reach the library.
-type CliDecimate = Extract<ProcessAction, { kind: 'decimate' }> & { uniform: boolean };
+type CliDecimate = Extract<ProcessAction, { kind: 'decimate' }> & { adaptive: boolean };
 
 // Strip the CLI-only lod tags, narrowing back to dispatchable actions.
 const stripLodTags = (actions: CliAction[]): ProcessAction[] => {
@@ -199,7 +199,7 @@ const cliOptionsConfig = {
     'filter-box': { type: 'string', short: 'B', multiple: true },
     'filter-sphere': { type: 'string', short: 'S', multiple: true },
     'decimate': { type: 'string', short: 'd', multiple: true },
-    'decimate-uniform': { type: 'string', multiple: true },
+    'decimate-adaptive': { type: 'string', multiple: true },
     'filter-cluster': { type: 'string', short: 'C', multiple: true },
     'filter-floaters': { type: 'string', short: 'F', multiple: true },
     params: { type: 'string', short: 'p', multiple: true },
@@ -704,7 +704,7 @@ const parseArguments = async () => {
                     });
                     break;
                 case 'decimate':
-                case 'decimate-uniform': {
+                case 'decimate-adaptive': {
                     const value = t.value.trim();
                     let count: number | null = null;
                     let percent: number | null = null;
@@ -727,7 +727,7 @@ const parseArguments = async () => {
                         kind: 'decimate',
                         count,
                         percent,
-                        uniform: t.name === 'decimate-uniform'
+                        adaptive: t.name === 'decimate-adaptive'
                     };
                     current.processActions.push(decimate);
                     break;
@@ -806,12 +806,12 @@ ACTIONS (executed in order; can be repeated)
     -S, --filter-sphere    <x,y,z,radius>   Remove Gaussians outside sphere
     -V, --filter-value     <name,cmp,value> Keep Gaussians where <name> <cmp> <value>;
                                               cmp ∈ {lt,lte,gt,gte,eq,neq}
-    -d, --decimate         <n|n%>           Simplify, allocating removal by local error (adaptive; default).
-                                              Much better on mixed-scale content such as skies.
-        --decimate-uniform <n|n%>           Simplify at a uniform rate everywhere (the pre-3.2 algorithm).
+    -d, --decimate         <n|n%>           Simplify at a uniform rate everywhere (default).
                                               Lower memory, and better at depth on uniformly-sized
                                               Gaussians: uniform texture, single objects, snow.
-                                              Must be the final action, and the output must be .ply
+        --decimate-adaptive <n|n%>          Simplify, allocating removal by local error (adaptive).
+                                              Much better on mixed-scale content such as skies.
+                                              Either must be the final action, with a .ply output
         --scratch-dir      <path>           Directory for decimation spill files (deep targets on huge
                                               scenes). Default: the output file's directory
     -F, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel. Default: 0.05,0.1,0.004
@@ -1279,8 +1279,8 @@ const main = async () => {
                     scratchDir: options.scratchDir ?? dirname(outputFilename),
                     remove: (path: string) => unlink(path)
                 };
-                combined = decimateAction.uniform ?
-                    await decimateSourceUniform(combined, pool, {
+                combined = decimateAction.adaptive ?
+                    await decimateSourceAdaptive(combined, pool, {
                         targetCount: keepCount,
                         createDevice: deviceCreator,
                         memoryBudgetBytes: options.memoryBudgetBytes,
