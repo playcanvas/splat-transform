@@ -37,10 +37,20 @@ type LodMeta = {
     version: number;
     asset: {
         generator: string;
+        /** Gaussians per file unit the partition aimed for (`--lod-chunk-count` × 1024). */
+        chunkGaussians: number;
+        /** Largest leaf extent the partition allowed, in world units (`--lod-chunk-extent`). */
+        chunkExtent: number;
     };
     count: number;
     counts: number[];
     lodLevels: number;
+    /**
+     * Whether every leaf carries an `errors` table. Declared here so a consumer
+     * can pick its LOD allocation strategy up front instead of searching the tree
+     * for the field (the engine's budget balancer needs exactly this answer).
+     */
+    lodErrors: boolean;
     environment?: string;
     filenames: string[];
     tree: MetaNode;
@@ -287,69 +297,81 @@ const findNearest = (
         results.push(result);
     }
     const distances = new Float64Array(targets * k);
+    const targetK = new Int32Array(targets);
+    for (let t = 0; t < targets; t++) {
+        targetK[t] = Math.min(k, ranges[2 * t + 1] - ranges[2 * t]);
+    }
+
+    const px = slim.x, py = slim.y, pz = slim.z;
+
+    // Per-query state lives out here so the traversal is one function compiled
+    // once, not a fresh closure allocated per query.
+    let x = 0, y = 0, z = 0;
+    let output = 0;
+
+    // the walk can stop where no level can improve: the largest k-th distance
+    let radius = Infinity;
+
+    const visit = (node: BTreeNode, distance: number): void => {
+        if (distance > radius) return;
+
+        const { indices } = node;
+        if (indices) {
+            for (let t = 0; t < targets; t++) {
+                const base = t * k;
+                const worst = base + targetK[t] - 1;
+                if (distance > distances[worst]) continue;
+
+                const lo = ranges[2 * t];
+                const hi = ranges[2 * t + 1];
+                const result = results[t];
+                for (let i = 0; i < indices.length; i++) {
+                    const candidate = indices[i];
+                    if (candidate < lo || candidate >= hi) continue;
+                    const dx = px[candidate] - x;
+                    const dy = py[candidate] - y;
+                    const dz = pz[candidate] - z;
+                    const d = dx * dx + dy * dy + dz * dz;
+                    if (d >= distances[worst]) continue;
+
+                    let insert = targetK[t] - 1;
+                    while (insert > 0 && d < distances[base + insert - 1]) {
+                        distances[base + insert] = distances[base + insert - 1];
+                        result[output + insert] = result[output + insert - 1];
+                        insert--;
+                    }
+                    distances[base + insert] = d;
+                    result[output + insert] = candidate;
+                }
+            }
+
+            radius = 0;
+            for (let t = 0; t < targets; t++) {
+                const d = distances[t * k + targetK[t] - 1];
+                if (d > radius) radius = d;
+            }
+            return;
+        }
+
+        const left = node.left!;
+        const right = node.right!;
+        const dl = distanceToAabbSq(left, x, y, z);
+        const dr = distanceToAabbSq(right, x, y, z);
+        if (dl <= dr) {
+            visit(left, dl);
+            visit(right, dr);
+        } else {
+            visit(right, dr);
+            visit(left, dl);
+        }
+    };
 
     for (let q = 0; q < queries.length; q++) {
         distances.fill(Infinity);
         const g = queries[q];
-        const x = slim.x[g], y = slim.y[g], z = slim.z[g];
-        const output = q * k;
-
-        // the walk can stop where no level can improve: the largest k-th distance
-        let radius = Infinity;
-
-        const visit = (node: BTreeNode, distance: number): void => {
-            if (distance > radius) return;
-
-            const { indices } = node;
-            if (indices) {
-                for (let t = 0; t < targets; t++) {
-                    const base = t * k;
-                    const worst = base + k - 1;
-                    if (distance > distances[worst]) continue;
-
-                    const lo = ranges[2 * t];
-                    const hi = ranges[2 * t + 1];
-                    const result = results[t];
-                    for (let i = 0; i < indices.length; i++) {
-                        const candidate = indices[i];
-                        if (candidate < lo || candidate >= hi) continue;
-                        const dx = slim.x[candidate] - x;
-                        const dy = slim.y[candidate] - y;
-                        const dz = slim.z[candidate] - z;
-                        const d = dx * dx + dy * dy + dz * dz;
-                        if (d >= distances[worst]) continue;
-
-                        let insert = k - 1;
-                        while (insert > 0 && d < distances[base + insert - 1]) {
-                            distances[base + insert] = distances[base + insert - 1];
-                            result[output + insert] = result[output + insert - 1];
-                            insert--;
-                        }
-                        distances[base + insert] = d;
-                        result[output + insert] = candidate;
-                    }
-                }
-
-                radius = 0;
-                for (let t = 0; t < targets; t++) {
-                    const d = distances[t * k + k - 1];
-                    if (d > radius) radius = d;
-                }
-                return;
-            }
-
-            const left = node.left!;
-            const right = node.right!;
-            const dl = distanceToAabbSq(left, x, y, z);
-            const dr = distanceToAabbSq(right, x, y, z);
-            if (dl <= dr) {
-                visit(left, dl);
-                visit(right, dr);
-            } else {
-                visit(right, dr);
-                visit(left, dl);
-            }
-        };
+        x = px[g]; y = py[g]; z = pz[g];
+        output = q * k;
+        radius = Infinity;
         visit(root, distanceToAabbSq(root, x, y, z));
     }
 
@@ -673,13 +695,23 @@ const calcErrors = async (
         errors[lod] = 0.5 * (forwardError + reverseError) + coverageError;
     });
 
-    // The engine's budget balancer drops a level from its frontier whenever a
-    // coarser one claims less error, which pins the node to that coarser level
-    // at any budget. Keep the table monotone so a level can only ever be
-    // dropped for being genuinely no better.
+    // Keep the table monotone across levels. This does not keep a finer level on
+    // the engine's Pareto frontier — that domination test accepts an equal error,
+    // so a cheaper coarser level displaces the finer one either way — but the
+    // budget balancer ranks transitions by error reduction per splat *across*
+    // nodes, so a coarser level must never advertise less error than the finer
+    // one it stands in for.
+    //
+    // A NaN scale or opacity in the input poisons that splat's mass, and a NaN
+    // mass reaches the coverage term (unlike a NaN error, which the nearest
+    // match discards). Left alone it serializes as `null`, and a single
+    // non-finite error drops the engine back to distance-based allocation for the
+    // whole scene, so treat a level whose error is not a number as no better than
+    // the one before it.
     let previous = 0;
     for (const lod of [...bins.keys()].sort((a, b) => a - b)) {
-        previous = errors[lod] = Math.max(errors[lod], previous);
+        const error = errors[lod];
+        previous = errors[lod] = Number.isFinite(error) ? Math.max(error, previous) : previous;
     }
 
     return errors;
@@ -882,6 +914,12 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
         chunkingBar.end();
     }
 
+    const trimErrors = (node: MetaNode): void => {
+        if (node.errors) node.errors.length = lodLevels;
+        for (const child of node.children ?? []) trimErrors(child);
+    };
+    trimErrors(tree);
+
     // The kd-tree is dead once the partition is built (lodFiles holds its own
     // index copies): release its N×4B index buffer and node AABBs before the
     // unit writes, where peak memory lives.
@@ -898,11 +936,14 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     const meta: LodMeta = {
         version: 1,
         asset: {
-            generator: `splat-transform v${version}`
+            generator: `splat-transform v${version}`,
+            chunkGaussians: binSize,
+            chunkExtent: binDim
         },
         count: counts.reduce((acc, curr) => acc + curr, 0),
         counts,
         lodLevels,
+        lodErrors: true,
         ...(hasEnv ? { environment: 'env/meta.json' } : {}),
         filenames,
         tree
@@ -1021,4 +1062,4 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     writingGroup.end();
 };
 
-export { positionsFromSlim, writeLodSource, type WriteLodSourceOptions };
+export { findNearest, positionsFromSlim, writeLodSource, type WriteLodSourceOptions };

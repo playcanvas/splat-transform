@@ -21,7 +21,7 @@ import { bakeTransform, mapSource, stackLods } from '../src/lib/ops/index.js';
 import { readPly } from '../src/lib/readers/read-ply.js';
 import { collectFilesByLod, readLodEnvironmentSource } from '../src/lib/readers/read-lod.js';
 import { createChunkDataPool } from '../src/lib/chunk/index.js';
-import { positionsFromSlim, writeLodSource } from '../src/lib/writers/write-lod.js';
+import { findNearest, positionsFromSlim, writeLodSource } from '../src/lib/writers/write-lod.js';
 import { version } from '../src/lib/version.js';
 
 import { encodePlyBinary } from './helpers/test-utils.mjs';
@@ -169,9 +169,14 @@ describe('writeLodSource: lod-meta.json contract', function () {
 
         assert.strictEqual(meta.version, 1);
         assert.strictEqual(meta.asset.generator, `splat-transform v${version}`);
+        // the partition parameters the caller asked for: chunkCount is in units of
+        // 1024 gaussians, chunkExtent in world units
+        assert.strictEqual(meta.asset.chunkGaussians, 1024);
+        assert.strictEqual(meta.asset.chunkExtent, 16);
         assert.strictEqual(meta.count, 5);
         assert.deepStrictEqual(meta.counts, [3, 2]);
         assert.strictEqual(meta.lodLevels, 2);
+        assert.strictEqual(meta.lodErrors, true, 'error tables are declared in the header');
         assert.ok(!('environment' in meta), 'environment omitted when there are no environment splats');
         assert.deepStrictEqual([...meta.filenames].sort(), ['0_0/meta.json', '1_0/meta.json']);
 
@@ -192,6 +197,45 @@ describe('writeLodSource: lod-meta.json contract', function () {
 
         assert.ok(fs.results.has('/scene/0_0/meta.json'));
         assert.ok(fs.results.has('/scene/1_0/meta.json'));
+    });
+
+    it('matches errors to lodLevels when trailing structural LODs are empty', async function () {
+        const { meta } = await writeScene([1, 0], 0);
+        assert.strictEqual(meta.lodLevels, 1);
+        assert.deepStrictEqual(meta.tree.errors, [0]);
+        assert.doesNotThrow(() => collectFilesByLod(meta, '/scene/lod-meta.json'));
+    });
+
+    it('prunes KNN traversal when a target LOD contains fewer than k splats', function () {
+        let farLeafVisits = 0;
+        const nearLeaf = {
+            count: 2,
+            aabb: { min: [0, 0, 0], max: [0, 0, 0] },
+            indices: Uint32Array.of(0, 2)
+        };
+        const farLeaf = {
+            count: 1,
+            aabb: { min: [1000, 0, 0], max: [1000, 0, 0] },
+            get indices() {
+                farLeafVisits++;
+                return Uint32Array.of(1);
+            }
+        };
+        const root = {
+            count: 3,
+            aabb: { min: [0, 0, 0], max: [1000, 0, 0] },
+            left: nearLeaf,
+            right: farLeaf
+        };
+        const slim = {
+            x: Float32Array.of(0, 1000, 0),
+            y: new Float32Array(3),
+            z: new Float32Array(3)
+        };
+
+        const [result] = findNearest(root, slim, Uint32Array.of(0), Int32Array.of(2, 3), 4);
+        assert.deepStrictEqual(result, Int32Array.of(2, -1, -1, -1));
+        assert.strictEqual(farLeafVisits, 0);
     });
 
     it('includes stored spherical harmonics in the LOD error', async function () {
@@ -233,6 +277,32 @@ describe('writeLodSource: lod-meta.json contract', function () {
         // is exact, but the level carries half the alpha mass
         const errors = await writeErrors([[{}, {}], [{}]]);
         assert.ok(Math.abs(errors[1] - 0.5) < 1e-6, `expected 0.5, got ${errors[1]}`);
+    });
+
+    it('keeps the error table readable when a NaN input poisons a level', async function () {
+        // A NaN scale makes that splat's mass NaN, which reaches the coverage
+        // term; left alone it serializes as `null` and the reader rejects it.
+        const fs = new MemoryFileSystem();
+        await writeLodSource({
+            filename: '/scene/lod-meta.json',
+            mainSource: stackLods([
+                dataTableToChunkSource(makeSplatTable([{}, { scale: NaN }]), 1 << 20),
+                dataTableToChunkSource(makeSplatTable([{}]), 1 << 20)
+            ]),
+            envSource: null,
+            iterations: 1,
+            chunkCount: 1,
+            chunkExtent: 16
+        }, fs);
+
+        const text = new TextDecoder().decode(fs.results.get('/scene/lod-meta.json'));
+        assert.ok(!text.includes('null'), 'no null slipped into the meta');
+        const meta = JSON.parse(text);
+        assert.ok(
+            meta.tree.errors.every(error => Number.isFinite(error) && error >= 0),
+            `expected finite non-negative errors, got ${meta.tree.errors}`
+        );
+        assert.doesNotThrow(() => collectFilesByLod(meta, '/scene/lod-meta.json'));
     });
 
     it('keeps the error table monotone across levels', async function () {
