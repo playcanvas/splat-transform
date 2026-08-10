@@ -165,12 +165,18 @@ const accumulateBound = (
     }
 };
 
+const invalidGaussian = (lod: number, row: number, what: string): Error => new Error(
+    `LOD ${lod} gaussian ${row} has ${what}; ` +
+    'run --filter-nan to drop invalid gaussians before writing LODs'
+);
+
 /**
  * Reject a batch of gaussians whose geometry is not finite. The bounds pass reads
- * every gaussian's geometric record once, so this is the one place the LOD writer
- * sees the whole scene: everything downstream — the error metric above all, whose
- * footprint mass runs through `sigmoid`/`exp` — may then assume finite input
- * rather than each stage carrying its own opinion about invalid data.
+ * every gaussian's geometric record once, so this covers the whole scene:
+ * everything downstream — the error metric above all, whose footprint mass runs
+ * through `sigmoid`/`exp` — may then assume finite input rather than each stage
+ * carrying its own opinion about invalid data. {@link assertFiniteColor} does the
+ * same for the layer this pass does not read.
  *
  * The rules mirror `filterNaNRows`, including its two deliberate exceptions
  * (`scale_*` may be `-Infinity`, `opacity` may be `+Infinity`, both harmless
@@ -188,10 +194,7 @@ const assertFiniteGeometry = (
     rows: Uint32Array, offset: number, lod: number
 ): void => {
     const reject = (i: number, what: string) => {
-        throw new Error(
-            `LOD ${lod} gaussian ${rows[offset + i]} has ${what}; ` +
-            'run --filter-nan to drop invalid gaussians before writing LODs'
-        );
+        throw invalidGaussian(lod, rows[offset + i], what);
     };
 
     for (let i = 0; i < count; i++) {
@@ -466,6 +469,35 @@ const indexOfSorted = (values: Uint32Array, value: number): number => {
     return -1;
 };
 
+/**
+ * Reject a batch of gaussians whose color or stored SH is not finite — the
+ * companion to {@link assertFiniteGeometry} for the layer the bounds pass does not
+ * read. A single non-finite coefficient makes {@link splatError} return `NaN` for
+ * every pair the splat takes part in, and `directional` discards `NaN` matches, so
+ * a level would report *less* error the more of it is broken. Coverage is again
+ * the whole scene: every gaussian of a leaf is gathered as its own level's query.
+ *
+ * @param color - Packed color/SH records for the batch.
+ * @param count - Gaussians in the batch.
+ * @param colorDim - Floats per gaussian (3 + stored SH).
+ * @param rows - Rows local to `lod`, indexed from `offset`, for error messages.
+ * @param offset - Index of the batch's first row within `rows`.
+ * @param lod - Structural LOD the batch was read from.
+ */
+const assertFiniteColor = (
+    color: Float32Array, count: number, colorDim: number,
+    rows: Uint32Array, offset: number, lod: number
+): void => {
+    for (let i = 0; i < count; i++) {
+        const base = i * colorDim;
+        for (let c = 0; c < colorDim; c++) {
+            if (!isFinite(color[base + c])) {
+                throw invalidGaussian(lod, rows[offset + i], 'a non-finite color or SH coefficient');
+            }
+        }
+    }
+};
+
 const gatherView = async (
     source: ChunkSource, pool: ChunkDataPool, slim: SlimColumns,
     globals: Uint32Array, lod: number, base: number
@@ -492,8 +524,10 @@ const gatherView = async (
         const geo = pool.acquire('geometric', layouts.geometric!, count);
         const color = pool.acquire('color', layouts.color!, count);
         await source.read({ indices: local, indexOffset: off, count, lod, geometric: geo, color });
+        const colorBatch = new Float32Array(color.data, 0, count * colorDim);
+        assertFiniteColor(colorBatch, count, colorDim, local, off, lod);
         view.geo.set(new Float32Array(geo.data, 0, count * 8), off * 8);
-        view.color.set(new Float32Array(color.data, 0, count * colorDim), off * colorDim);
+        view.color.set(colorBatch, off * colorDim);
         geo.release();
         color.release();
     }

@@ -287,7 +287,12 @@ describe('writeLodSource: lod-meta.json contract', function () {
         ['a NaN opacity', { opacity: NaN }, /non-finite opacity/],
         ['a NaN position', { x: NaN }, /non-finite position/],
         ['a NaN rotation', { rot_0: NaN }, /non-finite rotation/],
-        ['a zero-norm rotation', { rot_0: 0 }, /zero-norm rotation/]
+        ['a zero-norm rotation', { rot_0: 0 }, /zero-norm rotation/],
+        // a NaN colour makes splatError NaN for every pair the splat is in, and
+        // directional discards NaN matches — so the more of a level is broken, the
+        // less error it reports. Left unchecked, two displaced levels whose colours
+        // are NaN report error 0 and the engine drops the finer one.
+        ['a NaN color', { f_dc: NaN }, /non-finite color or SH/]
     ];
 
     for (const [label, splat, expected] of rejects) {
