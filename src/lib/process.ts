@@ -3,7 +3,7 @@ import { Vec3 } from 'playcanvas';
 import { createChunkDataPool } from './chunk';
 import { dataTableToChunkSource, materializeToDataTable } from './compat/data-table';
 import { Column, DataTable, sortMortonOrder, convertToSpace, getSHBands } from './data-table';
-import { decimateSource } from './decimate';
+import { decimateSource } from './decimate-uniform';
 import { computeSourceStats } from './ops';
 import { type InputFormat } from './read';
 import { formatSourceInfo, formatSourceStats } from './source-info';
@@ -158,6 +158,9 @@ type MortonOrder = {
  * Instead of discarding low-visibility splats, this iteratively merges nearby
  * similar splats into single approximating Gaussians using Mass-Preserving
  * Moment Matching (MPMM), preserving scene structure and appearance.
+ *
+ * Removal is allocated at a uniform rate everywhere; for the adaptive variant
+ * call `decimateSourceAdaptive()` directly.
  */
 type Decimate = {
     /** Action type identifier. */

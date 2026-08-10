@@ -1,21 +1,22 @@
 #!/usr/bin/env node
 /**
- * Output-parity check for `--decimate-uniform` against a reference build.
+ * Output-parity check for `--decimate` against a reference build.
  *
  * The uniform decimator is bit-for-bit output-compatible with the 3.1.x
  * release, which is what makes it a usable reference baseline (see
  * src/lib/decimate-uniform/README.md and the `old` column in
  * scenes/DECIMATION-RESULTS.md). This script is how that claim is checked:
  * run N chained halvings through a reference binary's `--decimate` and this
- * working tree's `--decimate-uniform`, compare the outputs byte for byte, and
- * report PSNR for both against the undecimated source.
+ * working tree's `--decimate`, compare the outputs byte for byte, and report
+ * PSNR for both against the undecimated source.
  *
  * Exits non-zero if any level differs, so it can gate a change.
  *
  * Prerequisites:
  *   - npm run build (imports WebPCodec from ../dist)
- *   - a reference binary on PATH, or --ref <path>. The reference must predate
- *     the split, i.e. its `--decimate` IS the uniform algorithm.
+ *   - a reference binary on PATH, or --ref <path>. It is invoked with
+ *     `--decimate`, so that flag must be the uniform algorithm there: any
+ *     3.1.x build (3.2.x spelled it `--decimate-uniform`).
  *
  * Usage:
  *   node tools/decimate-parity.mjs [sky|snow] [options]
@@ -114,11 +115,11 @@ const chain = (label, argsFor) => {
     return { paths, secs };
 };
 
-console.log(`\n=== ${which}: ${ref} --decimate  vs  this tree --decimate-uniform ===`);
+console.log(`\n=== ${which}: ${ref} --decimate  vs  this tree --decimate ===`);
 console.log(`source ${source} (${vertexCount(source)} splats), ${halvings} halvings\n`);
 
 const a = chain('ref', { bin: [ref], flags: ['--decimate'] });
-const b = chain('uni', { bin: [NODE, CLI], flags: ['--decimate-uniform'] });
+const b = chain('uni', { bin: [NODE, CLI], flags: ['--decimate'] });
 
 let mismatches = 0;
 console.log('level        count    ref s    uni s   identical');

@@ -185,17 +185,17 @@ describe('CLI decimate (terminal PLY restriction)', () => {
         assert.strictEqual(written, Math.round(inputCount / 2), `50% of ${inputCount}`);
     });
 
-    it('--decimate-uniform runs the pre-3.2 algorithm', async () => {
+    it('--decimate-adaptive runs the adaptive algorithm', async () => {
         const { mkdtemp, readFile: readFileFs, rm } = await import('node:fs/promises');
         const { tmpdir } = await import('node:os');
         const { join } = await import('node:path');
-        const dir = await mkdtemp(join(tmpdir(), 'st-decimate-uniform-cli-'));
+        const dir = await mkdtemp(join(tmpdir(), 'st-decimate-adaptive-cli-'));
         const balancedPath = join(dir, 'balanced.ply');
 
         const balanced = await runCli([
             '--gpu', 'cpu',
             'test/fixtures/splat/minimal.splat',
-            '--decimate-uniform', '50%',
+            '--decimate-adaptive', '50%',
             balancedPath
         ]);
         assert.strictEqual(balanced.code, 0, `balanced CLI failed:\n${balanced.stderr}\n${balanced.stdout}`);

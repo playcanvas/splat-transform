@@ -1,5 +1,5 @@
 /**
- * decimateSource orchestrator tests: exact counts, value domains, deep
+ * decimateSourceAdaptive orchestrator tests: exact counts, value domains, deep
  * targets (multi-generation with RAM intermediates), spill path with temp
  * cleanup, in-domain aggregate statistics, and input validation.
  */
@@ -12,7 +12,7 @@ import { describe, it } from 'node:test';
 
 import { makeSyntheticSource } from './helpers/synthetic-source.mjs';
 
-import { decimateSource } from '../src/lib/decimate/index.js';
+import { decimateSourceAdaptive } from '../src/lib/decimate/index.js';
 
 // Read the requested layers in ONE sequential pass (the producer contract:
 // each chunk is served exactly once, all layers together).
@@ -61,11 +61,11 @@ const stats = (geo, n) => {
     };
 };
 
-describe('decimateSource', () => {
+describe('decimateSourceAdaptive', () => {
     it('50% decimation: exact count, single generation, values in-domain', async () => {
         const n = 4000;
         const { source, pool } = await makeSyntheticSource(n, 1, 17, { chunkSize: 512 });
-        const out = await decimateSource(source, pool, { targetCount: 2000 });
+        const out = await decimateSourceAdaptive(source, pool, { targetCount: 2000 });
         assert.strictEqual(out.meta.numGaussians, 2000);
         const { position: pos, geometric: geo } = await readLayers(out, pool, ["position", "geometric"]);
         await out.close();
@@ -81,7 +81,7 @@ describe('decimateSource', () => {
     it('deep target runs multiple generations (RAM intermediates) to the exact count', async () => {
         const n = 4000;
         const { source, pool } = await makeSyntheticSource(n, 0, 19, { chunkSize: 512 });
-        const out = await decimateSource(source, pool, { targetCount: 500 }); // 12.5% → 3 generations
+        const out = await decimateSourceAdaptive(source, pool, { targetCount: 500 }); // 12.5% → 3 generations
         assert.strictEqual(out.meta.numGaussians, 500);
         const { geometric: geo } = await readLayers(out, pool, ["geometric"]);
         await out.close();
@@ -91,7 +91,7 @@ describe('decimateSource', () => {
     it('decimated output has finite, in-domain aggregate statistics', async () => {
         const n = 3000;
         const { source, pool } = await makeSyntheticSource(n, 1, 23, { chunkSize: 512 });
-        const out = await decimateSource(source, pool, { targetCount: 1500 });
+        const out = await decimateSourceAdaptive(source, pool, { targetCount: 1500 });
         const { geometric: oursGeo } = await readLayers(out, pool, ["geometric"]);
         await out.close();
 
@@ -107,7 +107,7 @@ describe('decimateSource', () => {
         const scratchDir = await mkdtemp(join(tmpdir(), 'decimate-spill-'));
         const { NodeFileSystem, NodeReadFileSystem } = await import('../src/cli/node-file-system.js');
         let sawSpill = false;
-        const out = await decimateSource(source, pool, {
+        const out = await decimateSourceAdaptive(source, pool, {
             targetCount: 400,                      // deep target → intermediates
             memoryBudgetBytes: 1,                  // force the spill path
             spill: {
@@ -136,7 +136,7 @@ describe('decimateSource', () => {
             chunkSize: 256,
             extraColumns: [{ name: 'tag', type: 'uint32' }]
         });
-        const out = await decimateSource(source, pool, { targetCount: 600 });
+        const out = await decimateSourceAdaptive(source, pool, { targetCount: 600 });
         assert.deepStrictEqual([...out.meta.extraColumns.map(e => e.name)], ['tag']);
         const { other } = await readLayers(out, pool, ["other"]);
         await out.close();
@@ -145,10 +145,10 @@ describe('decimateSource', () => {
 
     it('target >= N passes the source through; invalid inputs throw', async () => {
         const { source, pool } = await makeSyntheticSource(100, 0, 41, { chunkSize: 64 });
-        const out = await decimateSource(source, pool, { targetCount: 100 });
+        const out = await decimateSourceAdaptive(source, pool, { targetCount: 100 });
         assert.strictEqual(out, source);
 
-        await assert.rejects(() => decimateSource(source, pool, { targetCount: 0 }), /at least 1/);
+        await assert.rejects(() => decimateSourceAdaptive(source, pool, { targetCount: 0 }), /at least 1/);
 
         // multi-LOD source rejected
         const { buffers } = await makeSyntheticSource(50, 0, 43, { chunkSize: 1024 });
@@ -165,7 +165,7 @@ describe('decimateSource', () => {
             geometric: [buffers.geometric[0], slice(buffers.geometric, 25, 32)],
             color: [buffers.color[0], slice(buffers.color, 25, 12)]
         });
-        await assert.rejects(() => decimateSource(multiLod, pool, { targetCount: 10 }), /single-LOD/);
+        await assert.rejects(() => decimateSourceAdaptive(multiLod, pool, { targetCount: 10 }), /single-LOD/);
         await multiLod.close();
     });
 });

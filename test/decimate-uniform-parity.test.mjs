@@ -1,5 +1,5 @@
 /**
- * Output-parity guards for the `--decimate-uniform` decimator in
+ * Output-parity guards for the `--decimate` decimator in
  * `src/lib/decimate-uniform/` — see that directory's README.
  *
  * That path is bit-for-bit output-compatible with the 3.1.6 binary, which is

@@ -16,7 +16,10 @@ import { Vec3 } from 'playcanvas';
 
 import { assertClose } from './helpers/summary-compare.mjs';
 import { createMinimalTestData } from './helpers/test-utils.mjs';
-import { Column, DataTable, processDataTable } from '../src/lib/index.js';
+import {
+    Column, DataTable, createChunkDataPool, dataTableToChunkSource,
+    decimateSourceAdaptive, processDataTable
+} from '../src/lib/index.js';
 
 function createGaussianTestData(options = {}) {
     const count = options.count ?? 4;
@@ -203,19 +206,24 @@ describe('decimate - merge quality invariants', () => {
         );
     });
 
-    it('should decimate a fully-coincident scene (re-costed selection)', async () => {
-        // Every splat coincident at the origin: the legacy one-shot matching
-        // starved on the collapsed KNN hub set and failed loud. Re-costed
+    it('should fail loud on a fully-coincident scene, where the adaptive path merges', async () => {
+        // Every splat coincident at the origin. The action runs the uniform
+        // decimator (--decimate), whose one-shot matching starves on the
+        // collapsed KNN hub set and fails loud rather than grinding. Re-costed
         // selection derives candidates from the full neighbour graph as
-        // clusters form, so coincident scenes now merge cleanly (coincident
-        // merges are exactly lossless under the field-L2 cost).
+        // clusters form, so --decimate-adaptive merges these cleanly instead
+        // (coincident merges are exactly lossless under the field-L2 cost).
         const testData = createGaussianTestData({ count: 600 });
-        const result = await processDataTable(testData, decimate(300));
-        assert.strictEqual(result.numRows, 300);
-        const op = result.getColumnByName('opacity').data;
-        for (let i = 0; i < 300; i++) {
-            assert.ok(Number.isFinite(op[i]), `row ${i} opacity finite`);
-        }
+        await assert.rejects(
+            () => processDataTable(testData, decimate(300)),
+            /decimation stalled/,
+            'uniform path refuses to grind on a degenerate neighbour graph'
+        );
+
+        const pool = createChunkDataPool();
+        const out = await decimateSourceAdaptive(dataTableToChunkSource(testData), pool, { targetCount: 300 });
+        assert.strictEqual(out.meta.numGaussians, 300);
+        await out.close();
     });
 
     it('should throw when gaussian columns are missing (legacy silently pruned)', async () => {

@@ -35,7 +35,7 @@ type CandidateArrays = {
 /**
  * Colour components the pass gathers per row. The field-L2 cost reads only
  * DC, so at SH band 3 this is 16× less colour RAM and copy traffic per block
- * than gathering every band. (`--decimate-uniform` scores full SH and has its
+ * than gathering every band. (`--decimate` scores full SH and has its
  * own pass — see lib/decimate-uniform/priority.ts.)
  */
 const COLOR_COMPONENTS = 3;

@@ -1,8 +1,8 @@
 # decimate-uniform — the pre-3.2 decimator
 
-The decimator that shipped up to 3.1.x, reached through `--decimate-uniform` /
-`decimateSourceUniform()`. `src/lib/decimate/` holds the adaptive one
-(`--decimate` / `decimateSource()`).
+The decimator that shipped up to 3.1.x and the default again, reached through
+`--decimate` / `decimateSource()`. `src/lib/decimate/` holds the adaptive one
+(`--decimate-adaptive` / `decimateSourceAdaptive()`).
 
 The names describe how each allocates removal, not a ranking. Both are
 supported and neither is a fallback for the other: they win on different
@@ -65,8 +65,8 @@ to be deliberate rather than incidental. Before landing one:
 
 - Re-run the whole-scene comparison if you expect output to be unchanged. That
   is what `tools/decimate-parity.mjs` is for — it chains halvings through a
-  reference binary's `--decimate` and this tree's `--decimate-uniform`, compares
-  byte for byte, reports PSNR for both, and exits non-zero on any mismatch:
+  reference binary's `--decimate` and this tree's `--decimate`, compares byte
+  for byte, reports PSNR for both, and exits non-zero on any mismatch:
 
   ```bash
   node tools/decimate-parity.mjs sky --ref splat-transform
@@ -85,7 +85,7 @@ to be deliberate rather than incidental. Before landing one:
 
 ## If it is ever retired
 
-Nothing in `src/lib/decimate/` refers to this directory, so: `rm -rf` it, drop
-`decimateSourceUniform` from `src/lib/index.ts`, drop `--decimate-uniform`
-from the CLI, and delete `test/decimate-uniform-parity.test.mjs` and
+Nothing in `src/lib/decimate/` refers to this directory, so: `rm -rf` it, point
+`decimateSource` in `src/lib/index.ts` and `--decimate` in the CLI back at the
+adaptive path, and delete `test/decimate-uniform-parity.test.mjs` and
 `tools/decimate-parity.mjs`.
