@@ -1,4 +1,5 @@
-import { html, css, js } from '@playcanvas/supersplat-viewer';
+import { css, js, renderViewerHtml } from '@playcanvas/supersplat-viewer';
+import { defaultSettings } from '@playcanvas/supersplat-viewer/settings';
 import { basename, dirname, join } from 'pathe';
 
 import { logWrittenFile } from './utils';
@@ -7,30 +8,6 @@ import { DataTable } from '../data-table';
 import { type FileSystem, MemoryFileSystem, writeFile } from '../io/write';
 import type { DeviceCreator } from '../types';
 import { logger, toBase64 } from '../utils';
-
-const defaultSettings = {
-    version: 2,
-    tonemapping: 'none',
-    highPrecisionRendering: false,
-    background: { color: [0.4, 0.4, 0.4] },
-    postEffectSettings: {
-        sharpness: { enabled: false, amount: 0 },
-        bloom: { enabled: false, intensity: 1, blurLevel: 2 },
-        grading: { enabled: false, brightness: 0, contrast: 1, saturation: 1, tint: [1, 1, 1] },
-        vignette: { enabled: false, intensity: 0.5, inner: 0.3, outer: 0.75, curvature: 1 },
-        fringing: { enabled: false, intensity: 0.5 }
-    },
-    animTracks: [] as any[],
-    cameras: [{
-        initial: {
-            position: [2, 2, -2],
-            target: [0, 0, 0],
-            fov: 75
-        }
-    }],
-    annotations: [] as any[],
-    startMode: 'default'
-};
 
 type WriteHtmlOptions = {
     filename: string;
@@ -54,12 +31,7 @@ type WriteHtmlOptions = {
 const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
     const { filename, dataTable, viewerSettingsJson, bundle, iterations, createDevice } = options;
 
-    const pad = (text: string, spaces: number) => {
-        const whitespace = ' '.repeat(spaces);
-        return text.split('\n').map(line => whitespace + line).join('\n');
-    };
-
-    const viewerSettings = viewerSettingsJson || defaultSettings;
+    const viewerSettings = viewerSettingsJson || defaultSettings('object');
     const encoder = new TextEncoder();
 
     if (bundle) {
@@ -79,17 +51,16 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
         // get the memory buffer
         const sogData = toBase64(memoryFs.results.get(sogFilename));
 
-        const style = '<link rel="stylesheet" href="./index.css">';
-        const script = 'import { main } from \'./index.js\';';
-        const settings = 'settings: fetch(settingsUrl).then(response => response.json())';
-        const content = 'fetch(contentUrl)';
-
-        const resultHtml = html
-        .replace(style, `<style>\n${pad(css, 12)}\n        </style>`)
-        .replace(script, js)
-        .replace(settings, `settings: ${JSON.stringify(viewerSettings)}`)
-        .replace(content, `fetch("data:application/octet-stream;base64,${sogData}")`)
-        .replace('.compressed.ply', '.sog');
+        const resultHtml = renderViewerHtml({
+            bootstrap: {
+                settings: viewerSettings,
+                contentUrl: `data:application/octet-stream;base64,${sogData}`,
+                // a data: uri has no usable name, so this selects the sog parser
+                contentFilename: 'scene.sog'
+            },
+            inlineCss: true,
+            inlineJs: true
+        });
 
         const htmlBytes = encoder.encode(resultHtml);
 
@@ -134,12 +105,10 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
         await writeFile(fs, settingsPath, settingsBytes);
         logWrittenFile(basename(settingsPath), settingsBytes.byteLength);
 
-        // Generate HTML with external references
-        const content = 'fetch(contentUrl)';
-
-        const resultHtml = html
-        .replace(content, `fetch("${sogFilename}")`)
-        .replace('.compressed.ply', '.sog');
+        // Generate HTML referencing the sibling files
+        const resultHtml = renderViewerHtml({
+            bootstrap: { contentUrl: sogFilename }
+        });
 
         const htmlBytes = encoder.encode(resultHtml);
         await writeFile(fs, filename, htmlBytes);
