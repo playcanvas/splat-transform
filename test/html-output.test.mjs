@@ -47,6 +47,21 @@ describe('HTML Format (Output Only)', () => {
         assert(htmlText.includes('<head'), 'Should have head tag');
         assert(htmlText.includes('<body'), 'Should have body tag');
 
+        // The bootstrap block must carry the splat and settings inline; if any of these
+        // regress, the page silently falls back to fetching missing sibling files
+        assert(htmlText.includes('"contentUrl":"data:application/octet-stream;base64,'),
+            'Bootstrap should embed the splat as a data: URI');
+        assert(htmlText.includes('"contentFilename":"scene.sog"'),
+            'Bootstrap should name the data: URI content so the sog parser is selected');
+        assert(htmlText.includes('"settings":{'),
+            'Bootstrap should embed the viewer settings inline');
+
+        // Self-contained: no external stylesheet or module references. Note ./settings.json
+        // legitimately remains in the script as the default settingsUrl; the inline
+        // bootstrap settings take precedence over it
+        assert(!htmlText.includes('./index.css'), 'Stylesheet should be inlined, not linked');
+        assert(!htmlText.includes('./index.js'), 'Module bundle should be inlined, not imported');
+
         // For bundled, everything should be in one file
         assert.strictEqual(writeFs.results.size, 1, 'Bundled should only produce one file');
     });
@@ -65,6 +80,14 @@ describe('HTML Format (Output Only)', () => {
 
         const htmlText = new TextDecoder().decode(htmlData);
         assert(htmlText.includes('<html'), 'Should have html tag');
+
+        // The document must actually reference the sibling files it ships with
+        assert(htmlText.includes('"contentUrl":"viewer.sog"'),
+            'Bootstrap should point at the sibling .sog file');
+        assert(htmlText.includes('href="./index.css"'), 'Should link the sibling stylesheet');
+        assert(htmlText.includes("import { main } from './index.js';"),
+            'Should import the sibling module bundle');
+        assert(htmlText.includes('./settings.json'), 'Should fetch the sibling settings file');
 
         // For unbundled, should have additional files
         assert(writeFs.results.size > 1, 'Unbundled should produce multiple files');
@@ -96,8 +119,9 @@ describe('HTML Format (Output Only)', () => {
         const htmlData = writeFs.results.get('viewer.html');
         assert(htmlData, 'HTML file should be written');
 
-        // The settings should be embedded somehow (exact format depends on implementation)
+        // The supplied settings should be embedded in the bootstrap verbatim
         const htmlText = new TextDecoder().decode(htmlData);
-        assert(htmlText.length > 0, 'HTML should have content');
+        assert(htmlText.includes('"autoRotate":true'),
+            'Custom settings should be embedded in the bootstrap');
     });
 });
