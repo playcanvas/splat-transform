@@ -1,4 +1,5 @@
 import { execSync } from 'node:child_process';
+import { copyFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 
 import json from '@rollup/plugin-json';
@@ -116,6 +117,40 @@ const cjs = {
     cache: false
 };
 
+// Viewer settings re-export - bundled from the same vendored viewer as the html
+// writer, so producers author settings against the exact viewer version embedded
+// in html exports, with no viewer dependency of their own. The declaration is
+// copied from the viewer package rather than emitted by tsc: an emitted d.ts
+// would just re-export from '@playcanvas/supersplat-viewer', which consumers of
+// this package do not have installed.
+const viewerSettings = {
+    input: 'src/lib/viewer-settings.ts',
+    output: {
+        dir: 'dist',
+        format: 'esm',
+        sourcemap: true,
+        entryFileNames: 'viewer-settings.mjs'
+    },
+    plugins: [
+        typescript({
+            tsconfig: './tsconfig.json',
+            declaration: false,
+            declarationDir: undefined
+        }),
+        resolve(),
+        {
+            name: 'copy-viewer-settings-dts',
+            writeBundle() {
+                copyFileSync(
+                    'node_modules/@playcanvas/supersplat-viewer/dist/settings.d.ts',
+                    'dist/viewer-settings.d.ts'
+                );
+            }
+        }
+    ],
+    cache: false
+};
+
 // CLI build - Node.js specific
 const cli = {
     input: 'src/cli/index.ts',
@@ -140,4 +175,4 @@ const cli = {
     cache: false
 };
 
-export default [worker, esm, cjs, cli];
+export default [worker, esm, cjs, viewerSettings, cli];
