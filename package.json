@@ -28,6 +28,10 @@
       }
     },
     "./worker": "./dist/worker.mjs",
+    "./viewer-settings": {
+      "types": "./dist/viewer-settings.d.ts",
+      "import": "./dist/viewer-settings.mjs"
+    },
     "./lib/*": "./lib/*"
   },
   "bin": {
