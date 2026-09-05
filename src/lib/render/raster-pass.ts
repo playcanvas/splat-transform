@@ -87,13 +87,17 @@ interface BackgroundRGBA {
  * @param dataTable - Gaussian splat data in PlayCanvas-identity space.
  * @param camera - Camera parameters.
  * @param background - RGBA background composited under residual transmittance.
+ * @param options - Render options.
+ * @param options.quiet - Suppress the progress group and bar, for callers
+ * rendering many small images in a loop.
  * @returns RGBA byte array of length `camera.width × camera.height × 4`.
  */
 const renderRasterPass = async (
     device: GraphicsDevice,
     dataTable: DataTable,
     camera: RenderCamera,
-    background: BackgroundRGBA
+    background: BackgroundRGBA,
+    options: { quiet?: boolean } = {}
 ): Promise<Uint8Array> => {
     if (!Number.isInteger(camera.width) || !Number.isInteger(camera.height) ||
         camera.width <= 0 || camera.height <= 0) {
@@ -123,7 +127,7 @@ const renderRasterPass = async (
     // test, which uses the actual screen-space radius — strictly
     // tighter than the L∞-bound CPU test. For equirect the cone test
     // doesn't apply at all: every direction is in-view.
-    const cullGroup = logger.group('Cull');
+    const cullGroup = options.quiet ? null : logger.group('Cull');
     const xCol = dataTable.getColumnByName('x')!.data as Float32Array;
     const yCol = dataTable.getColumnByName('y')!.data as Float32Array;
     const zCol = dataTable.getColumnByName('z')!.data as Float32Array;
@@ -150,7 +154,7 @@ const renderRasterPass = async (
             if (dx * dx + dy * dy + dz * dz > nearSq) candidates[candidateCount++] = i;
         }
     }
-    cullGroup.end();
+    cullGroup?.end();
 
     // ---- Image tile grid + sub-frame partition ----
     // Pinhole renders larger than ~1080p are split into sub-frames so
@@ -397,7 +401,7 @@ const renderRasterPass = async (
     for (let s = 0; s < numSubFrames; s++) {
         totalChunks += Math.ceil(subFrameLists[s].length / effectiveChunkCap);
     }
-    const rasterBar = logger.bar('rasterizing', Math.max(1, totalChunks));
+    const rasterBar = options.quiet ? null : logger.bar('rasterizing', Math.max(1, totalChunks));
     let completed = 0;
 
     for (let sy = 0; sy < numSubFramesY; sy++) {
@@ -413,7 +417,7 @@ const renderRasterPass = async (
                 const chunkSize = Math.min(effectiveChunkCap, sfCount - chunkStart);
                 packChunkInput(cols, sfCandidates, chunkStart, chunkSize, numSHBands, chunkInput);
                 rasterizer.dispatchChunk(chunkInput, chunkSize);
-                rasterBar.update(++completed);
+                rasterBar?.update(++completed);
             }
 
             const subFrameBytes = await rasterizer.finishGroup();
@@ -438,7 +442,7 @@ const renderRasterPass = async (
             }
         }
     }
-    rasterBar.end();
+    rasterBar?.end();
 
     rasterizer.destroy();
 

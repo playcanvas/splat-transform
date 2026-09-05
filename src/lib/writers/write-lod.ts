@@ -1,15 +1,13 @@
 import { basename, dirname, resolve } from 'pathe';
-import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
+import { BoundingBox, type GraphicsDevice, Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { logWrittenFile } from './utils';
 import { writeSogSource } from './write-sog.js';
 import { type ChunkDataPool, type ChunkSource, type ReadRequest, createChunkDataPool } from '../chunk';
 import { Column, DataTable } from '../data-table';
-import {
-    EPS_COV, det3, ellipsoidArea, quatToRotmat, sigmaFromRotVar, sigmoid, type SplatView
-} from '../decimate/moment-match';
 import { type FileSystem } from '../io/write';
 import { bakeTransform, permuteSource, sortMortonColumns } from '../ops';
+import { type RenderCamera, renderSplats } from '../render';
 import { BTreeNode, BTree } from '../spatial';
 import type { DeviceCreator } from '../types';
 import { logger, Transform } from '../utils';
@@ -173,9 +171,9 @@ const invalidGaussian = (lod: number, row: number, what: string): Error => new E
 /**
  * Reject a batch of gaussians whose geometry is not finite. The bounds pass reads
  * every gaussian's geometric record once, so this covers the whole scene:
- * everything downstream — the error metric above all, whose footprint mass runs
- * through `sigmoid`/`exp` — may then assume finite input rather than each stage
- * carrying its own opinion about invalid data. {@link assertFiniteColor} does the
+ * everything downstream — the error pass above all, which renders every gaussian
+ * — may then assume finite input rather than each stage carrying its own opinion
+ * about invalid data. {@link assertFiniteColor} does the
  * same for the layer this pass does not read.
  *
  * The rules mirror `filterNaNRows`, including its two deliberate exceptions
@@ -313,169 +311,13 @@ const binIndices = (parent: BTreeNode, lodOf: (index: number) => number): Map<nu
     return result;
 };
 
-const distanceToAabbSq = (node: BTreeNode, x: number, y: number, z: number): number => {
-    const { min, max } = node.aabb;
-    const dx = x < min[0] ? min[0] - x : x > max[0] ? x - max[0] : 0;
-    const dy = y < min[1] ? min[1] - y : y > max[1] ? y - max[1] : 0;
-    const dz = z < min[2] ? min[2] - z : z > max[2] ? z - max[2] : 0;
-    return dx * dx + dy * dy + dz * dz;
-};
-
-/**
- * The k nearest candidates of each of several structural LODs to every query, in
- * center space — one traversal per query, serving every LOD.
- *
- * `ranges` holds `[lo, hi)` per LOD in flat analysis index space: LOD is
- * structural, so a level's gaussians are exactly one contiguous index range and
- * the level test is two comparisons rather than a lookup. Sharing the traversal
- * is what makes the error pass affordable — every splat of the reference level is
- * matched against every coarser level, so searching them separately would repeat
- * the same descent once per level.
- *
- * A node is descended while any level can still improve on it, and a leaf's
- * candidates are examined for a level only when that level's own k-th distance
- * says they could, so each level's result is identical to a search of its own.
- * Each node's distance is computed once, by its parent, and passed in.
- *
- * @param root - Root of the tree to search.
- * @param slim - Resident position columns.
- * @param queries - Flat analysis indices to search from.
- * @param ranges - Flat `[lo, hi)` pairs, one per LOD to match against.
- * @param k - Neighbours per query per LOD.
- * @returns Per LOD, `k` flat indices per query, nearest first, `-1` for none.
- */
-const findNearest = (
-    root: BTreeNode, slim: SlimColumns, queries: Uint32Array, ranges: Int32Array, k: number
-): Int32Array[] => {
-    const targets = ranges.length >> 1;
-    const results: Int32Array[] = [];
-    for (let t = 0; t < targets; t++) {
-        const result = new Int32Array(queries.length * k);
-        result.fill(-1);
-        results.push(result);
-    }
-    const distances = new Float64Array(targets * k);
-    const targetK = new Int32Array(targets);
-    for (let t = 0; t < targets; t++) {
-        targetK[t] = Math.min(k, ranges[2 * t + 1] - ranges[2 * t]);
-    }
-
-    const px = slim.x, py = slim.y, pz = slim.z;
-
-    // Per-query state lives out here so the traversal is one function compiled
-    // once, not a fresh closure allocated per query.
-    let x = 0, y = 0, z = 0;
-    let output = 0;
-
-    // the walk can stop where no level can improve: the largest k-th distance
-    let radius = Infinity;
-
-    const visit = (node: BTreeNode, distance: number): void => {
-        if (distance > radius) return;
-
-        const { indices } = node;
-        if (indices) {
-            for (let t = 0; t < targets; t++) {
-                const base = t * k;
-                const worst = base + targetK[t] - 1;
-                if (distance > distances[worst]) continue;
-
-                const lo = ranges[2 * t];
-                const hi = ranges[2 * t + 1];
-                const result = results[t];
-                for (let i = 0; i < indices.length; i++) {
-                    const candidate = indices[i];
-                    if (candidate < lo || candidate >= hi) continue;
-                    const dx = px[candidate] - x;
-                    const dy = py[candidate] - y;
-                    const dz = pz[candidate] - z;
-                    const d = dx * dx + dy * dy + dz * dz;
-                    if (d >= distances[worst]) continue;
-
-                    let insert = targetK[t] - 1;
-                    while (insert > 0 && d < distances[base + insert - 1]) {
-                        distances[base + insert] = distances[base + insert - 1];
-                        result[output + insert] = result[output + insert - 1];
-                        insert--;
-                    }
-                    distances[base + insert] = d;
-                    result[output + insert] = candidate;
-                }
-            }
-
-            radius = 0;
-            for (let t = 0; t < targets; t++) {
-                const d = distances[t * k + targetK[t] - 1];
-                if (d > radius) radius = d;
-            }
-            return;
-        }
-
-        const left = node.left!;
-        const right = node.right!;
-        const dl = distanceToAabbSq(left, x, y, z);
-        const dr = distanceToAabbSq(right, x, y, z);
-        if (dl <= dr) {
-            visit(left, dl);
-            visit(right, dr);
-        } else {
-            visit(right, dr);
-            visit(left, dl);
-        }
-    };
-
-    for (let q = 0; q < queries.length; q++) {
-        distances.fill(Infinity);
-        const g = queries[q];
-        x = px[g]; y = py[g]; z = pz[g];
-        output = q * k;
-        radius = Infinity;
-        visit(root, distanceToAabbSq(root, x, y, z));
-    }
-
-    return results;
-};
-
-const uniqueGlobals = (queries: Uint32Array, neighbourSets: Int32Array[]): Uint32Array => {
-    let capacity = queries.length;
-    for (const neighbours of neighbourSets) capacity += neighbours.length;
-    const combined = new Uint32Array(capacity);
-    combined.set(queries);
-    let count = queries.length;
-    for (const neighbours of neighbourSets) {
-        for (let i = 0; i < neighbours.length; i++) {
-            if (neighbours[i] >= 0) combined[count++] = neighbours[i];
-        }
-    }
-    const sorted = combined.subarray(0, count);
-    sorted.sort();
-    let unique = 0;
-    for (let i = 0; i < sorted.length; i++) {
-        if (i === 0 || sorted[i] !== sorted[i - 1]) sorted[unique++] = sorted[i];
-    }
-    return sorted.slice(0, unique);
-};
-
-const indexOfSorted = (values: Uint32Array, value: number): number => {
-    let lo = 0;
-    let hi = values.length - 1;
-    while (lo <= hi) {
-        const mid = (lo + hi) >>> 1;
-        const candidate = values[mid];
-        if (candidate < value) lo = mid + 1;
-        else if (candidate > value) hi = mid - 1;
-        else return mid;
-    }
-    return -1;
-};
-
 /**
  * Reject a batch of gaussians whose color or stored SH is not finite — the
  * companion to {@link assertFiniteGeometry} for the layer the bounds pass does not
- * read. A single non-finite coefficient makes {@link splatError} return `NaN` for
- * every pair the splat takes part in, and `directional` discards `NaN` matches, so
- * a level would report *less* error the more of it is broken. Coverage is again
- * the whole scene: every gaussian of a leaf is gathered as its own level's query.
+ * read. A non-finite coefficient would paint NaN into the error renders and the
+ * comparison would silently absorb it, so it is refused up front like invalid
+ * geometry. Coverage is again the whole scene: every gaussian of a leaf is
+ * gathered for its own level's render.
  *
  * @param color - Packed color/SH records for the batch.
  * @param count - Gaussians in the batch.
@@ -498,301 +340,225 @@ const assertFiniteColor = (
     }
 };
 
-const gatherView = async (
+const GEOMETRIC_COLUMNS = ['rot_0', 'rot_1', 'rot_2', 'rot_3', 'scale_0', 'scale_1', 'scale_2', 'opacity'];
+
+/**
+ * Gather one structural level of a leaf into a resident {@link DataTable} for the
+ * rasterizer. Positions come from the resident slim columns; rotation, scale,
+ * opacity and color/SH are read from the source by index in pool-sized batches —
+ * the same per-leaf gather the bounds pass does for its layers.
+ *
+ * The table stays in PLY space, tagged as such. The error pass renders scene and
+ * camera in one space and only ever compares renders against each other, so the
+ * space is immaterial as long as it is shared; PLY-space SH is evaluated against
+ * PLY-space view directions, which is self-consistent.
+ *
+ * @param source - The PLY-space scene source.
+ * @param pool - Pool for the temporary per-batch read buffers.
+ * @param slim - Resident position columns.
+ * @param indices - Flat analysis indices of the level's gaussians in this leaf.
+ * @param lod - The structural LOD the indices belong to.
+ * @param base - Flat base of `lod`, converting a flat index to a row local to it.
+ * @returns The level's gaussians as a table in PLY space.
+ */
+const gatherLeafTable = async (
     source: ChunkSource, pool: ChunkDataPool, slim: SlimColumns,
-    globals: Uint32Array, lod: number, base: number
-): Promise<SplatView> => {
+    indices: Uint32Array, lod: number, base: number
+): Promise<DataTable> => {
     const { layouts } = source.meta;
     const colorDim = layouts.color!.stride >> 2;
-    const view: SplatView = {
-        pos: new Float32Array(globals.length * 3),
-        geo: new Float32Array(globals.length * 8),
-        color: new Float32Array(globals.length * colorDim),
-        colorDim
-    };
-    const local = new Uint32Array(globals.length);
-    for (let i = 0; i < globals.length; i++) {
-        const g = globals[i];
-        local[i] = g - base;
-        view.pos[i * 3] = slim.x[g];
-        view.pos[i * 3 + 1] = slim.y[g];
-        view.pos[i * 3 + 2] = slim.z[g];
-    }
+    const n = indices.length;
 
-    for (let off = 0; off < local.length; off += pool.chunkSize) {
-        const count = Math.min(pool.chunkSize, local.length - off);
-        const geo = pool.acquire('geometric', layouts.geometric!, count);
-        const color = pool.acquire('color', layouts.color!, count);
-        await source.read({ indices: local, indexOffset: off, count, lod, geometric: geo, color });
-        const colorBatch = new Float32Array(color.data, 0, count * colorDim);
-        assertFiniteColor(colorBatch, count, colorDim, local, off, lod);
-        view.geo.set(new Float32Array(geo.data, 0, count * 8), off * 8);
-        view.color.set(colorBatch, off * colorDim);
-        geo.release();
-        color.release();
-    }
+    const position = [new Float32Array(n), new Float32Array(n), new Float32Array(n)];
+    const geometric = GEOMETRIC_COLUMNS.map(() => new Float32Array(n));
+    const color = Array.from({ length: colorDim }, () => new Float32Array(n));
 
-    return view;
-};
-
-const concatViews = (views: SplatView[]): SplatView => {
-    const { colorDim } = views[0];
-    let count = 0;
-    for (const v of views) count += v.pos.length / 3;
-    const result: SplatView = {
-        pos: new Float32Array(count * 3),
-        geo: new Float32Array(count * 8),
-        color: new Float32Array(count * colorDim),
-        colorDim
-    };
-    let row = 0;
-    for (const v of views) {
-        result.pos.set(v.pos, row * 3);
-        result.geo.set(v.geo, row * 8);
-        result.color.set(v.color, row * colorDim);
-        row += v.pos.length / 3;
-    }
-    return result;
-};
-
-const PI_1_5 = Math.PI ** 1.5;
-const TWO_PI_1_5 = (2 * Math.PI) ** 1.5;
-
-/**
- * Per-splat terms of the field-L2: the covariance, the footprint mass used to
- * weight it, the gaussian's opacity, sqrt(det sigma), and its self inner product
- * <f, f> = alpha^2 * pi^1.5 * sqrt(det sigma).
- *
- * `sigma` and `mass` are what the decimator's `buildCostCache` computes (same
- * math, same f32 storage, so the same values); the rest of that cache serves the
- * MC-KL edge cost, which this path does not evaluate, so it is not built here.
- */
-type ErrorCache = {
-    sigma: Float32Array;
-    mass: Float32Array;
-    alpha: Float64Array;
-    sqrtDet: Float64Array;
-    self: Float64Array;
-};
-
-const buildErrorCache = (view: SplatView): ErrorCache => {
-    const { geo } = view;
-    const n = geo.length / 8;
-    const sigma = new Float32Array(n * 9);
-    const mass = new Float32Array(n);
-    const alpha = new Float64Array(n);
-    const sqrtDet = new Float64Array(n);
-    const self = new Float64Array(n);
-    const rot = new Float32Array(9);
-
+    const local = new Uint32Array(n);
     for (let i = 0; i < n; i++) {
-        const i8 = 8 * i;
-        const i9 = 9 * i;
-
-        const linAlpha = sigmoid(geo[i8 + 7]);
-        const sx = Math.max(Math.exp(geo[i8 + 4]), 1e-12);
-        const sy = Math.max(Math.exp(geo[i8 + 5]), 1e-12);
-        const sz = Math.max(Math.exp(geo[i8 + 6]), 1e-12);
-
-        let qw = geo[i8], qx = geo[i8 + 1], qy = geo[i8 + 2], qz = geo[i8 + 3];
-        const invq = 1 / Math.max(Math.hypot(qw, qx, qy, qz), 1e-12);
-        qw *= invq; qx *= invq; qy *= invq; qz *= invq;
-
-        quatToRotmat(qw, qx, qy, qz, rot, 0);
-        sigmaFromRotVar(rot, 0, sx * sx + EPS_COV, sy * sy + EPS_COV, sz * sz + EPS_COV, sigma, i9);
-
-        const root = Math.sqrt(Math.max(det3(sigma, i9), 1e-300));
-        alpha[i] = linAlpha;
-        sqrtDet[i] = root;
-        self[i] = linAlpha * linAlpha * PI_1_5 * root;
-        mass[i] = linAlpha * ellipsoidArea(sx, sy, sz) + 1e-12;
+        const g = indices[i];
+        local[i] = g - base;
+        position[0][i] = slim.x[g];
+        position[1][i] = slim.y[g];
+        position[2][i] = slim.z[g];
     }
 
-    return { sigma, mass, alpha, sqrtDet, self };
-};
+    for (let off = 0; off < n; off += pool.chunkSize) {
+        const count = Math.min(pool.chunkSize, n - off);
+        const geo = pool.acquire('geometric', layouts.geometric!, count);
+        const col = pool.acquire('color', layouts.color!, count);
+        await source.read({ indices: local, indexOffset: off, count, lod, geometric: geo, color: col });
 
-const sumScratch = new Float64Array(9);
+        const geoBatch = new Float32Array(geo.data, 0, count * 8);
+        const colorBatch = new Float32Array(col.data, 0, count * colorDim);
+        assertFiniteColor(colorBatch, count, colorDim, local, off, lod);
+        for (let i = 0; i < count; i++) {
+            for (let k = 0; k < 8; k++) geometric[k][off + i] = geoBatch[i * 8 + k];
+            for (let k = 0; k < colorDim; k++) color[k][off + i] = colorBatch[i * colorDim + k];
+        }
+
+        geo.release();
+        col.release();
+    }
+
+    const columns = [
+        new Column('x', position[0]),
+        new Column('y', position[1]),
+        new Column('z', position[2]),
+        ...GEOMETRIC_COLUMNS.map((name, k) => new Column(name, geometric[k])),
+        new Column('f_dc_0', color[0]),
+        new Column('f_dc_1', color[1]),
+        new Column('f_dc_2', color[2])
+    ];
+    for (let k = 3; k < colorDim; k++) columns.push(new Column(`f_rest_${k - 3}`, color[k]));
+
+    return new DataTable(columns, Transform.PLY);
+};
 
 /**
- * Approximation error between two splats: the relative field-L2 of the density
- * each one paints plus the stored-SH L2.
- *
- * Writing f(x) = alpha * exp(-0.5 (x-mu)^T sigma^-1 (x-mu)), every inner product
- * <f_i, f_j> is closed form, so
- *
- *   ||f_i - f_j||^2 / (||f_i||^2 + ||f_j||^2)
- *
- * is exact: zero only for identical splats, monotone in their separation, and
- * bounded by 1 once they no longer overlap. The decimator's edge cost is not
- * usable here — as a one-sample MC estimate of a KL it carries ~1.2 nats of
- * noise, far more than the error a well-decimated leaf actually has, and it is
- * blind to opacity (alpha only sets the merge weights there).
- *
- * Both terms are non-negative, so a pair whose geometric term alone already
- * reaches `cutoff` cannot beat it: `Infinity` is returned without summing the SH
- * coefficients, which is the bulk of the arithmetic at 3 SH bands.
- *
- * @param view - Splat columns.
- * @param cache - Per-splat cache from {@link buildErrorCache}.
- * @param i - First splat (view row).
- * @param j - Second splat (view row).
- * @param cutoff - Error to beat; pass `Infinity` for the unconditional error.
- * @returns The error, zero when the two splats are identical.
+ * Pixels across each error render. This is the metric's one calibration: it fixes
+ * the on-screen size at which a level is judged, since detail finer than a pixel
+ * of the render is invisible to it. 512 across a leaf corresponds to a leaf
+ * spanning roughly a quarter of a 2K-wide viewport — the band in which the
+ * engine's budget allocator is actually trading levels off against each other.
+ * The nearest leaves are bought first whatever their error says, and the far
+ * field sits at its coarsest level regardless, so accuracy elsewhere buys little.
  */
-const splatError = (
-    view: SplatView, cache: ErrorCache, i: number, j: number, cutoff: number
-): number => {
-    const s = sumScratch;
-    const i9 = 9 * i, j9 = 9 * j;
-    for (let a = 0; a < 9; a++) s[a] = cache.sigma[i9 + a] + cache.sigma[j9 + a];
-    const detS = Math.max(det3(s, 0), 1e-300);
+const ERROR_VIEW_SIZE = 512;
 
-    // d^T (sigma_i + sigma_j)^-1 d, via the adjugate (symmetric, so no transpose)
-    const { pos } = view;
-    const dx = pos[3 * i] - pos[3 * j];
-    const dy = pos[3 * i + 1] - pos[3 * j + 1];
-    const dz = pos[3 * i + 2] - pos[3 * j + 2];
-    const ax = (s[4] * s[8] - s[5] * s[7]) * dx + (s[2] * s[7] - s[1] * s[8]) * dy + (s[1] * s[5] - s[2] * s[4]) * dz;
-    const ay = (s[5] * s[6] - s[3] * s[8]) * dx + (s[0] * s[8] - s[2] * s[6]) * dy + (s[2] * s[3] - s[0] * s[5]) * dz;
-    const az = (s[3] * s[7] - s[4] * s[6]) * dx + (s[1] * s[6] - s[0] * s[7]) * dy + (s[0] * s[4] - s[1] * s[3]) * dz;
-    const quad = (dx * ax + dy * ay + dz * az) / detS;
+/**
+ * Camera distance from the leaf centre, in bounding-sphere radii. Near-orthographic
+ * without being so far that the splats' projected footprints are lost to precision.
+ */
+const ERROR_VIEW_DISTANCE = 4;
 
-    const cross = cache.alpha[i] * cache.alpha[j] * TWO_PI_1_5 *
-        cache.sqrtDet[i] * cache.sqrtDet[j] / Math.sqrt(detS) * Math.exp(-0.5 * quad);
-    const total = cache.self[i] + cache.self[j];
-    const geoError = Math.max(0, total - 2 * cross) / Math.max(total, 1e-300);
-    if (geoError >= cutoff) return Infinity;
+/** The six axis-aligned directions the leaf is viewed from. */
+const ERROR_VIEW_DIRECTIONS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 
-    const { color, colorDim } = view;
-    let colorError = 0;
-    for (let c = 0; c < colorDim; c++) {
-        const d = color[i * colorDim + c] - color[j * colorDim + c];
-        colorError += d * d;
-    }
+/**
+ * Transparent black: the renderer then reports residual coverage in the alpha
+ * channel and colour premultiplied by it in RGB, so thinning (lost coverage) and
+ * colour drift both register as a difference.
+ */
+const ERROR_BACKGROUND = { r: 0, g: 0, b: 0, a: 0 };
 
-    return geoError + colorError;
+/**
+ * The six views of a leaf: pinhole cameras on each axis, far enough out to frame
+ * the leaf's bounding sphere with a little margin.
+ *
+ * @param bound - The leaf's ellipsoid AABB (the same volume the engine derives its
+ * screen coverage from).
+ * @returns One camera per view direction.
+ */
+const leafCameras = (bound: Aabb): RenderCamera[] => {
+    const { min, max } = bound;
+    const cx = (min[0] + max[0]) / 2;
+    const cy = (min[1] + max[1]) / 2;
+    const cz = (min[2] + max[2]) / 2;
+    const radius = Math.max(Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]) / 2, 1e-3);
+    const distance = ERROR_VIEW_DISTANCE * radius;
+    const fovY = 2 * Math.atan(1.05 * radius / distance);
+
+    return ERROR_VIEW_DIRECTIONS.map(([dx, dy, dz]) => ({
+        projection: 'pinhole',
+        position: new Vec3(cx + dx * distance, cy + dy * distance, cz + dz * distance),
+        target: new Vec3(cx, cy, cz),
+        // any vector not parallel to the view direction
+        up: dy !== 0 ? new Vec3(0, 0, 1) : new Vec3(0, 1, 0),
+        fovY,
+        width: ERROR_VIEW_SIZE,
+        height: ERROR_VIEW_SIZE,
+        // the leaf occupies [distance - radius, distance + radius] in depth
+        near: radius
+    }));
 };
 
+const sumSquared = (image: Uint8Array): number => {
+    let total = 0;
+    for (let i = 0; i < image.length; i++) {
+        const v = image[i] / 255;
+        total += v * v;
+    }
+    return total;
+};
+
+const sumSquaredDifference = (a: Uint8Array, b: Uint8Array): number => {
+    let total = 0;
+    for (let i = 0; i < a.length; i++) {
+        const d = (a[i] - b[i]) / 255;
+        total += d * d;
+    }
+    return total;
+};
+
+/**
+ * Per-level approximation error of a leaf, measured on rendered images.
+ *
+ * Each level present in the leaf is rendered from the six {@link leafCameras}
+ * views and compared against the finest level present, which is the reference
+ * and carries no error. A level's error is the squared RGBA difference summed
+ * over every pixel of every view, divided by the reference's summed squared RGBA
+ * — a relative image error that is zero for an identical level, grows without
+ * bound as a level departs from the reference, and is dimensionless so leaves of
+ * any physical size compare on one scale.
+ *
+ * Comparing composited images rather than the gaussians themselves is what makes
+ * the number track what the viewer will show: a merge of overlapping splats into
+ * one that paints the same pixels costs nothing, while thinning, blur and colour
+ * drift all register in proportion to how visible they are at the calibrated
+ * size ({@link ERROR_VIEW_SIZE}). Any per-splat comparison saturates once a
+ * splat no longer overlaps its nearest match, which compresses a 128x decimation
+ * and a 2x one into the same narrow band and leaves the engine's allocator
+ * ranking on splat count alone.
+ *
+ * The cost is linear in the leaf's gaussians (each is projected once per view
+ * per level) and each leaf is self-contained, so the pass scales linearly with
+ * the scene and needs no scene-wide search structure.
+ *
+ * The table is kept monotone non-decreasing across levels. The engine ranks
+ * upgrades by error reduction per splat *across* leaves, so a coarser level must
+ * never advertise less error than the finer one it stands in for.
+ *
+ * @param device - Graphics device the renders run on.
+ * @param source - The PLY-space scene source.
+ * @param pool - Pool for the per-batch read buffers.
+ * @param slim - Resident position columns.
+ * @param bound - The leaf's ellipsoid AABB, in PLY space.
+ * @param bins - The leaf's flat analysis indices, by structural LOD.
+ * @param cum - Flat base of each structural LOD.
+ * @param numLods - Number of structural LODs in the source.
+ * @returns One error per structural LOD; zero for the reference and for levels
+ * absent from the leaf.
+ */
 const calcErrors = async (
-    source: ChunkSource, pool: ChunkDataPool, slim: SlimColumns, root: BTreeNode,
-    bins: Map<number, Uint32Array>, cum: number[], numLods: number
+    device: GraphicsDevice, source: ChunkSource, pool: ChunkDataPool, slim: SlimColumns,
+    bound: Aabb, bins: Map<number, Uint32Array>, cum: number[], numLods: number
 ): Promise<number[]> => {
-    // Symmetric Chamfer-style error against the finest representation present in
-    // this leaf, plus the alpha-mass a level fails to carry. Center-space KNN
-    // supplies a small candidate set (including candidates across leaf
-    // boundaries); the final match uses the closed-form {@link splatError}. This
-    // compares arbitrary input LODs, so it does not depend on how those LODs
-    // were produced.
     const errors = new Array(numLods).fill(0);
-    const referenceLod = Math.min(...bins.keys());
-    const referenceQueries = bins.get(referenceLod)!;
-    const k = 4;
+    const levels = [...bins.keys()].sort((a, b) => a - b);
+    if (levels.length < 2) return errors;
 
-    const targetLods = [...bins.keys()].filter(lod => lod !== referenceLod).sort((a, b) => a - b);
-    if (targetLods.length === 0) return errors;
+    const cameras = leafCameras(bound);
 
-    // Forward (reference -> each level) shares one traversal per reference splat;
-    // reverse (each level -> reference) is a separate query set per level.
-    const targetRanges = new Int32Array(targetLods.length * 2);
-    targetLods.forEach((lod, i) => {
-        targetRanges[2 * i] = cum[lod];
-        targetRanges[2 * i + 1] = cum[lod + 1];
-    });
-    const referenceRange = Int32Array.of(cum[referenceLod], cum[referenceLod + 1]);
-
-    const forwards = findNearest(root, slim, referenceQueries, targetRanges, k);
-    const reverses = targetLods.map(lod => findNearest(root, slim, bins.get(lod)!, referenceRange, k)[0]);
-
-    // One gathered section per level, holding that level's own splats plus every
-    // splat another level matched into it, concatenated into a single view. All
-    // levels are handled in one pass so the reference level — the largest, and a
-    // participant in every pair — is read and cached once instead of once per
-    // level pair.
-    const order = [referenceLod, ...targetLods];
-    const globals: Uint32Array[] = new Array(numLods);
-    globals[referenceLod] = uniqueGlobals(referenceQueries, reverses);
-    targetLods.forEach((lod, i) => {
-        globals[lod] = uniqueGlobals(bins.get(lod)!, [forwards[i]]);
-    });
-
-    const offsets = new Int32Array(numLods);
-    const sections: SplatView[] = [];
-    let rows = 0;
-    for (const lod of order) {
-        offsets[lod] = rows;
-        sections.push(await gatherView(source, pool, slim, globals[lod], lod, cum[lod]));
-        rows += globals[lod].length;
+    const referenceLod = levels[0];
+    const referenceTable = await gatherLeafTable(source, pool, slim, bins.get(referenceLod)!, referenceLod, cum[referenceLod]);
+    const referenceImages: Uint8Array[] = [];
+    let energy = 0;
+    for (const camera of cameras) {
+        const image = await renderSplats(device, referenceTable, camera, ERROR_BACKGROUND, { quiet: true });
+        energy += sumSquared(image);
+        referenceImages.push(image);
     }
 
-    const view = concatViews(sections);
-    const cache = buildErrorCache(view);
-
-    // Rows of a level's own splats, in query order. The reference level's are
-    // reused by every pair.
-    const rowsOf = (queries: Uint32Array, lod: number): Int32Array => {
-        const result = new Int32Array(queries.length);
-        const offset = offsets[lod];
-        const g = globals[lod];
-        for (let i = 0; i < queries.length; i++) result[i] = offset + indexOfSorted(g, queries[i]);
-        return result;
-    };
-    const referenceRows = rowsOf(referenceQueries, referenceLod);
-
-    // `mass` (alpha * ellipsoid area) is a splat's share of what the leaf
-    // paints, so it weights both the per-splat mean and the coverage term —
-    // a hair-thin splat and one spanning the whole leaf are not equals.
-    const directional = (
-        queryRows: Int32Array, neighbours: Int32Array, neighbourLod: number
-    ): number => {
-        let total = 0;
-        let weight = 0;
-        const neighbourOffset = offsets[neighbourLod];
-        const neighbourGlobals = globals[neighbourLod];
-        for (let i = 0; i < queryRows.length; i++) {
-            const queryRow = queryRows[i];
-            let best = Infinity;
-            for (let j = 0; j < k; j++) {
-                const neighbour = neighbours[i * k + j];
-                if (neighbour < 0) continue;
-                const neighbourRow = neighbourOffset + indexOfSorted(neighbourGlobals, neighbour);
-                const error = splatError(view, cache, queryRow, neighbourRow, best);
-                if (error < best) best = error;
-            }
-            if (best === Infinity) continue;
-            total += cache.mass[queryRow] * best;
-            weight += cache.mass[queryRow];
-        }
-        return weight > 0 ? total / weight : 0;
-    };
-
-    const massOf = (queryRows: Int32Array): number => {
-        let mass = 0;
-        for (let i = 0; i < queryRows.length; i++) mass += cache.mass[queryRows[i]];
-        return mass;
-    };
-
-    // Nearest-neighbour matching cannot see thinning: drop every second
-    // splat of an overlapping group and each survivor still has a
-    // near-identical partner, while the alpha the group accumulates halves.
-    // Sky gaps are exactly that, so compare the mass the levels carry.
-    const referenceMass = massOf(referenceRows);
-    targetLods.forEach((lod, i) => {
-        const targetRows = rowsOf(bins.get(lod)!, lod);
-        const coverageError = Math.max(0, 1 - massOf(targetRows) / Math.max(referenceMass, 1e-300));
-        const forwardError = directional(referenceRows, forwards[i], lod);
-        const reverseError = directional(targetRows, reverses[i], referenceLod);
-        errors[lod] = 0.5 * (forwardError + reverseError) + coverageError;
-    });
-
-    // Keep the table monotone across levels. This does not keep a finer level on
-    // the engine's Pareto frontier — that domination test accepts an equal error,
-    // so a cheaper coarser level displaces the finer one either way — but the
-    // budget balancer ranks transitions by error reduction per splat *across*
-    // nodes, so a coarser level must never advertise less error than the finer
-    // one it stands in for.
     let previous = 0;
-    for (const lod of [...bins.keys()].sort((a, b) => a - b)) {
-        previous = errors[lod] = Math.max(errors[lod], previous);
+    for (let i = 1; i < levels.length; i++) {
+        const lod = levels[i];
+        const table = await gatherLeafTable(source, pool, slim, bins.get(lod)!, lod, cum[lod]);
+        let difference = 0;
+        for (let v = 0; v < cameras.length; v++) {
+            const image = await renderSplats(device, table, cameras[v], ERROR_BACKGROUND, { quiet: true });
+            difference += sumSquaredDifference(referenceImages[v], image);
+        }
+        previous = errors[lod] = Math.max(energy > 0 ? difference / energy : 0, previous);
     }
 
     return errors;
@@ -853,6 +619,11 @@ type WriteLodSourceOptions = {
     mainSource: ChunkSource;
     envSource: ChunkSource | null;
     iterations: number;
+    /**
+     * Supplies the GPU the per-leaf error tables are rendered on (and that SOG
+     * encoding uses). Without one the manifest declares `lodErrors: false` and a
+     * consumer falls back to deriving errors from splat counts.
+     */
     createDevice?: DeviceCreator;
     chunkCount: number;
     chunkExtent: number;
@@ -887,6 +658,13 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
 
     // Pool for slim extraction read buffers and the chunk-native SOG encodes.
     const pool = createChunkDataPool();
+
+    // The error tables are rendered, so they need the GPU. Acquired up front: the
+    // partition pass below computes them leaf by leaf.
+    const device = createDevice ? await createDevice() : null;
+    if (!device) {
+        logger.info('No GPU device: LOD error tables are not written; the viewer will derive them from splat counts.');
+    }
 
     const slim = await extractSlim(mainSource, pool);
     const hasEnv = !!envSource && envSource.meta.numGaussians > 0;
@@ -983,8 +761,9 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
 
         // Bound and approximation errors over the leaf's full structural LOD data.
         const bound = await calcBound(mainSource, pool, bins, cum, n => chunkingBar.tick(n));
-        const errors = await calcErrors(mainSource, pool, slim, bTree!.root, bins, cum, numLods);
+        if (!device) return { bound, lods };
 
+        const errors = await calcErrors(device, mainSource, pool, slim, bound, bins, cum, numLods);
         return { bound, lods, errors };
     };
 
@@ -1024,7 +803,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
         count: counts.reduce((acc, curr) => acc + curr, 0),
         counts,
         lodLevels,
-        lodErrors: true,
+        lodErrors: device !== null,
         ...(hasEnv ? { environment: 'env/meta.json' } : {}),
         filenames,
         tree
@@ -1143,4 +922,4 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     writingGroup.end();
 };
 
-export { findNearest, positionsFromSlim, writeLodSource, type WriteLodSourceOptions };
+export { positionsFromSlim, writeLodSource, type WriteLodSourceOptions };
