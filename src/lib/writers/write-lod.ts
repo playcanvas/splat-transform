@@ -1,13 +1,13 @@
 import { basename, dirname, resolve } from 'pathe';
-import { BoundingBox, type GraphicsDevice, Mat4, Quat, Vec3 } from 'playcanvas';
+import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
+import { ATLAS_MAX_BATCH_GAUSSIANS, ErrorRenderer, type LeafLevels, leafViewSize } from './lod-error';
 import { logWrittenFile } from './utils';
 import { writeSogSource } from './write-sog.js';
 import { type ChunkDataPool, type ChunkSource, type ReadRequest, createChunkDataPool } from '../chunk';
 import { Column, DataTable } from '../data-table';
 import { type FileSystem } from '../io/write';
 import { bakeTransform, permuteSource, sortMortonColumns } from '../ops';
-import { type RenderCamera, renderSplats } from '../render';
 import { BTreeNode, BTree } from '../spatial';
 import type { DeviceCreator } from '../types';
 import { logger, Transform } from '../utils';
@@ -173,8 +173,8 @@ const invalidGaussian = (lod: number, row: number, what: string): Error => new E
  * every gaussian's geometric record once, so this covers the whole scene:
  * everything downstream — the error pass above all, which renders every gaussian
  * — may then assume finite input rather than each stage carrying its own opinion
- * about invalid data. {@link assertFiniteColor} does the
- * same for the layer this pass does not read.
+ * about invalid data. {@link assertFiniteColor} does the same for the layer this
+ * pass does not read.
  *
  * The rules mirror `filterNaNRows`, including its two deliberate exceptions
  * (`scale_*` may be `-Infinity`, `opacity` may be `+Infinity`, both harmless
@@ -414,154 +414,114 @@ const gatherLeafTable = async (
     return new DataTable(columns, Transform.PLY);
 };
 
-/**
- * Pixels across each error render. This is the metric's one calibration: it fixes
- * the on-screen size at which a level is judged, since detail finer than a pixel
- * of the render is invisible to it. 512 across a leaf corresponds to a leaf
- * spanning roughly a quarter of a 2K-wide viewport — the band in which the
- * engine's budget allocator is actually trading levels off against each other.
- * The nearest leaves are bought first whatever their error says, and the far
- * field sits at its coarsest level regardless, so accuracy elsewhere buys little.
- */
-const ERROR_VIEW_SIZE = 512;
+/** A leaf awaiting its error table: the node it fills in and the indices to gather. */
+type LeafJob = {
+    node: MetaNode;
+    bins: Map<number, Uint32Array>;
+};
 
 /**
- * Camera distance from the leaf centre, in bounding-sphere radii. Near-orthographic
- * without being so far that the splats' projected footprints are lost to precision.
- */
-const ERROR_VIEW_DISTANCE = 4;
-
-/** The six axis-aligned directions the leaf is viewed from. */
-const ERROR_VIEW_DIRECTIONS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
-
-/**
- * Transparent black: the renderer then reports residual coverage in the alpha
- * channel and colour premultiplied by it in RGB, so thinning (lost coverage) and
- * colour drift both register as a difference.
- */
-const ERROR_BACKGROUND = { r: 0, g: 0, b: 0, a: 0 };
-
-/**
- * The six views of a leaf: pinhole cameras on each axis, far enough out to frame
- * the leaf's bounding sphere with a little margin.
+ * Make a leaf's raw error table monotone non-decreasing across its levels. The
+ * engine ranks upgrades by error reduction per splat *across* leaves, so a coarser
+ * level must never advertise less error than the finer one it stands in for.
  *
- * @param bound - The leaf's ellipsoid AABB (the same volume the engine derives its
- * screen coverage from).
- * @returns One camera per view direction.
+ * @param raw - Raw error per LOD.
+ * @param levels - The leaf's levels, ascending.
+ * @returns The clamped table, zero for levels absent from the leaf.
  */
-const leafCameras = (bound: Aabb): RenderCamera[] => {
-    const { min, max } = bound;
-    const cx = (min[0] + max[0]) / 2;
-    const cy = (min[1] + max[1]) / 2;
-    const cz = (min[2] + max[2]) / 2;
-    const radius = Math.max(Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]) / 2, 1e-3);
-    const distance = ERROR_VIEW_DISTANCE * radius;
-    const fovY = 2 * Math.atan(1.05 * radius / distance);
-
-    return ERROR_VIEW_DIRECTIONS.map(([dx, dy, dz]) => ({
-        projection: 'pinhole',
-        position: new Vec3(cx + dx * distance, cy + dy * distance, cz + dz * distance),
-        target: new Vec3(cx, cy, cz),
-        // any vector not parallel to the view direction
-        up: dy !== 0 ? new Vec3(0, 0, 1) : new Vec3(0, 1, 0),
-        fovY,
-        width: ERROR_VIEW_SIZE,
-        height: ERROR_VIEW_SIZE,
-        // the leaf occupies [distance - radius, distance + radius] in depth
-        near: radius
-    }));
-};
-
-const sumSquared = (image: Uint8Array): number => {
-    let total = 0;
-    for (let i = 0; i < image.length; i++) {
-        const v = image[i] / 255;
-        total += v * v;
-    }
-    return total;
-};
-
-const sumSquaredDifference = (a: Uint8Array, b: Uint8Array): number => {
-    let total = 0;
-    for (let i = 0; i < a.length; i++) {
-        const d = (a[i] - b[i]) / 255;
-        total += d * d;
-    }
-    return total;
+const monotoneErrors = (raw: number[], levels: number[]): number[] => {
+    const errors = new Array(raw.length).fill(0);
+    let previous = 0;
+    for (const lod of levels) previous = errors[lod] = Math.max(raw[lod], previous);
+    return errors;
 };
 
 /**
- * Per-level approximation error of a leaf, measured on rendered images.
- *
- * Each level present in the leaf is rendered from the six {@link leafCameras}
- * views and compared against the finest level present, which is the reference
- * and carries no error. A level's error is the squared RGBA difference summed
- * over every pixel of every view, divided by the reference's summed squared RGBA
- * — a relative image error that is zero for an identical level, grows without
- * bound as a level departs from the reference, and is dimensionless so leaves of
- * any physical size compare on one scale.
+ * Fill in every leaf's error table: gather its levels, then measure them with the
+ * {@link ErrorRenderer} — small leaves batched into atlases, the rest alone.
  *
  * Comparing composited images rather than the gaussians themselves is what makes
  * the number track what the viewer will show: a merge of overlapping splats into
  * one that paints the same pixels costs nothing, while thinning, blur and colour
- * drift all register in proportion to how visible they are at the calibrated
- * size ({@link ERROR_VIEW_SIZE}). Any per-splat comparison saturates once a
- * splat no longer overlaps its nearest match, which compresses a 128x decimation
- * and a 2x one into the same narrow band and leaves the engine's allocator
- * ranking on splat count alone.
+ * drift all register in proportion to how visible they are at the judged size
+ * (see {@link leafViewSize}). Any per-splat comparison saturates once a splat no
+ * longer overlaps its nearest match, which compresses a 128x decimation and a 2x
+ * one into the same narrow band and leaves the engine's allocator ranking on
+ * splat count alone.
  *
- * The cost is linear in the leaf's gaussians (each is projected once per view
- * per level) and each leaf is self-contained, so the pass scales linearly with
- * the scene and needs no scene-wide search structure.
+ * Each leaf is self-contained, so the pass needs no scene-wide search structure
+ * and its cost is a fixed price per render times the number of leaves, levels
+ * and views, with batching dividing the render count for small leaves.
  *
- * The table is kept monotone non-decreasing across levels. The engine ranks
- * upgrades by error reduction per splat *across* leaves, so a coarser level must
- * never advertise less error than the finer one it stands in for.
+ * Leaves are visited in partition order so each atlas holds neighbours and the
+ * source gathers stay local. An atlas is flushed when it fills, and every
+ * partially filled one at the end.
  *
- * @param device - Graphics device the renders run on.
+ * @param renderer - The renderer for the pass.
  * @param source - The PLY-space scene source.
  * @param pool - Pool for the per-batch read buffers.
  * @param slim - Resident position columns.
- * @param bound - The leaf's ellipsoid AABB, in PLY space.
- * @param bins - The leaf's flat analysis indices, by structural LOD.
  * @param cum - Flat base of each structural LOD.
  * @param numLods - Number of structural LODs in the source.
- * @returns One error per structural LOD; zero for the reference and for levels
- * absent from the leaf.
+ * @param jobs - The leaves, in partition order.
  */
-const calcErrors = async (
-    device: GraphicsDevice, source: ChunkSource, pool: ChunkDataPool, slim: SlimColumns,
-    bound: Aabb, bins: Map<number, Uint32Array>, cum: number[], numLods: number
-): Promise<number[]> => {
-    const errors = new Array(numLods).fill(0);
-    const levels = [...bins.keys()].sort((a, b) => a - b);
-    if (levels.length < 2) return errors;
+const runErrorPass = async (
+    renderer: ErrorRenderer, source: ChunkSource, pool: ChunkDataPool, slim: SlimColumns,
+    cum: number[], numLods: number, jobs: LeafJob[]
+): Promise<void> => {
+    const bar = logger.bar('lod errors', jobs.length);
+    const atlases = new Map<number, { leaf: LeafLevels; job: LeafJob }[]>();
+    const atlasGaussians = new Map<number, number>();
 
-    const cameras = leafCameras(bound);
+    const assign = (job: LeafJob, levels: number[], raw: number[]) => {
+        job.node.errors = monotoneErrors(raw, levels);
+        bar.tick(1);
+    };
 
-    const referenceLod = levels[0];
-    const referenceTable = await gatherLeafTable(source, pool, slim, bins.get(referenceLod)!, referenceLod, cum[referenceLod]);
-    const referenceImages: Uint8Array[] = [];
-    let energy = 0;
-    for (const camera of cameras) {
-        const image = await renderSplats(device, referenceTable, camera, ERROR_BACKGROUND, { quiet: true });
-        energy += sumSquared(image);
-        referenceImages.push(image);
-    }
+    const flush = async (frame: number) => {
+        const batch = atlases.get(frame);
+        if (!batch?.length) return;
+        atlases.set(frame, []);
+        atlasGaussians.set(frame, 0);
+        const raws = await renderer.atlasErrors(batch.map(b => b.leaf), frame, numLods);
+        batch.forEach((b, i) => assign(b.job, [...b.leaf.levels.keys()].sort((x, y) => x - y), raws[i]));
+    };
 
-    let previous = 0;
-    for (let i = 1; i < levels.length; i++) {
-        const lod = levels[i];
-        const table = await gatherLeafTable(source, pool, slim, bins.get(lod)!, lod, cum[lod]);
-        let difference = 0;
-        for (let v = 0; v < cameras.length; v++) {
-            const image = await renderSplats(device, table, cameras[v], ERROR_BACKGROUND, { quiet: true });
-            difference += sumSquaredDifference(referenceImages[v], image);
+    try {
+        for (const job of jobs) {
+            const levels = [...job.bins.keys()].sort((a, b) => a - b);
+            if (levels.length < 2) {
+                assign(job, levels, new Array(numLods).fill(0));
+                continue;
+            }
+
+            const tables = new Map<number, DataTable>();
+            for (const lod of levels) {
+                tables.set(lod, await gatherLeafTable(source, pool, slim, job.bins.get(lod)!, lod, cum[lod]));
+            }
+            const leaf: LeafLevels = { bound: job.node.bound, levels: tables };
+            const reference = tables.get(levels[0])!;
+            const frame = leafViewSize(leaf.bound, reference);
+
+            if (ErrorRenderer.fitsAtlas(frame, leaf)) {
+                // Batches are keyed by the frame rounded up to a power of two, so a
+                // scene's leaves fall into a few well-filled batches rather than one
+                // per frame size; a leaf is only ever judged at a frame at least its own.
+                const key = 1 << Math.ceil(Math.log2(frame));
+                const batch = atlases.get(key) ?? [];
+                atlases.set(key, batch);
+                batch.push({ leaf, job });
+                const gaussians = (atlasGaussians.get(key) ?? 0) + reference.numRows;
+                atlasGaussians.set(key, gaussians);
+                if (batch.length === ErrorRenderer.atlasCapacity(key) || gaussians >= ATLAS_MAX_BATCH_GAUSSIANS) await flush(key);
+            } else {
+                assign(job, levels, await renderer.leafErrors(leaf, numLods));
+            }
         }
-        previous = errors[lod] = Math.max(energy > 0 ? difference / energy : 0, previous);
+        for (const frame of atlases.keys()) await flush(frame);
+    } finally {
+        bar.end();
     }
-
-    return errors;
 };
 
 /**
@@ -659,12 +619,14 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     // Pool for slim extraction read buffers and the chunk-native SOG encodes.
     const pool = createChunkDataPool();
 
-    // The error tables are rendered, so they need the GPU. Acquired up front: the
-    // partition pass below computes them leaf by leaf.
+    // The error tables are rendered, so they need the GPU. One renderer serves the
+    // whole pass; the partition below computes the tables leaf by leaf.
     const device = createDevice ? await createDevice() : null;
-    if (!device) {
+    const renderer = device ? new ErrorRenderer(device, mainSource.meta.shBands) : null;
+    if (!renderer) {
         logger.info('No GPU device: LOD error tables are not written; the viewer will derive them from splat counts.');
     }
+    const leafJobs: LeafJob[] = [];
 
     const slim = await extractSlim(mainSource, pool);
     const hasEnv = !!envSource && envSource.meta.numGaussians > 0;
@@ -759,12 +721,12 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
             lodLevels = Math.max(lodLevels, lodValue + 1);
         }
 
-        // Bound and approximation errors over the leaf's full structural LOD data.
+        // Bound over the leaf's full structural LOD data; the error table is filled
+        // in by the pass after the partition, which batches leaves.
         const bound = await calcBound(mainSource, pool, bins, cum, n => chunkingBar.tick(n));
-        if (!device) return { bound, lods };
-
-        const errors = await calcErrors(device, mainSource, pool, slim, bound, bins, cum, numLods);
-        return { bound, lods, errors };
+        const leaf: MetaNode = { bound, lods };
+        if (renderer) leafJobs.push({ node: leaf, bins });
+        return leaf;
     };
 
     let tree: MetaNode;
@@ -772,6 +734,16 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
         tree = await build(bTree.root);
     } finally {
         chunkingBar.end();
+    }
+
+    if (renderer) {
+        const errorStart = performance.now();
+        try {
+            await runErrorPass(renderer, mainSource, pool, slim, cum, numLods, leafJobs);
+        } finally {
+            renderer.destroy();
+        }
+        logger.info(`LOD error pass: ${((performance.now() - errorStart) / 1000).toFixed(1)}s over ${leafJobs.length} leaves`);
     }
 
     const trimErrors = (node: MetaNode): void => {
@@ -803,7 +775,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
         count: counts.reduce((acc, curr) => acc + curr, 0),
         counts,
         lodLevels,
-        lodErrors: device !== null,
+        lodErrors: renderer !== null,
         ...(hasEnv ? { environment: 'env/meta.json' } : {}),
         filenames,
         tree
