@@ -511,7 +511,7 @@ const runErrorPass = async (
             const reference = tables.get(levels[0])!;
             const frame = leafViewSize(leaf.bound, reference);
 
-            if (ErrorRenderer.fitsAtlas(frame, leaf)) {
+            if (renderer.fitsAtlas(frame, leaf)) {
                 // Batches are keyed by the frame rounded up to a power of two, so a
                 // scene's leaves fall into a few well-filled batches rather than one
                 // per frame size; a leaf is only ever judged at a frame at least its own.
@@ -521,7 +521,7 @@ const runErrorPass = async (
                 batch.push({ leaf, job });
                 const gaussians = (atlasGaussians.get(key) ?? 0) + reference.numRows;
                 atlasGaussians.set(key, gaussians);
-                if (batch.length === ErrorRenderer.atlasCapacity(key) || gaussians >= ATLAS_MAX_BATCH_GAUSSIANS) await flush(key);
+                if (batch.length === renderer.atlasCapacity(key) || gaussians >= ATLAS_MAX_BATCH_GAUSSIANS) await flush(key);
             } else {
                 assign(job, levels, await renderer.leafErrors(leaf, numLods));
             }

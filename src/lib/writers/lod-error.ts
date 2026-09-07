@@ -72,12 +72,17 @@ const SOLO_SLOTS = ERROR_VIEW_DIRECTIONS.length;
 const FOOTPRINT_SAMPLES = 4096;
 
 /**
- * Pixels across the image that batches of leaves are rendered into. 256 tiles a
- * side: with cells two frames wide this holds 16 leaves at the full 512-pixel
- * frame and over a thousand at a 64-pixel one. Image sizes are kept to powers of
- * two.
+ * Most pixels across the image that batches of leaves are rendered into. 256
+ * tiles a side: with cells two frames wide this holds 16 leaves at the full
+ * 512-pixel frame and over a thousand at a 64-pixel one. Image sizes are kept to
+ * powers of two. The rasterizer keeps 16 bytes of running state per pixel in one
+ * storage buffer, 256 MiB at this size, so a device whose storage binding limit
+ * is smaller gets a smaller atlas ({@link ErrorRenderer}).
  */
-const ATLAS_SIZE = 4096;
+const ATLAS_MAX_SIZE = 4096;
+
+/** Bytes of rasterizer running state per atlas pixel, one vec4f. */
+const ATLAS_STATE_BYTES_PER_PIXEL = 16;
 
 /**
  * Atlas cells are this many leaf frames across, the leaf frame centred, so that a
@@ -473,11 +478,21 @@ class ErrorRenderer {
 
     private atlas: ViewRenderer;
 
+    /** Pixels across an atlas: {@link ATLAS_MAX_SIZE} or what the device can bind. */
+    private atlasSize: number;
+
     /**
      * @param device - Graphics device the renders run on.
      * @param numSHBands - The scene's SH band count.
      */
     constructor(device: GraphicsDevice, numSHBands: 0 | 1 | 2 | 3) {
+        // The atlas running state must fit one storage binding: the largest power
+        // of two side whose pixels do. The WebGPU baseline of 128 MiB gives 2048.
+        // @ts-ignore - limits is exposed by WebgpuGraphicsDevice
+        const wgpuLimits = (device as { limits?: { maxStorageBufferBindingSize?: number } }).limits;
+        const maxBindingBytes = wgpuLimits?.maxStorageBufferBindingSize ?? 128 * 1024 * 1024;
+        this.atlasSize = Math.min(ATLAS_MAX_SIZE, 1 << Math.floor(Math.log2(Math.sqrt(maxBindingBytes / ATLAS_STATE_BYTES_PER_PIXEL))));
+
         // Alone, a splat's footprint can span the whole image.
         const soloTiles = ERROR_VIEW_MAX_SIZE / TILE_SIZE;
         this.solo = new ViewRenderer(device, numSHBands, ERROR_VIEW_MAX_SIZE, 1 << Math.ceil(Math.log2(soloTiles * soloTiles)), SOLO_SLOTS);
@@ -487,15 +502,15 @@ class ErrorRenderer {
         const largestCell = ATLAS_CELL_FRAMES * ATLAS_MAX_FRAME;
         const footprintPixels = 2 * 3 * ATLAS_MAX_SIGMA_RATIO * largestCell / (ATLAS_CELL_FRAMES * 2 * ERROR_VIEW_MARGIN);
         const footprintTiles = Math.ceil(footprintPixels / TILE_SIZE) + 2;
-        this.atlas = new ViewRenderer(device, numSHBands, ATLAS_SIZE, 1 << Math.ceil(Math.log2(footprintTiles * footprintTiles)));
+        this.atlas = new ViewRenderer(device, numSHBands, this.atlasSize, 1 << Math.ceil(Math.log2(footprintTiles * footprintTiles)));
     }
 
     /**
      * @param frame - Pixels across a leaf's frame, from {@link leafViewSize}.
      * @returns Most leaves of that frame one atlas holds.
      */
-    static atlasCapacity(frame: number): number {
-        const cells = Math.floor(ATLAS_SIZE / (ATLAS_CELL_FRAMES * frame));
+    atlasCapacity(frame: number): number {
+        const cells = Math.floor(this.atlasSize / (ATLAS_CELL_FRAMES * frame));
         return cells * cells;
     }
 
@@ -509,7 +524,7 @@ class ErrorRenderer {
      * @param leaf - The leaf's levels and bound.
      * @returns True when the leaf goes into an atlas.
      */
-    static fitsAtlas(frame: number, leaf: LeafLevels): boolean {
+    fitsAtlas(frame: number, leaf: LeafLevels): boolean {
         if (frame > ATLAS_MAX_FRAME) return false;
         const reference = leaf.levels.get(Math.min(...leaf.levels.keys()))!;
         if (reference.numRows > ATLAS_MAX_GAUSSIANS) return false;
@@ -578,7 +593,7 @@ class ErrorRenderer {
         const cells = Math.ceil(Math.sqrt(leaves.length));
         const cellPx = ATLAS_CELL_FRAMES * frame;
         const framePx = frame;
-        const size = Math.min(ATLAS_SIZE, 1 << Math.ceil(Math.log2(Math.max(TILE_SIZE, cells * cellPx))));
+        const size = Math.min(this.atlasSize, 1 << Math.ceil(Math.log2(Math.max(TILE_SIZE, cells * cellPx))));
         const cellUnits = ATLAS_CELL_FRAMES * 2 * ERROR_VIEW_MARGIN;
         const pixelsPerUnit = cellPx / cellUnits;
         const extent = size / pixelsPerUnit;
