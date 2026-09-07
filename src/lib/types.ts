@@ -28,6 +28,9 @@ type Options = {
     /** Approximate size of an LOD chunk in world units (meters). Default: 16 */
     lodChunkExtent?: number;
 
+    /** Gaussians (in thousands) below which an LOD chunk is not split for exceeding the extent. Default: 8 */
+    lodChunkMin?: number;
+
     /** SPZ format version to write. Default: 4. */
     spzVersion?: 3 | 4;
 

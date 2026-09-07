@@ -225,6 +225,50 @@ describe('writeLodSource: lod-meta.json contract', function () {
         assert.ok(fs.results.has('/scene/1_0/meta.json'));
     });
 
+    const wideSplats = Array.from({ length: 300 }, (_, i) => ({ x: i * 0.5 }));
+
+    it('records the chunk minimum and does not split a sparse node for extent below it', async function () {
+        // 300 splats over 150 m: wider than the 16 m extent limit (and enough for the
+        // spatial tree to have interior nodes), but far below the default minimum of
+        // 8K gaussians, so the region stays one leaf
+        const source = dataTableToChunkSource(makeSplatTable(wideSplats), 1 << 20);
+        const fs = new MemoryFileSystem();
+        await writeLodSource({
+            filename: '/scene/lod-meta.json',
+            mainSource: source,
+            envSource: null,
+            iterations: 1,
+            chunkCount: 1,
+            chunkExtent: 16
+        }, fs);
+        const meta = JSON.parse(new TextDecoder().decode(fs.results.get('/scene/lod-meta.json')));
+        assert.strictEqual(meta.asset.chunkMinGaussians, 8192);
+        assert.ok(!('children' in meta.tree), 'a sparse wide node is one leaf');
+        assert.strictEqual(meta.tree.lods['0'].count, wideSplats.length);
+    });
+
+    it('splits a wide node for extent once it holds more than the chunk minimum', async function () {
+        const source = dataTableToChunkSource(makeSplatTable(wideSplats), 1 << 20);
+        const fs = new MemoryFileSystem();
+        await writeLodSource({
+            filename: '/scene/lod-meta.json',
+            mainSource: source,
+            envSource: null,
+            iterations: 1,
+            chunkCount: 1,
+            chunkExtent: 16,
+            chunkMin: 0
+        }, fs);
+        const meta = JSON.parse(new TextDecoder().decode(fs.results.get('/scene/lod-meta.json')));
+        assert.strictEqual(meta.asset.chunkMinGaussians, 0);
+        assert.strictEqual(meta.tree.children?.length, 2, 'the extent limit splits a node above the minimum');
+        const leaves = [];
+        const walk = (n) => { if (n.children) n.children.forEach(walk); else leaves.push(n); };
+        walk(meta.tree);
+        assert.ok(leaves.length >= 2, `expected the extent limit to split the node, got ${leaves.length} leaf`);
+        assert.strictEqual(leaves.reduce((sum, l) => sum + l.lods['0'].count, 0), wideSplats.length);
+    });
+
     it('matches errors to lodLevels when trailing structural LODs are empty', async function () {
         const { meta } = await writeScene([1, 0], 0);
         assert.strictEqual(meta.lodLevels, 1);

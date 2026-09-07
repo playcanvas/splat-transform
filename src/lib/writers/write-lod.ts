@@ -37,8 +37,16 @@ type LodMeta = {
         generator: string;
         /** Gaussians per file unit the partition aimed for (`--lod-chunk-count` × 1024). */
         chunkGaussians: number;
-        /** Largest leaf extent the partition allowed, in world units (`--lod-chunk-extent`). */
+        /**
+         * Largest leaf extent the partition allowed, in world units (`--lod-chunk-extent`),
+         * for leaves holding more than `chunkMinGaussians`.
+         */
         chunkExtent: number;
+        /**
+         * Gaussians below which a leaf was not split for extent (`--lod-chunk-min` × 1024).
+         * Sparser regions form leaves as wide as they need to be to hold this many.
+         */
+        chunkMinGaussians: number;
     };
     count: number;
     counts: number[];
@@ -587,6 +595,18 @@ type WriteLodSourceOptions = {
     createDevice?: DeviceCreator;
     chunkCount: number;
     chunkExtent: number;
+    /**
+     * Gaussians, in thousands, below which a node is not split for exceeding
+     * `chunkExtent`. Default 8. A leaf is the unit of streaming, culling and LOD
+     * choice, and costs the same to stream, evaluate and describe whether it holds
+     * eighty gaussians or eight thousand; without a floor a wide sparse region —
+     * sky, floaters, distant background — is cut down to the extent limit
+     * regardless of content, into tens of thousands of near-empty leaves that
+     * inflate the manifest and the runtime's per-node work while carrying nothing
+     * the allocator would not buy whole anyway. Dense regions never reach the
+     * floor, so their leaves are unchanged.
+     */
+    chunkMin?: number;
 };
 
 /**
@@ -605,7 +625,7 @@ type WriteLodSourceOptions = {
  * @ignore
  */
 const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) => {
-    const { filename, envSource, iterations, createDevice, chunkCount, chunkExtent } = options;
+    const { filename, envSource, iterations, createDevice, chunkCount, chunkExtent, chunkMin = 8 } = options;
 
     // Bake the pending coordinate-space transform to PLY once, up front, so the
     // partition/bounds passes (extractSlim, calcBound, morton) and the per-unit
@@ -661,6 +681,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     // approximate number of gaussians we'll place into file units
     const binSize = chunkCount * 1024;
     const binDim = chunkExtent;
+    const binMin = chunkMin * 1024;
 
     // map of lod -> file units -> subunits (each subunit a tight Uint32Array of
     // gaussian indices). This is the bulk retained bookkeeping; Uint32Array keeps
@@ -674,7 +695,9 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     const chunkingBar = logger.bar('chunking', cum[numLods]);
 
     const build = async (node: BTreeNode): Promise<MetaNode> => {
-        if (!node.indices && (node.count > binSize || (node.aabb && node.aabb.largestDim() > binDim))) {
+        // Split when the node holds more than a unit, or when it is wider than the
+        // extent limit and holds enough gaussians to be worth two leaves.
+        if (!node.indices && (node.count > binSize || (node.aabb && node.aabb.largestDim() > binDim && node.count > binMin))) {
             const children = [
                 await build(node.left),
                 await build(node.right)
@@ -770,7 +793,8 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
         asset: {
             generator: `splat-transform v${version}`,
             chunkGaussians: binSize,
-            chunkExtent: binDim
+            chunkExtent: binDim,
+            chunkMinGaussians: binMin
         },
         count: counts.reduce((acc, curr) => acc + curr, 0),
         counts,
