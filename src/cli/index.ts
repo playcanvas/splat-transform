@@ -161,6 +161,7 @@ const cliOptionsConfig = {
     'viewer-settings': { type: 'string', default: '' },
     'lod-chunk-count': { type: 'string', default: '512' },
     'lod-chunk-extent': { type: 'string', default: '16' },
+    'lod-chunk-min': { type: 'string', default: '8' },
     'spz-version': { type: 'string', default: '4' },
     unbundled: { type: 'boolean', default: false },
     'voxel-size': { type: 'string' },
@@ -538,6 +539,7 @@ const parseArguments = async () => {
         unbundled: v.unbundled,
         lodChunkCount: parseInteger(v['lod-chunk-count']),
         lodChunkExtent: parseInteger(v['lod-chunk-extent']),
+        lodChunkMin: parseInteger(v['lod-chunk-min']),
         spzVersion: spzVersion as 3 | 4,
         voxelResolution,
         opacityCutoff,
@@ -853,6 +855,7 @@ LOD INPUT (lod-meta.json, .lcc, .lcc2)
 LOD OUTPUT (lod-meta.json)
         --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
         --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
+        --lod-chunk-min    <n>              Gaussians in K below which a chunk is not split for extent. Default: 8
 
 VOXEL OUTPUT (.voxel.json)
         --voxel-size       <n>              Voxel size for .voxel.json. Default: 0.05
@@ -1413,7 +1416,8 @@ const main = async () => {
                 iterations: options.iterations,
                 createDevice: deviceCreator,
                 chunkCount: options.lodChunkCount,
-                chunkExtent: options.lodChunkExtent
+                chunkExtent: options.lodChunkExtent,
+                chunkMin: options.lodChunkMin
             }, new NodeFileSystem());
 
             await mainSource.close();
