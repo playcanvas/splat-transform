@@ -1,4 +1,4 @@
-import { type GraphicsDevice, Vec3 } from 'playcanvas';
+import { type GraphicsDevice, Quat, Vec3 } from 'playcanvas';
 
 import { Column, DataTable } from '../data-table';
 import { GpuSplatRasterizer } from '../gpu';
@@ -54,8 +54,24 @@ const ERROR_VIEW_DISTANCE = 200;
 /** Margin around a leaf's bounding sphere in its frame, as a factor of the radius. */
 const ERROR_VIEW_MARGIN = 1.05;
 
-/** The six axis-aligned directions a leaf is viewed from. */
-const ERROR_VIEW_DIRECTIONS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+/**
+ * The six directions a leaf is viewed from, each with an up vector: the coordinate
+ * axes under one fixed, generic rotation. Colour is stored as spherical harmonics
+ * and evaluated along the view direction, and on a bare axis the basis functions
+ * xy, yz, xz, xyz and z(x² − y²) are exactly zero, so colour held in those
+ * coefficients would be invisible to axis-aligned views. Under this rotation every
+ * basis function of bands 1 to 3 has magnitude at least 0.09 in every view.
+ * Opposite views still agree on even bands and negate odd ones, so six views sample
+ * each band at three directions: band 1 is seen whole, bands 2 and 3 in part.
+ */
+const ERROR_VIEWS: { direction: Vec3, up: Vec3 }[] = (() => {
+    const rotation = new Quat().setFromEulerAngles(45, 20, 35);
+    const axes = [Vec3.RIGHT, Vec3.UP, Vec3.FORWARD].map(axis => rotation.transformVector(axis, new Vec3()));
+    return axes.flatMap((axis, i) => [1, -1].map(sign => ({
+        direction: axis.clone().mulScalar(sign),
+        up: axes[(i + 1) % 3]
+    })));
+})();
 
 /** Gaussians per GPU dispatch; bounds the input and pair buffers. */
 const CHUNK_CAP = 200_000;
@@ -66,7 +82,7 @@ const CHUNK_CAP = 200_000;
  * work, so issuing the views together and waiting once turns six round trips
  * into one.
  */
-const SOLO_SLOTS = ERROR_VIEW_DIRECTIONS.length;
+const SOLO_SLOTS = ERROR_VIEWS.length;
 
 /** Gaussians sampled when estimating a leaf's finest splat footprint. */
 const FOOTPRINT_SAMPLES = 4096;
@@ -108,7 +124,7 @@ const ATLAS_MAX_SIGMA_RATIO = 0.5;
 /**
  * Camera distance for an atlas, as a multiple of the atlas width. Cells sit off
  * the camera axis, so this sets how far their view direction departs from the
- * axis-aligned one a solo render has: at 200 widths it is under 0.15 degrees,
+ * one a solo render has: at 200 widths it is under 0.15 degrees,
  * under a pixel of skew across a frame.
  */
 const ATLAS_DISTANCE = 200;
@@ -165,12 +181,10 @@ const boundRadius = (bound: Aabb): number => {
     return Math.max(Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]) / 2, 1e-3);
 };
 
-// any vector not parallel to the view direction
-const viewUp = (dy: number): Vec3 => (dy !== 0 ? new Vec3(0, 0, 1) : new Vec3(0, 1, 0));
-
 /**
- * The six views of a leaf rendered alone: pinhole cameras on each axis, far enough
- * out to frame the leaf's bounding sphere with a little margin.
+ * The six views of a leaf rendered alone: pinhole cameras along each of the
+ * {@link ERROR_VIEWS}, far enough out to frame the leaf's bounding sphere with a
+ * little margin.
  *
  * @param bound - The leaf's ellipsoid AABB (the same volume the engine derives its
  * screen coverage from).
@@ -186,11 +200,11 @@ const leafCameras = (bound: Aabb, size: number): RenderCamera[] => {
     const distance = ERROR_VIEW_DISTANCE * radius;
     const fovY = 2 * Math.atan(ERROR_VIEW_MARGIN * radius / distance);
 
-    return ERROR_VIEW_DIRECTIONS.map(([dx, dy, dz]) => ({
+    return ERROR_VIEWS.map(({ direction, up }) => ({
         projection: 'pinhole',
-        position: new Vec3(cx + dx * distance, cy + dy * distance, cz + dz * distance),
+        position: new Vec3(cx + direction.x * distance, cy + direction.y * distance, cz + direction.z * distance),
         target: new Vec3(cx, cy, cz),
-        up: viewUp(dy),
+        up,
         fovY,
         width: size,
         height: size,
@@ -456,7 +470,7 @@ const assembleAtlas = (members: AtlasSlot[], lod: number, right: Vec3, down: Vec
 /**
  * Measures per-leaf, per-level approximation error on rendered images.
  *
- * Each level present in a leaf is rendered from the six {@link ERROR_VIEW_DIRECTIONS}
+ * Each level present in a leaf is rendered from the six {@link ERROR_VIEWS}
  * and compared against the finest level present, which is the reference and
  * carries no error. A level's error is the squared RGBA difference summed over
  * every pixel of the leaf's frame in every view, divided by the reference's summed
@@ -571,7 +585,9 @@ class ErrorRenderer {
             for (let v = 0; v < cameras.length; v++) {
                 difference += sumSquaredDifferenceRect(referenceImages[v], images[v], size, 0, 0, size);
             }
-            errors[levels[i]] = energy > 0 ? difference / energy : 0;
+            // A reference that renders nothing leaves no energy to compare against: a
+            // level that then draws anything is wholly wrong, one that draws nothing exact.
+            errors[levels[i]] = energy > 0 ? difference / energy : (difference > 0 ? 1 : 0);
         }
         return errors;
     }
@@ -616,12 +632,12 @@ class ErrorRenderer {
         const energy = new Array(leaves.length).fill(0);
         const difference = leaves.map(() => new Array(numLods).fill(0));
 
-        for (const [dx, dy, dz] of ERROR_VIEW_DIRECTIONS) {
+        for (const { direction, up } of ERROR_VIEWS) {
             const camera: RenderCamera = {
                 projection: 'pinhole',
-                position: new Vec3(dx * distance, dy * distance, dz * distance),
+                position: direction.clone().mulScalar(distance),
                 target: new Vec3(0, 0, 0),
-                up: viewUp(dy),
+                up,
                 fovY,
                 width: size,
                 height: size,
@@ -656,7 +672,7 @@ class ErrorRenderer {
         return leaves.map((leaf, k) => {
             const errors = new Array(numLods).fill(0);
             for (const lod of leaf.levels.keys()) {
-                if (lod !== referenceOf[k]) errors[lod] = energy[k] > 0 ? difference[k][lod] / energy[k] : 0;
+                if (lod !== referenceOf[k]) errors[lod] = energy[k] > 0 ? difference[k][lod] / energy[k] : (difference[k][lod] > 0 ? 1 : 0);
             }
             return errors;
         });

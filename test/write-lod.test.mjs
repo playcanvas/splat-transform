@@ -139,12 +139,29 @@ const writeErrors = async (levels) => {
     return meta.tree.errors;
 };
 
-const makeShTable = (restValue) => {
+// A one-splat table with `count` SH coefficients (9, 24 or 45 for bands 1 to 3),
+// all `restValue` except those in `overrides`.
+const makeShTable = (restValue, count = 9, overrides = {}) => {
     const table = makeTable(1);
-    for (let i = 0; i < 9; i++) {
-        table.addColumn(new Column(`f_rest_${i}`, new Float32Array([restValue])));
+    for (let i = 0; i < count; i++) {
+        table.addColumn(new Column(`f_rest_${i}`, new Float32Array([overrides[i] ?? restValue])));
     }
     return table;
+};
+
+// The error table of a two-level scene whose levels are the given one-splat tables.
+const writeTableErrors = async (tables) => {
+    const fs = new MemoryFileSystem();
+    await writeLodSource({
+        filename: '/scene/lod-meta.json',
+        mainSource: stackLods(tables.map(table => dataTableToChunkSource(table, 1 << 20))),
+        envSource: null,
+        iterations: 1,
+        chunkCount: 1,
+        chunkExtent: 16,
+        createDevice: async () => device
+    }, fs);
+    return JSON.parse(new TextDecoder().decode(fs.results.get('/scene/lod-meta.json'))).tree.errors;
 };
 
 // Build a structural multi-LOD source from per-level row counts (each level a
@@ -293,22 +310,15 @@ describe('writeLodSource: lod-meta.json contract', function () {
 
     it('includes stored spherical harmonics in the LOD error', async function (t) {
         if (!device) return t.skip('no WebGPU adapter available');
-        const fs = new MemoryFileSystem();
-        await writeLodSource({
-            filename: '/scene/lod-meta.json',
-            mainSource: stackLods([
-                dataTableToChunkSource(makeShTable(0), 1 << 20),
-                dataTableToChunkSource(makeShTable(2), 1 << 20)
-            ]),
-            envSource: null,
-            iterations: 1,
-            chunkCount: 1,
-            chunkExtent: 16,
-            createDevice: async () => device
-        }, fs);
+        const errors = await writeTableErrors([makeShTable(0), makeShTable(2)]);
+        assert.ok(errors[1] > 0);
+    });
 
-        const meta = JSON.parse(new TextDecoder().decode(fs.results.get('/scene/lod-meta.json')));
-        assert.ok(meta.tree.errors[1] > 0);
+    it('sees colour held in SH coefficients that vanish on the coordinate axes', async function (t) {
+        if (!device) return t.skip('no WebGPU adapter available');
+        // f_rest_3 is the red channel's xy term, zero in any view along an axis
+        const errors = await writeTableErrors([makeShTable(0, 45), makeShTable(0, 45, { 3: 2 })]);
+        assert.ok(errors[1] > 0, `expected a non-zero error, got ${errors[1]}`);
     });
 
     it('reports no error for a level identical to the finest', async function (t) {
@@ -329,6 +339,13 @@ describe('writeLodSource: lod-meta.json contract', function () {
         if (!device) return t.skip('no WebGPU adapter available');
         const errors = await writeErrors([[{ opacity: 2 }], [{ opacity: -2 }]]);
         assert.ok(errors[1] > 0, `expected a non-zero error, got ${errors[1]}`);
+    });
+
+    it('scores a level that draws where the reference renders nothing', async function (t) {
+        if (!device) return t.skip('no WebGPU adapter available');
+        // opacity logit -10 is under the rasterizer's alpha floor, so the reference is transparent
+        const errors = await writeErrors([[{ opacity: -10 }], [{ opacity: 5 }]]);
+        assert.ok(errors[1] > 0 && Number.isFinite(errors[1]), `expected a positive finite error, got ${errors[1]}`);
     });
 
     it('penalises thinning even when the survivors are identical', async function (t) {
