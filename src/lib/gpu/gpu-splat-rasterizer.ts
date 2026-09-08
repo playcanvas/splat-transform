@@ -30,6 +30,7 @@ import { tileAabbEquirect } from './shaders/chunks/tile-aabb-equirect';
 import { tileAabbPinhole } from './shaders/chunks/tile-aabb-pinhole';
 import { tileWalkEquirect } from './shaders/chunks/tile-walk-equirect';
 import { tileWalkPinhole } from './shaders/chunks/tile-walk-pinhole';
+import { clearStateWgsl } from './shaders/clear-state';
 import { finalizeWgsl } from './shaders/finalize';
 import { findBoundariesWgsl } from './shaders/find-boundaries';
 import { initTileOffsetsWgsl } from './shaders/init-tile-offsets';
@@ -39,7 +40,7 @@ import { projectWgsl } from './shaders/project';
 import { rasterizeBinnedWgsl } from './shaders/rasterize-binned';
 import { tileBinEmitPairsWgsl } from './shaders/tile-bin-emit-pairs';
 import { uniformsStruct, uniformFormatEntries } from './shaders/uniforms';
-import { type Projection } from '../render/camera';
+import { type CameraBasis, type Projection } from '../render/camera';
 import { TILE_SIZE } from '../render/config';
 
 /** 12 floats per projected splat: vec4 × 3. */
@@ -82,6 +83,20 @@ interface SplatRasterizerOptions {
     groupTilesY: number;
     /** Max gaussians per chunk; sizes the input + projection + pair buffers. */
     chunkCap: number;
+    /**
+     * Number of independent running-state/output buffer pairs, default 1. With
+     * more, a caller can have that many groups in flight — encode the next
+     * group while an earlier one's readback is still pending — since every
+     * other buffer is transient per chunk and the queue executes in order.
+     * `beginGroup` picks the slot.
+     */
+    slots?: number;
+    /**
+     * Fade out splats whose projected radius approaches the image height, default
+     * true; see `RADIUS_FADE_START_FRAC`. Off for measurement renders, where a splat
+     * that legitimately fills the frame must keep its full alpha.
+     */
+    radiusFade?: boolean;
     /**
      * Hard upper bound on per-splat tile coverage. The project shader
      * clamps `coverage[i] = min(rawBboxArea, maxCoveragePerSplat)`, so
@@ -135,8 +150,10 @@ const numSHCoeffsPerChannel = (bands: number): number => {
 interface PipelineBuffers {
     inputBuffer: StorageBuffer;
     projBuffer: StorageBuffer;
-    runningStateBuffer: StorageBuffer;
-    outputBuffer: StorageBuffer;
+    /** One running-state buffer per slot. */
+    runningStateBuffers: StorageBuffer[];
+    /** One RGBA8 output buffer per slot. */
+    outputBuffers: StorageBuffer[];
     /** Per-tile offset table for binned rasterize: `(numTiles + 1) × u32`. */
     tileOffsetsBuffer: StorageBuffer;
     /**
@@ -168,6 +185,7 @@ interface PipelineBuffers {
      * indices to its internal `sortedIndices` buffer.
      */
     splatValuesBuffer: StorageBuffer;
+    clearStateCompute: Compute;
     projectCompute: Compute;
     prefixSumCompute: Compute;
     emitPairsCompute: Compute;
@@ -211,6 +229,7 @@ class GpuSplatRasterizer {
     private emitPairsShader: Shader;
     private prepareIndirectShader: Shader;
     private initTileOffsetsShader: Shader;
+    private clearStateShader: Shader;
     private findBoundariesShader: Shader;
     private rasterizeBinnedShader: Shader;
     private finalizeShader: Shader;
@@ -219,6 +238,7 @@ class GpuSplatRasterizer {
     private emitPairsBgFormat: BindGroupFormat;
     private prepareIndirectBgFormat: BindGroupFormat;
     private initTileOffsetsBgFormat: BindGroupFormat;
+    private clearStateBgFormat: BindGroupFormat;
     private findBoundariesBgFormat: BindGroupFormat;
     private rasterizeBinnedBgFormat: BindGroupFormat;
     private finalizeBgFormat: BindGroupFormat;
@@ -230,9 +250,9 @@ class GpuSplatRasterizer {
     private radixSort: ComputeRadixSort;
     /** sortIndirect numBits, derived from numTiles (multiple of 4). */
     private sortKeyBits: number;
-    private clearStatePattern: Float32Array;
     /** Active group's tile dimensions, set by `beginGroup`. */
     private activeTilesX: number = 0;
+    private activeSlot: number = 0;
     private activeTilesY: number = 0;
 
     /** Floats per gaussian in the input buffer (depends on SH band count). */
@@ -257,11 +277,21 @@ class GpuSplatRasterizer {
         this.groupPixelW = options.groupTilesX * TILE_SIZE;
         this.groupPixelH = options.groupTilesY * TILE_SIZE;
 
+        // `indirect: true` is required since engine 2.19 — indirect mode
+        // moved from a per-call `sortIndirect()` behaviour to a constructor
+        // option. Without it, `sortIndirect()` silently dispatches directly
+        // with `maxElementCount` (the full pair-buffer capacity), sorting
+        // uninitialized zeros to the front and producing empty tile slices.
+        this.radixSort = new ComputeRadixSort(device, { indirect: true });
+
+        // The key width is the fewest whole passes that index every tile: 4 bits
+        // each on the portable implementation, 8 on the one-sweep variant the engine
+        // picks on NVIDIA. Engine 2.22 returns the sorted indices correctly at any
+        // pass count (2.21 needed an odd one). Capped at what a u32 key holds.
         const numTiles = options.groupTilesX * options.groupTilesY;
-        // Round up to multiple of 4 (radix sort uses 4-bit passes). Min 4
-        // because ComputeRadixSort requires numBits ≥ 4. Max 32 (u32 key).
-        const tileBits = Math.max(4, Math.min(32, Math.ceil(Math.log2(Math.max(2, numTiles)) / 4) * 4));
-        this.sortKeyBits = tileBits;
+        const { radixBits } = this.radixSort;
+        const passes = Math.max(1, Math.ceil(Math.log2(Math.max(2, numTiles)) / radixBits));
+        this.sortKeyBits = Math.min(passes, Math.floor(32 / radixBits)) * radixBits;
 
         const coeffs = numSHCoeffsPerChannel(options.numSHBands);
         this.inputStride = 14 + 3 * coeffs;
@@ -295,6 +325,10 @@ class GpuSplatRasterizer {
             new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
             new BindStorageBufferFormat('totalPairs', SHADERSTAGE_COMPUTE, true),
             new BindStorageBufferFormat('tileOffsets', SHADERSTAGE_COMPUTE)
+        ]);
+        this.clearStateBgFormat = new BindGroupFormat(device, [
+            new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
+            new BindStorageBufferFormat('runningState', SHADERSTAGE_COMPUTE)
         ]);
         this.findBoundariesBgFormat = new BindGroupFormat(device, [
             new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
@@ -356,6 +390,7 @@ class GpuSplatRasterizer {
         if (options.numSHBands >= 1) sharedCdefines.set('SH_BAND_1', '');
         if (options.numSHBands >= 2) sharedCdefines.set('SH_BAND_2', '');
         if (options.numSHBands >= 3) sharedCdefines.set('SH_BAND_3', '');
+        if (options.radiusFade === false) sharedCdefines.set('NO_RADIUS_FADE', '');
 
         const mkShader = (
             name: string,
@@ -399,6 +434,7 @@ class GpuSplatRasterizer {
         this.emitPairsShader = mkShader('splat-tilebin-emit-pairs', tileBinEmitPairsWgsl(), this.emitPairsBgFormat);
         this.prepareIndirectShader = mkShader('splat-tilebin-prepare-indirect', prepareIndirectWgsl(), this.prepareIndirectBgFormat, prepareIndirectUniforms);
         this.initTileOffsetsShader = mkShader('splat-tilebin-init-tile-offsets', initTileOffsetsWgsl(), this.initTileOffsetsBgFormat);
+        this.clearStateShader = mkShader('splat-clear-state', clearStateWgsl(), this.clearStateBgFormat);
         this.findBoundariesShader = mkShader('splat-tilebin-find-boundaries', findBoundariesWgsl(), this.findBoundariesBgFormat);
         this.rasterizeBinnedShader = mkShader('splat-rasterize-binned', rasterizeBinnedWgsl(), this.rasterizeBinnedBgFormat);
         this.finalizeShader = mkShader('splat-finalize-pack', finalizeWgsl(), this.finalizeBgFormat);
@@ -426,8 +462,9 @@ class GpuSplatRasterizer {
 
         const inputBuffer = new StorageBuffer(device, inputBytes, BUFFERUSAGE_COPY_DST);
         const projBuffer = new StorageBuffer(device, projBytes, 0);
-        const runningStateBuffer = new StorageBuffer(device, stateBytes, BUFFERUSAGE_COPY_DST);
-        const outputBuffer = new StorageBuffer(device, outputBytes, BUFFERUSAGE_COPY_SRC);
+        const slots = Math.max(1, options.slots ?? 1);
+        const runningStateBuffers = Array.from({ length: slots }, () => new StorageBuffer(device, stateBytes, BUFFERUSAGE_COPY_DST));
+        const outputBuffers = Array.from({ length: slots }, () => new StorageBuffer(device, outputBytes, BUFFERUSAGE_COPY_SRC));
         const tileOffsetsBuffer = new StorageBuffer(device, tileOffsetsBytes, 0);
         const coverageBuffer = new StorageBuffer(device, coverageBytes, 0);
         const emitOffsetBuffer = new StorageBuffer(device, emitOffsetBytes, 0);
@@ -468,26 +505,30 @@ class GpuSplatRasterizer {
 
         const rasterizeBinnedCompute = new Compute(device, this.rasterizeBinnedShader, 'splat-rasterize-binned');
         rasterizeBinnedCompute.setParameter('projected', projBuffer);
-        rasterizeBinnedCompute.setParameter('runningState', runningStateBuffer);
+        rasterizeBinnedCompute.setParameter('runningState', runningStateBuffers[0]);
         rasterizeBinnedCompute.setParameter('tileOffsets', tileOffsetsBuffer);
         // `sortedSplatIndices` is bound per-chunk inside `dispatchChunk`,
         // pointing at the radix sort's `sortedIndices` output buffer.
 
         const finalizeCompute = new Compute(device, this.finalizeShader, 'splat-finalize');
-        finalizeCompute.setParameter('runningState', runningStateBuffer);
-        finalizeCompute.setParameter('output', outputBuffer);
+        finalizeCompute.setParameter('runningState', runningStateBuffers[0]);
+        finalizeCompute.setParameter('output', outputBuffers[0]);
+
+        const clearStateCompute = new Compute(device, this.clearStateShader, 'splat-clear-state');
+        clearStateCompute.setParameter('runningState', runningStateBuffers[0]);
 
         this.buffers = {
             inputBuffer,
             projBuffer,
-            runningStateBuffer,
-            outputBuffer,
+            runningStateBuffers,
+            outputBuffers,
             tileOffsetsBuffer,
             coverageBuffer,
             emitOffsetBuffer,
             totalPairsBuffer,
             tileKeysBuffer,
             splatValuesBuffer,
+            clearStateCompute,
             projectCompute,
             prefixSumCompute,
             emitPairsCompute,
@@ -497,20 +538,6 @@ class GpuSplatRasterizer {
             rasterizeBinnedCompute,
             finalizeCompute
         };
-
-        // CPU-side cleared running state: T = 1 per pixel, color = 0.
-        // Reused across groups; uploaded to runningStateBuffer at beginGroup.
-        this.clearStatePattern = new Float32Array(groupPixels * RUNNING_STATE_STRIDE_F32);
-        for (let i = 0; i < groupPixels; i++) {
-            this.clearStatePattern[i * 4 + 3] = 1; // T = 1
-        }
-
-        // `indirect: true` is required since engine 2.19 — indirect mode
-        // moved from a per-call `sortIndirect()` behaviour to a constructor
-        // option. Without it, `sortIndirect()` silently dispatches directly
-        // with `maxElementCount` (the full pair-buffer capacity), sorting
-        // uninitialized zeros to the front and producing empty tile slices.
-        this.radixSort = new ComputeRadixSort(device, { indirect: true });
 
         // The per-chunk pipeline reserves 2 slots in the device's
         // indirect-dispatch buffer (one for the radix sort, one for
@@ -558,6 +585,7 @@ class GpuSplatRasterizer {
 
         const b = this.buffers;
         for (const c of [
+            b.clearStateCompute,
             b.projectCompute,
             b.prefixSumCompute,
             b.emitPairsCompute,
@@ -596,26 +624,63 @@ class GpuSplatRasterizer {
     }
 
     /**
+     * Point the rasterizer at another view. Takes effect at the next `beginGroup`,
+     * which uploads the uniforms; the projection stays as constructed and the
+     * image must fit the constructed group. Lets one instance, with its compiled
+     * pipelines and sized buffers, serve many renders that differ only in view.
+     *
+     * @param basis - The camera basis and focal lengths.
+     * @param near - Near plane distance in world units.
+     * @param imageWidth - Image width in pixels, at most the constructed width.
+     * @param imageHeight - Image height in pixels, at most the constructed height.
+     */
+    setView(basis: CameraBasis, near: number, imageWidth: number, imageHeight: number): void {
+        const o = this.options;
+        o.rightX = basis.right.x; o.rightY = basis.right.y; o.rightZ = basis.right.z;
+        o.downX = basis.down.x; o.downY = basis.down.y; o.downZ = basis.down.z;
+        o.forwardX = basis.forward.x; o.forwardY = basis.forward.y; o.forwardZ = basis.forward.z;
+        o.eyeX = basis.eye.x; o.eyeY = basis.eye.y; o.eyeZ = basis.eye.z;
+        o.focalX = basis.focalX; o.focalY = basis.focalY;
+        o.near = near;
+        o.imageWidth = imageWidth;
+        o.imageHeight = imageHeight;
+    }
+
+    /**
      * Begin processing a group. Clears running state and sets uniforms.
      *
      * @param groupX - Group index along X.
      * @param groupY - Group index along Y.
      * @param groupTilesX - Number of tiles in this group along X.
      * @param groupTilesY - Number of tiles in this group along Y.
+     * @param slot - Which running-state/output pair to render into; see `slots`.
      */
     beginGroup(
         groupX: number,
         groupY: number,
         groupTilesX: number,
-        groupTilesY: number
+        groupTilesY: number,
+        slot: number = 0
     ): void {
         this.setUniforms(groupX, groupY, groupTilesX, groupTilesY);
         this.activeTilesX = groupTilesX;
         this.activeTilesY = groupTilesY;
+
+        const b = this.buffers;
+        if (slot !== this.activeSlot) {
+            this.activeSlot = slot;
+            const state = b.runningStateBuffers[slot];
+            b.clearStateCompute.setParameter('runningState', state);
+            b.rasterizeBinnedCompute.setParameter('runningState', state);
+            b.finalizeCompute.setParameter('runningState', state);
+            b.finalizeCompute.setParameter('output', b.outputBuffers[slot]);
+        }
+        // Clear the running state on the GPU: colour 0, transmittance 1. Four pixels
+        // per thread, 256 threads per workgroup.
         const groupPixels = groupTilesX * groupTilesY * TILE_SIZE * TILE_SIZE;
-        this.buffers.runningStateBuffer.write(
-            0, this.clearStatePattern, 0, groupPixels * RUNNING_STATE_STRIDE_F32
-        );
+        const clear = this.buffers.clearStateCompute;
+        clear.setupDispatch(Math.ceil(groupPixels / (4 * 256)), 1, 1);
+        this.device.computeDispatch([clear], 'splat-clear-state');
     }
 
     /**
@@ -723,8 +788,8 @@ class GpuSplatRasterizer {
         // The radix sort is stable, so within each tile the splatValues
         // remain in their input order = depth-monotonic (from the CPU
         // pre-sort), giving depth-ordered compositing per tile for free.
-        // numBits = sortKeyBits (rounded up to multiple of 4 from
-        // ceil(log2(numTiles))) — only the minimum required passes run.
+        // numBits = sortKeyBits (ceil(log2(numTiles)) rounded up to the
+        // sort's pass width) — only the minimum required passes run.
         const pairsCap = this.chunkCap * this.options.maxCoveragePerSplat;
         this.radixSort.sortIndirect(
             b.tileKeysBuffer, pairsCap, this.sortKeyBits, sortSlot,
@@ -775,7 +840,7 @@ class GpuSplatRasterizer {
         const activePixelW = this.activeTilesX * TILE_SIZE;
         const activePixelH = this.activeTilesY * TILE_SIZE;
         const groupOutputBytes = activePixelW * activePixelH * 4;
-        return b.outputBuffer.read(0, groupOutputBytes, null, true) as Promise<Uint8Array>;
+        return b.outputBuffers[this.activeSlot].read(0, groupOutputBytes, null, true) as Promise<Uint8Array>;
     }
 
     /**
@@ -786,8 +851,8 @@ class GpuSplatRasterizer {
         const b = this.buffers;
         b.inputBuffer.destroy();
         b.projBuffer.destroy();
-        b.runningStateBuffer.destroy();
-        b.outputBuffer.destroy();
+        for (const buffer of b.runningStateBuffers) buffer.destroy();
+        for (const buffer of b.outputBuffers) buffer.destroy();
         b.tileOffsetsBuffer.destroy();
         b.coverageBuffer.destroy();
         b.emitOffsetBuffer.destroy();
@@ -799,6 +864,7 @@ class GpuSplatRasterizer {
         this.emitPairsShader.destroy();
         this.prepareIndirectShader.destroy();
         this.initTileOffsetsShader.destroy();
+        this.clearStateShader.destroy();
         this.findBoundariesShader.destroy();
         this.rasterizeBinnedShader.destroy();
         this.finalizeShader.destroy();
@@ -807,6 +873,7 @@ class GpuSplatRasterizer {
         this.emitPairsBgFormat.destroy();
         this.prepareIndirectBgFormat.destroy();
         this.initTileOffsetsBgFormat.destroy();
+        this.clearStateBgFormat.destroy();
         this.findBoundariesBgFormat.destroy();
         this.rasterizeBinnedBgFormat.destroy();
         this.finalizeBgFormat.destroy();

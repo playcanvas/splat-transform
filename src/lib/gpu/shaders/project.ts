@@ -134,11 +134,20 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // splats fade at every render resolution — preserves cross-
     // resolution consistency (e.g. 8K-downsampled-to-1080p matches
     // 1080p direct).
+    //
+    // NO_RADIUS_FADE (measurement renders) keeps every splat at full
+    // alpha whatever its footprint; the group AABB and coverage cap
+    // still bound the work.
+#ifdef NO_RADIUS_FADE
+    let radiusFade = 1.0;
+    let radius = ceil(radiusRaw);
+#else
     let fadeStart = RADIUS_FADE_START_FRAC * f32(uniforms.imageHeight);
     let fadeEnd = RADIUS_FADE_END_FRAC * f32(uniforms.imageHeight);
     let radiusFade = clamp((fadeEnd - radiusRaw) / (fadeEnd - fadeStart), 0.0, 1.0);
     if (radiusFade <= 0.0) { writeInvalid(i); return; }
     let radius = ceil(min(radiusRaw, fadeEnd));
+#endif
 
     // Group AABB cull. The BVH frustum query may include splats whose
     // 3D AABB grazes the frustum but whose 2D footprint misses the group.

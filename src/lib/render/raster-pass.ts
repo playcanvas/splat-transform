@@ -5,10 +5,9 @@ import {
     AA_DILATION_COV,
     DISCRIMINANT_FLOOR,
     JACOBIAN_LIMIT_FACTOR,
-    PAIR_BUFFER_BUDGET_BYTES,
-    PAIR_BUFFER_TOTAL_BYTES_PER_ELEMENT,
     SIGMA_CUTOFF,
-    TILE_SIZE
+    TILE_SIZE,
+    rasterChunkCap
 } from './config';
 import {
     SortScratch,
@@ -341,14 +340,9 @@ const renderRasterPass = async (
     //      within `PAIR_BUFFER_BUDGET_BYTES` — bounds the rasterizer's
     //      peak GPU footprint when chunkCap could otherwise saturate
     //      the binding limit on adapters with very large bindings.
-    // @ts-ignore - limits is exposed by WebgpuGraphicsDevice
-    const wgpuLimits = (device as { limits?: { maxStorageBufferBindingSize?: number } }).limits;
-    const maxBindingBytes = wgpuLimits?.maxStorageBufferBindingSize ?? 128 * 1024 * 1024;
-    const bindingChunkCap = Math.floor(maxBindingBytes / (maxCoveragePerSplat * 4));
-    const budgetChunkCap = Math.floor(PAIR_BUFFER_BUDGET_BYTES / (maxCoveragePerSplat * PAIR_BUFFER_TOTAL_BYTES_PER_ELEMENT));
     const effectiveChunkCap = Math.max(
         1,
-        Math.min(CHUNK_CAP, budgetChunkCap, bindingChunkCap, candidateCount)
+        Math.min(CHUNK_CAP, rasterChunkCap(device, maxCoveragePerSplat), candidateCount)
     );
 
     const rasterizer = new GpuSplatRasterizer(device, {

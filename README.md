@@ -216,6 +216,7 @@ Apply when writing `lod-meta.json` (multi-LOD streaming SOG bundle).
     --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
     --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
     --lod-chunk-min    <n>              Gaussians in K below which a chunk is not split for extent. Default: 8
+    --lod-errors                        Render per-chunk LOD error tables (needs a GPU). Default: off
 ```
 
 A chunk is split when it holds more than `--lod-chunk-count` Gaussians, or when it is wider than `--lod-chunk-extent` and holds more than `--lod-chunk-min`. The minimum keeps sparse regions such as sky or distant background from being cut into thousands of near-empty chunks: below it a region stays one chunk however wide it is. Dense regions are unaffected.
