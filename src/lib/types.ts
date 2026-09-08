@@ -31,6 +31,9 @@ type Options = {
     /** Gaussians (in thousands) below which an LOD chunk is not split for exceeding the extent. Default: 8 */
     lodChunkMin?: number;
 
+    /** Whether to render and write per-leaf LOD error tables (needs a GPU). Default: false */
+    lodErrors?: boolean;
+
     /** SPZ format version to write. Default: 4. */
     spzVersion?: 3 | 4;
 

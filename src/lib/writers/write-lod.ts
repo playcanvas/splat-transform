@@ -565,11 +565,16 @@ type WriteLodSourceOptions = {
     envSource: ChunkSource | null;
     iterations: number;
     /**
-     * Supplies the GPU the per-leaf error tables are rendered on (and that SOG
-     * encoding uses). Without one the manifest declares `lodErrors: false` and a
-     * consumer falls back to deriving errors from splat counts.
+     * Supplies the GPU that SOG encoding uses and, with `lodErrors`, that the
+     * per-leaf error tables are rendered on.
      */
     createDevice?: DeviceCreator;
+    /**
+     * Render and write the per-leaf error tables. Default false: the manifest then
+     * declares `lodErrors: false` and a consumer derives errors from splat counts.
+     * Needs `createDevice`.
+     */
+    lodErrors?: boolean;
     chunkCount: number;
     chunkExtent: number;
     /**
@@ -602,7 +607,7 @@ type WriteLodSourceOptions = {
  * @ignore
  */
 const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) => {
-    const { filename, envSource, iterations, createDevice, chunkCount, chunkExtent, chunkMin = 8 } = options;
+    const { filename, envSource, iterations, createDevice, chunkCount, chunkExtent, chunkMin = 8, lodErrors = false } = options;
 
     // Bake the pending coordinate-space transform to PLY once, up front, so the
     // partition/bounds passes (extractSlim, calcBound, morton) and the per-unit
@@ -616,11 +621,11 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     // Pool for slim extraction read buffers and the chunk-native SOG encodes.
     const pool = createChunkDataPool();
 
-    // The error tables are rendered, so they need the GPU. One renderer serves the
-    // whole pass; the partition below queues the leaves for it. A host without a
-    // usable adapter still gets its LODs, without the tables.
+    // The error tables are opt-in and rendered, so they need the GPU. One renderer
+    // serves the whole pass; the partition below queues the leaves for it. A host
+    // without a usable adapter still gets its LODs, without the tables.
     let device: GraphicsDevice | null = null;
-    if (createDevice) {
+    if (lodErrors && createDevice) {
         try {
             device = await createDevice();
         } catch (err) {
@@ -628,7 +633,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
         }
     }
     const renderer = device ? new ErrorRenderer(device, mainSource.meta.shBands) : null;
-    if (!renderer) {
+    if (lodErrors && !renderer) {
         logger.warn('No GPU device: LOD error tables are not written; the viewer will derive them from splat counts.');
     }
     const leafJobs: LeafJob[] = [];

@@ -29,9 +29,9 @@ import { encodePlyBinary } from './helpers/test-utils.mjs';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 WebPCodec.wasmUrl = join(__dirname, '..', 'lib', 'webp.wasm');
 
-// The per-leaf error tables are rendered on the GPU; tests that read them skip
-// when no adapter is available, and the header tests assert the declaration
-// matches whether a device was supplied.
+// The per-leaf error tables are opt-in and rendered on the GPU; tests that read
+// them request them and skip when no adapter is available, and the header tests
+// assert the declaration matches whether a device was supplied.
 let device = null;
 
 before(async () => {
@@ -47,7 +47,7 @@ after(() => {
     device?.destroy?.();
 });
 
-const deviceOptions = () => (device ? { createDevice: async () => device } : {});
+const deviceOptions = () => (device ? { createDevice: async () => device, lodErrors: true } : { lodErrors: true });
 
 // Minimal seekable ReadSource over a buffer, for the disk-PLY writeLodSource path.
 class BufferReadSource {
@@ -159,7 +159,8 @@ const writeTableErrors = async (tables) => {
         iterations: 1,
         chunkCount: 1,
         chunkExtent: 16,
-        createDevice: async () => device
+        createDevice: async () => device,
+        lodErrors: true
     }, fs);
     return JSON.parse(new TextDecoder().decode(fs.results.get('/scene/lod-meta.json'))).tree.errors;
 };
@@ -301,11 +302,28 @@ describe('writeLodSource: lod-meta.json contract', function () {
             envSource: null,
             iterations: 1,
             chunkCount: 1,
-            chunkExtent: 16
+            chunkExtent: 16,
+            lodErrors: true
         }, fs);
         const meta = JSON.parse(new TextDecoder().decode(fs.results.get('/scene/lod-meta.json')));
         assert.strictEqual(meta.lodErrors, false);
         assert.ok(!('errors' in meta.tree), 'no per-leaf error table without a GPU');
+    });
+
+    it('omits error tables by default', async function () {
+        const fs = new MemoryFileSystem();
+        await writeLodSource({
+            filename: '/scene/lod-meta.json',
+            mainSource: makeSource([3, 2]),
+            envSource: null,
+            iterations: 1,
+            chunkCount: 1,
+            chunkExtent: 16,
+            ...(device ? { createDevice: async () => device } : {})
+        }, fs);
+        const meta = JSON.parse(new TextDecoder().decode(fs.results.get('/scene/lod-meta.json')));
+        assert.strictEqual(meta.lodErrors, false);
+        assert.ok(!('errors' in meta.tree), 'no per-leaf error table unless requested');
     });
 
     it('includes stored spherical harmonics in the LOD error', async function (t) {
