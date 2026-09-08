@@ -51,7 +51,7 @@
   ],
   "dependencies": {
     "@adobe/spz": "0.2.3",
-    "webgpu": "0.6.0"
+    "webgpu": "0.4.0"
   },
   "devDependencies": {
     "@playcanvas/eslint-config": "2.1.0",
