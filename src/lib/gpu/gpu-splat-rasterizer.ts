@@ -284,20 +284,14 @@ class GpuSplatRasterizer {
         // uninitialized zeros to the front and producing empty tile slices.
         this.radixSort = new ComputeRadixSort(device, { indirect: true });
 
-        // The key width is a whole number of the sort's passes — 4 bits each on the
-        // portable implementation, 8 on the one-sweep variant the engine picks on
-        // NVIDIA — and an ODD number of them. Engine 2.21's sort keeps the caller's
-        // value buffer in its ping-pong rotation, so after an even pass count the
-        // sorted indices sit in that buffer while `sortedIndices` points at an
-        // internal one that was never written, and every splat lands in the wrong
-        // tile. Odd counts end in the buffer the getter returns, on that engine and
-        // on the fixed one alike. Capped at the widest odd pass count a u32 key holds.
+        // The key width is the fewest whole passes that index every tile: 4 bits
+        // each on the portable implementation, 8 on the one-sweep variant the engine
+        // picks on NVIDIA. Engine 2.22 returns the sorted indices correctly at any
+        // pass count (2.21 needed an odd one). Capped at what a u32 key holds.
         const numTiles = options.groupTilesX * options.groupTilesY;
         const { radixBits } = this.radixSort;
-        const maxPasses = Math.floor(32 / radixBits);
-        let passes = Math.max(1, Math.ceil(Math.log2(Math.max(2, numTiles)) / radixBits));
-        if (passes % 2 === 0) passes += 1;
-        this.sortKeyBits = Math.min(passes, maxPasses % 2 === 0 ? maxPasses - 1 : maxPasses) * radixBits;
+        const passes = Math.max(1, Math.ceil(Math.log2(Math.max(2, numTiles)) / radixBits));
+        this.sortKeyBits = Math.min(passes, Math.floor(32 / radixBits)) * radixBits;
 
         const coeffs = numSHCoeffsPerChannel(options.numSHBands);
         this.inputStride = 14 + 3 * coeffs;
@@ -794,8 +788,8 @@ class GpuSplatRasterizer {
         // The radix sort is stable, so within each tile the splatValues
         // remain in their input order = depth-monotonic (from the CPU
         // pre-sort), giving depth-ordered compositing per tile for free.
-        // numBits = sortKeyBits (rounded up to multiple of 4 from
-        // ceil(log2(numTiles))) — only the minimum required passes run.
+        // numBits = sortKeyBits (ceil(log2(numTiles)) rounded up to the
+        // sort's pass width) — only the minimum required passes run.
         const pairsCap = this.chunkCap * this.options.maxCoveragePerSplat;
         this.radixSort.sortIndirect(
             b.tileKeysBuffer, pairsCap, this.sortKeyBits, sortSlot,
