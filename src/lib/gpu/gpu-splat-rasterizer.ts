@@ -92,6 +92,12 @@ interface SplatRasterizerOptions {
      */
     slots?: number;
     /**
+     * Fade out splats whose projected radius approaches the image height, default
+     * true; see `RADIUS_FADE_START_FRAC`. Off for measurement renders, where a splat
+     * that legitimately fills the frame must keep its full alpha.
+     */
+    radiusFade?: boolean;
+    /**
      * Hard upper bound on per-splat tile coverage. The project shader
      * clamps `coverage[i] = min(rawBboxArea, maxCoveragePerSplat)`, so
      * the pair buffer is bounded by `chunkCap × maxCoveragePerSplat`
@@ -271,19 +277,27 @@ class GpuSplatRasterizer {
         this.groupPixelW = options.groupTilesX * TILE_SIZE;
         this.groupPixelH = options.groupTilesY * TILE_SIZE;
 
+        // `indirect: true` is required since engine 2.19 — indirect mode
+        // moved from a per-call `sortIndirect()` behaviour to a constructor
+        // option. Without it, `sortIndirect()` silently dispatches directly
+        // with `maxElementCount` (the full pair-buffer capacity), sorting
+        // uninitialized zeros to the front and producing empty tile slices.
+        this.radixSort = new ComputeRadixSort(device, { indirect: true });
+
+        // The key width is a whole number of the sort's passes — 4 bits each on the
+        // portable implementation, 8 on the one-sweep variant the engine picks on
+        // NVIDIA — and an ODD number of them. Engine 2.21's sort keeps the caller's
+        // value buffer in its ping-pong rotation, so after an even pass count the
+        // sorted indices sit in that buffer while `sortedIndices` points at an
+        // internal one that was never written, and every splat lands in the wrong
+        // tile. Odd counts end in the buffer the getter returns, on that engine and
+        // on the fixed one alike. Capped at the widest odd pass count a u32 key holds.
         const numTiles = options.groupTilesX * options.groupTilesY;
-        // Round up to a multiple of 4 (radix sort uses 4-bit passes), then to an
-        // ODD number of passes. Engine 2.21's radix sort keeps the caller's key and
-        // value buffers in its ping-pong rotation, so after an even pass count the
-        // result sits in those buffers while `sortedKeys` / `sortedIndices` point at
-        // internal ones that were never written — every splat lands in the wrong
-        // tile and the image comes out empty or scrambled. Odd counts end in the
-        // internal buffers the getters return, on that engine and on the fixed one
-        // alike. Min 4 because ComputeRadixSort requires numBits ≥ 4; 28 covers
-        // any tile count a u32 key can index.
-        let tileBits = Math.max(4, Math.ceil(Math.log2(Math.max(2, numTiles)) / 4) * 4);
-        if ((tileBits / 4) % 2 === 0) tileBits += 4;
-        this.sortKeyBits = Math.min(28, tileBits);
+        const { radixBits } = this.radixSort;
+        const maxPasses = Math.floor(32 / radixBits);
+        let passes = Math.max(1, Math.ceil(Math.log2(Math.max(2, numTiles)) / radixBits));
+        if (passes % 2 === 0) passes += 1;
+        this.sortKeyBits = Math.min(passes, maxPasses % 2 === 0 ? maxPasses - 1 : maxPasses) * radixBits;
 
         const coeffs = numSHCoeffsPerChannel(options.numSHBands);
         this.inputStride = 14 + 3 * coeffs;
@@ -382,6 +396,7 @@ class GpuSplatRasterizer {
         if (options.numSHBands >= 1) sharedCdefines.set('SH_BAND_1', '');
         if (options.numSHBands >= 2) sharedCdefines.set('SH_BAND_2', '');
         if (options.numSHBands >= 3) sharedCdefines.set('SH_BAND_3', '');
+        if (options.radiusFade === false) sharedCdefines.set('NO_RADIUS_FADE', '');
 
         const mkShader = (
             name: string,
@@ -529,13 +544,6 @@ class GpuSplatRasterizer {
             rasterizeBinnedCompute,
             finalizeCompute
         };
-
-        // `indirect: true` is required since engine 2.19 — indirect mode
-        // moved from a per-call `sortIndirect()` behaviour to a constructor
-        // option. Without it, `sortIndirect()` silently dispatches directly
-        // with `maxElementCount` (the full pair-buffer capacity), sorting
-        // uninitialized zeros to the front and producing empty tile slices.
-        this.radixSort = new ComputeRadixSort(device, { indirect: true });
 
         // The per-chunk pipeline reserves 2 slots in the device's
         // indirect-dispatch buffer (one for the radix sort, one for

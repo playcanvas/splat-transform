@@ -1,10 +1,11 @@
 import { basename, dirname, resolve } from 'pathe';
-import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
+import { BoundingBox, type GraphicsDevice, Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { ATLAS_MAX_BATCH_GAUSSIANS, ErrorRenderer, type LeafLevels, leafViewSize } from './lod-error';
 import { logWrittenFile } from './utils';
 import { writeSogSource } from './write-sog.js';
-import { type ChunkDataPool, type ChunkSource, type ReadRequest, createChunkDataPool } from '../chunk';
+import { type ChunkDataPool, type ChunkLayer, type ChunkSource, type ReadRequest, createChunkDataPool } from '../chunk';
+import { materializeToDataTable } from '../compat/data-table';
 import { Column, DataTable } from '../data-table';
 import { type FileSystem } from '../io/write';
 import { bakeTransform, permuteSource, sortMortonColumns } from '../ops';
@@ -178,11 +179,10 @@ const invalidGaussian = (lod: number, row: number, what: string): Error => new E
 
 /**
  * Reject a batch of gaussians whose geometry is not finite. The bounds pass reads
- * every gaussian's geometric record once, so this covers the whole scene:
- * everything downstream — the error pass above all, which renders every gaussian
- * — may then assume finite input rather than each stage carrying its own opinion
- * about invalid data. {@link assertFiniteColor} does the same for the layer this
- * pass does not read.
+ * every gaussian's record once, so this covers the whole scene: everything
+ * downstream — the error pass above all, which renders every gaussian — may then
+ * assume finite input rather than each stage carrying its own opinion about
+ * invalid data. {@link assertFiniteColor} does the same for the colour layer.
  *
  * The rules mirror `filterNaNRows`, including its two deliberate exceptions
  * (`scale_*` may be `-Infinity`, `opacity` may be `+Infinity`, both harmless
@@ -225,11 +225,41 @@ const assertFiniteGeometry = (
     }
 };
 
+/**
+ * Reject a batch of gaussians whose color or stored SH is not finite — the
+ * companion to {@link assertFiniteGeometry}, run on the same bounds-pass read so
+ * the whole scene is covered with or without a GPU. A non-finite coefficient would
+ * paint NaN into the error renders, which the comparison would silently absorb,
+ * and would corrupt the SOG colour codebooks, so it is refused up front like
+ * invalid geometry.
+ *
+ * @param color - Packed color/SH records for the batch.
+ * @param count - Gaussians in the batch.
+ * @param colorDim - Floats per gaussian (3 + stored SH).
+ * @param rows - Rows local to `lod`, indexed from `offset`, for error messages.
+ * @param offset - Index of the batch's first row within `rows`.
+ * @param lod - Structural LOD the batch was read from.
+ */
+const assertFiniteColor = (
+    color: Float32Array, count: number, colorDim: number,
+    rows: Uint32Array, offset: number, lod: number
+): void => {
+    for (let i = 0; i < count; i++) {
+        const base = i * colorDim;
+        for (let c = 0; c < colorDim; c++) {
+            if (!isFinite(color[base + c])) {
+                throw invalidGaussian(lod, rows[offset + i], 'a non-finite color or SH coefficient');
+            }
+        }
+    }
+};
+
 // Per-leaf ellipsoid AABB, computed per structural LOD. Positions are resident,
 // but rotation/scale are gathered from the source by index so the geometric layer
 // is never wholly resident — the bounds-pass analog of the per-unit heavy gather.
 // `bins` maps LOD -> flat analysis indices; each is gathered from its own LOD
-// (flat index `g` -> local row `g - cum[lod]`).
+// (flat index `g` -> local row `g - cum[lod]`). The colour layer rides along on
+// the same record read purely to be validated.
 const calcBound = async (
     source: ChunkSource, pool: ChunkDataPool, bins: Map<number, Uint32Array>, cum: number[],
     tick?: (n: number) => void
@@ -239,6 +269,7 @@ const calcBound = async (
 
     const batch = pool.chunkSize;
     const { layouts } = source.meta;
+    const colorDim = layouts.color!.stride >> 2;
 
     for (const [lodValue, flat] of bins) {
         const base = cum[lodValue];
@@ -249,13 +280,15 @@ const calcBound = async (
             const count = Math.min(batch, local.length - off);
             const pos = pool.acquire('position', layouts.position!, count);
             const geo = pool.acquire('geometric', layouts.geometric!, count);
-            await source.read({ indices: local, indexOffset: off, count, lod: lodValue, position: pos, geometric: geo });
+            const color = pool.acquire('color', layouts.color!, count);
+            await source.read({ indices: local, indexOffset: off, count, lod: lodValue, position: pos, geometric: geo, color });
             // position is full-stride packed xyz — read the pool buffer in place
             // rather than copying it out per batch
             const posBatch = new Float32Array(pos.data, 0, count * 3);
             assertFiniteGeometry(
                 posBatch, new Float32Array(geo.data, 0, count * 8), count, local, off, lodValue
             );
+            assertFiniteColor(new Float32Array(color.data, 0, count * colorDim), count, colorDim, local, off, lodValue);
             accumulateBound(
                 min, max,
                 posBatch,
@@ -265,6 +298,7 @@ const calcBound = async (
             );
             pos.release();
             geo.release();
+            color.release();
             tick?.(count);
         }
     }
@@ -319,42 +353,14 @@ const binIndices = (parent: BTreeNode, lodOf: (index: number) => number): Map<nu
     return result;
 };
 
-/**
- * Reject a batch of gaussians whose color or stored SH is not finite — the
- * companion to {@link assertFiniteGeometry} for the layer the bounds pass does not
- * read. A non-finite coefficient would paint NaN into the error renders and the
- * comparison would silently absorb it, so it is refused up front like invalid
- * geometry. Coverage is again the whole scene: every gaussian of a leaf is
- * gathered for its own level's render.
- *
- * @param color - Packed color/SH records for the batch.
- * @param count - Gaussians in the batch.
- * @param colorDim - Floats per gaussian (3 + stored SH).
- * @param rows - Rows local to `lod`, indexed from `offset`, for error messages.
- * @param offset - Index of the batch's first row within `rows`.
- * @param lod - Structural LOD the batch was read from.
- */
-const assertFiniteColor = (
-    color: Float32Array, count: number, colorDim: number,
-    rows: Uint32Array, offset: number, lod: number
-): void => {
-    for (let i = 0; i < count; i++) {
-        const base = i * colorDim;
-        for (let c = 0; c < colorDim; c++) {
-            if (!isFinite(color[base + c])) {
-                throw invalidGaussian(lod, rows[offset + i], 'a non-finite color or SH coefficient');
-            }
-        }
-    }
-};
-
-const GEOMETRIC_COLUMNS = ['rot_0', 'rot_1', 'rot_2', 'rot_3', 'scale_0', 'scale_1', 'scale_2', 'opacity'];
+/** The layers a leaf's render needs from the source; positions are resident. */
+const LEAF_TABLE_LAYERS = new Set<ChunkLayer>(['geometric', 'color']);
 
 /**
  * Gather one structural level of a leaf into a resident {@link DataTable} for the
  * rasterizer. Positions come from the resident slim columns; rotation, scale,
- * opacity and color/SH are read from the source by index in pool-sized batches —
- * the same per-leaf gather the bounds pass does for its layers.
+ * opacity and color/SH are read from the source by index, chunk by chunk, through
+ * the same permuted view the unit writes use.
  *
  * The table stays in PLY space, tagged as such. The error pass renders scene and
  * camera in one space and only ever compares renders against each other, so the
@@ -373,53 +379,24 @@ const gatherLeafTable = async (
     source: ChunkSource, pool: ChunkDataPool, slim: SlimColumns,
     indices: Uint32Array, lod: number, base: number
 ): Promise<DataTable> => {
-    const { layouts } = source.meta;
-    const colorDim = layouts.color!.stride >> 2;
     const n = indices.length;
-
-    const position = [new Float32Array(n), new Float32Array(n), new Float32Array(n)];
-    const geometric = GEOMETRIC_COLUMNS.map(() => new Float32Array(n));
-    const color = Array.from({ length: colorDim }, () => new Float32Array(n));
-
     const local = new Uint32Array(n);
+    const x = new Float32Array(n);
+    const y = new Float32Array(n);
+    const z = new Float32Array(n);
     for (let i = 0; i < n; i++) {
         const g = indices[i];
         local[i] = g - base;
-        position[0][i] = slim.x[g];
-        position[1][i] = slim.y[g];
-        position[2][i] = slim.z[g];
+        x[i] = slim.x[g];
+        y[i] = slim.y[g];
+        z[i] = slim.z[g];
     }
 
-    for (let off = 0; off < n; off += pool.chunkSize) {
-        const count = Math.min(pool.chunkSize, n - off);
-        const geo = pool.acquire('geometric', layouts.geometric!, count);
-        const col = pool.acquire('color', layouts.color!, count);
-        await source.read({ indices: local, indexOffset: off, count, lod, geometric: geo, color: col });
-
-        const geoBatch = new Float32Array(geo.data, 0, count * 8);
-        const colorBatch = new Float32Array(col.data, 0, count * colorDim);
-        assertFiniteColor(colorBatch, count, colorDim, local, off, lod);
-        for (let i = 0; i < count; i++) {
-            for (let k = 0; k < 8; k++) geometric[k][off + i] = geoBatch[i * 8 + k];
-            for (let k = 0; k < colorDim; k++) color[k][off + i] = colorBatch[i * colorDim + k];
-        }
-
-        geo.release();
-        col.release();
-    }
-
-    const columns = [
-        new Column('x', position[0]),
-        new Column('y', position[1]),
-        new Column('z', position[2]),
-        ...GEOMETRIC_COLUMNS.map((name, k) => new Column(name, geometric[k])),
-        new Column('f_dc_0', color[0]),
-        new Column('f_dc_1', color[1]),
-        new Column('f_dc_2', color[2])
-    ];
-    for (let k = 3; k < colorDim; k++) columns.push(new Column(`f_rest_${k - 3}`, color[k]));
-
-    return new DataTable(columns, Transform.PLY);
+    const table = await materializeToDataTable(permuteSource(source, local, { lod }), pool, LEAF_TABLE_LAYERS);
+    table.addColumn(new Column('x', x));
+    table.addColumn(new Column('y', y));
+    table.addColumn(new Column('z', z));
+    return table;
 };
 
 /** A leaf awaiting its error table: the node it fills in and the indices to gather. */
@@ -640,11 +617,19 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     const pool = createChunkDataPool();
 
     // The error tables are rendered, so they need the GPU. One renderer serves the
-    // whole pass; the partition below computes the tables leaf by leaf.
-    const device = createDevice ? await createDevice() : null;
+    // whole pass; the partition below queues the leaves for it. A host without a
+    // usable adapter still gets its LODs, without the tables.
+    let device: GraphicsDevice | null = null;
+    if (createDevice) {
+        try {
+            device = await createDevice();
+        } catch (err) {
+            logger.warn(`GPU device unavailable: ${err instanceof Error ? err.message : String(err)}`);
+        }
+    }
     const renderer = device ? new ErrorRenderer(device, mainSource.meta.shBands) : null;
     if (!renderer) {
-        logger.info('No GPU device: LOD error tables are not written; the viewer will derive them from splat counts.');
+        logger.warn('No GPU device: LOD error tables are not written; the viewer will derive them from splat counts.');
     }
     const leafJobs: LeafJob[] = [];
 
@@ -759,6 +744,11 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
         chunkingBar.end();
     }
 
+    // The kd-tree is dead once the partition is built (lodFiles and the leaf jobs
+    // hold their own index copies): release its N×4B index buffer and node AABBs
+    // before the error pass and the unit writes, where peak memory lives.
+    bTree = null;
+
     if (renderer) {
         const errorStart = performance.now();
         try {
@@ -774,11 +764,6 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
         for (const child of node.children ?? []) trimErrors(child);
     };
     trimErrors(tree);
-
-    // The kd-tree is dead once the partition is built (lodFiles holds its own
-    // index copies): release its N×4B index buffer and node AABBs before the
-    // unit writes, where peak memory lives.
-    bTree = null;
 
     // count splats per lod level
     const counts = new Array(lodLevels).fill(0);

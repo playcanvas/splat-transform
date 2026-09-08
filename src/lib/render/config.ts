@@ -1,3 +1,5 @@
+import { type GraphicsDevice } from 'playcanvas';
+
 /**
  * Centralised render-time tunables. Constants that today live as magic
  * numbers in the project/rasterize WGSL shaders, in `gaussian-aabb.ts`'s
@@ -132,6 +134,33 @@ export const PAIR_BUFFER_BUDGET_BYTES = 768 * 1024 * 1024;
  * pipeline.
  */
 export const PAIR_BUFFER_TOTAL_BYTES_PER_ELEMENT = 4 * 6;
+
+/**
+ * Largest storage buffer one binding may reference, from the device's WebGPU
+ * limits, or the spec's 128 MiB baseline when the device does not expose them.
+ *
+ * @param device - The graphics device.
+ * @returns The limit in bytes.
+ */
+export const storageBindingLimit = (device: GraphicsDevice): number => {
+    const limits = (device as { limits?: { maxStorageBufferBindingSize?: number } }).limits;
+    return limits?.maxStorageBufferBindingSize ?? 128 * 1024 * 1024;
+};
+
+/**
+ * Gaussians per rasterizer chunk within the two pair-buffer limits: each of the
+ * six pair-sized buffers must fit one storage binding, and together they must
+ * fit `budgetBytes`.
+ *
+ * @param device - The graphics device.
+ * @param maxCoveragePerSplat - Most tiles one splat may cover, so pairs per gaussian.
+ * @param budgetBytes - Total bytes for all pair-sized buffers; {@link PAIR_BUFFER_BUDGET_BYTES} by default.
+ * @returns The chunk cap, at least 1.
+ */
+export const rasterChunkCap = (device: GraphicsDevice, maxCoveragePerSplat: number, budgetBytes = PAIR_BUFFER_BUDGET_BYTES): number => Math.max(1, Math.min(
+    Math.floor(storageBindingLimit(device) / (maxCoveragePerSplat * 4)),
+    Math.floor(budgetBytes / (maxCoveragePerSplat * PAIR_BUFFER_TOTAL_BYTES_PER_ELEMENT))
+));
 
 /**
  * Screen-radius fade thresholds, expressed as fractions of image

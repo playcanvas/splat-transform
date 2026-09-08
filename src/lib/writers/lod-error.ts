@@ -3,7 +3,7 @@ import { type GraphicsDevice, Quat, Vec3 } from 'playcanvas';
 import { Column, DataTable } from '../data-table';
 import { GpuSplatRasterizer } from '../gpu';
 import { type RenderCamera, buildCameraBasis } from '../render/camera';
-import { PAIR_BUFFER_BUDGET_BYTES, PAIR_BUFFER_TOTAL_BYTES_PER_ELEMENT, TILE_SIZE } from '../render/config';
+import { PAIR_BUFFER_BUDGET_BYTES, TILE_SIZE, rasterChunkCap, storageBindingLimit } from '../render/config';
 import {
     SortScratch, getSplatColumnRefs, packChunkInput, sortCandidatesByDepth, splatInputStride
 } from '../render/preprocess';
@@ -83,6 +83,14 @@ const CHUNK_CAP = 200_000;
  * into one.
  */
 const SOLO_SLOTS = ERROR_VIEWS.length;
+
+/**
+ * Renders the atlas path keeps in flight: the levels of one view are issued into
+ * alternating slots, so the next level's atlas is assembled on the CPU while the
+ * GPU draws and reads back the current one. Two is enough to overlap the two;
+ * every further slot costs another full-size running state ({@link ATLAS_MAX_SIZE}).
+ */
+const ATLAS_SLOTS = 2;
 
 /** Gaussians sampled when estimating a leaf's finest splat footprint. */
 const FOOTPRINT_SAMPLES = 4096;
@@ -246,27 +254,20 @@ class ViewRenderer {
      * @param maxSize - Most pixels across an image; sizes the group.
      * @param maxCoveragePerSplat - Most tiles any one splat's footprint can cover, a
      * power of two; sizes the pair buffers.
+     * @param pairBudgetBytes - GPU bytes for this renderer's pair buffers; sizes the chunk.
      * @param slots - Renders that may be in flight at once; see {@link issue}.
      */
-    constructor(device: GraphicsDevice, numSHBands: 0 | 1 | 2 | 3, maxSize: number, maxCoveragePerSplat: number, slots = 1) {
+    constructor(device: GraphicsDevice, numSHBands: 0 | 1 | 2 | 3, maxSize: number, maxCoveragePerSplat: number, pairBudgetBytes: number, slots = 1) {
         const maxTiles = maxSize / TILE_SIZE;
-
-        // Same two GPU limits the image writer honours: each pair buffer must fit one
-        // storage binding, and all of them together must fit the pair budget.
-        // @ts-ignore - limits is exposed by WebgpuGraphicsDevice
-        const wgpuLimits = (device as { limits?: { maxStorageBufferBindingSize?: number } }).limits;
-        const maxBindingBytes = wgpuLimits?.maxStorageBufferBindingSize ?? 128 * 1024 * 1024;
-        this.chunkCap = Math.max(1, Math.min(
-            CHUNK_CAP,
-            Math.floor(maxBindingBytes / (maxCoveragePerSplat * 4)),
-            Math.floor(PAIR_BUFFER_BUDGET_BYTES / (maxCoveragePerSplat * PAIR_BUFFER_TOTAL_BYTES_PER_ELEMENT))
-        ));
+        this.chunkCap = Math.min(CHUNK_CAP, rasterChunkCap(device, maxCoveragePerSplat, pairBudgetBytes));
 
         this.device = device;
         this.numSHBands = numSHBands;
         this.chunkInput = new Float32Array(this.chunkCap * splatInputStride(numSHBands));
 
-        // The view fields are placeholders; setView supplies them per render.
+        // The view fields are placeholders; setView supplies them per render. No
+        // radius fade: a leaf's frame is sized to its bound, so a splat spanning the
+        // whole frame is the scene, not an outlier, and must render at full alpha.
         this.rasterizer = new GpuSplatRasterizer(device, {
             numSHBands,
             projection: 'pinhole',
@@ -274,6 +275,7 @@ class ViewRenderer {
             groupTilesY: maxTiles,
             chunkCap: this.chunkCap,
             slots,
+            radiusFade: false,
             maxCoveragePerSplat,
             imageWidth: maxSize,
             imageHeight: maxSize,
@@ -348,15 +350,6 @@ class ViewRenderer {
         const images = await Promise.all(pending);
         this.device.frameEnd();
         return images;
-    }
-
-    /**
-     * @param table - Splats in the same space as `camera`.
-     * @param camera - The view; its image must fit the constructed size.
-     * @returns The RGBA bytes of the render, `camera.width` square.
-     */
-    async render(table: DataTable, camera: RenderCamera): Promise<Uint8Array> {
-        return (await this.settle([this.issue(table, camera)]))[0];
     }
 
     destroy(): void {
@@ -478,9 +471,9 @@ const assembleAtlas = (members: AtlasSlot[], lod: number, right: Vec3, down: Vec
  * without bound as a level departs from the reference, and is dimensionless so
  * leaves of any physical size compare on one scale.
  *
- * A render costs about a millisecond whatever its size, so the pass is priced by
- * renders, and a scene cut into tens of thousands of small leaves would take
- * hours one leaf at a time. Small leaves are therefore batched: each is
+ * A render's cost is dominated by its GPU round trip rather than by what it
+ * draws, so the pass is priced by renders, and a scene cut into tens of thousands
+ * of small leaves would take hours one leaf at a time. Small leaves are therefore batched: each is
  * normalised to unit bounding radius, placed in its own cell of an atlas in front
  * of one distant camera, and rendered together with the rest of the batch, once
  * per level per view. A leaf's frame in the atlas is the same size, seen from the
@@ -502,21 +495,22 @@ class ErrorRenderer {
     constructor(device: GraphicsDevice, numSHBands: 0 | 1 | 2 | 3) {
         // The atlas running state must fit one storage binding: the largest power
         // of two side whose pixels do. The WebGPU baseline of 128 MiB gives 2048.
-        // @ts-ignore - limits is exposed by WebgpuGraphicsDevice
-        const wgpuLimits = (device as { limits?: { maxStorageBufferBindingSize?: number } }).limits;
-        const maxBindingBytes = wgpuLimits?.maxStorageBufferBindingSize ?? 128 * 1024 * 1024;
-        this.atlasSize = Math.min(ATLAS_MAX_SIZE, 1 << Math.floor(Math.log2(Math.sqrt(maxBindingBytes / ATLAS_STATE_BYTES_PER_PIXEL))));
+        this.atlasSize = Math.min(ATLAS_MAX_SIZE, 1 << Math.floor(Math.log2(Math.sqrt(storageBindingLimit(device) / ATLAS_STATE_BYTES_PER_PIXEL))));
+
+        // The two renderers live for the whole pass, so they share the one pair
+        // budget the image writer gives its single rasterizer.
+        const pairBudget = PAIR_BUFFER_BUDGET_BYTES / 2;
 
         // Alone, a splat's footprint can span the whole image.
         const soloTiles = ERROR_VIEW_MAX_SIZE / TILE_SIZE;
-        this.solo = new ViewRenderer(device, numSHBands, ERROR_VIEW_MAX_SIZE, 1 << Math.ceil(Math.log2(soloTiles * soloTiles)), SOLO_SLOTS);
+        this.solo = new ViewRenderer(device, numSHBands, ERROR_VIEW_MAX_SIZE, 1 << Math.ceil(Math.log2(soloTiles * soloTiles)), pairBudget, SOLO_SLOTS);
 
         // In an atlas a splat's footprint radius is at most three sigma, sigma at
         // most ATLAS_MAX_SIGMA_RATIO of a unit-radius leaf; widest at the widest frame.
         const largestCell = ATLAS_CELL_FRAMES * ATLAS_MAX_FRAME;
         const footprintPixels = 2 * 3 * ATLAS_MAX_SIGMA_RATIO * largestCell / (ATLAS_CELL_FRAMES * 2 * ERROR_VIEW_MARGIN);
         const footprintTiles = Math.ceil(footprintPixels / TILE_SIZE) + 2;
-        this.atlas = new ViewRenderer(device, numSHBands, this.atlasSize, 1 << Math.ceil(Math.log2(footprintTiles * footprintTiles)));
+        this.atlas = new ViewRenderer(device, numSHBands, this.atlasSize, 1 << Math.ceil(Math.log2(footprintTiles * footprintTiles)), pairBudget, ATLAS_SLOTS);
     }
 
     /**
@@ -596,9 +590,11 @@ class ErrorRenderer {
      * Errors of a batch of small leaves rendered together.
      *
      * Every leaf gets a frame of exactly `frame` pixels, the density a solo render
-     * at that frame would have, in a cell three frames wide. The image is the
-     * smallest power of two that holds the batch's cells, so a small or trailing
-     * batch does not pay for a full-size readback.
+     * at that frame would have, in a cell {@link ATLAS_CELL_FRAMES} frames wide. The
+     * image is the smallest power of two that holds the batch's cells, so a small
+     * or trailing batch does not pay for a full-size readback. Within a view the
+     * levels are double-buffered ({@link ATLAS_SLOTS}): the next level's atlas is
+     * assembled while the current one renders.
      *
      * @param leaves - At most {@link atlasCapacity} leaves, each accepted by {@link fitsAtlas}.
      * @param frame - Pixels across each leaf's frame, at least each leaf's {@link leafViewSize}.
@@ -651,12 +647,16 @@ class ErrorRenderer {
                 y0: Math.round(size / 2 + s.v * pixelsPerUnit - framePx / 2)
             }));
 
-            const images = new Map<number, Uint8Array>();
-            for (const lod of levels) {
-                const members = slots.filter(s => s.leaf.levels.has(lod));
-                const table = assembleAtlas(members, lod, right, down);
-                images.set(lod, await this.atlas.render(table, camera));
+            const pending: Promise<Uint8Array>[] = [];
+            for (let i = 0; i < levels.length; i++) {
+                const members = slots.filter(s => s.leaf.levels.has(levels[i]));
+                const table = assembleAtlas(members, levels[i], right, down);
+                // a slot is reused only once the render it last held has been read back
+                if (i >= ATLAS_SLOTS) await pending[i - ATLAS_SLOTS];
+                pending.push(this.atlas.issue(table, camera, i % ATLAS_SLOTS));
             }
+            const rendered = await this.atlas.settle(pending);
+            const images = new Map(levels.map((lod, i) => [lod, rendered[i]]));
 
             for (let k = 0; k < leaves.length; k++) {
                 const reference = images.get(referenceOf[k])!;

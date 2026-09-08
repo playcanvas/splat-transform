@@ -358,7 +358,8 @@ describe('writeLodSource: lod-meta.json contract', function () {
 
     // Non-finite input is rejected up front rather than tolerated: a NaN anywhere
     // in a gaussian would paint NaN into the error renders, and the comparison
-    // would quietly absorb it.
+    // would quietly absorb it. The check runs on the bounds pass, so it holds with
+    // or without a GPU.
     const rejects = [
         ['a NaN scale', { scale: NaN }, /non-finite scale/],
         ['a NaN opacity', { opacity: NaN }, /non-finite opacity/],
@@ -369,8 +370,7 @@ describe('writeLodSource: lod-meta.json contract', function () {
     ];
 
     for (const [label, splat, expected] of rejects) {
-        it(`refuses to write LODs for input with ${label}`, async function (t) {
-            if (!device) return t.skip('no WebGPU adapter available');
+        it(`refuses to write LODs for input with ${label}`, async function () {
             await assert.rejects(() => writeErrors([[{}, splat], [{}]]), (err) => {
                 assert.match(err.message, expected);
                 assert.match(err.message, /--filter-nan/);
@@ -379,15 +379,27 @@ describe('writeLodSource: lod-meta.json contract', function () {
         });
     }
 
-    it('accepts the non-finite values --filter-nan deliberately keeps', async function (t) {
-        if (!device) return t.skip('no WebGPU adapter available');
+    it('accepts the non-finite values --filter-nan deliberately keeps', async function () {
         // a flat splat (scale -Inf) and a fully opaque one (opacity +Inf) survive
         // filterNaN, so the writer must not reject them
         const errors = await writeErrors([[{}, { scale: -Infinity }, { opacity: Infinity }], [{}]]);
-        assert.ok(
-            errors.every(error => Number.isFinite(error) && error >= 0),
-            `expected finite non-negative errors, got ${errors}`
-        );
+        if (device) {
+            assert.ok(
+                errors.every(error => Number.isFinite(error) && error >= 0),
+                `expected finite non-negative errors, got ${errors}`
+            );
+        }
+    });
+
+    it('measures small leaves through the atlas', async function (t) {
+        if (!device) return t.skip('no WebGPU adapter available');
+        // a grid of small splats: every splat is far below half the leaf's bounding
+        // radius, so the leaf is batched into an atlas rather than rendered alone.
+        // Three levels, so the atlas renderer's second slot is reused within a view.
+        const grid = Array.from({ length: 64 }, (_, i) => ({ x: (i % 8) * 0.25, y: Math.floor(i / 8) * 0.25 }));
+        const errors = await writeErrors([grid, grid, grid.filter((_, i) => i % 2 === 0)]);
+        assert.strictEqual(errors[1], 0, `expected no error for an identical level, got ${errors[1]}`);
+        assert.ok(errors[2] > 0 && Number.isFinite(errors[2]), `expected a positive finite error for thinning, got ${errors[2]}`);
     });
 
     it('keeps the error table monotone across levels', async function (t) {
