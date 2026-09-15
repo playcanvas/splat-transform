@@ -1,3 +1,5 @@
+import type { ExperienceSettings } from '@playcanvas/supersplat-viewer/settings';
+
 /**
  * Collision mesh shape generated alongside voxel output.
  *
@@ -17,7 +19,7 @@ type Options = {
     lodSelect?: number[];
 
     /** Viewer settings JSON for HTML output */
-    viewerSettingsJson?: any;
+    viewerSettingsJson?: ExperienceSettings;
 
     /** Whether to generate unbundled HTML output with separate files. Default: false */
     unbundled?: boolean;

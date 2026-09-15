@@ -7,6 +7,8 @@ import assert from 'node:assert';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { defaultSettings } from '@playcanvas/supersplat-viewer/settings';
+
 import {
     writeHtml,
     MemoryFileSystem,
@@ -105,15 +107,14 @@ describe('HTML Format (Output Only)', () => {
 
     it('should accept viewer settings JSON', async () => {
         const writeFs = new MemoryFileSystem();
+        const settings = defaultSettings('object');
+        settings.background.color = [0.25, 0.5, 0.75];
         await writeHtml({
             filename: 'viewer.html',
             dataTable: testData,
             bundle: true,
             iterations: 3,
-            viewerSettingsJson: {
-                backgroundColor: '#000000',
-                autoRotate: true
-            }
+            viewerSettingsJson: settings
         }, writeFs);
 
         const htmlData = writeFs.results.get('viewer.html');
@@ -121,7 +122,23 @@ describe('HTML Format (Output Only)', () => {
 
         // The supplied settings should be embedded in the bootstrap verbatim
         const htmlText = new TextDecoder().decode(htmlData);
-        assert(htmlText.includes('"autoRotate":true'),
+        assert(htmlText.includes('"color":[0.25,0.5,0.75]'),
             'Custom settings should be embedded in the bootstrap');
+    });
+
+    it('should reject viewer settings JSON the viewer cannot read', async () => {
+        const writeFs = new MemoryFileSystem();
+        await assert.rejects(
+            writeHtml({
+                filename: 'viewer.html',
+                dataTable: testData,
+                bundle: true,
+                iterations: 3,
+                viewerSettingsJson: { version: 2, backgroundColor: '#000000', autoRotate: true }
+            }, writeFs),
+            /settings\.tonemapping/,
+            'Invalid settings should fail naming the offending field, not produce a blank page'
+        );
+        assert(!writeFs.results.has('viewer.html'), 'No HTML file should be written');
     });
 });
