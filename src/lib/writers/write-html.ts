@@ -1,5 +1,5 @@
 import { css, js, renderViewerHtml } from '@playcanvas/supersplat-viewer';
-import { defaultSettings } from '@playcanvas/supersplat-viewer/settings';
+import { defaultSettings, validateSettings, type ExperienceSettings } from '@playcanvas/supersplat-viewer/settings';
 import { basename, dirname, join } from 'pathe';
 
 import { logWrittenFile } from './utils';
@@ -12,7 +12,7 @@ import { logger, toBase64 } from '../utils';
 type WriteHtmlOptions = {
     filename: string;
     dataTable: DataTable;
-    viewerSettingsJson?: any;
+    viewerSettingsJson?: ExperienceSettings;
     bundle: boolean;
     iterations: number;
     createDevice?: DeviceCreator;
@@ -31,6 +31,12 @@ type WriteHtmlOptions = {
 const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
     const { filename, dataTable, viewerSettingsJson, bundle, iterations, createDevice } = options;
 
+    // Fail here rather than shipping a page that renders nothing: the settings are read by
+    // the exact viewer version bundled into this output, and a single-file export has no
+    // server behind it to report the problem later.
+    if (viewerSettingsJson) {
+        validateSettings(viewerSettingsJson);
+    }
     const viewerSettings = viewerSettingsJson || defaultSettings('object');
     const encoder = new TextEncoder();
 
