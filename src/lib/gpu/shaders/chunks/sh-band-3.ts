@@ -2,14 +2,13 @@
  * Spherical-harmonics degree-3 evaluation (7 additional coefficients per
  * channel, indices [8..14]).
  *
- * Reads:   dirX, dirY, dirZ, base, splats, COEFFS_PER_CHANNEL,
+ * Reads:   dirX, dirY, dirZ, s (source splat index), shc(), COEFFS_PER_CHANNEL,
  *          SH_C3_0, SH_C3_1, SH_C3_2, SH_C3_3, SH_C3_4, SH_C3_5, SH_C3_6
  * Defines: (mutates) cR, cG, cB
  */
 const shBand3 = /* wgsl */`
     {
         let n = COEFFS_PER_CHANNEL;
-        let shBase = base + 14u;
         let xx2 = dirX * dirX;
         let yy2 = dirY * dirY;
         let zz2 = dirZ * dirZ;
@@ -21,9 +20,9 @@ const shBand3 = /* wgsl */`
         let b12 = SH_C3_4 * dirX * (4.0 * zz2 - xx2 - yy2);
         let b13 = SH_C3_5 * dirZ * (xx2 - yy2);
         let b14 = SH_C3_6 * dirX * (xx2 - 3.0 * yy2);
-        cR = cR + b8 * splats[shBase + 8u] + b9 * splats[shBase + 9u] + b10 * splats[shBase + 10u] + b11 * splats[shBase + 11u] + b12 * splats[shBase + 12u] + b13 * splats[shBase + 13u] + b14 * splats[shBase + 14u];
-        cG = cG + b8 * splats[shBase + n + 8u] + b9 * splats[shBase + n + 9u] + b10 * splats[shBase + n + 10u] + b11 * splats[shBase + n + 11u] + b12 * splats[shBase + n + 12u] + b13 * splats[shBase + n + 13u] + b14 * splats[shBase + n + 14u];
-        cB = cB + b8 * splats[shBase + 2u * n + 8u] + b9 * splats[shBase + 2u * n + 9u] + b10 * splats[shBase + 2u * n + 10u] + b11 * splats[shBase + 2u * n + 11u] + b12 * splats[shBase + 2u * n + 12u] + b13 * splats[shBase + 2u * n + 13u] + b14 * splats[shBase + 2u * n + 14u];
+        cR = cR + b8 * shc(8u, s) + b9 * shc(9u, s) + b10 * shc(10u, s) + b11 * shc(11u, s) + b12 * shc(12u, s) + b13 * shc(13u, s) + b14 * shc(14u, s);
+        cG = cG + b8 * shc(n + 8u, s) + b9 * shc(n + 9u, s) + b10 * shc(n + 10u, s) + b11 * shc(n + 11u, s) + b12 * shc(n + 12u, s) + b13 * shc(n + 13u, s) + b14 * shc(n + 14u, s);
+        cB = cB + b8 * shc(2u * n + 8u, s) + b9 * shc(2u * n + 9u, s) + b10 * shc(2u * n + 10u, s) + b11 * shc(2u * n + 11u, s) + b12 * shc(2u * n + 12u, s) + b13 * shc(2u * n + 13u, s) + b14 * shc(2u * n + 14u, s);
     }
 `;
 

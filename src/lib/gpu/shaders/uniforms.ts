@@ -35,6 +35,7 @@ struct Uniforms {
     downBX: f32, downBY: f32, downBZ: f32, _p8: f32,
     forwardBX: f32, forwardBY: f32, forwardBZ: f32, _p9: f32,
     eyeBX: f32, eyeBY: f32, eyeBZ: f32, _p10: f32,
+    numSplats: u32, rangeStart: u32, emitBase: u32, _p11: u32,
 }
 `;
 
@@ -105,7 +106,13 @@ const uniformFormatEntries = (): UniformFormat[] => [
     new UniformFormat('eyeBX', UNIFORMTYPE_FLOAT),
     new UniformFormat('eyeBY', UNIFORMTYPE_FLOAT),
     new UniformFormat('eyeBZ', UNIFORMTYPE_FLOAT),
-    new UniformFormat('_p10', UNIFORMTYPE_FLOAT)
+    new UniformFormat('_p10', UNIFORMTYPE_FLOAT),
+    // Resident (column-major) scene layout: column stride, and the splat /
+    // pair offsets of the range being emitted. Zero for the chunked path.
+    new UniformFormat('numSplats', UNIFORMTYPE_UINT),
+    new UniformFormat('rangeStart', UNIFORMTYPE_UINT),
+    new UniformFormat('emitBase', UNIFORMTYPE_UINT),
+    new UniformFormat('_p11', UNIFORMTYPE_UINT)
 ];
 
 export { uniformsStruct, uniformFormatEntries };

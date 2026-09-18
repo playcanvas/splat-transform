@@ -2,11 +2,12 @@
  * Golden-image regression tests for the WebP renderer.
  *
  * Each case renders a small synthetic scene with a fixed camera, then
- * byte-compares the output to a checked-in golden .webp. Catches any
- * change to the rendering pipeline that would alter pixel output.
+ * compares the decoded pixels to a checked-in golden .webp. Catches any
+ * change to the rendering pipeline that would alter pixel output, while
+ * staying independent of the (lossless) WebP encoder's effort setting.
  *
  * The renderer is deterministic on a given GPU/driver â€” these tests
- * verify byte-exact output. If they fail after an intentional renderer
+ * verify byte-exact pixels. If they fail after an intentional renderer
  * change, regenerate goldens via:
  *
  *     node test/render-golden.regenerate.mjs
@@ -35,6 +36,13 @@ import { CASES } from './render-golden.cases.mjs';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = dirname(__dirname);
 const cliPath = join(rootDir, 'bin/cli.mjs');
+
+// Decoded-pixel comparison: the codec ships in the built library.
+const decodeRgba = async (bytes) => {
+    const { WebPCodec } = await import(join(rootDir, 'dist/index.mjs'));
+    const codec = await WebPCodec.create();
+    return codec.decodeRGBA(new Uint8Array(bytes));
+};
 
 // `bin/cli.mjs` imports the bundled `dist/cli.mjs` (gitignored, must be
 // built). `npm run pretest` builds before `npm test`; direct invocation
@@ -79,16 +87,17 @@ describe('Render goldens', { skip: distExists ? false : 'dist/cli.mjs missing â€
             );
 
             const [actual, expected] = await Promise.all([
-                readFile(outPath),
-                readFile(join(__dirname, goldenPath))
+                readFile(outPath).then(decodeRgba),
+                readFile(join(__dirname, goldenPath)).then(decodeRgba)
             ]);
             assert.strictEqual(
-                actual.length, expected.length,
-                `${name}: byte length ${actual.length} != golden ${expected.length}`
+                `${actual.width}x${actual.height}`, `${expected.width}x${expected.height}`,
+                `${name}: size differs from golden`
             );
             assert.ok(
-                actual.equals(expected),
-                `${name}: bytes differ from golden (${goldenPath})`
+                Buffer.from(actual.rgba.buffer, actual.rgba.byteOffset, actual.rgba.byteLength)
+                .equals(Buffer.from(expected.rgba.buffer, expected.rgba.byteOffset, expected.rgba.byteLength)),
+                `${name}: pixels differ from golden (${goldenPath})`
             );
         });
     }

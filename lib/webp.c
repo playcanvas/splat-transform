@@ -34,6 +34,43 @@ int webp_encode_lossless_rgba(const uint8_t *rgba, int width, int height, int st
     return 1;
 }
 
+// Lossless encode at a chosen effort level (0 = fastest / largest,
+// 9 = slowest / smallest; the simple API above corresponds to level 6).
+// `exact` keeps the RGB of fully transparent pixels, so the round trip is
+// bit-exact for every channel, not just the visible ones.
+EMSCRIPTEN_KEEPALIVE
+int webp_encode_lossless_rgba_level(const uint8_t *rgba, int width, int height, int stride,
+                                    int level, uint8_t **out_buf, size_t *out_size)
+{
+    if (!rgba || width <= 0 || height <= 0 || stride <= 0 || !out_buf || !out_size)
+        return 0;
+    WebPConfig config;
+    if (!WebPConfigInit(&config) || !WebPConfigLosslessPreset(&config, level))
+        return 0;
+    config.exact = 1;
+    WebPPicture pic;
+    if (!WebPPictureInit(&pic))
+        return 0;
+    pic.use_argb = 1;
+    pic.width = width;
+    pic.height = height;
+    if (!WebPPictureImportRGBA(&pic, rgba, stride))
+        return 0;
+    WebPMemoryWriter writer;
+    WebPMemoryWriterInit(&writer);
+    pic.writer = WebPMemoryWrite;
+    pic.custom_ptr = &writer;
+    int ok = WebPEncode(&config, &pic);
+    WebPPictureFree(&pic);
+    if (!ok || writer.size == 0) {
+        WebPMemoryWriterClear(&writer);
+        return 0;
+    }
+    *out_buf = writer.mem;
+    *out_size = writer.size;
+    return 1;
+}
+
 // Simple wrapper that decodes a WebP (lossy or lossless) into RGBA32.
 // Returns 1 on success, 0 on failure.
 // out_rgba: pointer to buffer pointer that will receive allocated image data (must be freed with webp_free)

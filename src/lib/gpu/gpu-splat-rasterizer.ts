@@ -92,11 +92,11 @@ interface SplatRasterizerOptions {
      */
     slots?: number;
     /**
-     * Fade out splats whose projected radius approaches the image height, default
-     * true; see `RADIUS_FADE_START_FRAC`. Off for measurement renders, where a splat
-     * that legitimately fills the frame must keep its full alpha.
+     * Clamp splats whose projected radius exceeds the shorter image edge, default
+     * true; see `SIZE_CLAMP_FRAC`. Off for measurement renders, where a splat that
+     * legitimately fills the frame must render at its true size.
      */
-    radiusFade?: boolean;
+    sizeClamp?: boolean;
     /**
      * Hard upper bound on per-splat tile coverage. The project shader
      * clamps `coverage[i] = min(rawBboxArea, maxCoveragePerSplat)`, so
@@ -401,7 +401,7 @@ class GpuSplatRasterizer {
         if (options.numSHBands >= 1) sharedCdefines.set('SH_BAND_1', '');
         if (options.numSHBands >= 2) sharedCdefines.set('SH_BAND_2', '');
         if (options.numSHBands >= 3) sharedCdefines.set('SH_BAND_3', '');
-        if (options.radiusFade === false) sharedCdefines.set('NO_RADIUS_FADE', '');
+        if (options.sizeClamp === false) sharedCdefines.set('NO_SIZE_CLAMP', '');
         if (options.basisB) sharedCdefines.set('MOTION_BLUR', '');
 
         const mkShader = (
@@ -641,6 +641,9 @@ class GpuSplatRasterizer {
             c.setParameter('_p9', 0);
             c.setParameter('eyeBX', bb?.eye.x ?? 0); c.setParameter('eyeBY', bb?.eye.y ?? 0); c.setParameter('eyeBZ', bb?.eye.z ?? 0);
             c.setParameter('_p10', 0);
+            // Chunked path: interleaved input, whole chunk per dispatch.
+            c.setParameter('numSplats', 0); c.setParameter('rangeStart', 0);
+            c.setParameter('emitBase', 0); c.setParameter('_p11', 0);
         }
     }
 

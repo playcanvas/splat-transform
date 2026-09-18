@@ -27,9 +27,38 @@ const projectWgsl = (coeffsPerChannel: number) => /* wgsl */`
 #include "constants"
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
-@group(0) @binding(1) var<storage, read> splats: array<f32>;
 @group(0) @binding(2) var<storage, read_write> projected: array<vec4<f32>>;
 @group(0) @binding(3) var<storage, read_write> coverage: array<u32>;
+
+// Splat attribute access. The chunked path uploads an interleaved record
+// per gaussian (\`splats\`, stride \`splatStride\`); the resident path keeps the
+// scene's columns on the GPU (\`splatsBase\` for the 14 base attributes,
+// \`splatsSH\` for the SH rest coefficients, both column-major with stride
+// \`numSplats\`) and processes gaussians in the depth-sorted \`order\`. Both
+// resolve to the same f32 values, so the two paths render identically.
+#ifdef SOA
+@group(0) @binding(1) var<storage, read> splatsBase: array<f32>;
+@group(0) @binding(4) var<storage, read> splatsSH: array<f32>;
+@group(0) @binding(5) var<storage, read> order: array<u32>;
+
+fn attr(c: u32, s: u32) -> f32 {
+    return splatsBase[c * uniforms.numSplats + s];
+}
+
+fn shc(k: u32, s: u32) -> f32 {
+    return splatsSH[k * uniforms.numSplats + s];
+}
+#else
+@group(0) @binding(1) var<storage, read> splats: array<f32>;
+
+fn attr(c: u32, s: u32) -> f32 {
+    return splats[s * uniforms.splatStride + c];
+}
+
+fn shc(k: u32, s: u32) -> f32 {
+    return splats[s * uniforms.splatStride + 14u + k];
+}
+#endif
 
 #include "covariance3DFns"
 #include "jacobianPinholeFns"
@@ -59,26 +88,36 @@ fn writeInvalid(idx: u32) {
 }
 
 @compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let i = gid.x;
+fn main(
+    @builtin(workgroup_id) wgId: vec3<u32>,
+    @builtin(num_workgroups) numWg: vec3<u32>,
+    @builtin(local_invocation_id) lid: vec3<u32>
+) {
+    // Dispatches past the per-dimension workgroup limit are tiled in 2-D;
+    // linearise so the chunked (1-D) and resident paths index alike.
+    let i = (wgId.y * numWg.x + wgId.x) * 64u + lid.x;
     if (i >= uniforms.chunkSize) { return; }
 
-    let base = i * uniforms.splatStride;
+#ifdef SOA
+    let s = order[i];
+#else
+    let s = i;
+#endif
 
-    let posX = splats[base + 0u];
-    let posY = splats[base + 1u];
-    let posZ = splats[base + 2u];
-    let rotW = splats[base + 3u];
-    let rotX = splats[base + 4u];
-    let rotY = splats[base + 5u];
-    let rotZ = splats[base + 6u];
-    let lsX = splats[base + 7u];
-    let lsY = splats[base + 8u];
-    let lsZ = splats[base + 9u];
-    let opacity = splats[base + 10u];
-    let fdcR = splats[base + 11u];
-    let fdcG = splats[base + 12u];
-    let fdcB = splats[base + 13u];
+    let posX = attr(0u, s);
+    let posY = attr(1u, s);
+    let posZ = attr(2u, s);
+    let rotW = attr(3u, s);
+    let rotX = attr(4u, s);
+    let rotY = attr(5u, s);
+    let rotZ = attr(6u, s);
+    let lsX = attr(7u, s);
+    let lsY = attr(8u, s);
+    let lsZ = attr(9u, s);
+    let opacity = attr(10u, s);
+    let fdcR = attr(11u, s);
+    let fdcG = attr(12u, s);
+    let fdcB = attr(13u, s);
 
     // World → camera
     let wx = posX - uniforms.eyeX;
@@ -162,6 +201,32 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     cov11 = cov11 + cocVar;
 #endif
 
+    // Footprint radius from the larger eigenvalue of the dilated covariance.
+    let detU = cov00 * cov11 - cov01 * cov01;
+    if (detU <= 0.0) { writeInvalid(i); return; }
+    let mid = 0.5 * (cov00 + cov11);
+    let disc = sqrt(max(DISCRIMINANT_FLOOR, mid * mid - detU));
+    var radiusRaw = SIGMA_CUTOFF * sqrt(mid + disc);
+
+    // Size clamp: a splat whose radius exceeds SIZE_CLAMP_FRAC of the
+    // shorter image edge is scaled down uniformly (covariance × s²) until
+    // it fits. Aspect, orientation and alpha are untouched — the editor's
+    // behaviour — and the alpha rescale below still uses the unclamped
+    // determinant so the clamp only shrinks the footprint, never
+    // brightens it. NO_SIZE_CLAMP (measurement renders) renders every
+    // splat at its true size.
+#ifndef NO_SIZE_CLAMP
+    let radiusLimit = SIZE_CLAMP_FRAC * f32(min(uniforms.imageWidth, uniforms.imageHeight));
+    if (radiusRaw > radiusLimit) {
+        let s = radiusLimit / radiusRaw;
+        let s2 = s * s;
+        cov00 = cov00 * s2;
+        cov01 = cov01 * s2;
+        cov11 = cov11 * s2;
+        radiusRaw = radiusLimit;
+    }
+#endif
+
     let det = cov00 * cov11 - cov01 * cov01;
     if (det <= 0.0) { writeInvalid(i); return; }
 
@@ -170,41 +235,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let covInvB = -cov01 * invDet;
     let covInvC = cov00 * invDet;
 
-    let mid = 0.5 * (cov00 + cov11);
-    let disc = sqrt(max(DISCRIMINANT_FLOOR, mid * mid - det));
-    let lambdaMax = mid + disc;
-    let radiusRaw = SIGMA_CUTOFF * sqrt(lambdaMax);
-
-    // Outlier-splat fade: huge splats (close-by mega-splats or pathological
-    // training output) would otherwise project to a screen-spanning footprint
-    // and tint the whole frame. Linearly fade alpha from 1 to 0 as the
-    // un-clamped radius grows from fadeStart to fadeEnd, and discard
-    // beyond. The bbox we hand to the rasterizer is clamped at fadeEnd
-    // so the binner doesn't reserve tile coverage for a splat that
-    // contributes zero anyway. Softer than a hard clamp: prevents the
-    // visible pop as the camera approaches a clipped splat.
-    //
-    // Thresholds are fractions of image height so the SAME world-space
-    // splats fade at every render resolution — preserves cross-
-    // resolution consistency (e.g. 8K-downsampled-to-1080p matches
-    // 1080p direct).
-    //
-    // NO_RADIUS_FADE (measurement renders) keeps every splat at full
-    // alpha whatever its footprint; the group AABB and coverage cap
-    // still bound the work.
     // Half of the segment the rasterizer integrates over (zero when
     // static), added to the bbox around the midpoint.
     let hLen = sqrt(hx * hx + hy * hy);
-#ifdef NO_RADIUS_FADE
-    let radiusFade = 1.0;
     let radius = ceil(radiusRaw + hLen);
-#else
-    let fadeStart = RADIUS_FADE_START_FRAC * f32(uniforms.imageHeight);
-    let fadeEnd = RADIUS_FADE_END_FRAC * f32(uniforms.imageHeight);
-    let radiusFade = clamp((fadeEnd - radiusRaw) / (fadeEnd - fadeStart), 0.0, 1.0);
-    if (radiusFade <= 0.0) { writeInvalid(i); return; }
-    let radius = ceil(min(radiusRaw, fadeEnd) + hLen);
-#endif
 
     // Group AABB cull. The BVH frustum query may include splats whose
     // 3D AABB grazes the frustum but whose 2D footprint misses the group.
@@ -247,13 +281,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 #ifndef PROJECTION_EQUIRECT
     // Energy-preserving alpha rescale for DoF. When apertureScale == 0,
-    // detPreDoF == det so dofAlphaScale == 1 (no-op).
-    let dofAlphaScale = sqrt(max(0.0, detPreDoF) / det);
+    // detPreDoF == detU so dofAlphaScale == 1 (no-op).
+    let dofAlphaScale = sqrt(max(0.0, detPreDoF) / detU);
 #else
     let dofAlphaScale = 1.0;
 #endif
 
-    let alpha = (1.0 / (1.0 + exp(-opacity))) * radiusFade * dofAlphaScale;
+    let alpha = (1.0 / (1.0 + exp(-opacity))) * dofAlphaScale;
 
     projected[i * 3u + 0u] = vec4<f32>(screenX, screenY, radius, hx);
     projected[i * 3u + 1u] = vec4<f32>(covInvA, covInvB, covInvC, alpha);

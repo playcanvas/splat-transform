@@ -54,6 +54,7 @@ import { resolveLodLevels } from '../lib/ops';
 import { readLccSource, readLccEnvironmentSource } from '../lib/readers/read-lcc';
 import { readLcc2Source, readLcc2EnvironmentSource } from '../lib/readers/read-lcc2';
 import { readLodSource, readLodEnvironmentSource } from '../lib/readers/read-lod';
+import { loadCameraTrack, type CameraTrack } from '../lib/render/camera-track';
 
 /**
  * CLI-specific options extending library options.
@@ -188,6 +189,9 @@ const cliOptionsConfig = {
     'camera-up-end': { type: 'string' },
     'shutter': { type: 'string' },
     'motion-samples': { type: 'string' },
+    'webp-effort': { type: 'string' },
+    'camera-track': { type: 'string' },
+    'frames': { type: 'string' },
 
     'scratch-dir': { type: 'string' },
 
@@ -504,6 +508,37 @@ const parseArguments = async () => {
     if (renderMotionSamples !== undefined && renderMotionSamples < 1) {
         throw new Error(`Invalid --motion-samples value: ${v['motion-samples']}. Must be >= 1.`);
     }
+    const renderWebpEffort = v['webp-effort'] !== undefined ? parseInteger(v['webp-effort']) : undefined;
+    if (renderWebpEffort !== undefined && (renderWebpEffort < 0 || renderWebpEffort > 9)) {
+        throw new Error(`Invalid --webp-effort value: ${v['webp-effort']}. Must be in [0, 9].`);
+    }
+    // Camera animation: an editor project (.ssproj directory or its document.json),
+    // viewer settings.json, or a plain frames list. Poses without a fov use --camera-fov.
+    let renderCameraTrack: CameraTrack | undefined;
+    if (v['camera-track'] !== undefined) {
+        let trackPath = v['camera-track'];
+        if ((await lstat(trackPath).catch(() => null))?.isDirectory()) {
+            trackPath = join(trackPath, 'document.json');
+        }
+        let trackJson: unknown;
+        try {
+            trackJson = JSON.parse(await pathReadFile(trackPath, 'utf-8'));
+        } catch (e) {
+            throw new Error(`Failed to read camera track JSON: ${trackPath} (${(e as Error).message})`);
+        }
+        renderCameraTrack = loadCameraTrack(trackJson, renderFov ?? 60);
+    }
+    let renderFrames: [number, number] | undefined;
+    if (v.frames !== undefined) {
+        const m = v.frames.match(/^(\d+)(?:-(\d+))?$/);
+        if (!m) {
+            throw new Error(`Invalid --frames value: ${v.frames}. Expected a frame or an inclusive range, e.g. 0-47.`);
+        }
+        renderFrames = [parseInteger(m[1]), parseInteger(m[2] ?? m[1])];
+        if (renderFrames[1] < renderFrames[0]) {
+            throw new Error(`Invalid --frames value: ${v.frames}. The range end precedes its start.`);
+        }
+    }
     let renderBackground: { r: number; g: number; b: number; a: number } | undefined;
     if (v.background !== undefined) {
         const parts = v.background.split(',').map((p: string) => parseNumber(p.trim()));
@@ -535,6 +570,9 @@ const parseArguments = async () => {
         // Half the machine's RAM, capped at 48 GiB — derived here because the
         // library is node-free and cannot read os.totalmem() itself.
         memoryBudgetBytes: Math.min(48 * 2 ** 30, Math.floor(totalmem() / 2)),
+        // The image writer's GPU-resident copy of the scene shares RAM with the
+        // in-memory table on unified-memory machines, so bound it the same way.
+        renderResidentBudget: Math.min(48 * 2 ** 30, Math.floor(totalmem() / 2)),
         lodSelect: v['select-lod'].split(',').filter(v => !!v).map(parseInteger),
         viewerSettingsJson: viewerSettingsPath && await readJsonFile(viewerSettingsPath),
         unbundled: v.unbundled,
@@ -567,7 +605,10 @@ const parseArguments = async () => {
         renderLookAtEnd,
         renderUpEnd,
         renderShutter,
-        renderMotionSamples
+        renderMotionSamples,
+        renderWebpEffort,
+        renderCameraTrack,
+        renderFrames
     };
 
     for (const t of tokens) {
@@ -898,6 +939,16 @@ IMAGE OUTPUT (.webp) — lossless WebP rendered via GPU rasterizer
                                             integrates every gaussian's motion exactly, so streaks are smooth at any N;
                                             more slices refine compositing between overlapping gaussians.
                                             Default: 4. Only with --camera-pos-end.
+        --webp-effort      <0-9>            Lossless WebP compression effort. Every level is lossless; higher is
+                                            smaller but much slower (6 is about 8x slower than 0 for ~20% smaller
+                                            files). Default: 0.
+        --camera-track     <path>           Render a camera animation as a frame sequence: a supersplat editor project
+                                            (.ssproj directory or its document.json), a viewer settings.json with
+                                            animTracks, or a JSON { frameRate, frames: [{ position, target, fov }] }.
+                                            Frames are written as <name>.NNNN.webp. Replaces --camera-pos/--camera-target;
+                                            the track's target is the defocus focus point. With --shutter, each frame is
+                                            motion-blurred over that fraction of the frame interval.
+        --frames           <a[-b]>          Inclusive frame range of the track to render. Default: all frames.
 
 EXAMPLES
     # Convert formats

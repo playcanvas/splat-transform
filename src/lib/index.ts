@@ -82,6 +82,11 @@ export { readKsplat, readMjs, readPly, readSog, readSplat, readSpz } from './rea
 export { writeSog, writeSpz, writePly, writeCompressedPly, writeCsv, writeHtml, writeImage, writeGlb, writeVoxel } from './writers';
 export type { WriteImageOptions, WriteVoxelOptions, VoxelMetadata } from './writers';
 
+// Camera animation tracks for multi-frame image output (editor project,
+// viewer settings, or a plain frame list)
+export { loadCameraTrack } from './render/camera-track';
+export type { CameraTrack, TrackPose } from './render/camera-track';
+
 // ---------------------------------------------------------------------------
 // Infrastructure
 // ---------------------------------------------------------------------------

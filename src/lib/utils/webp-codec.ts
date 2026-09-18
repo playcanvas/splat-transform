@@ -60,8 +60,25 @@ class WebPCodec {
         return instance;
     }
 
-    encodeLosslessRGBA(rgba: Uint8Array, width: number, height: number, stride = width * 4) {
+    /**
+     * Encode RGBA pixels as a lossless WebP.
+     *
+     * @param rgba - Pixels, `height` rows of `stride` bytes.
+     * @param width - Image width.
+     * @param height - Image height.
+     * @param stride - Row stride in bytes. Default: `width * 4`.
+     * @param effort - Compression effort 0–9 (0 fastest and largest, 9 slowest
+     * and smallest). Omit for libwebp's default (equivalent to 6). Every
+     * effort is lossless; when given, the encoder also keeps the RGB of fully
+     * transparent pixels so the round trip is bit-exact on all four channels.
+     * @returns The encoded WebP bytes.
+     */
+    encodeLosslessRGBA(rgba: Uint8Array, width: number, height: number, stride = width * 4, effort?: number) {
         const { Module } = this;
+
+        if (effort !== undefined && (!Number.isInteger(effort) || effort < 0 || effort > 9)) {
+            throw new Error(`WebP lossless effort must be an integer in [0, 9], got ${effort}`);
+        }
 
         const inPtr = Module._malloc(rgba.length);
         const outPtrPtr = Module._malloc(4);
@@ -69,7 +86,9 @@ class WebPCodec {
 
         Module.HEAPU8.set(rgba, inPtr);
 
-        const ok = Module._webp_encode_lossless_rgba(inPtr, width, height, stride, outPtrPtr, outSizePtr);
+        const ok = effort === undefined ?
+            Module._webp_encode_lossless_rgba(inPtr, width, height, stride, outPtrPtr, outSizePtr) :
+            Module._webp_encode_lossless_rgba_level(inPtr, width, height, stride, effort, outPtrPtr, outSizePtr);
         if (!ok) {
             throw new Error('WebP lossless encode failed');
         }

@@ -1,5 +1,7 @@
 import type { ExperienceSettings } from '@playcanvas/supersplat-viewer/settings';
 
+import type { CameraTrack } from './render/camera-track';
+
 /**
  * Collision mesh shape generated alongside voxel output.
  *
@@ -149,6 +151,35 @@ type Options = {
      * gaussians. Default: `4`. No effect without `renderCameraEndPosition`.
      */
     renderMotionSamples?: number;
+
+    /**
+     * WebP lossless compression effort for image output, 0–9. All levels
+     * are lossless; higher is smaller but much slower. Default: `0`.
+     */
+    renderWebpEffort?: number;
+
+    /**
+     * Camera animation to render as a frame sequence (see `loadCameraTrack`).
+     * Replaces `renderCameraPosition` / `renderLookAt` / `renderFov`; the
+     * output filename gains a zero-padded frame index before its extension.
+     * With `renderShutter` set, each frame is motion-blurred over that
+     * fraction of the frame interval.
+     */
+    renderCameraTrack?: CameraTrack;
+
+    /**
+     * Inclusive frame range of `renderCameraTrack` to render. Default: every
+     * frame of the track.
+     */
+    renderFrames?: [number, number];
+
+    /**
+     * Most bytes the image writer may hold GPU-resident for the scene.
+     * Scenes over it, or that the device refuses to allocate, stream
+     * through the chunked path instead. Default: no limit beyond the
+     * device's binding limits.
+     */
+    renderResidentBudget?: number;
 };
 
 /**

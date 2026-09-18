@@ -33,10 +33,31 @@ const tileBinEmitPairsWgsl = () => /* wgsl */`
 @group(0) @binding(4) var<storage, read_write> tileKeys: array<u32>;
 @group(0) @binding(5) var<storage, read_write> splatValues: array<u32>;
 
+// First pair slot of splat i. The chunked path's prefix sum is already
+// global to the chunk. The resident path scans in blocks of 2048 splats:
+// \`emitOffset\` is block-local, \`blockPrefix\` holds each block's exclusive
+// pair prefix, and \`emitBase\` rebases the range being emitted to slot 0.
+#ifdef SOA
+@group(0) @binding(6) var<storage, read> blockPrefix: array<u32>;
+
+fn pairBase(i: u32) -> u32 {
+    return blockPrefix[i >> 11u] - uniforms.emitBase;
+}
+#else
+fn pairBase(i: u32) -> u32 {
+    return 0u;
+}
+#endif
+
 @compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let i = gid.x;
-    if (i >= uniforms.chunkSize) { return; }
+fn main(
+    @builtin(workgroup_id) wgId: vec3<u32>,
+    @builtin(num_workgroups) numWg: vec3<u32>,
+    @builtin(local_invocation_id) lid: vec3<u32>
+) {
+    let lin = (wgId.y * numWg.x + wgId.x) * 64u + lid.x;
+    if (lin >= uniforms.chunkSize) { return; }
+    let i = uniforms.rangeStart + lin;
     let cap = coverage[i];
     if (cap == 0u) { return; }
     let v0 = projected[i * 3u + 0u];

@@ -221,6 +221,10 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
                 upEnd: options.renderUpEnd,
                 shutter: options.renderShutter,
                 motionSamples: options.renderMotionSamples,
+                webpEffort: options.renderWebpEffort,
+                cameraTrack: options.renderCameraTrack,
+                frames: options.renderFrames,
+                residentBudget: options.renderResidentBudget,
                 createDevice
             }, fs);
             break;

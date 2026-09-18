@@ -1,19 +1,27 @@
-import { basename } from 'pathe';
+import { basename, extname } from 'pathe';
 import { Vec3 } from 'playcanvas';
 
 import { logWrittenFile } from './utils';
-import { convertToSpace, DataTable } from '../data-table';
+import { computeWriteTransform, DataTable } from '../data-table';
+import { ResidentUploadError } from '../gpu/gpu-scene-rasterizer';
 import { type FileSystem, writeFile } from '../io/write';
-import { renderSplats } from '../render';
+import { renderSplats, SceneRenderer, residentSceneBytes, residentSceneFits } from '../render';
 import { type Projection, type RenderCamera } from '../render/camera';
+import { type CameraTrack } from '../render/camera-track';
+import { sceneSHBands } from '../render/preprocess';
 import type { DeviceCreator } from '../types';
-import { logger, Transform, WebPCodec } from '../utils';
+import { fmtBytes, fmtTime, logger, Transform, WebPCodec } from '../utils';
+
+type Vec3Like = { x: number; y: number; z: number };
 
 /**
  * Options for writing a rendered splat image.
  */
 type WriteImageOptions = {
-    /** Output filename ending in `.webp`. */
+    /**
+     * Output filename ending in `.webp`. With `cameraTrack`, each frame is
+     * written as `<stem>.NNNN.webp` (zero-padded frame index).
+     */
     filename: string;
 
     /** Gaussian splat data to render. */
@@ -29,16 +37,20 @@ type WriteImageOptions = {
      */
     projection?: Projection;
 
-    /** Camera position in world space. Default: (2, 1, -2). */
-    cameraPosition?: { x: number; y: number; z: number };
+    /** Camera position in world space. Default: (2, 1, -2). Ignored with `cameraTrack`. */
+    cameraPosition?: Vec3Like;
 
-    /** Point the camera looks at, in world space. Default: (0, 0, 0). */
-    lookAt?: { x: number; y: number; z: number };
+    /** Point the camera looks at, in world space. Default: (0, 0, 0). Ignored with `cameraTrack`. */
+    lookAt?: Vec3Like;
 
     /** World-space up vector. Default: (0, 1, 0). */
-    up?: { x: number; y: number; z: number };
+    up?: Vec3Like;
 
-    /** Vertical field of view in degrees. Default: 60 for `pinhole`. Must be omitted for `equirect` (throws if supplied). */
+    /**
+     * Vertical field of view in degrees. Default: 60 for `pinhole`. Must be
+     * omitted for `equirect` (throws if supplied). With `cameraTrack`, the
+     * track's per-pose fov takes precedence.
+     */
     fov?: number;
 
     /** Output image width in pixels. Default: 1280 (pinhole) or 2048 (equirect). */
@@ -84,27 +96,30 @@ type WriteImageOptions = {
      * motion blur: the camera moves from (`cameraPosition`, `lookAt`,
      * `up`) at shutter-open to (`cameraEndPosition`, `lookAtEnd`,
      * `upEnd`) at shutter-close, and every gaussian is integrated over
-     * its motion in `motionSamples` shutter slices. Pinhole only.
+     * its motion in `motionSamples` shutter slices. Pinhole only. Not
+     * valid with `cameraTrack`, whose motion blur comes from `shutter`.
      */
-    cameraEndPosition?: { x: number; y: number; z: number };
+    cameraEndPosition?: Vec3Like;
 
     /**
      * End look-at target for motion blur. Defaults to `lookAt` when
      * motion blur is enabled.
      */
-    lookAtEnd?: { x: number; y: number; z: number };
+    lookAtEnd?: Vec3Like;
 
     /**
      * End up vector for motion blur. Defaults to `up` when motion blur
      * is enabled.
      */
-    upEnd?: { x: number; y: number; z: number };
+    upEnd?: Vec3Like;
 
     /**
-     * Shutter fraction in `[0, 1]`. Portion of the start→end segment
+     * Shutter fraction in `[0, 1]`. For a start→end segment, the portion
      * actually integrated, centered on the midpoint (standard
-     * shutter-angle convention: 1.0 = full motion, 0.5 = 180° shutter).
-     * Default: `1`. Only meaningful with `cameraEndPosition`.
+     * shutter-angle convention: 1.0 = full motion, 0.5 = 180° shutter);
+     * default `1`. For a `cameraTrack`, setting it enables motion blur
+     * over that fraction of the frame interval, centered on each frame;
+     * default off.
      */
     shutter?: number;
 
@@ -114,16 +129,59 @@ type WriteImageOptions = {
      * streaks are smooth at any N; more slices refine the compositing
      * between overlapping gaussians (1 slice is a single pass with a
      * small exposure bias, 4 is visually converged on typical scenes).
-     * Default: `4`. Only meaningful with `cameraEndPosition`.
+     * Default: `4`. Only meaningful when motion blur is enabled.
      */
     motionSamples?: number;
+
+    /**
+     * Camera animation to render as a frame sequence. Poses come from the
+     * track (position, target and fov per frame; `up` still applies) and
+     * the scene stays resident on the GPU across frames.
+     */
+    cameraTrack?: CameraTrack;
+
+    /** Inclusive frame range of `cameraTrack` to render. Default: every frame. */
+    frames?: [number, number];
+
+    /**
+     * WebP lossless compression effort, 0–9. Every level is lossless; higher
+     * levels shrink the file at a steep cost in encode time (about 8× slower
+     * from 0 to 6 for roughly 20% smaller output). Default: `0`.
+     */
+    webpEffort?: number;
+
+    /**
+     * Most bytes to hold GPU-resident for the scene. The resident path
+     * uploads the scene once and renders every pass from it; scenes over
+     * this budget, or over the device's binding limits, or that the device
+     * refuses to allocate, stream through the chunked path instead.
+     * Default: no budget.
+     */
+    residentBudget?: number;
 
     /** Function returning a GraphicsDevice. Required — rasterization runs on GPU. */
     createDevice?: DeviceCreator;
 };
 
+/** A camera pose in the scene's space: position, target, up and vertical fov in degrees. */
+type Pose = { pos: Vec3Like; tgt: Vec3Like; up: Vec3Like; fov: number };
+
 /**
- * Renders the splat scene to a lossless WebP image written via `fs`.
+ * `<stem>.NNNN<ext>` for frame `frame` of a sequence.
+ *
+ * @param filename - The sequence's base filename.
+ * @param frame - Frame index.
+ * @param digits - Zero-padding width.
+ * @returns The per-frame filename.
+ */
+const frameFilename = (filename: string, frame: number, digits: number): string => {
+    const ext = extname(filename);
+    return `${filename.slice(0, filename.length - ext.length)}.${String(frame).padStart(digits, '0')}${ext}`;
+};
+
+/**
+ * Renders the splat scene to a lossless WebP image written via `fs`, or to
+ * a sequence of them along a camera track.
  *
  * @param options - Render parameters and target filename.
  * @param fs - File system abstraction for writing the output.
@@ -148,18 +206,20 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         cameraPosition = { x: 2, y: 1, z: -2 },
         lookAt = { x: 0, y: 0, z: 0 },
         up = { x: 0, y: 1, z: 0 },
-        near = 0.2,
         background = { r: 0, g: 0, b: 0, a: 1 },
         fStop,
-        focusDistance,
-        sensorSize = 0.024,
         cameraEndPosition,
         lookAtEnd,
         upEnd,
         shutter,
         motionSamples,
+        cameraTrack,
+        frames,
+        webpEffort = 0,
+        residentBudget,
         createDevice
     } = options;
+    let { near = 0.2, focusDistance, sensorSize = 0.024 } = options;
 
     if (!createDevice) {
         throw new Error('writeImage requires a createDevice function for GPU rasterization');
@@ -206,10 +266,14 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         }
     }
 
-    // Motion blur: enabled iff `--camera-pos-end` is supplied. The end pose
-    // for missing `camera-target-end` / `camera-up-end` defaults to the start pose so
-    // pure translations don't need redundant flags.
-    const motionEnabled = cameraEndPosition !== undefined;
+    // Motion blur. Along a start→end segment it is enabled by
+    // `--camera-pos-end`, with the end pose defaulting to the start pose
+    // for missing `camera-target-end` / `camera-up-end` so pure translations
+    // don't need redundant flags. Along a track it is enabled by `--shutter`.
+    if (cameraTrack && cameraEndPosition) {
+        throw new Error('writeImage: --camera-pos-end is not valid with --camera-track; motion blur along a track comes from --shutter.');
+    }
+    const motionEnabled = cameraTrack ? (shutter !== undefined && shutter > 0) : cameraEndPosition !== undefined;
     const motionN = motionEnabled ? (motionSamples ?? 4) : 1;
     const motionShutter = motionEnabled ? (shutter ?? 1) : 0;
     if (motionEnabled && (motionShutter < 0 || motionShutter > 1)) {
@@ -219,25 +283,86 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         throw new Error(`writeImage: --motion-samples must be a positive integer, got ${motionN}.`);
     }
     if (motionEnabled && projection === 'equirect') {
-        throw new Error('writeImage: motion blur (--camera-pos-end) is not supported with --projection equirect.');
+        throw new Error('writeImage: motion blur is not supported with --projection equirect.');
     }
-    const camStart = cameraPosition;
-    const camEnd = cameraEndPosition ?? cameraPosition;
-    const lookStart = lookAt;
-    const lookEnd = lookAtEnd ?? lookAt;
-    const upStart = up;
-    const upEndR = upEnd ?? up;
+
+    // Frame range: a single frame without a track, else the track's frames.
+    let frameStart = 0;
+    let frameEnd = 0;
+    if (cameraTrack) {
+        frameStart = frames?.[0] ?? 0;
+        frameEnd = frames?.[1] ?? cameraTrack.frameCount - 1;
+        if (!Number.isInteger(frameStart) || !Number.isInteger(frameEnd) || frameStart < 0 || frameEnd < frameStart) {
+            throw new Error(`writeImage: invalid frame range ${frameStart}-${frameEnd}.`);
+        }
+        if (frameEnd >= cameraTrack.frameCount) {
+            throw new Error(`writeImage: frame range ${frameStart}-${frameEnd} exceeds the track's ${cameraTrack.frameCount} frames (0-${cameraTrack.frameCount - 1}).`);
+        }
+    }
+    const frameCount = frameEnd - frameStart + 1;
+    const digits = Math.max(4, String(frameEnd).length);
+
+    // The camera, its defaults and the renderer's conventions live in the
+    // PlayCanvas default space, while the table stays in its source space
+    // (e.g. Transform.PLY). Rather than rewriting every column into the
+    // camera's space, move the camera into the table's: positions and
+    // targets through the inverse transform, directions through its
+    // rotation, and lengths (near plane, focus, sensor) by its scale. The
+    // image is the same; the per-render pass over the whole scene is not.
+    const delta = computeWriteTransform(dataTable.transform, Transform.IDENTITY);
+    const toData = delta ? delta.clone().invert() : null;
+    const tmp = new Vec3();
+    const toDataPoint = (p: Vec3Like): Vec3Like => {
+        if (!toData) return p;
+        toData.transformPoint(tmp.set(p.x, p.y, p.z), tmp);
+        return { x: tmp.x, y: tmp.y, z: tmp.z };
+    };
+    const toDataDir = (d: Vec3Like): Vec3Like => {
+        if (!toData) return d;
+        toData.rotation.transformVector(tmp.set(d.x, d.y, d.z), tmp);
+        return { x: tmp.x, y: tmp.y, z: tmp.z };
+    };
+    if (toData) {
+        near *= toData.scale;
+        sensorSize *= toData.scale;
+        if (focusDistance !== undefined) focusDistance *= toData.scale;
+    }
+    const camStart = toDataPoint(cameraPosition);
+    const camEnd = toDataPoint(cameraEndPosition ?? cameraPosition);
+    const lookStart = toDataPoint(lookAt);
+    const lookEnd = toDataPoint(lookAtEnd ?? lookAt);
+    const upStart = toDataDir(up);
+    const upEndR = toDataDir(upEnd ?? up);
+    const optionFov = projection === 'equirect' ? 0 : fov!;
+
+    // Pose at time t. Along a segment, t ∈ [0, 1] from the start to the end
+    // pose (normalized lerp for `up` so it stays unit-length when the two
+    // differ in direction) and the shutter window is centered on 0.5. Along
+    // a track, t is a frame time and the window is centered on the frame.
+    const poseAt: (t: number) => Pose = cameraTrack ?
+        (t) => {
+            const p = cameraTrack.poseAt(t);
+            return { pos: toDataPoint(p.position), tgt: toDataPoint(p.target), up: upStart, fov: projection === 'equirect' ? 0 : p.fov };
+        } :
+        (t) => {
+            const pos = {
+                x: camStart.x + (camEnd.x - camStart.x) * t,
+                y: camStart.y + (camEnd.y - camStart.y) * t,
+                z: camStart.z + (camEnd.z - camStart.z) * t
+            };
+            const tgt = {
+                x: lookStart.x + (lookEnd.x - lookStart.x) * t,
+                y: lookStart.y + (lookEnd.y - lookStart.y) * t,
+                z: lookStart.z + (lookEnd.z - lookStart.z) * t
+            };
+            const ux = upStart.x + (upEndR.x - upStart.x) * t;
+            const uy = upStart.y + (upEndR.y - upStart.y) * t;
+            const uz = upStart.z + (upEndR.z - upStart.z) * t;
+            const ulen = Math.hypot(ux, uy, uz) || 1;
+            return { pos, tgt, up: { x: ux / ulen, y: uy / ulen, z: uz / ulen }, fov: optionFov };
+        };
 
     const g = logger.group('Render');
-
-    const fovY = projection === 'equirect' ? 0 : (fov! * Math.PI) / 180;
-
-    // Precompute focal scaling used by the DoF aperture-scale formula. Only
-    // depends on intrinsics (sensor, fov, height), not on the camera pose,
-    // so it's safe to share across motion-blur sub-frames.
-    const dofEnabled = projection !== 'equirect' && fStop !== undefined;
-    const focalRealWorld = dofEnabled ? (sensorSize / 2) / Math.tan(fovY * 0.5) : 0;
-    const focalYPx = dofEnabled ? (height / 2) / Math.tan(fovY * 0.5) : 0;
 
     // Resolve DoF for pinhole only. The project shader consumes a single
     // pre-baked scalar `apertureScale` (pixel CoC per unit relative
@@ -246,17 +371,20 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     //     CoC_pixels = (focal_real² / (N · focus)) × |1 − focus/cz|
     //                  × image_height / sensor_height
     //
-    // where focal_real is the real lens focal length implied by
-    // `fovY` and `sensorSize`. Apply image_height / sensor_height to
-    // convert physical CoC (sensor units) to pixels. Defaulting
-    // `sensorSize` to 0.024 makes f-stops behave like a 35mm
-    // full-frame camera when world units are meters; scale to suit
-    // non-meter scenes. Focus defaults to the look-at point — which,
-    // under motion blur, moves with the interpolated camera pose
-    // (recomputed per sub-frame below).
-    const buildCamera = (pos: { x: number; y: number; z: number },
-        tgt: { x: number; y: number; z: number },
-        u: { x: number; y: number; z: number }): RenderCamera => {
+    // where focal_real is the real lens focal length implied by the pose's
+    // fov and `sensorSize`. Apply image_height / sensor_height to convert
+    // physical CoC (sensor units) to pixels. Defaulting `sensorSize` to
+    // 0.024 makes f-stops behave like a 35mm full-frame camera when world
+    // units are meters; scale to suit non-meter scenes. Focus defaults to
+    // the look-at point — which, under motion blur or along a track, moves
+    // with the pose.
+    const dofEnabled = projection !== 'equirect' && fStop !== undefined;
+    const buildCamera = (pose: Pose): RenderCamera => {
+        const { pos, tgt, up: u } = pose;
+        const fovY = projection === 'equirect' ? 0 : (pose.fov * Math.PI) / 180;
+        if (projection !== 'equirect' && !(fovY > 0 && fovY < Math.PI)) {
+            throw new Error(`writeImage: invalid fov ${pose.fov}° on the camera track.`);
+        }
         let fDist = 0;
         let aScale = 0;
         if (dofEnabled) {
@@ -265,10 +393,12 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
             } else {
                 const fwdLen = Math.hypot(tgt.x - pos.x, tgt.y - pos.y, tgt.z - pos.z);
                 if (fwdLen === 0) {
-                    throw new Error('writeImage: cannot derive default --focus-distance because --camera-pos equals --camera-target.');
+                    throw new Error('writeImage: cannot derive default --focus-distance because the camera position equals its target.');
                 }
                 fDist = fwdLen;
             }
+            const focalRealWorld = (sensorSize / 2) / Math.tan(fovY * 0.5);
+            const focalYPx = (height! / 2) / Math.tan(fovY * 0.5);
             aScale = focalRealWorld * focalYPx / (fStop! * fDist);
         }
         return {
@@ -287,105 +417,142 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
 
     const device = await createDevice();
 
-    // The renderer's camera, defaults and convention all live in PlayCanvas
-    // default space. Convert the DataTable from its source-space (e.g.
-    // Transform.PLY) to identity so positions, rotations and SH bands align.
-    // `inPlace=true` is safe: the CLI builds a fresh combined DataTable per
-    // write and library callers passing data into a writer accept that the
-    // writer may consume the table.
-    const pcDataTable = convertToSpace(dataTable, Transform.IDENTITY, true);
-
-    // Pre-resolve the start-pose DoF info for the info log line.
-    const startCamera = buildCamera(camStart, lookStart, upStart);
+    // Pre-resolve the first pose for the info log line.
+    const firstPose = poseAt(cameraTrack ? frameStart : 0);
+    const startCamera = buildCamera(firstPose);
 
     if (projection === 'equirect') {
         logger.info(`${width}x${height} equirect`);
     } else if (startCamera.apertureScale! > 0) {
-        logger.info(`${width}x${height} fov ${fov}° f/${fStop} focus ${startCamera.focusDistance!.toFixed(3)} sensor ${sensorSize}`);
+        logger.info(`${width}x${height} fov ${+firstPose.fov.toFixed(3)}° f/${fStop} focus ${startCamera.focusDistance!.toFixed(3)} sensor ${options.sensorSize ?? 0.024}`);
     } else {
-        logger.info(`${width}x${height} fov ${fov}°`);
+        logger.info(`${width}x${height} fov ${+firstPose.fov.toFixed(3)}°`);
+    }
+    if (cameraTrack) {
+        logger.info(`camera track: frames ${frameStart}-${frameEnd} of ${cameraTrack.frameCount} at ${cameraTrack.frameRate} fps`);
     }
     if (motionEnabled) {
         logger.info(`motion blur: ${motionN} slice${motionN === 1 ? '' : 's'}, shutter ${motionShutter}`);
     }
 
-    // Pose along the start→end segment at parameter t. Normalized lerp for
-    // `up` so it stays unit-length when the start/end up vectors differ in
-    // direction.
-    const poseAt = (t: number) => {
-        const pos = {
-            x: camStart.x + (camEnd.x - camStart.x) * t,
-            y: camStart.y + (camEnd.y - camStart.y) * t,
-            z: camStart.z + (camEnd.z - camStart.z) * t
-        };
-        const tgt = {
-            x: lookStart.x + (lookEnd.x - lookStart.x) * t,
-            y: lookStart.y + (lookEnd.y - lookStart.y) * t,
-            z: lookStart.z + (lookEnd.z - lookStart.z) * t
-        };
-        const ux = upStart.x + (upEndR.x - upStart.x) * t;
-        const uy = upStart.y + (upEndR.y - upStart.y) * t;
-        const uz = upStart.z + (upEndR.z - upStart.z) * t;
-        const ulen = Math.hypot(ux, uy, uz) || 1;
-        return { pos, tgt, up: { x: ux / ulen, y: uy / ulen, z: uz / ulen } };
-    };
-    // Shutter window, centered on the segment midpoint.
-    const halfWin = motionShutter / 2;
-    const t0 = 0.5 - halfWin;
-    const t1 = 0.5 + halfWin;
-
-    // Camera for a motion-blur pass over [tA, tB]: shutter-open pose at
-    // tA, shutter-close pose at tB, focus distance and aperture scale from
-    // the slice midpoint.
-    const toVec3 = (v: { x: number; y: number; z: number }) => new Vec3(v.x, v.y, v.z);
-    const sliceCamera = (tA: number, tB: number): RenderCamera => {
-        const open = poseAt(tA);
-        const close = poseAt(tB);
-        const mid = poseAt(0.5 * (tA + tB));
-        return {
-            ...buildCamera(mid.pos, mid.tgt, mid.up),
-            position: toVec3(open.pos),
-            target: toVec3(open.tgt),
-            up: toVec3(open.up),
-            shutterClose: {
-                position: toVec3(close.pos),
-                target: toVec3(close.tgt),
-                up: toVec3(close.up)
-            }
-        };
-    };
-
-    let rgba: Uint8Array;
-    if (!motionEnabled) {
-        rgba = await renderSplats(device, pcDataTable, startCamera, background);
-    } else if (motionN === 1) {
-        rgba = await renderSplats(device, pcDataTable, sliceCamera(t0, t1), background);
-    } else {
-        // Camera motion blur over N shutter slices, averaged in float to
-        // avoid 8-bit truncation per slice. Each slice integrates every
-        // gaussian's motion exactly, so the streak is smooth at any N;
-        // more slices refine the per-instant compositing between
-        // overlapping gaussians, which a single slice approximates with a
-        // fixed order and time-averaged alphas.
-        const pixels = width! * height! * 4;
-        const accum = new Float32Array(pixels);
-        for (let i = 0; i < motionN; i++) {
-            const subCamera = sliceCamera(t0 + (t1 - t0) * i / motionN, t0 + (t1 - t0) * (i + 1) / motionN);
-            const frame = await renderSplats(device, pcDataTable, subCamera, background);
-            for (let p = 0; p < pixels; p++) accum[p] += frame[p];
+    // Resident path when the scene fits: one upload, then every pass only
+    // sends the sorted order. Otherwise (or if the device refuses the
+    // allocation) each pass streams the scene through the chunked path.
+    let scene: SceneRenderer | null = null;
+    const numRows = dataTable.numRows;
+    const residentBytes = residentSceneBytes(numRows, sceneSHBands(dataTable));
+    const withinBudget = residentBudget === undefined || residentBytes <= residentBudget;
+    if (withinBudget && residentSceneFits(device, numRows, sceneSHBands(dataTable))) {
+        const candidate = new SceneRenderer(device, dataTable, {
+            projection,
+            width: width!,
+            height: height!,
+            motionBlur: motionEnabled,
+            background
+        });
+        try {
+            await candidate.upload();
+            scene = candidate;
+            logger.info(`scene resident on GPU (${fmtBytes(residentBytes)})`);
+        } catch (e) {
+            if (!(e instanceof ResidentUploadError)) throw e;
+            candidate.destroy();
+            logger.warn(`${e.message}; streaming the scene per pass instead`);
         }
-        rgba = new Uint8Array(pixels);
-        const inv = 1 / motionN;
-        for (let p = 0; p < pixels; p++) rgba[p] = Math.round(accum[p] * inv);
+    } else {
+        logger.info(`scene streamed per pass (${fmtBytes(residentBytes)} resident would ${withinBudget ? 'exceed a storage binding' : 'exceed the resident budget'})`);
     }
+    const renderView = (camera: RenderCamera): Promise<Uint8Array> => {
+        return scene ? scene.render(camera) : renderSplats(device, dataTable, camera, background);
+    };
 
-    const encodingGroup = logger.group('Encoding');
-    const webPCodec = await WebPCodec.create(); // cheap: create() memoizes the wasm module
-    const webp = webPCodec.encodeLosslessRGBA(rgba, width, height);
-    encodingGroup.end();
+    try {
+        // Camera for a motion-blur pass over [tA, tB]: shutter-open pose at
+        // tA, shutter-close pose at tB, focus distance and aperture scale from
+        // the slice midpoint.
+        const toVec3 = (v: Vec3Like) => new Vec3(v.x, v.y, v.z);
+        const sliceCamera = (tA: number, tB: number): RenderCamera => {
+            const open = poseAt(tA);
+            const close = poseAt(tB);
+            return {
+                ...buildCamera(poseAt(0.5 * (tA + tB))),
+                position: toVec3(open.pos),
+                target: toVec3(open.tgt),
+                up: toVec3(open.up),
+                shutterClose: {
+                    position: toVec3(close.pos),
+                    target: toVec3(close.tgt),
+                    up: toVec3(close.up)
+                }
+            };
+        };
 
-    await writeFile(fs, filename, webp);
-    logWrittenFile(basename(filename), webp.byteLength);
+        // One output frame centered on time `center`, its shutter spanning
+        // ±halfWin around it. Along a track the window is clipped to the
+        // track's frames: a looping timeline wraps from its last frame back
+        // to its first, and a shutter reaching into that jump would ghost the
+        // end frames of a clip that plays once.
+        const renderFrame = async (center: number, halfWin: number): Promise<Uint8Array> => {
+            if (!motionEnabled) {
+                return renderView(buildCamera(poseAt(center)));
+            }
+            const t0 = cameraTrack ? Math.max(0, center - halfWin) : center - halfWin;
+            const t1 = cameraTrack ? Math.min(cameraTrack.frameCount - 1, center + halfWin) : center + halfWin;
+            if (motionN === 1) {
+                return renderView(sliceCamera(t0, t1));
+            }
+            // Camera motion blur over N shutter slices, averaged in float to
+            // avoid 8-bit truncation per slice. Each slice integrates every
+            // gaussian's motion exactly, so the streak is smooth at any N;
+            // more slices refine the per-instant compositing between
+            // overlapping gaussians, which a single slice approximates with a
+            // fixed order and time-averaged alphas.
+            const pixels = width! * height! * 4;
+            const accum = new Float32Array(pixels);
+            for (let i = 0; i < motionN; i++) {
+                const frame = await renderView(sliceCamera(t0 + (t1 - t0) * i / motionN, t0 + (t1 - t0) * (i + 1) / motionN));
+                for (let p = 0; p < pixels; p++) accum[p] += frame[p];
+            }
+            const rgba = new Uint8Array(pixels);
+            const inv = 1 / motionN;
+            for (let p = 0; p < pixels; p++) rgba[p] = Math.round(accum[p] * inv);
+            return rgba;
+        };
+
+        const webPCodec = await WebPCodec.create(); // cheap: create() memoizes the wasm module
+        const halfWin = motionShutter / 2;
+
+        if (!cameraTrack) {
+            const rgba = await renderFrame(0.5, halfWin);
+            const encodingGroup = logger.group('Encoding');
+            const webp = webPCodec.encodeLosslessRGBA(rgba, width, height, width * 4, webpEffort);
+            encodingGroup.end();
+            await writeFile(fs, filename, webp);
+            logWrittenFile(basename(filename), webp.byteLength);
+        } else {
+            const bar = logger.bar('frames', frameCount);
+            let renderMs = 0;
+            let encodeMs = 0;
+            let totalBytes = 0;
+            for (let f = frameStart; f <= frameEnd; f++) {
+                const t0 = performance.now();
+                const rgba = await renderFrame(f, halfWin);
+                const t1 = performance.now();
+                const webp = webPCodec.encodeLosslessRGBA(rgba, width, height, width * 4, webpEffort);
+                encodeMs += performance.now() - t1;
+                renderMs += t1 - t0;
+                await writeFile(fs, frameFilename(filename, f, digits), webp);
+                totalBytes += webp.byteLength;
+                bar.update(f - frameStart + 1);
+            }
+            bar.end();
+            const first = basename(frameFilename(filename, frameStart, digits));
+            const last = basename(frameFilename(filename, frameEnd, digits));
+            logger.info(`${frameCount} frames ${first} … ${last} (${fmtBytes(totalBytes)}): render ${fmtTime(renderMs)}, encode ${fmtTime(encodeMs)}`);
+        }
+    } finally {
+        scene?.destroy();
+    }
 
     g.end();
 };
