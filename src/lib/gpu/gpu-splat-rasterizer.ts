@@ -17,9 +17,9 @@ import {
 } from 'playcanvas';
 
 import { constantsChunk } from './shaders/chunks/constants';
-import { covariance3D } from './shaders/chunks/covariance-3d';
+import { covariance3D, covariance3DFns } from './shaders/chunks/covariance-3d';
 import { jacobianEquirect } from './shaders/chunks/jacobian-equirect';
-import { jacobianPinhole } from './shaders/chunks/jacobian-pinhole';
+import { jacobianPinhole, jacobianPinholeFns } from './shaders/chunks/jacobian-pinhole';
 import { projectionEquirect } from './shaders/chunks/projection-equirect';
 import { projectionPinhole } from './shaders/chunks/projection-pinhole';
 import { quatRotation } from './shaders/chunks/quat-rotation';
@@ -140,6 +140,12 @@ interface SplatRasterizerOptions {
     apertureScale: number;
     /** RGBA background, each channel in [0, 1]. */
     bgR: number; bgG: number; bgB: number; bgA: number;
+    /**
+     * Shutter-close camera basis. When set, the shaders integrate each
+     * gaussian over its screen-space motion between this basis and the
+     * primary one (motion blur). Omit for a static render. Pinhole only.
+     */
+    basisB?: CameraBasis;
 }
 
 const numSHCoeffsPerChannel = (bands: number): number => {
@@ -360,12 +366,16 @@ class GpuSplatRasterizer {
         // here with the resolved `maxCoveragePerSplat` so the chunk
         // bodies stay JS-template-free.
         const projection = options.projection;
+        if (options.basisB && projection !== 'pinhole') {
+            throw new Error('GpuSplatRasterizer: motion blur is pinhole-only');
+        }
         const sharedCincludes = new Map<string, string>([
             ['uniformsStruct', uniformsStruct],
             ['constants', constantsChunk],
             ['projectionPinhole', projectionPinhole],
             ['projectionEquirect', projectionEquirect],
             ['jacobianPinhole', jacobianPinhole],
+            ['jacobianPinholeFns', jacobianPinholeFns],
             ['jacobianEquirect', jacobianEquirect],
             ['tileAabbPinhole', tileAabbPinhole(options.maxCoveragePerSplat)],
             ['tileAabbEquirect', tileAabbEquirect(options.maxCoveragePerSplat)],
@@ -375,7 +385,8 @@ class GpuSplatRasterizer {
             ['shBand2', shBand2],
             ['shBand3', shBand3],
             ['quatRotation', quatRotation],
-            ['covariance3D', covariance3D]
+            ['covariance3D', covariance3D],
+            ['covariance3DFns', covariance3DFns]
         ]);
 
         // Per-render variant flags consumed by `#ifdef` directives in
@@ -391,6 +402,7 @@ class GpuSplatRasterizer {
         if (options.numSHBands >= 2) sharedCdefines.set('SH_BAND_2', '');
         if (options.numSHBands >= 3) sharedCdefines.set('SH_BAND_3', '');
         if (options.radiusFade === false) sharedCdefines.set('NO_RADIUS_FADE', '');
+        if (options.basisB) sharedCdefines.set('MOTION_BLUR', '');
 
         const mkShader = (
             name: string,
@@ -620,6 +632,15 @@ class GpuSplatRasterizer {
             c.setParameter('groupPixelOriginY', originY);
             c.setParameter('bgR', o.bgR); c.setParameter('bgG', o.bgG);
             c.setParameter('bgB', o.bgB); c.setParameter('bgA', o.bgA);
+            const bb = o.basisB;
+            c.setParameter('rightBX', bb?.right.x ?? 0); c.setParameter('rightBY', bb?.right.y ?? 0); c.setParameter('rightBZ', bb?.right.z ?? 0);
+            c.setParameter('_p7', 0);
+            c.setParameter('downBX', bb?.down.x ?? 0); c.setParameter('downBY', bb?.down.y ?? 0); c.setParameter('downBZ', bb?.down.z ?? 0);
+            c.setParameter('_p8', 0);
+            c.setParameter('forwardBX', bb?.forward.x ?? 0); c.setParameter('forwardBY', bb?.forward.y ?? 0); c.setParameter('forwardBZ', bb?.forward.z ?? 0);
+            c.setParameter('_p9', 0);
+            c.setParameter('eyeBX', bb?.eye.x ?? 0); c.setParameter('eyeBY', bb?.eye.y ?? 0); c.setParameter('eyeBZ', bb?.eye.z ?? 0);
+            c.setParameter('_p10', 0);
         }
     }
 

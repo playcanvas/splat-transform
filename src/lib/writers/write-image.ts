@@ -81,10 +81,10 @@ type WriteImageOptions = {
 
     /**
      * End camera position for motion blur. When set, enables camera
-     * motion blur: the renderer averages `motionSamples` sub-frames
-     * with the camera interpolated from (`cameraPosition`, `lookAt`,
+     * motion blur: the camera moves from (`cameraPosition`, `lookAt`,
      * `up`) at shutter-open to (`cameraEndPosition`, `lookAtEnd`,
-     * `upEnd`) at shutter-close.
+     * `upEnd`) at shutter-close, and every gaussian is integrated over
+     * its motion in `motionSamples` shutter slices. Pinhole only.
      */
     cameraEndPosition?: { x: number; y: number; z: number };
 
@@ -109,9 +109,12 @@ type WriteImageOptions = {
     shutter?: number;
 
     /**
-     * Number of sub-frames to accumulate for motion blur. Cost is N×
-     * a single render. Default: `16`. Only meaningful with
-     * `cameraEndPosition`.
+     * Number of shutter slices for motion blur; cost is N× a single
+     * render. Each slice integrates every gaussian's motion exactly, so
+     * streaks are smooth at any N; more slices refine the compositing
+     * between overlapping gaussians (1 slice is a single pass with a
+     * small exposure bias, 4 is visually converged on typical scenes).
+     * Default: `4`. Only meaningful with `cameraEndPosition`.
      */
     motionSamples?: number;
 
@@ -206,14 +209,17 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     // Motion blur: enabled iff `--camera-pos-end` is supplied. The end pose
     // for missing `camera-target-end` / `camera-up-end` defaults to the start pose so
     // pure translations don't need redundant flags.
-    const motionBlur = cameraEndPosition !== undefined;
-    const motionN = motionBlur ? (motionSamples ?? 16) : 1;
-    const motionShutter = motionBlur ? (shutter ?? 1) : 0;
-    if (motionBlur && (motionShutter < 0 || motionShutter > 1)) {
+    const motionEnabled = cameraEndPosition !== undefined;
+    const motionN = motionEnabled ? (motionSamples ?? 4) : 1;
+    const motionShutter = motionEnabled ? (shutter ?? 1) : 0;
+    if (motionEnabled && (motionShutter < 0 || motionShutter > 1)) {
         throw new Error(`writeImage: --shutter must be in [0, 1], got ${motionShutter}.`);
     }
-    if (motionBlur && (!Number.isInteger(motionN) || motionN < 1)) {
+    if (motionEnabled && (!Number.isInteger(motionN) || motionN < 1)) {
         throw new Error(`writeImage: --motion-samples must be a positive integer, got ${motionN}.`);
+    }
+    if (motionEnabled && projection === 'equirect') {
+        throw new Error('writeImage: motion blur (--camera-pos-end) is not supported with --projection equirect.');
     }
     const camStart = cameraPosition;
     const camEnd = cameraEndPosition ?? cameraPosition;
@@ -299,44 +305,72 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     } else {
         logger.info(`${width}x${height} fov ${fov}°`);
     }
-    if (motionBlur) {
-        logger.info(`motion blur: ${motionN} samples, shutter ${motionShutter}`);
+    if (motionEnabled) {
+        logger.info(`motion blur: ${motionN} slice${motionN === 1 ? '' : 's'}, shutter ${motionShutter}`);
     }
 
+    // Pose along the start→end segment at parameter t. Normalized lerp for
+    // `up` so it stays unit-length when the start/end up vectors differ in
+    // direction.
+    const poseAt = (t: number) => {
+        const pos = {
+            x: camStart.x + (camEnd.x - camStart.x) * t,
+            y: camStart.y + (camEnd.y - camStart.y) * t,
+            z: camStart.z + (camEnd.z - camStart.z) * t
+        };
+        const tgt = {
+            x: lookStart.x + (lookEnd.x - lookStart.x) * t,
+            y: lookStart.y + (lookEnd.y - lookStart.y) * t,
+            z: lookStart.z + (lookEnd.z - lookStart.z) * t
+        };
+        const ux = upStart.x + (upEndR.x - upStart.x) * t;
+        const uy = upStart.y + (upEndR.y - upStart.y) * t;
+        const uz = upStart.z + (upEndR.z - upStart.z) * t;
+        const ulen = Math.hypot(ux, uy, uz) || 1;
+        return { pos, tgt, up: { x: ux / ulen, y: uy / ulen, z: uz / ulen } };
+    };
+    // Shutter window, centered on the segment midpoint.
+    const halfWin = motionShutter / 2;
+    const t0 = 0.5 - halfWin;
+    const t1 = 0.5 + halfWin;
+
+    // Camera for a motion-blur pass over [tA, tB]: shutter-open pose at
+    // tA, shutter-close pose at tB, focus distance and aperture scale from
+    // the slice midpoint.
+    const toVec3 = (v: { x: number; y: number; z: number }) => new Vec3(v.x, v.y, v.z);
+    const sliceCamera = (tA: number, tB: number): RenderCamera => {
+        const open = poseAt(tA);
+        const close = poseAt(tB);
+        const mid = poseAt(0.5 * (tA + tB));
+        return {
+            ...buildCamera(mid.pos, mid.tgt, mid.up),
+            position: toVec3(open.pos),
+            target: toVec3(open.tgt),
+            up: toVec3(open.up),
+            shutterClose: {
+                position: toVec3(close.pos),
+                target: toVec3(close.tgt),
+                up: toVec3(close.up)
+            }
+        };
+    };
+
     let rgba: Uint8Array;
-    if (!motionBlur) {
+    if (!motionEnabled) {
         rgba = await renderSplats(device, pcDataTable, startCamera, background);
+    } else if (motionN === 1) {
+        rgba = await renderSplats(device, pcDataTable, sliceCamera(t0, t1), background);
     } else {
-        // Camera motion blur: average N sub-frames with the camera linearly
-        // interpolated between the start and end poses, stratified across
-        // the shutter window centered on the midpoint. Accumulate in float
-        // to avoid 8-bit truncation per sample.
-        const halfWin = motionShutter / 2;
-        const t0 = 0.5 - halfWin;
-        const t1 = 0.5 + halfWin;
+        // Camera motion blur over N shutter slices, averaged in float to
+        // avoid 8-bit truncation per slice. Each slice integrates every
+        // gaussian's motion exactly, so the streak is smooth at any N;
+        // more slices refine the per-instant compositing between
+        // overlapping gaussians, which a single slice approximates with a
+        // fixed order and time-averaged alphas.
         const pixels = width! * height! * 4;
         const accum = new Float32Array(pixels);
         for (let i = 0; i < motionN; i++) {
-            const u = motionN === 1 ? 0.5 : (i + 0.5) / motionN;
-            const t = t0 + (t1 - t0) * u;
-            const pos = {
-                x: camStart.x + (camEnd.x - camStart.x) * t,
-                y: camStart.y + (camEnd.y - camStart.y) * t,
-                z: camStart.z + (camEnd.z - camStart.z) * t
-            };
-            const tgt = {
-                x: lookStart.x + (lookEnd.x - lookStart.x) * t,
-                y: lookStart.y + (lookEnd.y - lookStart.y) * t,
-                z: lookStart.z + (lookEnd.z - lookStart.z) * t
-            };
-            // Normalized lerp for `up` so it stays unit-length when the
-            // start/end up vectors differ in direction.
-            const ux = upStart.x + (upEndR.x - upStart.x) * t;
-            const uy = upStart.y + (upEndR.y - upStart.y) * t;
-            const uz = upStart.z + (upEndR.z - upStart.z) * t;
-            const ulen = Math.hypot(ux, uy, uz) || 1;
-            const upI = { x: ux / ulen, y: uy / ulen, z: uz / ulen };
-            const subCamera = buildCamera(pos, tgt, upI);
+            const subCamera = sliceCamera(t0 + (t1 - t0) * i / motionN, t0 + (t1 - t0) * (i + 1) / motionN);
             const frame = await renderSplats(device, pcDataTable, subCamera, background);
             for (let p = 0; p < pixels; p++) accum[p] += frame[p];
         }

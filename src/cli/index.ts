@@ -887,15 +887,17 @@ IMAGE OUTPUT (.webp) — lossless WebP rendered via GPU rasterizer
         --sensor-size      <n>              Vertical sensor height in world units. Gives --f-stop a physical meaning.
                                             Default: 0.024 (35mm full-frame, world units = meters). Scale to your world:
                                             world unit = decimeter → 0.24, world unit = millimeter → 24.
-        --camera-pos-end   <x,y,z>          End camera position. When set, enables camera motion blur: the renderer
-                                            averages sub-frames with the camera interpolated from --camera-pos (shutter open)
-                                            to --camera-pos-end (shutter close). Default: disabled (no motion blur).
+        --camera-pos-end   <x,y,z>          End camera position. When set, enables camera motion blur: the camera moves
+                                            from --camera-pos (shutter open) to --camera-pos-end (shutter close) and every
+                                            gaussian is integrated over its motion. Pinhole only. Default: disabled.
         --camera-target-end <x,y,z>         End camera target. Default: same as --camera-target. Only with --camera-pos-end.
         --camera-up-end    <x,y,z>          End up vector. Default: same as --camera-up. Only with --camera-pos-end.
         --shutter          <0..1>           Fraction of the start→end segment integrated, centered on the midpoint
                                             (1.0 = full motion; 0.5 = 180° shutter). Default: 1. Only with --camera-pos-end.
-        --motion-samples   <n>              Sub-frames to accumulate for motion blur. Cost is N× a single render.
-                                            Default: 16. Only with --camera-pos-end.
+        --motion-samples   <n>              Shutter slices for motion blur. Cost is N× a single render. Each slice
+                                            integrates every gaussian's motion exactly, so streaks are smooth at any N;
+                                            more slices refine compositing between overlapping gaussians.
+                                            Default: 4. Only with --camera-pos-end.
 
 EXAMPLES
     # Convert formats

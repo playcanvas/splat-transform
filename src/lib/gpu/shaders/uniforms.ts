@@ -31,6 +31,10 @@ struct Uniforms {
     groupPixelMinX: u32, groupPixelMinY: u32, groupPixelMaxX: u32, groupPixelMaxY: u32,
     groupTilesX: u32, groupTilesY: u32, groupPixelOriginX: u32, groupPixelOriginY: u32,
     bgR: f32, bgG: f32, bgB: f32, bgA: f32,
+    rightBX: f32, rightBY: f32, rightBZ: f32, _p7: f32,
+    downBX: f32, downBY: f32, downBZ: f32, _p8: f32,
+    forwardBX: f32, forwardBY: f32, forwardBZ: f32, _p9: f32,
+    eyeBX: f32, eyeBY: f32, eyeBZ: f32, _p10: f32,
 }
 `;
 
@@ -84,7 +88,24 @@ const uniformFormatEntries = (): UniformFormat[] => [
     new UniformFormat('bgR', UNIFORMTYPE_FLOAT),
     new UniformFormat('bgG', UNIFORMTYPE_FLOAT),
     new UniformFormat('bgB', UNIFORMTYPE_FLOAT),
-    new UniformFormat('bgA', UNIFORMTYPE_FLOAT)
+    new UniformFormat('bgA', UNIFORMTYPE_FLOAT),
+    // Shutter-close camera basis for analytic motion blur (zero when unused).
+    new UniformFormat('rightBX', UNIFORMTYPE_FLOAT),
+    new UniformFormat('rightBY', UNIFORMTYPE_FLOAT),
+    new UniformFormat('rightBZ', UNIFORMTYPE_FLOAT),
+    new UniformFormat('_p7', UNIFORMTYPE_FLOAT),
+    new UniformFormat('downBX', UNIFORMTYPE_FLOAT),
+    new UniformFormat('downBY', UNIFORMTYPE_FLOAT),
+    new UniformFormat('downBZ', UNIFORMTYPE_FLOAT),
+    new UniformFormat('_p8', UNIFORMTYPE_FLOAT),
+    new UniformFormat('forwardBX', UNIFORMTYPE_FLOAT),
+    new UniformFormat('forwardBY', UNIFORMTYPE_FLOAT),
+    new UniformFormat('forwardBZ', UNIFORMTYPE_FLOAT),
+    new UniformFormat('_p9', UNIFORMTYPE_FLOAT),
+    new UniformFormat('eyeBX', UNIFORMTYPE_FLOAT),
+    new UniformFormat('eyeBY', UNIFORMTYPE_FLOAT),
+    new UniformFormat('eyeBZ', UNIFORMTYPE_FLOAT),
+    new UniformFormat('_p10', UNIFORMTYPE_FLOAT)
 ];
 
 export { uniformsStruct, uniformFormatEntries };

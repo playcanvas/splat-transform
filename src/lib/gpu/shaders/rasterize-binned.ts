@@ -17,6 +17,10 @@
  * of the ±π longitude seam evaluates against the splat's nearer copy.
  * Without the flag the raw delta is used.
  *
+ * `MOTION_BLUR` replaces the point evaluation with the time average of
+ * the gaussian sliding along its shutter segment (half displacement in
+ * `v0.w` / `v2.w`), in closed form via `erf`.
+ *
  * @returns WGSL source for the binned-rasterize compute shader.
  */
 const rasterizeBinnedWgsl = () => /* wgsl */`
@@ -28,6 +32,16 @@ const rasterizeBinnedWgsl = () => /* wgsl */`
 @group(0) @binding(2) var<storage, read_write> runningState: array<vec4<f32>>;
 @group(0) @binding(3) var<storage, read> tileOffsets: array<u32>;
 @group(0) @binding(4) var<storage, read> sortedSplatIndices: array<u32>;
+
+#ifdef MOTION_BLUR
+// Abramowitz & Stegun 7.1.26, |error| < 1.5e-7: ample for 8-bit output.
+fn erf(x: f32) -> f32 {
+    let ax = abs(x);
+    let t = 1.0 / (1.0 + 0.3275911 * ax);
+    let poly = ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t;
+    return sign(x) * (1.0 - poly * exp(-ax * ax));
+}
+#endif
 
 @compute @workgroup_size(TILE_SIZE, TILE_SIZE, 1)
 fn main(
@@ -81,6 +95,51 @@ fn main(
         let r = v0.z;
         if (r <= 0.0 || abs(dx) > r || abs(dy) > r) { continue; }
         let v1 = projected[splatIdx * 3u + 1u];
+#ifdef MOTION_BLUR
+        // Time average of the truncated gaussian as its centre slides from
+        // c−h to c+h. With A the inverse covariance and Q(v) = vᵀAv, the
+        // Mahalanobis distance along the path is quadratic in the path
+        // parameter s ∈ [−1, 1]:
+        //   Q(d − s·h) = Q(h)·s² − 2(dᵀAh)·s + Q(d)
+        // The static path composites exp(−½Q) − GAUSSIAN_FLOOR clipped at
+        // zero, i.e. support Q ≤ SIGMA_CUTOFF². Solving the quadratic for
+        // that support gives the interval [s1, s2] of the sweep during
+        // which the pixel is inside the ellipse; the gaussian integrates in
+        // closed form in erf over it and the floor contributes −floor ×
+        // (s2 − s1). Cauchy–Schwarz bounds the peak exponent at ≤ 0, so
+        // the exp cannot overflow; the clamp only absorbs rounding. With
+        // no motion along the covariance this collapses to the static
+        // evaluation.
+        let v2 = projected[splatIdx * 3u + 2u];
+        let hx = v0.w;
+        let hy = v2.w;
+        let qd = v1.x * dx * dx + 2.0 * v1.y * dx * dy + v1.z * dy * dy;
+        let qh = v1.x * hx * hx + 2.0 * v1.y * hx * hy + v1.z * hy * hy;
+        let bd = v1.x * dx * hx + v1.y * (dx * hy + dy * hx) + v1.z * dy * hy;
+        let cut2 = SIGMA_CUTOFF * SIGMA_CUTOFF;
+        var g = 0.0;
+        if (qh < 1e-6) {
+            if (qd > cut2) { continue; }
+            g = exp(-0.5 * qd) - GAUSSIAN_FLOOR;
+        } else {
+            let disc = bd * bd - qh * (qd - cut2);
+            if (disc <= 0.0) { continue; }
+            let sd = sqrt(disc);
+            let s1 = max(-1.0, (bd - sd) / qh);
+            let s2 = min(1.0, (bd + sd) / qh);
+            if (s2 <= s1) { continue; }
+            let aq = 0.5 * qh;
+            let sa = sqrt(aq);
+            let u = bd / (2.0 * sa);
+            let peak = exp(min(0.0, u * u - 0.5 * qd));
+            // sqrt(pi) / 4: the ½ of the average over [−1, 1] times √π/(2√aq).
+            g = 0.443113462726379 / sa * peak * (erf(sa * s2 - u) - erf(sa * s1 - u))
+                - 0.5 * GAUSSIAN_FLOOR * (s2 - s1);
+        }
+        let alpha = min(OPACITY_CAP, v1.w * max(0.0, g));
+        if (alpha < MIN_ALPHA) { continue; }
+        let weight = T * alpha;
+#else
         let power = -0.5 * (v1.x * dx * dx + 2.0 * v1.y * dx * dy + v1.z * dy * dy);
         if (power > 0.0) { continue; }
         // Subtract GAUSSIAN_FLOOR so each splat's alpha reaches 0 exactly
@@ -91,6 +150,7 @@ fn main(
         if (alpha < MIN_ALPHA) { continue; }
         let weight = T * alpha;
         let v2 = projected[splatIdx * 3u + 2u];
+#endif
         color = color + weight * v2.rgb;
         T = T * (1.0 - alpha);
     }

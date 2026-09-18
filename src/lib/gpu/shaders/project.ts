@@ -13,6 +13,12 @@
  * embedded by the tile-AABB chunk via JS-template substitution at
  * construction time (see `sharedCincludes` in the rasterizer ctor).
  *
+ * Motion blur (`MOTION_BLUR`, pinhole only) projects each gaussian a
+ * second time with the shutter-close basis, averages the two 2D
+ * covariances, moves the centre to the shutter midpoint and stores the
+ * half displacement in the record's two spare floats (`v0.w`, `v2.w`) for
+ * the rasterizer to integrate over.
+ *
  * @param coeffsPerChannel - Per-channel SH coefficient count (0/3/8/15).
  * @returns WGSL source for the project compute shader.
  */
@@ -24,6 +30,9 @@ const projectWgsl = (coeffsPerChannel: number) => /* wgsl */`
 @group(0) @binding(1) var<storage, read> splats: array<f32>;
 @group(0) @binding(2) var<storage, read_write> projected: array<vec4<f32>>;
 @group(0) @binding(3) var<storage, read_write> coverage: array<u32>;
+
+#include "covariance3DFns"
+#include "jacobianPinholeFns"
 
 const SH_C0: f32 = 0.28209479177387814;
 const SH_C1: f32 = 0.4886025119029199;
@@ -94,6 +103,51 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     #include "jacobianPinhole"
 #endif
 
+    // Depth and eye used for defocus and the SH view direction: the single
+    // pose for a static render, the shutter midpoint under motion blur.
+    var czView = cz;
+    var eyeX = uniforms.eyeX;
+    var eyeY = uniforms.eyeY;
+    var eyeZ = uniforms.eyeZ;
+    // Half of the screen-space displacement over the shutter (zero when
+    // static), handed to the rasterizer through the projected record.
+    var hx = 0.0;
+    var hy = 0.0;
+
+#ifdef MOTION_BLUR
+    // Shutter-close pose: project centre and footprint again, average the
+    // two 2D covariances and move the centre to the midpoint. Both ends
+    // must sit in front of the near plane.
+    let wxB = posX - uniforms.eyeBX;
+    let wyB = posY - uniforms.eyeBY;
+    let wzB = posZ - uniforms.eyeBZ;
+    let cxB = uniforms.rightBX * wxB + uniforms.rightBY * wyB + uniforms.rightBZ * wzB;
+    let cyB = uniforms.downBX * wxB + uniforms.downBY * wyB + uniforms.downBZ * wzB;
+    let czB = uniforms.forwardBX * wxB + uniforms.forwardBY * wyB + uniforms.forwardBZ * wzB;
+    if (czB <= uniforms.near) { writeInvalid(i); return; }
+    let invZB = 1.0 / czB;
+    let screenXB = uniforms.focalX * cxB * invZB + f32(uniforms.imageWidth) * 0.5;
+    let screenYB = uniforms.focalY * cyB * invZB + f32(uniforms.imageHeight) * 0.5;
+    let ccB = camCov(
+        uniforms.rightBX, uniforms.rightBY, uniforms.rightBZ,
+        uniforms.downBX, uniforms.downBY, uniforms.downBZ,
+        uniforms.forwardBX, uniforms.forwardBY, uniforms.forwardBZ,
+        sig00, sig01, sig02, sig11, sig12, sig22
+    );
+    let covB = cov2dPinhole(cxB, cyB, czB, invZB, ccB.c00, ccB.c01, ccB.c02, ccB.c11, ccB.c12, ccB.c22);
+    cov00 = 0.5 * (cov00 + covB.x);
+    cov01 = 0.5 * (cov01 + covB.y);
+    cov11 = 0.5 * (cov11 + covB.z);
+    hx = 0.5 * (screenXB - screenX);
+    hy = 0.5 * (screenYB - screenY);
+    screenX = screenX + hx;
+    screenY = screenY + hy;
+    czView = 0.5 * (cz + czB);
+    eyeX = 0.5 * (uniforms.eyeX + uniforms.eyeBX);
+    eyeY = 0.5 * (uniforms.eyeY + uniforms.eyeBY);
+    eyeZ = 0.5 * (uniforms.eyeZ + uniforms.eyeBZ);
+#endif
+
     cov00 = cov00 + AA_DILATION_COV;
     cov11 = cov11 + AA_DILATION_COV;
 
@@ -102,7 +156,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // alpha rescale below conserves integrated energy — without it,
     // defocused foreground splats over-occlude what is behind them.
     let detPreDoF = cov00 * cov11 - cov01 * cov01;
-    let coc = uniforms.apertureScale * abs(1.0 - uniforms.focusDistance / cz);
+    let coc = uniforms.apertureScale * abs(1.0 - uniforms.focusDistance / czView);
     let cocVar = coc * coc;
     cov00 = cov00 + cocVar;
     cov11 = cov11 + cocVar;
@@ -138,15 +192,18 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // NO_RADIUS_FADE (measurement renders) keeps every splat at full
     // alpha whatever its footprint; the group AABB and coverage cap
     // still bound the work.
+    // Half of the segment the rasterizer integrates over (zero when
+    // static), added to the bbox around the midpoint.
+    let hLen = sqrt(hx * hx + hy * hy);
 #ifdef NO_RADIUS_FADE
     let radiusFade = 1.0;
-    let radius = ceil(radiusRaw);
+    let radius = ceil(radiusRaw + hLen);
 #else
     let fadeStart = RADIUS_FADE_START_FRAC * f32(uniforms.imageHeight);
     let fadeEnd = RADIUS_FADE_END_FRAC * f32(uniforms.imageHeight);
     let radiusFade = clamp((fadeEnd - radiusRaw) / (fadeEnd - fadeStart), 0.0, 1.0);
     if (radiusFade <= 0.0) { writeInvalid(i); return; }
-    let radius = ceil(min(radiusRaw, fadeEnd));
+    let radius = ceil(min(radiusRaw, fadeEnd) + hLen);
 #endif
 
     // Group AABB cull. The BVH frustum query may include splats whose
@@ -162,9 +219,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // View-dependent color via SH evaluation.
-    let dpx = posX - uniforms.eyeX;
-    let dpy = posY - uniforms.eyeY;
-    let dpz = posZ - uniforms.eyeZ;
+    let dpx = posX - eyeX;
+    let dpy = posY - eyeY;
+    let dpz = posZ - eyeZ;
     let dirLen = max(1e-30, sqrt(dpx * dpx + dpy * dpy + dpz * dpz));
     let dirX = dpx / dirLen;
     let dirY = dpy / dirLen;
@@ -198,9 +255,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let alpha = (1.0 / (1.0 + exp(-opacity))) * radiusFade * dofAlphaScale;
 
-    projected[i * 3u + 0u] = vec4<f32>(screenX, screenY, radius, 0.0);
+    projected[i * 3u + 0u] = vec4<f32>(screenX, screenY, radius, hx);
     projected[i * 3u + 1u] = vec4<f32>(covInvA, covInvB, covInvC, alpha);
-    projected[i * 3u + 2u] = vec4<f32>(colR, colG, colB, 0.0);
+    projected[i * 3u + 2u] = vec4<f32>(colR, colG, colB, hy);
 
     // Per-splat tile-coverage count, clamped at maxCoveragePerSplat.
     // Tile indices are GROUP-LOCAL (= image-tile-index minus the

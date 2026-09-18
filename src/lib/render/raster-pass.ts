@@ -1,6 +1,6 @@
 import { GraphicsDevice } from 'playcanvas';
 
-import { type Projection, type RenderCamera, buildCameraBasis } from './camera';
+import { type CameraBasis, type Projection, type RenderCamera, buildCameraBasis } from './camera';
 import {
     AA_DILATION_COV,
     DISCRIMINANT_FLOOR,
@@ -107,6 +107,18 @@ const renderRasterPass = async (
     const projection: Projection = camera.projection ?? 'pinhole';
     const basis = buildCameraBasis(camera);
 
+    // Motion blur: a second basis at shutter close. The GPU projects every
+    // gaussian with both and integrates in between; the CPU passes below
+    // sort by the mean depth and bound both footprints.
+    let basisB: CameraBasis | undefined;
+    if (camera.shutterClose) {
+        if (projection !== 'pinhole') {
+            throw new Error('renderRasterPass: motion blur is pinhole-only');
+        }
+        const { position, target, up } = camera.shutterClose;
+        basisB = buildCameraBasis({ ...camera, position, target, up });
+    }
+
     // ---- Frustum cull ----
     // Linear, centre-only near-plane test. Pinhole tests cz > near (the
     // GPU project shader's exact near-plane condition). Equirect has no
@@ -177,7 +189,7 @@ const renderRasterPass = async (
     const inputStride = splatInputStride(numSHBands);
     const cols = getSplatColumnRefs(dataTable, numSHBands);
     const sortScratch = new SortScratch();
-    sortCandidatesByDepth(cols, candidates, candidateCount, basis, projection, sortScratch);
+    sortCandidatesByDepth(cols, candidates, candidateCount, basis, projection, sortScratch, basisB);
 
     // ---- Per-sub-frame CPU cull ----
     // For multi-sub-frame renders, partition the depth-sorted candidate
@@ -239,6 +251,32 @@ const renderRasterPass = async (
         const ranges = new Uint16Array(candidateCount * 4);
         const subFrameCounts = new Uint32Array(numSubFrames);
 
+        // Defocus widens every footprint by the circle of confusion, so
+        // the bound must include it or a splat straddling a sub-frame
+        // edge drops out of the neighbouring list.
+        const aperture = camera.apertureScale ?? 0;
+        const focus = camera.focusDistance ?? 0;
+        // Shutter-close basis scalars (motion blur only).
+        const exB = basisB?.eye.x ?? 0, eyB = basisB?.eye.y ?? 0, ezB = basisB?.eye.z ?? 0;
+        const fxB = basisB?.forward.x ?? 0, fyB = basisB?.forward.y ?? 0, fzB = basisB?.forward.z ?? 0;
+        const rxB = basisB?.right.x ?? 0, ryB = basisB?.right.y ?? 0, rzB = basisB?.right.z ?? 0;
+        const dxB = basisB?.down.x ?? 0, dyB = basisB?.down.y ?? 0, dzB = basisB?.down.z ?? 0;
+
+        // Geometric part of the bound at one camera-space point:
+        // (focal/cz)² · (1 + tx² + ty²) · maxScale² with tx = cx/cz,
+        // ty = cy/cz both clamped to ±lim. Matches the project shader's
+        // clamp so the bound is tight.
+        const lambdaGeom = (cx: number, cy: number, invZ: number, maxScale: number): number => {
+            const tx = cx * invZ;
+            const ty = cy * invZ;
+            const txClamped = tx > limX ? limX : (tx < -limX ? -limX : tx);
+            const tyClamped = ty > limY ? limY : (ty < -limY ? -limY : ty);
+            const tx2 = Math.min(txClamped * txClamped, limX2);
+            const ty2 = Math.min(tyClamped * tyClamped, limY2);
+            const jFactorSq = 1 + tx2 + ty2;
+            return (focalMax * invZ) * (focalMax * invZ) * jFactorSq * maxScale * maxScale;
+        };
+
         // Pass 1: compute ranges, count per sub-frame.
         for (let i = 0; i < candidateCount; i++) {
             const idx = candidates[i];
@@ -258,23 +296,48 @@ const renderRasterPass = async (
                 Math.exp(syColRef[idx]),
                 Math.exp(szColRef[idx])
             );
-            // Jacobian factor: (focal/cz)² · (1 + tx² + ty²) with
-            // tx = cx/cz, ty = cy/cz both clamped to ±lim. Matches the
-            // project shader's clamp so the bound is tight.
-            const tx = cx * invZ;
-            const ty = cy * invZ;
-            const txClamped = tx > limX ? limX : (tx < -limX ? -limX : tx);
-            const tyClamped = ty > limY ? limY : (ty < -limY ? -limY : ty);
-            const tx2 = Math.min(txClamped * txClamped, limX2);
-            const ty2 = Math.min(tyClamped * tyClamped, limY2);
-            const jFactorSq = 1 + tx2 + ty2;
-            const lambdaMaxBound = (focalMax * invZ) * (focalMax * invZ) * jFactorSq * maxScale * maxScale + lambdaSafety;
+            let lambdaMaxBound = lambdaGeom(cx, cy, invZ, maxScale);
+            let centerX = screenX;
+            let centerY = screenY;
+            let czView = cz;
+            let hLen = 0;
+            if (basisB) {
+                // Both shutter ends: the GPU averages the two covariances
+                // and centres the footprint on the midpoint, so bound by
+                // the larger end and keep the half displacement. A splat
+                // behind the near plane at shutter close is invalid on the
+                // GPU, so it needs no sub-frame.
+                const wxB = xCol[idx] - exB;
+                const wyB = yCol[idx] - eyB;
+                const wzB = zCol[idx] - ezB;
+                const czB = fxB * wxB + fyB * wyB + fzB * wzB;
+                if (czB <= near) {
+                    ranges[i * 4] = SF_OFFSCREEN;
+                    continue;
+                }
+                const cxB = rxB * wxB + ryB * wyB + rzB * wzB;
+                const cyB = dxB * wxB + dyB * wyB + dzB * wzB;
+                const invZB = 1.0 / czB;
+                const screenXB = focalX * cxB * invZB + halfW;
+                const screenYB = focalY * cyB * invZB + halfH;
+                lambdaMaxBound = Math.max(lambdaMaxBound, lambdaGeom(cxB, cyB, invZB, maxScale));
+                centerX = 0.5 * (screenX + screenXB);
+                centerY = 0.5 * (screenY + screenYB);
+                czView = 0.5 * (cz + czB);
+                hLen = 0.5 * Math.hypot(screenXB - screenX, screenYB - screenY);
+            }
+            lambdaMaxBound += lambdaSafety;
+            if (aperture > 0) {
+                const coc = aperture * Math.abs(1 - focus / czView);
+                lambdaMaxBound += coc * coc;
+            }
+            // The GPU bbox is the footprint plus the half displacement.
             // +1 px ceil safety to match the GPU's `ceil(radius)`.
-            const screenR = Math.ceil(SIGMA_CUTOFF * Math.sqrt(lambdaMaxBound)) + 1;
-            const minX = screenX - screenR;
-            const maxX = screenX + screenR;
-            const minY = screenY - screenR;
-            const maxY = screenY + screenR;
+            const screenR = Math.ceil(SIGMA_CUTOFF * Math.sqrt(lambdaMaxBound) + hLen) + 1;
+            const minX = centerX - screenR;
+            const maxX = centerX + screenR;
+            const minY = centerY - screenR;
+            const maxY = centerY + screenR;
             if (maxX < 0 || minX >= width || maxY < 0 || minY >= height) {
                 ranges[i * 4] = SF_OFFSCREEN;
                 continue;
@@ -374,7 +437,8 @@ const renderRasterPass = async (
         bgR: background.r,
         bgG: background.g,
         bgB: background.b,
-        bgA: background.a
+        bgA: background.a,
+        basisB
     });
 
     // Per-chunk CPU scratch.

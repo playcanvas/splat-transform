@@ -116,7 +116,7 @@ type Options = {
      * End camera position for motion blur. When set, enables camera
      * motion blur: the renderer averages multiple sub-frames with the
      * camera interpolated between `renderCameraPosition` (shutter open)
-     * and `renderCameraEndPosition` (shutter close).
+     * and `renderCameraEndPosition` (shutter close). Pinhole only.
      */
     renderCameraEndPosition?: { x: number; y: number; z: number };
 
@@ -143,9 +143,10 @@ type Options = {
     renderShutter?: number;
 
     /**
-     * Number of sub-frames to accumulate for motion blur. More samples =
-     * smoother streaks at proportionally higher cost. Default: `16`.
-     * No effect without `renderCameraEndPosition`.
+     * Number of shutter slices for motion blur; cost is N× a single
+     * render. Each slice integrates every gaussian's motion exactly, so
+     * more slices only refine the compositing between overlapping
+     * gaussians. Default: `4`. No effect without `renderCameraEndPosition`.
      */
     renderMotionSamples?: number;
 };

@@ -62,6 +62,14 @@ type RenderCamera = {
      * equirect. Default `0` disables defocus.
      */
     apertureScale?: number;
+    /**
+     * Camera pose at shutter close. When set, the render is motion-blurred:
+     * `position`, `target` and `up` describe the shutter-open pose and each
+     * gaussian is integrated over its screen-space path between the two
+     * (linear motion, averaged footprint, fixed compositing order; exact
+     * per pixel in closed form). Omit for a static render. Pinhole only.
+     */
+    shutterClose?: { position: Vec3; target: Vec3; up: Vec3 };
 };
 
 /**

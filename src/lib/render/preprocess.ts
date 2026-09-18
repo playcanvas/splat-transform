@@ -75,6 +75,8 @@ class SortScratch {
  * @param camera - Camera basis (forward used for pinhole, eye for both).
  * @param projection - Projection mode; selects the depth metric.
  * @param scratch - Reusable scratch buffers, grown on demand.
+ * @param cameraB - Shutter-close basis for analytic motion blur (pinhole
+ * only): splats are ordered by the mean of their open and close depths.
  */
 const sortCandidatesByDepth = (
     cols: SplatColumnRefs,
@@ -82,7 +84,8 @@ const sortCandidatesByDepth = (
     count: number,
     camera: CameraBasis,
     projection: Projection,
-    scratch: SortScratch
+    scratch: SortScratch,
+    cameraB?: CameraBasis
 ): void => {
     if (count < 2) return;
     scratch.ensure(count);
@@ -90,7 +93,17 @@ const sortCandidatesByDepth = (
     const { depth, radix } = scratch;
     const ex = camera.eye.x, ey = camera.eye.y, ez = camera.eye.z;
 
-    if (projection === 'pinhole') {
+    if (projection === 'pinhole' && cameraB) {
+        const fx = camera.forward.x, fy = camera.forward.y, fz = camera.forward.z;
+        const exB = cameraB.eye.x, eyB = cameraB.eye.y, ezB = cameraB.eye.z;
+        const fxB = cameraB.forward.x, fyB = cameraB.forward.y, fzB = cameraB.forward.z;
+        for (let i = 0; i < count; i++) {
+            const s = candidateIndices[i];
+            const czA = fx * (x[s] - ex) + fy * (y[s] - ey) + fz * (z[s] - ez);
+            const czB = fxB * (x[s] - exB) + fyB * (y[s] - eyB) + fzB * (z[s] - ezB);
+            depth[i] = 0.5 * (czA + czB);
+        }
+    } else if (projection === 'pinhole') {
         const fx = camera.forward.x, fy = camera.forward.y, fz = camera.forward.z;
         for (let i = 0; i < count; i++) {
             const s = candidateIndices[i];
