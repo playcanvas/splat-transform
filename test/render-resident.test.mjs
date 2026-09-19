@@ -177,6 +177,59 @@ describe('resident renderer matches the chunked path', () => {
         }
     });
 
+    it('GPU slice accumulation matches the float mean of the slices', async (t) => {
+        if (!device) return t.skip('no WebGPU adapter available');
+        const { Vec3 } = await import('playcanvas');
+        const { SceneRenderer } = await import('../src/lib/render/index.js');
+        const dataTable = await makeScene(20000, 7);
+        const up = new Vec3(0, 1, 0);
+        const slice = (zA, zB) => ({
+            position: new Vec3(0, 0, zA),
+            target: new Vec3(0, 0, 0),
+            up,
+            fovY: Math.PI / 3,
+            width: 256,
+            height: 192,
+            near: 0.125,
+            shutterClose: { position: new Vec3(0.25, 0, zB), target: new Vec3(0.25, 0, 0), up }
+        });
+        const slices = [slice(10, 10.25), slice(10.25, 10.5), slice(10.5, 10.75), slice(10.75, 11)];
+        const scene = new SceneRenderer(device, dataTable, {
+            projection: 'pinhole',
+            width: 256,
+            height: 192,
+            motionBlur: true,
+            background
+        });
+        try {
+            await scene.upload();
+            const gpu = await scene.renderSlices(slices);
+            assert.ok(countForeground(gpu) > 1000, 'scene should cover the frame');
+
+            // Reference: each slice rendered alone and the 8-bit results
+            // averaged in float. The GPU averages before quantizing, so the
+            // two may differ by the per-slice rounding: at most one level.
+            const accum = new Float32Array(gpu.length);
+            for (const s of slices) {
+                const img = await scene.render(s);
+                for (let p = 0; p < img.length; p++) accum[p] += img[p];
+            }
+            let maxDiff = 0;
+            for (let p = 0; p < gpu.length; p++) {
+                const d = Math.abs(gpu[p] - Math.round(accum[p] / slices.length));
+                if (d > maxDiff) maxDiff = d;
+            }
+            assert.ok(maxDiff <= 1, `accumulated frame differs from the slice mean by ${maxDiff} levels`);
+
+            // Two identical slices: their float mean is exact, so the result
+            // must equal the single render byte for byte.
+            const twice = await scene.renderSlices([slices[0], slices[0]]);
+            compare(twice, await scene.render(slices[0]), 'identical slices');
+        } finally {
+            scene.destroy();
+        }
+    });
+
     it('a view with nothing in front of the camera renders the background', async (t) => {
         if (!device) return t.skip('no WebGPU adapter available');
         const { Vec3 } = await import('playcanvas');

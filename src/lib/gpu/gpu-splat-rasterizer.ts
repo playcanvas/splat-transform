@@ -16,10 +16,13 @@ import {
     UniformFormat
 } from 'playcanvas';
 
+import { type CameraBasis, type Projection } from '../render/camera';
+import { TILE_SIZE } from '../render/config';
 import { constantsChunk } from './shaders/chunks/constants';
 import { covariance3D, covariance3DFns } from './shaders/chunks/covariance-3d';
 import { jacobianEquirect } from './shaders/chunks/jacobian-equirect';
 import { jacobianPinhole, jacobianPinholeFns } from './shaders/chunks/jacobian-pinhole';
+import { packRGBA8 } from './shaders/chunks/pack-rgba8';
 import { projectionEquirect } from './shaders/chunks/projection-equirect';
 import { projectionPinhole } from './shaders/chunks/projection-pinhole';
 import { quatRotation } from './shaders/chunks/quat-rotation';
@@ -40,8 +43,6 @@ import { projectWgsl } from './shaders/project';
 import { rasterizeBinnedWgsl } from './shaders/rasterize-binned';
 import { tileBinEmitPairsWgsl } from './shaders/tile-bin-emit-pairs';
 import { uniformsStruct, uniformFormatEntries } from './shaders/uniforms';
-import { type CameraBasis, type Projection } from '../render/camera';
-import { TILE_SIZE } from '../render/config';
 
 /** 12 floats per projected splat: vec4 × 3. */
 const PROJECTION_STRIDE_F32 = 12;
@@ -372,6 +373,7 @@ class GpuSplatRasterizer {
         const sharedCincludes = new Map<string, string>([
             ['uniformsStruct', uniformsStruct],
             ['constants', constantsChunk],
+            ['packRGBA8', packRGBA8],
             ['projectionPinhole', projectionPinhole],
             ['projectionEquirect', projectionEquirect],
             ['jacobianPinhole', jacobianPinhole],
@@ -643,7 +645,9 @@ class GpuSplatRasterizer {
             c.setParameter('_p10', 0);
             // Chunked path: interleaved input, whole chunk per dispatch.
             c.setParameter('numSplats', 0); c.setParameter('rangeStart', 0);
-            c.setParameter('emitBase', 0); c.setParameter('_p11', 0);
+            c.setParameter('emitBase', 0); c.setParameter('sliceIndex', 0);
+            c.setParameter('sliceCount', 1); c.setParameter('_p11', 0);
+            c.setParameter('_p12', 0); c.setParameter('_p13', 0);
         }
     }
 

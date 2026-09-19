@@ -134,27 +134,41 @@ class SceneRenderer {
      * @returns RGBA bytes, `width × height × 4`.
      */
     render(camera: RenderCamera): Promise<Uint8Array> {
-        const { projection, width, height, motionBlur } = this.options;
-        if ((camera.projection ?? 'pinhole') !== projection || camera.width !== width || camera.height !== height) {
-            throw new Error('SceneRenderer: camera projection or size differs from the renderer\'s');
-        }
-        if (motionBlur !== (camera.shutterClose !== undefined)) {
-            throw new Error('SceneRenderer: camera motion blur differs from the renderer\'s');
-        }
-        const basis = buildCameraBasis(camera);
-        let basisB: CameraBasis | undefined;
-        if (camera.shutterClose) {
-            const { position, target, up } = camera.shutterClose;
-            basisB = buildCameraBasis({ ...camera, position, target, up });
-        }
+        return this.renderSlices([camera]);
+    }
 
-        return this.raster.render({
-            basis,
-            basisB,
-            near: camera.near,
-            focusDistance: camera.focusDistance ?? 0,
-            apertureScale: camera.apertureScale ?? 0
+    /**
+     * Render the mean of several views: the shutter slices of one
+     * motion-blurred frame, accumulated on the GPU in float and quantized
+     * once. Needs a renderer built with `motionBlur`.
+     *
+     * @param cameras - The slices, each carrying `shutterClose`; same constraints as {@link render}.
+     * @returns RGBA bytes, `width × height × 4`.
+     */
+    renderSlices(cameras: RenderCamera[]): Promise<Uint8Array> {
+        const { projection, width, height, motionBlur } = this.options;
+        const views = cameras.map((camera) => {
+            if ((camera.projection ?? 'pinhole') !== projection || camera.width !== width || camera.height !== height) {
+                throw new Error('SceneRenderer: camera projection or size differs from the renderer\'s');
+            }
+            if (motionBlur !== (camera.shutterClose !== undefined)) {
+                throw new Error('SceneRenderer: camera motion blur differs from the renderer\'s');
+            }
+            const basis = buildCameraBasis(camera);
+            let basisB: CameraBasis | undefined;
+            if (camera.shutterClose) {
+                const { position, target, up } = camera.shutterClose;
+                basisB = buildCameraBasis({ ...camera, position, target, up });
+            }
+            return {
+                basis,
+                basisB,
+                near: camera.near,
+                focusDistance: camera.focusDistance ?? 0,
+                apertureScale: camera.apertureScale ?? 0
+            };
         });
+        return this.raster.render(views);
     }
 
     destroy(): void {

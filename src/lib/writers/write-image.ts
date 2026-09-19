@@ -11,8 +11,15 @@ import { type CameraTrack } from '../render/camera-track';
 import { sceneSHBands } from '../render/preprocess';
 import type { DeviceCreator } from '../types';
 import { fmtBytes, fmtTime, logger, Transform, WebPCodec } from '../utils';
+import { runEncodeWebp, WorkerQueue } from '../workers';
 
 type Vec3Like = { x: number; y: number; z: number };
+
+/**
+ * Frames of a sequence allowed to be encoding (queued or on a worker thread)
+ * while the next one renders. Bounds the RGBA frames held in memory.
+ */
+const MAX_PENDING_ENCODES = 4;
 
 /**
  * Options for writing a rendered splat image.
@@ -507,10 +514,18 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
             // more slices refine the per-instant compositing between
             // overlapping gaussians, which a single slice approximates with a
             // fixed order and time-averaged alphas.
+            const slices: RenderCamera[] = [];
+            for (let i = 0; i < motionN; i++) {
+                slices.push(sliceCamera(t0 + (t1 - t0) * i / motionN, t0 + (t1 - t0) * (i + 1) / motionN));
+            }
+            if (scene) {
+                // Resident: the slices accumulate on the GPU; one readback per frame.
+                return scene.renderSlices(slices);
+            }
             const pixels = width! * height! * 4;
             const accum = new Float32Array(pixels);
-            for (let i = 0; i < motionN; i++) {
-                const frame = await renderView(sliceCamera(t0 + (t1 - t0) * i / motionN, t0 + (t1 - t0) * (i + 1) / motionN));
+            for (const slice of slices) {
+                const frame = await renderSplats(device, dataTable, slice, background);
                 for (let p = 0; p < pixels; p++) accum[p] += frame[p];
             }
             const rgba = new Uint8Array(pixels);
@@ -530,25 +545,41 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
             await writeFile(fs, filename, webp);
             logWrittenFile(basename(filename), webp.byteLength);
         } else {
+            // Each frame encodes on a worker thread (and writes) while the
+            // next one renders; the RGBA buffer is transferred, not copied.
+            // Encode failures surface at the next frame or at the end.
             const bar = logger.bar('frames', frameCount);
+            const tStart = performance.now();
             let renderMs = 0;
-            let encodeMs = 0;
             let totalBytes = 0;
+            let encodeError: unknown = null;
+            const pending = new Set<Promise<void>>();
+            const encodeFrame = async (rgba: Uint8Array, frameFile: string): Promise<void> => {
+                try {
+                    const webp = await runEncodeWebp(rgba, width, height, webpEffort);
+                    await writeFile(fs, frameFile, webp);
+                    totalBytes += webp.byteLength;
+                } catch (e) {
+                    encodeError ??= e;
+                }
+            };
             for (let f = frameStart; f <= frameEnd; f++) {
                 const t0 = performance.now();
                 const rgba = await renderFrame(f, halfWin);
-                const t1 = performance.now();
-                const webp = webPCodec.encodeLosslessRGBA(rgba, width, height, width * 4, webpEffort);
-                encodeMs += performance.now() - t1;
-                renderMs += t1 - t0;
-                await writeFile(fs, frameFilename(filename, f, digits), webp);
-                totalBytes += webp.byteLength;
+                renderMs += performance.now() - t0;
+                const job: Promise<void> = encodeFrame(rgba, frameFilename(filename, f, digits)).finally(() => pending.delete(job));
+                pending.add(job);
+                if (pending.size >= MAX_PENDING_ENCODES) await Promise.race(pending);
+                if (encodeError) throw encodeError;
                 bar.update(f - frameStart + 1);
             }
+            await Promise.all(pending);
+            if (encodeError) throw encodeError;
             bar.end();
             const first = basename(frameFilename(filename, frameStart, digits));
             const last = basename(frameFilename(filename, frameEnd, digits));
-            logger.info(`${frameCount} frames ${first} … ${last} (${fmtBytes(totalBytes)}): render ${fmtTime(renderMs)}, encode ${fmtTime(encodeMs)}`);
+            const where = WorkerQueue.isInline ? 'inline' : 'on worker threads';
+            logger.info(`${frameCount} frames ${first} … ${last} (${fmtBytes(totalBytes)}): render ${fmtTime(renderMs)}, total ${fmtTime(performance.now() - tStart)} with encode ${where}`);
         }
     } finally {
         scene?.destroy();

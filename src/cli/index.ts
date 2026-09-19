@@ -883,7 +883,7 @@ GPU (used by SOG compression and GPU voxelization: --filter-cluster, --filter-fl
 
 SOG COMPRESSION (.sog, meta.json, lod-meta.json, .html outputs)
     -i, --sh-iterations    <n>              SH compression iterations (more=better). Default: 10
-        --max-workers      <n>              Worker threads for SOG encoding (0 = inline/serial). Default: 4
+        --max-workers      <n>              Worker threads for SOG and image-sequence encoding (0 = inline/serial). Default: 4
 
 SPZ OUTPUT (.spz)
         --spz-version      <3|4>            The SPZ format version to write. Default: 4

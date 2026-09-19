@@ -46,6 +46,21 @@ describe('worker queue', () => {
         );
     });
 
+    it('runEncodeWebp with an effort level stays lossless', async () => {
+        const width = 32;
+        const height = 16;
+        const rgba = new Uint8Array(width * height * 4);
+        for (let i = 0; i < rgba.length; ++i) {
+            rgba[i] = (i * 13) & 0xff;
+        }
+        const original = rgba.slice();
+
+        const webp = await runEncodeWebp(rgba, width, height, 0);
+        const codec = await WebPCodec.create();
+        const decoded = codec.decodeRGBA(webp);
+        assert.deepStrictEqual(Array.from(decoded.rgba), Array.from(original));
+    });
+
     it('runEncodeWebp produces a decodable lossless webp', async () => {
         const width = 32;
         const height = 16;
