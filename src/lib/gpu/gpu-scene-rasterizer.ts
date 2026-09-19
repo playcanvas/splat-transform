@@ -15,10 +15,13 @@ import {
     Vec2
 } from 'playcanvas';
 
+import { type ChunkData, type ChunkDataPool, type ChunkLayer, type ChunkSource, type ReadRequest, colorStride } from '../chunk';
+import { type CameraBasis, type Projection } from '../render/camera';
+import { PAIR_BUFFER_BUDGET_BYTES, PAIR_BUFFER_TOTAL_BYTES_PER_ELEMENT, TILE_SIZE } from '../render/config';
 import { accumulateWgsl } from './shaders/accumulate';
 import { constantsChunk } from './shaders/chunks/constants';
 import { covariance3D, covariance3DFns } from './shaders/chunks/covariance-3d';
-import { jacobianEquirect } from './shaders/chunks/jacobian-equirect';
+import { jacobianEquirect, jacobianEquirectFns } from './shaders/chunks/jacobian-equirect';
 import { jacobianPinhole, jacobianPinholeFns } from './shaders/chunks/jacobian-pinhole';
 import { packRGBA8 } from './shaders/chunks/pack-rgba8';
 import { projectionEquirect } from './shaders/chunks/projection-equirect';
@@ -41,15 +44,13 @@ import { rasterizeBinnedWgsl } from './shaders/rasterize-binned';
 import { SCAN_BLOCK, scanBlocksWgsl, scanSumsWgsl } from './shaders/scan-blocks';
 import { tileBinEmitPairsWgsl } from './shaders/tile-bin-emit-pairs';
 import { uniformsStruct, uniformFormatEntries } from './shaders/uniforms';
-import { type CameraBasis, type Projection } from '../render/camera';
-import { PAIR_BUFFER_BUDGET_BYTES, PAIR_BUFFER_TOTAL_BYTES_PER_ELEMENT, TILE_SIZE } from '../render/config';
-import { type SplatColumnRefs } from '../render/preprocess';
 
 /** 12 floats per projected splat: vec4 × 3. */
 const PROJECTION_STRIDE_F32 = 12;
 
-/** Base attribute columns (position, rotation, log-scale, opacity, DC colour). */
-const BASE_COLUMNS = 14;
+/** Floats per gaussian in the source's position and geometric layers. */
+const POSITION_F32 = 3;
+const GEOMETRIC_F32 = 8;
 
 /**
  * Pairs the range cutter aims for per sort: the shared pair-buffer budget
@@ -60,13 +61,13 @@ const BASE_COLUMNS = 14;
 const PAIR_BUDGET = Math.floor(PAIR_BUFFER_BUDGET_BYTES / PAIR_BUFFER_TOTAL_BYTES_PER_ELEMENT);
 
 /**
- * Thrown by {@link GpuSceneRasterizer.uploadScene} when the device reports
- * out-of-memory for the resident copy. Callers fall back to the chunked
- * path, which streams the scene through a bounded input buffer instead.
+ * Thrown by the upload methods when the device reports out-of-memory for
+ * the scene's buffers. Callers fall back to a tier that holds less on the
+ * GPU.
  */
 class ResidentUploadError extends Error {
     constructor(message: string) {
-        super(`resident scene upload failed: ${message}`);
+        super(`scene upload failed: ${message}`);
         this.name = 'ResidentUploadError';
     }
 }
@@ -75,7 +76,7 @@ class ResidentUploadError extends Error {
  * Fixed per-scene configuration of a {@link GpuSceneRasterizer}.
  */
 interface SceneRasterizerOptions {
-    /** Number of SH bands above DC (0–3). Selects the SH shader variant and sizes the SH buffer. */
+    /** Number of SH bands above DC (0–3). Selects the SH shader variant and sizes the colour layer. */
     numSHBands: 0 | 1 | 2 | 3;
     /** Camera projection; fixed per instance (specialises the shaders). */
     projection: Projection;
@@ -110,34 +111,63 @@ interface SceneView {
     apertureScale: number;
 }
 
+/**
+ * One range of the streamed path: `count` gaussians' layer records in
+ * compositing order, as read from the source. The rasterizer releases the
+ * buffers once uploaded.
+ */
+interface StreamedRange {
+    count: number;
+    position: ChunkData;
+    geometric: ChunkData;
+    color: ChunkData;
+}
+
+/** The scene's order for one view: `order[0..visible)` are the visible gaussians, front to back. */
+interface SortedOrder {
+    order: Uint32Array;
+    visible: number;
+}
+
+/** Layers the rasterizer reads. */
+type SceneLayer = Extract<ChunkLayer, 'position' | 'geometric' | 'color'>;
+
 const numSHCoeffsPerChannel = (bands: number): number => {
     return bands === 0 ? 0 : bands === 1 ? 3 : bands === 2 ? 8 : 15;
 };
 
 /**
- * Resident-scene splat rasterizer.
+ * Scene splat rasterizer over a {@link ChunkSource}'s LOD 0.
  *
- * The scene's columns are uploaded once, column-major; a render uploads
- * nothing. Per render the GPU keys every gaussian by view depth and radix
- * sorts the keys (stable, identity payload, so ties break by row index as
- * the CPU sort does); the sorted index buffer is the order the project
- * shader gathers attributes in. Gaussians behind the near plane are keyed
- * like any other and invalidated by the project shader.
+ * Two ways to hold the scene, chosen by the caller:
  *
- * Per render and group (sub-frame): project every gaussian in one
- * dispatch → two-level block scan of their tile coverage → read back the
- * block prefixes and the total → allocate the pair buffers to exactly that
- * total (or cut the depth-sorted list into ranges at scan-block boundaries
- * so each sort stays within the pair budget) → for each range: emit pairs,
- * radix sort by tile, find tile boundaries, rasterize → finalize and read
- * back the group's pixels. A motion-blurred frame renders its shutter slices
- * one after another per group, accumulating each slice's composited colour
- * in float on the GPU and packing the mean on the last, so the frame costs
- * one readback and quantizes once.
+ * - **Resident** (`uploadScene`): the source's three layers are uploaded once
+ *   as they are stored (position, geometric and colour records), and a render
+ *   sends only the camera. The GPU keys every gaussian by view depth, radix
+ *   sorts the keys (stable, identity payload, so ties break by row index as
+ *   the CPU sort does) and gathers attributes in that order.
+ * - **Streamed** (`uploadPositions` or `prepareStreamed`): only the position
+ *   layer is resident, or nothing at all, and the caller streams the
+ *   gaussians' records per pass in depth order in ranges the rasterizer
+ *   uploads into range-sized buffers. With the positions resident the GPU
+ *   sorts and hands the order back (`sortedOrder`); otherwise the caller
+ *   sorts. Attribute memory is bounded by the range size, so any scene whose
+ *   positions fit renders.
  *
- * Every shader is shared with the chunked `GpuSplatRasterizer`; the
- * resident variants only change how attributes are addressed, so both
- * paths produce identical pixels.
+ * Either way, per render and group (sub-frame): project the gaussians of a
+ * range in one dispatch → two-level block scan of their tile coverage → read
+ * back the block prefixes and the total → pair buffers sized exactly (or the
+ * range cut at scan-block boundaries so each sort stays within the pair
+ * budget) → per cut: emit pairs, radix sort by tile, find tile boundaries,
+ * rasterize → after the last range: finalize and read back the group. A
+ * motion-blurred frame renders its shutter slices one after another per
+ * group, accumulating each slice's composited colour in float on the GPU and
+ * packing the mean on the last, so the frame costs one readback and
+ * quantizes once.
+ *
+ * Every shader is shared with the chunked `GpuSplatRasterizer`; the scene
+ * variants only change how attributes are addressed, so both produce
+ * identical pixels.
  */
 class GpuSceneRasterizer {
     private device: GraphicsDevice;
@@ -150,6 +180,7 @@ class GpuSceneRasterizer {
     private depthSort: ComputeRadixSort;
     private maxDispatchDim: number;
     private dispatchSize = new Vec2();
+    private colorF32: number;
 
     private depthKeysCompute: Compute;
     private projectCompute: Compute;
@@ -164,19 +195,33 @@ class GpuSceneRasterizer {
     /** Slice accumulation; only built with the `motionBlur` option. */
     private accumulateCompute: Compute | null = null;
 
-    // Scene (set by uploadScene).
+    // Scene (set by the upload methods).
+    /** Gaussians in the scene: the depth sort's extent. */
     private numSplats = 0;
-    private baseBuffer: StorageBuffer | null = null;
-    private shBuffer: StorageBuffer | null = null;
+    /** Rows the per-pass working buffers hold: the scene when resident, one range when streamed. */
+    private capacity = 0;
+    private streamed = false;
+    /** The layers the project shader reads: the scene when resident, the current range when streamed. */
+    private positionBuffer: StorageBuffer | null = null;
+    private geometricBuffer: StorageBuffer | null = null;
+    private colorBuffer: StorageBuffer | null = null;
+    /** The scene's positions for the depth keys when streaming with the GPU sort. */
+    private scenePositionBuffer: StorageBuffer | null = null;
     private depthKeysBuffer: StorageBuffer | null = null;
+    /** Identity order for the streamed path: ranges arrive already sorted. */
+    private identityOrderBuffer: StorageBuffer | null = null;
     private projBuffer: StorageBuffer | null = null;
     private coverageBuffer: StorageBuffer | null = null;
     private emitOffsetBuffer: StorageBuffer | null = null;
     private blockSumsBuffer: StorageBuffer | null = null;
     private blockPrefix = new Uint32Array(0);
     private totalReadback = new Uint32Array(1);
+    private orderReadback = new Uint32Array(0);
+    private visibleReadback = new Uint32Array(1);
+    private zero = new Uint32Array(1);
 
     // Per-instance.
+    private visibleCountBuffer: StorageBuffer;
     private tileOffsetsBuffer: StorageBuffer;
     private totalPairsBuffer: StorageBuffer;
     private runningStateBuffer: StorageBuffer;
@@ -198,10 +243,6 @@ class GpuSceneRasterizer {
         // @ts-ignore - limits is a WebGPU-device property not on the public type.
         this.maxDispatchDim = (device as { limits?: { maxComputeWorkgroupsPerDimension?: number } }).limits?.maxComputeWorkgroupsPerDimension ?? 65535;
 
-        if (options.motionBlur && options.projection !== 'pinhole') {
-            throw new Error('GpuSceneRasterizer: motion blur is pinhole-only');
-        }
-
         // Direct-dispatch radix sort: the pair count is known on the CPU by
         // the time each range sorts.
         this.radixSort = new ComputeRadixSort(device);
@@ -212,6 +253,7 @@ class GpuSceneRasterizer {
         this.depthSort = new ComputeRadixSort(device);
 
         const coeffs = numSHCoeffsPerChannel(options.numSHBands);
+        this.colorF32 = 3 + 3 * coeffs;
         const projection = options.projection;
 
         const cincludes = new Map<string, string>([
@@ -223,6 +265,7 @@ class GpuSceneRasterizer {
             ['jacobianPinhole', jacobianPinhole],
             ['jacobianPinholeFns', jacobianPinholeFns],
             ['jacobianEquirect', jacobianEquirect],
+            ['jacobianEquirectFns', jacobianEquirectFns],
             // No coverage cap: the pair buffers are sized from the measured
             // total, so the bbox is never truncated. The cap only has to be
             // unreachable; a group's tile area is the largest bbox possible.
@@ -237,7 +280,7 @@ class GpuSceneRasterizer {
             ['covariance3D', covariance3D],
             ['covariance3DFns', covariance3DFns]
         ]);
-        const cdefines = new Map<string, string>([['SOA', '']]);
+        const cdefines = new Map<string, string>([['SCENE', '']]);
         if (projection === 'equirect') cdefines.set('PROJECTION_EQUIRECT', '');
         if (options.numSHBands >= 1) cdefines.set('SH_BAND_1', '');
         if (options.numSHBands >= 2) cdefines.set('SH_BAND_2', '');
@@ -269,8 +312,8 @@ class GpuSceneRasterizer {
             return new Compute(device, shader, name);
         };
 
-        this.depthKeysCompute = mk('scene-depth-keys', depthKeysWgsl(), [ro('splatsBase'), rw('sortKeys')]);
-        this.projectCompute = mk('scene-project', projectWgsl(coeffs), [ro('splatsBase'), rw('projected'), rw('coverage'), ro('splatsSH'), ro('order')]);
+        this.depthKeysCompute = mk('scene-depth-keys', depthKeysWgsl(), [ro('position'), rw('sortKeys'), rw('visibleCount')]);
+        this.projectCompute = mk('scene-project', projectWgsl(coeffs), [ro('position'), rw('projected'), rw('coverage'), ro('geometric'), ro('color'), ro('order')]);
         this.scanBlocksCompute = mk('scene-scan-blocks', scanBlocksWgsl(), [ro('coverage'), rw('emitOffset'), rw('blockSums')]);
         this.scanSumsCompute = mk('scene-scan-sums', scanSumsWgsl(), [rw('blockSums'), rw('totalPairs')]);
         this.emitCompute = mk('scene-emit-pairs', tileBinEmitPairsWgsl(), [ro('projected'), ro('emitOffset'), ro('coverage'), rw('tileKeys'), rw('splatValues'), ro('blockPrefix')]);
@@ -284,6 +327,7 @@ class GpuSceneRasterizer {
         }
 
         const groupPixels = this.groupPixelW * this.groupPixelH;
+        this.visibleCountBuffer = new StorageBuffer(device, 4, BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST);
         this.tileOffsetsBuffer = new StorageBuffer(device, (numTiles + 1) * 4, 0);
         this.totalPairsBuffer = new StorageBuffer(device, 4, BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST);
         this.runningStateBuffer = new StorageBuffer(device, groupPixels * 16, BUFFERUSAGE_COPY_DST);
@@ -295,6 +339,7 @@ class GpuSceneRasterizer {
             this.accumulateCompute.setParameter('output', this.outputBuffer);
         }
 
+        this.depthKeysCompute.setParameter('visibleCount', this.visibleCountBuffer);
         this.scanSumsCompute.setParameter('totalPairs', this.totalPairsBuffer);
         this.initTileOffsetsCompute.setParameter('totalPairs', this.totalPairsBuffer);
         this.initTileOffsetsCompute.setParameter('tileOffsets', this.tileOffsetsBuffer);
@@ -308,86 +353,164 @@ class GpuSceneRasterizer {
     }
 
     /**
-     * Upload the scene's columns and allocate the per-splat working buffers.
-     * Runs inside an out-of-memory error scope: if the device refuses any of
-     * the allocations, everything is released and a
-     * {@link ResidentUploadError} is thrown so the caller can fall back.
+     * Hold the whole scene resident: upload the source's LOD 0 layers as
+     * stored and allocate the per-splat working buffers. The allocations run
+     * inside an out-of-memory error scope; if the device refuses any of them,
+     * everything is released and a {@link ResidentUploadError} is thrown so
+     * the caller can fall back to a streamed tier.
      *
-     * @param cols - The scene's column references (all rows).
-     * @param numSplats - Row count.
+     * @param source - The scene.
+     * @param pool - Pool for the chunk read buffers.
      */
-    async uploadScene(cols: SplatColumnRefs, numSplats: number): Promise<void> {
+    async uploadScene(source: ChunkSource, pool: ChunkDataPool): Promise<void> {
         this.releaseScene();
         const device = this.device;
-        const coeffs = numSHCoeffsPerChannel(this.options.numSHBands);
-        // @ts-ignore - wgpu is the underlying GPUDevice on WebgpuGraphicsDevice.
-        const wgpu = (device as { wgpu?: { pushErrorScope?: (f: string) => void; popErrorScope?: () => Promise<{ message: string } | null> } }).wgpu;
+        const n = source.meta.lodCounts[0];
+        const cs = colorStride(source.meta.shBands);
+        await this.guardAllocation(() => {
+            this.positionBuffer = new StorageBuffer(device, Math.max(4, n * POSITION_F32 * 4), BUFFERUSAGE_COPY_DST);
+            this.geometricBuffer = new StorageBuffer(device, Math.max(4, n * GEOMETRIC_F32 * 4), BUFFERUSAGE_COPY_DST);
+            this.colorBuffer = new StorageBuffer(device, Math.max(4, n * cs), BUFFERUSAGE_COPY_DST);
+            this.allocateSort(n);
+            this.allocateWorking(n);
+        });
+        this.numSplats = n;
+        this.capacity = n;
+        this.streamed = false;
 
-        wgpu?.pushErrorScope?.('out-of-memory');
-        let oom: { message: string } | null | undefined;
-        try {
-            const numBlocks = Math.ceil(numSplats / SCAN_BLOCK);
-            this.baseBuffer = new StorageBuffer(device, numSplats * BASE_COLUMNS * 4, BUFFERUSAGE_COPY_DST);
-            this.shBuffer = new StorageBuffer(device, Math.max(4, numSplats * coeffs * 3 * 4), BUFFERUSAGE_COPY_DST);
-            // The depth sort borrows this as one of its ping-pong buffers
-            // (destructive keys), so it needs the sorter's copy usages.
-            this.depthKeysBuffer = new StorageBuffer(device, numSplats * 4, BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST);
-            this.projBuffer = new StorageBuffer(device, numSplats * PROJECTION_STRIDE_F32 * 4, 0);
-            this.coverageBuffer = new StorageBuffer(device, numSplats * 4, 0);
-            this.emitOffsetBuffer = new StorageBuffer(device, numSplats * 4, 0);
-            this.blockSumsBuffer = new StorageBuffer(device, Math.max(1, numBlocks) * 4, BUFFERUSAGE_COPY_SRC);
-            this.blockPrefix = new Uint32Array(numBlocks + 1);
+        await this.readChunks(source, pool, ['position', 'geometric', 'color'], (rowStart, count, data) => {
+            this.positionBuffer!.write(rowStart * POSITION_F32 * 4, new Float32Array(data.position!.data, 0, count * POSITION_F32), 0, count * POSITION_F32);
+            this.geometricBuffer!.write(rowStart * GEOMETRIC_F32 * 4, new Float32Array(data.geometric!.data, 0, count * GEOMETRIC_F32), 0, count * GEOMETRIC_F32);
+            this.colorBuffer!.write(rowStart * cs, new Float32Array(data.color!.data, 0, count * this.colorF32), 0, count * this.colorF32);
+        });
 
-            const base = [
-                cols.x, cols.y, cols.z,
-                cols.rotW, cols.rotX, cols.rotY, cols.rotZ,
-                cols.scaleX, cols.scaleY, cols.scaleZ,
-                cols.opacity, cols.fdcR, cols.fdcG, cols.fdcB
-            ];
-            for (let c = 0; c < BASE_COLUMNS; c++) {
-                this.baseBuffer.write(c * numSplats * 4, base[c], 0, numSplats);
-            }
-            for (let k = 0; k < coeffs * 3; k++) {
-                this.shBuffer.write(k * numSplats * 4, cols.shRest[k], 0, numSplats);
-            }
-        } finally {
-            oom = await wgpu?.popErrorScope?.();
-        }
-        if (oom) {
-            this.releaseScene();
-            throw new ResidentUploadError(oom.message);
-        }
-        this.numSplats = numSplats;
-
-        this.depthKeysCompute.setParameter('splatsBase', this.baseBuffer);
-        this.depthKeysCompute.setParameter('sortKeys', this.depthKeysBuffer);
-        this.projectCompute.setParameter('splatsBase', this.baseBuffer);
-        this.projectCompute.setParameter('splatsSH', this.shBuffer);
-        this.projectCompute.setParameter('projected', this.projBuffer);
-        this.projectCompute.setParameter('coverage', this.coverageBuffer);
-        this.scanBlocksCompute.setParameter('coverage', this.coverageBuffer);
-        this.scanBlocksCompute.setParameter('emitOffset', this.emitOffsetBuffer);
-        this.scanBlocksCompute.setParameter('blockSums', this.blockSumsBuffer);
-        this.scanSumsCompute.setParameter('blockSums', this.blockSumsBuffer);
-        this.emitCompute.setParameter('projected', this.projBuffer);
-        this.emitCompute.setParameter('emitOffset', this.emitOffsetBuffer);
-        this.emitCompute.setParameter('coverage', this.coverageBuffer);
-        this.emitCompute.setParameter('blockPrefix', this.blockSumsBuffer);
-        this.rasterizeCompute.setParameter('projected', this.projBuffer);
+        this.depthKeysCompute.setParameter('position', this.positionBuffer);
+        this.bindWorking();
     }
 
     /**
-     * Render one view, or the mean of several. With more than one view each
-     * is a shutter slice of one motion-blurred frame: the slices accumulate
-     * on the GPU in float and the frame quantizes once.
+     * Stream the scene with the GPU sort: only the position layer is
+     * resident, for the depth keys; the gaussians' records arrive per pass in
+     * ranges of up to `rangeRows`, in the order `sortedOrder` hands back.
+     * Throws {@link ResidentUploadError} on out-of-memory.
+     *
+     * @param source - The scene.
+     * @param pool - Pool for the chunk read buffers.
+     * @param rangeRows - Most gaussians per streamed range.
+     */
+    async uploadPositions(source: ChunkSource, pool: ChunkDataPool, rangeRows: number): Promise<void> {
+        this.releaseScene();
+        const device = this.device;
+        const n = source.meta.lodCounts[0];
+        await this.guardAllocation(() => {
+            this.scenePositionBuffer = new StorageBuffer(device, Math.max(4, n * POSITION_F32 * 4), BUFFERUSAGE_COPY_DST);
+            this.allocateSort(n);
+            this.allocateRange(rangeRows, source.meta.shBands);
+        });
+        this.numSplats = n;
+        this.capacity = rangeRows;
+        this.streamed = true;
+        this.orderReadback = new Uint32Array(n);
+
+        await this.readChunks(source, pool, ['position'], (rowStart, count, data) => {
+            this.scenePositionBuffer!.write(rowStart * POSITION_F32 * 4, new Float32Array(data.position!.data, 0, count * POSITION_F32), 0, count * POSITION_F32);
+        });
+
+        this.depthKeysCompute.setParameter('position', this.scenePositionBuffer);
+        this.bindWorking();
+    }
+
+    /**
+     * Stream the scene with the caller's sort: nothing resident but the
+     * range buffers. Throws {@link ResidentUploadError} on out-of-memory.
+     *
+     * @param numSplats - Gaussians in the scene.
+     * @param rangeRows - Most gaussians per streamed range.
+     * @param numSHBands - The scene's SH bands, sizing the colour range buffer.
+     */
+    async prepareStreamed(numSplats: number, rangeRows: number, numSHBands: 0 | 1 | 2 | 3): Promise<void> {
+        this.releaseScene();
+        await this.guardAllocation(() => {
+            this.allocateRange(rangeRows, numSHBands);
+        });
+        this.numSplats = numSplats;
+        this.capacity = rangeRows;
+        this.streamed = true;
+        this.bindWorking();
+    }
+
+    /**
+     * Render one view, or the mean of several, from the resident scene. With
+     * more than one view each is a shutter slice of one motion-blurred
+     * frame: the slices accumulate on the GPU in float and the frame
+     * quantizes once.
      *
      * @param views - One view, or the shutter slices of a frame (needs the `motionBlur` option).
      * @returns RGBA bytes, `imageWidth × imageHeight × 4`.
      */
-    async render(views: SceneView[]): Promise<Uint8Array> {
-        if (!this.depthKeysBuffer) {
+    render(views: SceneView[]): Promise<Uint8Array> {
+        if (!this.positionBuffer || this.streamed) {
             throw new Error('GpuSceneRasterizer: uploadScene before render');
         }
+        this.checkViews(views);
+        return this.renderGroups(views, async (view, tilesX, tilesY) => {
+            this.depthSortPass();
+            await this.rasterRange(this.numSplats, tilesX, tilesY);
+        });
+    }
+
+    /**
+     * Render one view, or the mean of several, streaming the gaussians'
+     * records per pass. `ranges(view)` yields the view's visible gaussians
+     * front to back in ranges of at most the prepared row count; the next
+     * range is requested while the current one rasterizes. For a
+     * multi-group image the ranges are requested once per group.
+     *
+     * @param views - One view, or the shutter slices of a frame.
+     * @param ranges - Produces a view's depth-sorted ranges.
+     * @returns RGBA bytes, `imageWidth × imageHeight × 4`.
+     */
+    renderStreamed(views: SceneView[], ranges: (view: SceneView) => AsyncIterable<StreamedRange>): Promise<Uint8Array> {
+        if (!this.positionBuffer || !this.streamed) {
+            throw new Error('GpuSceneRasterizer: uploadPositions or prepareStreamed before renderStreamed');
+        }
+        this.checkViews(views);
+        return this.renderGroups(views, async (view, tilesX, tilesY) => {
+            const it = ranges(view)[Symbol.asyncIterator]();
+            let next = it.next();
+            for (;;) {
+                const { value: range, done } = await next;
+                if (done) break;
+                next = it.next();
+                this.uploadRange(range);
+                await this.rasterRange(range.count, tilesX, tilesY);
+            }
+        });
+    }
+
+    /**
+     * Depth sort the scene for the view in the current uniforms and read the
+     * order back: `order[0..visible)` are the gaussians the project shader
+     * will accept, front to back. Streamed path with resident positions only;
+     * call from within a `renderStreamed` range producer.
+     *
+     * @returns The sorted order and the visible count.
+     */
+    async sortedOrder(): Promise<SortedOrder> {
+        if (!this.scenePositionBuffer) {
+            throw new Error('GpuSceneRasterizer: sortedOrder needs uploadPositions');
+        }
+        if (this.numSplats === 0) return { order: this.orderReadback, visible: 0 };
+        this.depthSortPass();
+        const sorted = this.depthSort.sortedIndices!;
+        const [order, visible] = await Promise.all([
+            sorted.read(0, this.numSplats * 4, this.orderReadback, true) as Promise<Uint32Array>,
+            this.visibleCountBuffer.read(0, 4, this.visibleReadback, true) as Promise<Uint32Array>
+        ]);
+        return { order, visible: visible[0] };
+    }
+
+    private checkViews(views: SceneView[]): void {
         if (views.length === 0) {
             throw new Error('GpuSceneRasterizer: render needs at least one view');
         }
@@ -399,6 +522,20 @@ class GpuSceneRasterizer {
                 throw new Error('GpuSceneRasterizer: motion blur render needs the shutter-close basis');
             }
         }
+    }
+
+    /**
+     * The group loop shared by both paths: per group, per slice, set the
+     * uniforms, clear the running state, let `slice` rasterize the scene into
+     * it, then finalize (one slice) or accumulate (several); read the group
+     * back after its last slice. Slices run inside groups so the accumulator
+     * stays group-sized.
+     *
+     * @param views - The slices.
+     * @param slice - Rasterizes one slice into the running state.
+     * @returns RGBA bytes of the whole image.
+     */
+    private async renderGroups(views: SceneView[], slice: (view: SceneView, tilesX: number, tilesY: number) => Promise<void>): Promise<Uint8Array> {
         const o = this.options;
         const { imageWidth: width, imageHeight: height } = o;
         const imageTilesX = Math.ceil(width / TILE_SIZE);
@@ -414,13 +551,13 @@ class GpuSceneRasterizer {
                 const tilesX = Math.min(o.groupTilesX, imageTilesX - gx * o.groupTilesX);
                 const tilesY = Math.min(o.groupTilesY, imageTilesY - gy * o.groupTilesY);
 
-                // Slices inside groups: the accumulator is group-sized, and
-                // repeating a slice's depth sort per group is cheap next to
-                // the group's binning and rasterization.
                 for (let s = 0; s < views.length; s++) {
                     this.setUniforms(views[s], gx, gy, tilesX, tilesY, s, views.length);
-                    this.depthSortPass();
-                    await this.rasterPass(tilesX, tilesY);
+                    // Clear running state: colour 0, transmittance 1. Four pixels per thread.
+                    const groupPixels = tilesX * tilesY * TILE_SIZE * TILE_SIZE;
+                    this.clearStateCompute.setupDispatch(Math.ceil(groupPixels / (4 * 256)), 1, 1);
+                    this.device.computeDispatch([this.clearStateCompute], 'scene-clear-state');
+                    await slice(views[s], tilesX, tilesY);
                     pack.setupDispatch(tilesX, tilesY, 1);
                     this.device.computeDispatch([pack], packName);
                     this.submit();
@@ -443,95 +580,96 @@ class GpuSceneRasterizer {
 
     /**
      * Depth sort for the view in the current uniforms: key every gaussian,
-     * sort all 32 key bits (float order is exact) and bind the sorter's index
-     * buffer as the order the project shader gathers in. Skips writing sorted
-     * keys and borrows the keys buffer as scratch; both are rewritten per pass.
+     * sort all 32 key bits (float order is exact) and, when resident, bind
+     * the sorter's index buffer as the order the project shader gathers in.
+     * Skips writing sorted keys and borrows the keys buffer as scratch; both
+     * are rewritten per pass.
      */
     private depthSortPass(): void {
         if (this.numSplats === 0) return;
+        this.visibleCountBuffer.write(0, this.zero, 0, 1);
         this.dispatch2D(this.depthKeysCompute, Math.ceil(this.numSplats / 64), 'scene-depth-keys');
         this.depthSort.sort(this.depthKeysBuffer!, this.numSplats, 32, undefined, true, true);
         const order = this.depthSort.sortedIndices;
         if (!order) {
             throw new Error('ComputeRadixSort returned a null index buffer after sort()');
         }
-        this.projectCompute.setParameter('order', order);
+        if (!this.streamed) this.projectCompute.setParameter('order', order);
         this.submit();
     }
 
     /**
-     * Rasterize the sorted scene into the active group's running state:
-     * clear, project, scan the coverage, then emit, sort and rasterize every
-     * range. Uniforms and the order must be set.
+     * Rasterize `count` gaussians (the scene when resident, one range when
+     * streamed) from the bound layer buffers into the active group's running
+     * state: project, scan the coverage, then emit, sort and rasterize every
+     * cut of the range that fits the pair budget.
      *
+     * @param count - Gaussians to project.
      * @param tilesX - Active group width in tiles.
      * @param tilesY - Active group height in tiles.
      */
-    private async rasterPass(tilesX: number, tilesY: number): Promise<void> {
+    private async rasterRange(count: number, tilesX: number, tilesY: number): Promise<void> {
+        if (count === 0) return;
         const device = this.device;
-        const count = this.numSplats;
+        // Rows to project and scan: the range, not the scene.
+        for (const c of [this.projectCompute, this.scanBlocksCompute, this.scanSumsCompute]) {
+            c.setParameter('chunkSize', count);
+        }
 
-        // Clear running state: colour 0, transmittance 1. Four pixels per thread.
-        const groupPixels = tilesX * tilesY * TILE_SIZE * TILE_SIZE;
-        this.clearStateCompute.setupDispatch(Math.ceil(groupPixels / (4 * 256)), 1, 1);
-        device.computeDispatch([this.clearStateCompute], 'scene-clear-state');
+        // Project every gaussian against this group (those behind the near
+        // plane come out invalid, with no coverage), then scan the tile
+        // coverage: block-local offsets plus block totals, then the block
+        // totals into exclusive prefixes and a grand total.
+        this.dispatch2D(this.projectCompute, Math.ceil(count / 64), 'scene-project');
+        const numBlocks = Math.ceil(count / SCAN_BLOCK);
+        this.dispatch2D(this.scanBlocksCompute, numBlocks, 'scene-scan-blocks');
+        this.scanSumsCompute.setupDispatch(1, 1, 1);
+        device.computeDispatch([this.scanSumsCompute], 'scene-scan-sums');
+        this.submit();
 
-        if (count > 0) {
-            // Project every gaussian against this group (those behind the
-            // near plane come out invalid, with no coverage), then scan the
-            // tile coverage: block-local offsets plus block totals, then
-            // the block totals into exclusive prefixes and a grand total.
-            this.dispatch2D(this.projectCompute, Math.ceil(count / 64), 'scene-project');
-            const numBlocks = Math.ceil(count / SCAN_BLOCK);
-            this.dispatch2D(this.scanBlocksCompute, numBlocks, 'scene-scan-blocks');
-            this.scanSumsCompute.setupDispatch(1, 1, 1);
-            device.computeDispatch([this.scanSumsCompute], 'scene-scan-sums');
-            this.submit();
+        const [prefix, total] = await Promise.all([
+            this.blockSumsBuffer!.read(0, numBlocks * 4, this.blockPrefix, true) as Promise<Uint32Array>,
+            this.totalPairsBuffer.read(0, 4, this.totalReadback, true) as Promise<Uint32Array>
+        ]);
+        const totalPairs = total[0];
 
-            const [prefix, total] = await Promise.all([
-                this.blockSumsBuffer!.read(0, numBlocks * 4, this.blockPrefix, true) as Promise<Uint32Array>,
-                this.totalPairsBuffer.read(0, 4, this.totalReadback, true) as Promise<Uint32Array>
-            ]);
-            const totalPairs = total[0];
-
-            // Cut the depth-sorted list into ranges at scan-block boundaries so
-            // each sort stays within the pair budget. A range that is a single
-            // block exceeding the budget is sorted whole.
-            let startBlock = 0;
-            while (startBlock < numBlocks) {
-                const rangeBase = prefix[startBlock];
-                let endBlock = startBlock + 1;
-                while (endBlock < numBlocks && prefix[endBlock] - rangeBase <= PAIR_BUDGET) {
-                    endBlock++;
-                }
-                // `prefix[endBlock]` past the last block is the grand total.
-                const rangeEnd = endBlock < numBlocks ? prefix[endBlock] : totalPairs;
-                const rangePairs = rangeEnd - rangeBase;
-                if (rangePairs > 0) {
-                    const splatStart = startBlock * SCAN_BLOCK;
-                    const splatCount = Math.min(count, endBlock * SCAN_BLOCK) - splatStart;
-                    this.rasterizeRange(splatStart, splatCount, rangeBase, rangePairs, tilesX, tilesY);
-                }
-                startBlock = endBlock;
+        // Cut the depth-sorted list into ranges at scan-block boundaries so
+        // each sort stays within the pair budget. A range that is a single
+        // block exceeding the budget is sorted whole.
+        let startBlock = 0;
+        while (startBlock < numBlocks) {
+            const rangeBase = prefix[startBlock];
+            let endBlock = startBlock + 1;
+            while (endBlock < numBlocks && prefix[endBlock] - rangeBase <= PAIR_BUDGET) {
+                endBlock++;
             }
+            // `prefix[endBlock]` past the last block is the grand total.
+            const rangeEnd = endBlock < numBlocks ? prefix[endBlock] : totalPairs;
+            const rangePairs = rangeEnd - rangeBase;
+            if (rangePairs > 0) {
+                const splatStart = startBlock * SCAN_BLOCK;
+                const splatCount = Math.min(count, endBlock * SCAN_BLOCK) - splatStart;
+                this.rasterizeCut(splatStart, splatCount, rangeBase, rangePairs, tilesX, tilesY);
+            }
+            startBlock = endBlock;
         }
     }
 
     /**
-     * Emit, sort, bin and rasterize the pairs of one range of the sorted list.
+     * Emit, sort, bin and rasterize the pairs of one cut of the sorted list.
      *
-     * @param splatStart - First splat of the range (index into the sorted order).
-     * @param splatCount - Splats in the range.
-     * @param rangeBase - Pair slot of the range's first pair in the scan's numbering.
-     * @param rangePairs - Pairs in the range.
+     * @param splatStart - First splat of the cut (index into the sorted order).
+     * @param splatCount - Splats in the cut.
+     * @param rangeBase - Pair slot of the cut's first pair in the scan's numbering.
+     * @param rangePairs - Pairs in the cut.
      * @param tilesX - Active group width in tiles.
      * @param tilesY - Active group height in tiles.
      */
-    private rasterizeRange(splatStart: number, splatCount: number, rangeBase: number, rangePairs: number, tilesX: number, tilesY: number): void {
+    private rasterizeCut(splatStart: number, splatCount: number, rangeBase: number, rangePairs: number, tilesX: number, tilesY: number): void {
         const device = this.device;
         this.ensurePairCapacity(rangePairs);
 
-        // The range's pair count drives the sentinel and the boundary pass.
+        // The cut's pair count drives the sentinel and the boundary pass.
         // queue writes land before the commands recorded after them.
         this.totalReadback[0] = rangePairs;
         this.totalPairsBuffer.write(0, this.totalReadback, 0, 1);
@@ -563,8 +701,154 @@ class GpuSceneRasterizer {
         this.rasterizeCompute.setupDispatch(tilesX, tilesY, 1);
         device.computeDispatch([this.rasterizeCompute], 'scene-rasterize');
 
-        // Capture this range's uniforms before the next range overwrites them.
+        // Capture this cut's uniforms before the next cut overwrites them.
         this.submit();
+    }
+
+    /**
+     * Upload one streamed range into the range buffers and release its
+     * chunk buffers (the queue copies on write).
+     *
+     * @param range - The range.
+     */
+    private uploadRange(range: StreamedRange): void {
+        const n = range.count;
+        if (n > this.capacity) {
+            throw new Error(`GpuSceneRasterizer: streamed range of ${n} exceeds the prepared ${this.capacity} rows`);
+        }
+        this.positionBuffer!.write(0, new Float32Array(range.position.data, 0, n * POSITION_F32), 0, n * POSITION_F32);
+        this.geometricBuffer!.write(0, new Float32Array(range.geometric.data, 0, n * GEOMETRIC_F32), 0, n * GEOMETRIC_F32);
+        this.colorBuffer!.write(0, new Float32Array(range.color.data, 0, n * this.colorF32), 0, n * this.colorF32);
+        range.position.release();
+        range.geometric.release();
+        range.color.release();
+    }
+
+    /**
+     * Read the source's LOD 0 chunk by chunk and hand each to `sink` with its
+     * row offset. Buffers are released after the sink returns.
+     *
+     * @param source - The scene.
+     * @param pool - Pool for the read buffers.
+     * @param layers - Layers to read.
+     * @param sink - Consumes one chunk.
+     */
+    private async readChunks(
+        source: ChunkSource,
+        pool: ChunkDataPool,
+        layers: SceneLayer[],
+        sink: (rowStart: number, count: number, data: Partial<Record<SceneLayer, ChunkData>>) => void
+    ): Promise<void> {
+        const { meta } = source;
+        const n = meta.lodCounts[0];
+        const chunkSize = meta.chunkSize;
+        const numChunks = meta.numChunks[0] ?? 0;
+        for (let k = 0; k < numChunks; k++) {
+            const count = Math.min(chunkSize, n - k * chunkSize);
+            const data: Partial<Record<SceneLayer, ChunkData>> = {};
+            const request: ReadRequest = { chunkIndex: k, lod: 0, ...data };
+            for (const layer of layers) {
+                const cd = pool.acquire(layer, meta.layouts[layer]!, count);
+                data[layer] = cd;
+                (request as Record<string, unknown>)[layer] = cd;
+            }
+            await source.read(request);
+            sink(k * chunkSize, count, data);
+            for (const layer of layers) data[layer]!.release();
+        }
+    }
+
+    /**
+     * Run `allocate` inside an out-of-memory error scope, releasing the scene
+     * and throwing {@link ResidentUploadError} if the device reports one.
+     *
+     * @param allocate - Creates the buffers.
+     */
+    private async guardAllocation(allocate: () => void): Promise<void> {
+        // @ts-ignore - wgpu is the underlying GPUDevice on WebgpuGraphicsDevice.
+        const wgpu = (this.device as { wgpu?: { pushErrorScope?: (f: string) => void; popErrorScope?: () => Promise<{ message: string } | null> } }).wgpu;
+        wgpu?.pushErrorScope?.('out-of-memory');
+        let oom: { message: string } | null | undefined;
+        try {
+            allocate();
+        } finally {
+            oom = await wgpu?.popErrorScope?.();
+        }
+        if (oom) {
+            this.releaseScene();
+            throw new ResidentUploadError(oom.message);
+        }
+    }
+
+    /**
+     * Keys buffer for `n` gaussians, and the depth sorter's ping-pong buffers:
+     * the sorter allocates on its first sort, so run one on the still-empty
+     * keys here, inside the caller's error scope.
+     *
+     * @param n - Gaussians in the scene.
+     */
+    private allocateSort(n: number): void {
+        // The depth sort borrows this as one of its ping-pong buffers
+        // (destructive keys), so it needs the sorter's copy usages.
+        this.depthKeysBuffer = new StorageBuffer(this.device, Math.max(4, n * 4), BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST);
+        if (n > 0) {
+            this.depthSort.sort(this.depthKeysBuffer, n, 32, undefined, true, true);
+            this.submit();
+        }
+    }
+
+    /**
+     * Range buffers for the streamed path: the three layers for `rangeRows`
+     * gaussians, the identity order, and the working buffers.
+     *
+     * @param rangeRows - Most gaussians per range.
+     * @param numSHBands - Sizes the colour buffer.
+     */
+    private allocateRange(rangeRows: number, numSHBands: 0 | 1 | 2 | 3): void {
+        const device = this.device;
+        this.positionBuffer = new StorageBuffer(device, rangeRows * POSITION_F32 * 4, BUFFERUSAGE_COPY_DST);
+        this.geometricBuffer = new StorageBuffer(device, rangeRows * GEOMETRIC_F32 * 4, BUFFERUSAGE_COPY_DST);
+        this.colorBuffer = new StorageBuffer(device, rangeRows * colorStride(numSHBands), BUFFERUSAGE_COPY_DST);
+        this.identityOrderBuffer = new StorageBuffer(device, rangeRows * 4, BUFFERUSAGE_COPY_DST);
+        const identity = new Uint32Array(rangeRows);
+        for (let i = 0; i < rangeRows; i++) identity[i] = i;
+        this.identityOrderBuffer.write(0, identity, 0, rangeRows);
+        this.allocateWorking(rangeRows);
+    }
+
+    /**
+     * Per-row working buffers for `rows` gaussians: projection records,
+     * coverage, block-local scan offsets and block sums.
+     *
+     * @param rows - Rows the buffers hold.
+     */
+    private allocateWorking(rows: number): void {
+        const device = this.device;
+        const numBlocks = Math.ceil(rows / SCAN_BLOCK);
+        this.projBuffer = new StorageBuffer(device, Math.max(4, rows * PROJECTION_STRIDE_F32 * 4), 0);
+        this.coverageBuffer = new StorageBuffer(device, Math.max(4, rows * 4), 0);
+        this.emitOffsetBuffer = new StorageBuffer(device, Math.max(4, rows * 4), 0);
+        this.blockSumsBuffer = new StorageBuffer(device, Math.max(1, numBlocks) * 4, BUFFERUSAGE_COPY_SRC);
+        this.blockPrefix = new Uint32Array(numBlocks + 1);
+    }
+
+    private bindWorking(): void {
+        this.depthKeysCompute.setParameter('sortKeys', this.depthKeysBuffer ?? this.coverageBuffer);
+        this.projectCompute.setParameter('position', this.positionBuffer);
+        this.projectCompute.setParameter('geometric', this.geometricBuffer);
+        this.projectCompute.setParameter('color', this.colorBuffer);
+        if (this.streamed) this.projectCompute.setParameter('order', this.identityOrderBuffer);
+        this.projectCompute.setParameter('projected', this.projBuffer);
+        this.projectCompute.setParameter('coverage', this.coverageBuffer);
+        this.scanBlocksCompute.setParameter('coverage', this.coverageBuffer);
+        this.scanBlocksCompute.setParameter('emitOffset', this.emitOffsetBuffer);
+        this.scanBlocksCompute.setParameter('blockSums', this.blockSumsBuffer);
+        this.scanSumsCompute.setParameter('blockSums', this.blockSumsBuffer);
+        this.emitCompute.setParameter('projected', this.projBuffer);
+        this.emitCompute.setParameter('emitOffset', this.emitOffsetBuffer);
+        this.emitCompute.setParameter('coverage', this.coverageBuffer);
+        this.emitCompute.setParameter('blockPrefix', this.blockSumsBuffer);
+        this.rasterizeCompute.setParameter('projected', this.projBuffer);
     }
 
     private ensurePairCapacity(pairs: number): void {
@@ -586,7 +870,6 @@ class GpuSceneRasterizer {
         const o = this.options;
         const b = view.basis;
         const bb = view.basisB;
-        const count = this.numSplats;
         const originX = gx * this.groupPixelW;
         const originY = gy * this.groupPixelH;
         const maxX = originX + tilesX * TILE_SIZE;
@@ -614,7 +897,7 @@ class GpuSceneRasterizer {
             c.setParameter('_p5', 0); c.setParameter('_p6', 0);
             c.setParameter('imageWidth', o.imageWidth); c.setParameter('imageHeight', o.imageHeight);
             c.setParameter('splatStride', 0);
-            c.setParameter('chunkSize', count);
+            c.setParameter('chunkSize', this.capacity);
             c.setParameter('groupPixelMinX', originX);
             c.setParameter('groupPixelMinY', originY);
             c.setParameter('groupPixelMaxX', maxX);
@@ -652,16 +935,23 @@ class GpuSceneRasterizer {
     }
 
     private releaseScene(): void {
-        this.baseBuffer?.destroy();
-        this.shBuffer?.destroy();
+        this.positionBuffer?.destroy();
+        this.geometricBuffer?.destroy();
+        this.colorBuffer?.destroy();
+        this.scenePositionBuffer?.destroy();
         this.depthKeysBuffer?.destroy();
+        this.identityOrderBuffer?.destroy();
         this.projBuffer?.destroy();
         this.coverageBuffer?.destroy();
         this.emitOffsetBuffer?.destroy();
         this.blockSumsBuffer?.destroy();
-        this.baseBuffer = this.shBuffer = this.depthKeysBuffer = this.projBuffer = null;
+        this.positionBuffer = this.geometricBuffer = this.colorBuffer = this.scenePositionBuffer = null;
+        this.depthKeysBuffer = this.identityOrderBuffer = this.projBuffer = null;
         this.coverageBuffer = this.emitOffsetBuffer = this.blockSumsBuffer = null;
+        this.orderReadback = new Uint32Array(0);
         this.numSplats = 0;
+        this.capacity = 0;
+        this.streamed = false;
     }
 
     /** Release all GPU resources. */
@@ -669,6 +959,7 @@ class GpuSceneRasterizer {
         this.releaseScene();
         this.tileKeysBuffer?.destroy();
         this.splatValuesBuffer?.destroy();
+        this.visibleCountBuffer.destroy();
         this.tileOffsetsBuffer.destroy();
         this.totalPairsBuffer.destroy();
         this.runningStateBuffer.destroy();
@@ -681,4 +972,4 @@ class GpuSceneRasterizer {
     }
 }
 
-export { GpuSceneRasterizer, ResidentUploadError, type SceneRasterizerOptions, type SceneView };
+export { GpuSceneRasterizer, ResidentUploadError, type SceneRasterizerOptions, type SceneView, type StreamedRange, type SortedOrder };

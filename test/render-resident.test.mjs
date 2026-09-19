@@ -1,18 +1,21 @@
 /**
- * Resident-path parity.
+ * Scene renderer parity.
  *
- * `SceneRenderer` keeps the scene on the GPU and culls, depth-sorts and
- * gathers there; `renderSplats` (the chunked path) culls and sorts on the
- * CPU and streams the sorted list. Both drive the same shaders and must
- * produce the same pixels.
+ * `SceneRenderer` renders a `ChunkSource` in one of three tiers: resident
+ * (every layer on the GPU; GPU cull, depth sort and gather), streamed with
+ * the GPU sort (positions resident, attributes gathered from the source per
+ * pass in depth order) and streamed with the CPU sort. `renderSplats` (the
+ * chunked reference path) culls and sorts on the CPU from a `DataTable` and
+ * streams the sorted list. All four drive the same shaders and must produce
+ * the same pixels.
  *
  * The comparison is byte-exact. Scene positions sit on a 1/64 grid and the
- * cameras have exactly representable bases, so both paths compute
+ * cameras have exactly representable bases, so every path computes
  * bit-identical depth keys (f32 on the GPU, f64 rounded to f32 on the CPU)
- * and break ties the same way (stable sort, ascending row). Scenes include
+ * and breaks ties the same way (stable sort, ascending row). Scenes include
  * gaussians behind the camera, one exactly on the near plane and one with a
  * NaN position, which the CPU cull drops before the GPU sees them and the
- * resident path must invalidate on the GPU instead.
+ * GPU key pass must sort to the tail instead.
  */
 
 import assert from 'node:assert';
@@ -33,6 +36,8 @@ after(() => {
     device?.destroy?.();
 });
 
+const TIERS = ['resident', 'streamed-gpu', 'streamed-cpu'];
+
 /**
  * Deterministic scene on a 1/64 grid: `n` gaussians in [-4, 4]³ plus a
  * group behind a camera at z = 10 (z in [10.5, 14]), one gaussian whose
@@ -41,10 +46,11 @@ after(() => {
  *
  * @param {number} n - Gaussians in the main group.
  * @param {number} seed - PRNG seed.
- * @returns {Promise<import('../src/lib/index.js').DataTable>} The scene.
+ * @returns {Promise<{ dataTable: object, source: object, pool: object }>} The scene as a table and as a source.
  */
 const makeScene = async (n, seed) => {
-    const { Column, DataTable } = await import('../src/lib/index.js');
+    const { Column, DataTable, dataTableToChunkSource } = await import('../src/lib/index.js');
+    const { createChunkDataPool } = await import('../src/lib/chunk/index.js');
     let s = seed >>> 0;
     const rnd = () => {
         s = (s * 1664525 + 1013904223) >>> 0;
@@ -83,27 +89,32 @@ const makeScene = async (n, seed) => {
     // Undefined position.
     x[total - 1] = NaN;
 
-    return new DataTable([
+    const dataTable = new DataTable([
         new Column('x', x), new Column('y', y), new Column('z', z),
         new Column('rot_0', rot[0]), new Column('rot_1', rot[1]), new Column('rot_2', rot[2]), new Column('rot_3', rot[3]),
         new Column('scale_0', scale[0]), new Column('scale_1', scale[1]), new Column('scale_2', scale[2]),
         new Column('opacity', opacity),
         new Column('f_dc_0', fdc[0]), new Column('f_dc_1', fdc[1]), new Column('f_dc_2', fdc[2])
     ]);
+    // Small chunks so the streamed tiers cross several range boundaries.
+    const chunkSize = 4096;
+    const source = dataTableToChunkSource(dataTable, chunkSize);
+    const pool = createChunkDataPool({ chunkSize });
+    return { dataTable, source, pool };
 };
 
 const background = { r: 0.1, g: 0.2, b: 0.3, a: 1 };
 
-const compare = (resident, chunked, label) => {
+const compare = (candidate, reference, label) => {
     let differing = 0, max = 0;
-    for (let i = 0; i < chunked.length; i++) {
-        const d = Math.abs(resident[i] - chunked[i]);
+    for (let i = 0; i < reference.length; i++) {
+        const d = Math.abs(candidate[i] - reference[i]);
         if (d !== 0) {
             differing++;
             if (d > max) max = d;
         }
     }
-    assert.strictEqual(resident.length, chunked.length, `${label}: image size`);
+    assert.strictEqual(candidate.length, reference.length, `${label}: image size`);
     assert.strictEqual(differing, 0, `${label}: ${differing} bytes differ (max ${max})`);
 };
 
@@ -116,38 +127,46 @@ const countForeground = (image) => {
     return n;
 };
 
-const renderBoth = async (dataTable, camera) => {
-    const { SceneRenderer, renderSplats } = await import('../src/lib/render/index.js');
-    const scene = new SceneRenderer(device, dataTable, {
+const makeRenderer = async (scene, camera, tier) => {
+    const { SceneRenderer } = await import('../src/lib/render/index.js');
+    const renderer = new SceneRenderer(device, scene.source, scene.pool, {
         projection: camera.projection ?? 'pinhole',
         width: camera.width,
         height: camera.height,
         motionBlur: camera.shutterClose !== undefined,
-        background
+        background,
+        tier
     });
-    try {
-        await scene.upload();
-        const resident = await scene.render(camera);
-        const chunked = await renderSplats(device, dataTable, camera, background);
-        return { resident, chunked };
-    } finally {
-        scene.destroy();
-    }
+    const chosen = await renderer.upload();
+    assert.strictEqual(chosen, tier, 'forced tier honoured');
+    return renderer;
 };
 
-describe('resident renderer matches the chunked path', () => {
-    it('static pinhole, defocus, motion blur and equirect are byte-identical', async (t) => {
+describe('scene renderer matches the chunked path', () => {
+    it('static pinhole, defocus, motion blur, equirect and equirect blur are byte-identical in every tier', async (t) => {
         if (!device) return t.skip('no WebGPU adapter available');
         const { Vec3 } = await import('playcanvas');
-        const dataTable = await makeScene(20000, 7);
+        const { renderSplats } = await import('../src/lib/render/index.js');
+        const scene = await makeScene(20000, 7);
 
+        const up = new Vec3(0, 1, 0);
         const pinhole = {
             position: new Vec3(0, 0, 10),
             target: new Vec3(0, 0, 0),
-            up: new Vec3(0, 1, 0),
+            up,
             fovY: Math.PI / 3,
             width: 256,
             height: 192,
+            near: 0.125
+        };
+        const equirect = {
+            projection: 'equirect',
+            position: new Vec3(0.5, 0.25, 0.75),
+            target: new Vec3(0.5, 0.25, -1),
+            up,
+            fovY: 0,
+            width: 256,
+            height: 128,
             near: 0.125
         };
         const cases = [
@@ -156,32 +175,34 @@ describe('resident renderer matches the chunked path', () => {
             // Shutter-close eye moves 0.5 units along +z: depths stay on the grid.
             ['motion blur', {
                 ...pinhole,
-                shutterClose: { position: new Vec3(0.5, 0.25, 10.5), target: new Vec3(0.5, 0.25, 0.5), up: new Vec3(0, 1, 0) }
+                shutterClose: { position: new Vec3(0.5, 0.25, 10.5), target: new Vec3(0.5, 0.25, 0.5), up }
             }],
-            ['equirect', {
-                projection: 'equirect',
-                position: new Vec3(0.5, 0.25, 0.75),
-                target: new Vec3(0.5, 0.25, -1),
-                up: new Vec3(0, 1, 0),
-                fovY: 0,
-                width: 256,
-                height: 128,
-                near: 0.125
+            ['equirect', equirect],
+            // The eye moves half a unit on the grid; squared distances stay exact.
+            ['equirect blur', {
+                ...equirect,
+                shutterClose: { position: new Vec3(0.75, 0.25, 0.25), target: new Vec3(0.75, 0.25, -1.5), up }
             }]
         ];
 
         for (const [label, camera] of cases) {
-            const { resident, chunked } = await renderBoth(dataTable, camera);
-            assert.ok(countForeground(chunked) > 1000, `${label}: scene should cover the frame`);
-            compare(resident, chunked, label);
+            const reference = await renderSplats(device, scene.dataTable, camera, background);
+            assert.ok(countForeground(reference) > 1000, `${label}: scene should cover the frame`);
+            for (const tier of TIERS) {
+                const renderer = await makeRenderer(scene, camera, tier);
+                try {
+                    compare(await renderer.render(camera), reference, `${label} (${tier})`);
+                } finally {
+                    renderer.destroy();
+                }
+            }
         }
     });
 
     it('GPU slice accumulation matches the float mean of the slices', async (t) => {
         if (!device) return t.skip('no WebGPU adapter available');
         const { Vec3 } = await import('playcanvas');
-        const { SceneRenderer } = await import('../src/lib/render/index.js');
-        const dataTable = await makeScene(20000, 7);
+        const scene = await makeScene(20000, 7);
         const up = new Vec3(0, 1, 0);
         const slice = (zA, zB) => ({
             position: new Vec3(0, 0, zA),
@@ -194,46 +215,41 @@ describe('resident renderer matches the chunked path', () => {
             shutterClose: { position: new Vec3(0.25, 0, zB), target: new Vec3(0.25, 0, 0), up }
         });
         const slices = [slice(10, 10.25), slice(10.25, 10.5), slice(10.5, 10.75), slice(10.75, 11)];
-        const scene = new SceneRenderer(device, dataTable, {
-            projection: 'pinhole',
-            width: 256,
-            height: 192,
-            motionBlur: true,
-            background
-        });
-        try {
-            await scene.upload();
-            const gpu = await scene.renderSlices(slices);
-            assert.ok(countForeground(gpu) > 1000, 'scene should cover the frame');
+        for (const tier of ['resident', 'streamed-gpu']) {
+            const renderer = await makeRenderer(scene, slices[0], tier);
+            try {
+                const gpu = await renderer.renderSlices(slices);
+                assert.ok(countForeground(gpu) > 1000, `${tier}: scene should cover the frame`);
 
-            // Reference: each slice rendered alone and the 8-bit results
-            // averaged in float. The GPU averages before quantizing, so the
-            // two may differ by the per-slice rounding: at most one level.
-            const accum = new Float32Array(gpu.length);
-            for (const s of slices) {
-                const img = await scene.render(s);
-                for (let p = 0; p < img.length; p++) accum[p] += img[p];
-            }
-            let maxDiff = 0;
-            for (let p = 0; p < gpu.length; p++) {
-                const d = Math.abs(gpu[p] - Math.round(accum[p] / slices.length));
-                if (d > maxDiff) maxDiff = d;
-            }
-            assert.ok(maxDiff <= 1, `accumulated frame differs from the slice mean by ${maxDiff} levels`);
+                // Reference: each slice rendered alone and the 8-bit results
+                // averaged in float. The GPU averages before quantizing, so the
+                // two may differ by the per-slice rounding: at most one level.
+                const accum = new Float32Array(gpu.length);
+                for (const s of slices) {
+                    const img = await renderer.render(s);
+                    for (let p = 0; p < img.length; p++) accum[p] += img[p];
+                }
+                let maxDiff = 0;
+                for (let p = 0; p < gpu.length; p++) {
+                    const d = Math.abs(gpu[p] - Math.round(accum[p] / slices.length));
+                    if (d > maxDiff) maxDiff = d;
+                }
+                assert.ok(maxDiff <= 1, `${tier}: accumulated frame differs from the slice mean by ${maxDiff} levels`);
 
-            // Two identical slices: their float mean is exact, so the result
-            // must equal the single render byte for byte.
-            const twice = await scene.renderSlices([slices[0], slices[0]]);
-            compare(twice, await scene.render(slices[0]), 'identical slices');
-        } finally {
-            scene.destroy();
+                // Two identical slices: their float mean is exact, so the result
+                // must equal the single render byte for byte.
+                const twice = await renderer.renderSlices([slices[0], slices[0]]);
+                compare(twice, await renderer.render(slices[0]), `${tier}: identical slices`);
+            } finally {
+                renderer.destroy();
+            }
         }
     });
 
     it('a view with nothing in front of the camera renders the background', async (t) => {
         if (!device) return t.skip('no WebGPU adapter available');
         const { Vec3 } = await import('playcanvas');
-        const dataTable = await makeScene(500, 11);
+        const scene = await makeScene(500, 11);
         // Looking along +z from z = 20: every gaussian is behind the camera.
         const camera = {
             position: new Vec3(0, 0, 20),
@@ -244,8 +260,14 @@ describe('resident renderer matches the chunked path', () => {
             height: 64,
             near: 0.125
         };
-        const { resident, chunked } = await renderBoth(dataTable, camera);
-        assert.strictEqual(countForeground(resident), 0, 'resident: only background');
-        compare(resident, chunked, 'empty view');
+        for (const tier of TIERS) {
+            const renderer = await makeRenderer(scene, camera, tier);
+            try {
+                const image = await renderer.render(camera);
+                assert.strictEqual(countForeground(image), 0, `${tier}: only background`);
+            } finally {
+                renderer.destroy();
+            }
+        }
     });
 });

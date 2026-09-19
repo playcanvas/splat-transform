@@ -1,5 +1,5 @@
-import { type ChunkDataPool, type ChunkLayer, type ChunkSource } from './chunk';
-import { materializeToDataTable } from './compat/data-table';
+import { type ChunkDataPool, type ChunkLayer, type ChunkSource, createChunkDataPool } from './chunk';
+import { dataTableToChunkSource, materializeToDataTable } from './compat/data-table';
 import { DataTable } from './data-table';
 import { type FileSystem } from './io/write';
 import { type SplatModel } from './splat-model';
@@ -91,6 +91,46 @@ const getOutputFormat = (filename: string, options: Options): OutputFormat => {
     }
 
     throw new Error(`Unsupported output file type: ${filename}`);
+};
+
+/**
+ * Render a source to an image file (single frame or camera track).
+ *
+ * @param filename - Output filename.
+ * @param source - The scene.
+ * @param pool - Pool for the source's read buffers.
+ * @param options - Processing options (the `render*` fields).
+ * @param fs - File system to write through.
+ * @param createDevice - GPU device factory.
+ */
+const writeImageSource = async (filename: string, source: ChunkSource, pool: ChunkDataPool, options: Options, fs: FileSystem, createDevice?: DeviceCreator): Promise<void> => {
+    await writeImage({
+        filename,
+        source,
+        pool,
+        projection: options.renderProjection,
+        cameraPosition: options.renderCameraPosition,
+        lookAt: options.renderLookAt,
+        up: options.renderUp,
+        fov: options.renderFov,
+        width: options.renderWidth,
+        height: options.renderHeight,
+        near: options.renderNear,
+        background: options.renderBackground,
+        fStop: options.renderFStop,
+        focusDistance: options.renderFocusDistance,
+        sensorSize: options.renderSensorSize,
+        cameraEndPosition: options.renderCameraEndPosition,
+        lookAtEnd: options.renderLookAtEnd,
+        upEnd: options.renderUpEnd,
+        shutter: options.renderShutter,
+        motionSamples: options.renderMotionSamples,
+        webpEffort: options.renderWebpEffort,
+        cameraTrack: options.renderCameraTrack,
+        frames: options.renderFrames,
+        residentBudget: options.renderResidentBudget,
+        createDevice
+    }, fs);
 };
 
 /**
@@ -200,36 +240,16 @@ const writeFile = async (writeOptions: WriteOptions, fs: FileSystem) => {
                 createDevice
             }, fs);
             break;
-        case 'image':
-            await writeImage({
-                filename,
-                dataTable,
-                projection: options.renderProjection,
-                cameraPosition: options.renderCameraPosition,
-                lookAt: options.renderLookAt,
-                up: options.renderUp,
-                fov: options.renderFov,
-                width: options.renderWidth,
-                height: options.renderHeight,
-                near: options.renderNear,
-                background: options.renderBackground,
-                fStop: options.renderFStop,
-                focusDistance: options.renderFocusDistance,
-                sensorSize: options.renderSensorSize,
-                cameraEndPosition: options.renderCameraEndPosition,
-                lookAtEnd: options.renderLookAtEnd,
-                upEnd: options.renderUpEnd,
-                shutter: options.renderShutter,
-                motionSamples: options.renderMotionSamples,
-                webpEffort: options.renderWebpEffort,
-                cameraTrack: options.renderCameraTrack,
-                frames: options.renderFrames,
-                residentBudget: options.renderResidentBudget,
-                createDevice
-            }, fs);
+        case 'image': {
+            // The image writer is chunk-native; view the table as a source.
+            const source = dataTableToChunkSource(dataTable, undefined, undefined, model);
+            const pool = createChunkDataPool({ chunkSize: source.meta.chunkSize });
+            await writeImageSource(filename, source, pool, options, fs, createDevice);
             break;
+        }
     }
 };
+
 
 /**
  * Options for {@link writeSource} — the chunk-native write entry.
@@ -285,6 +305,9 @@ const writeSource = async (writeSourceOptions: WriteSourceOptions, fs: FileSyste
             break;
         case 'lod':
             throw new Error('writeSource: lod output must be written via writeLodSource');
+        case 'image':
+            await writeImageSource(filename, source, pool, options, fs, createDevice);
+            break;
         case 'voxel': {
             // Voxelization consumes only position + geometric (see writeVoxel:
             // x/y/z, rot, scale, opacity — no color/SH). Materialize just those

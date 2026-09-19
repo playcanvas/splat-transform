@@ -69,17 +69,18 @@ class SortScratch {
  * shared `radixSortIndicesByFloat`, providing depths as the parallel
  * Float32 keys.
  *
- * @param cols - Pre-resolved column references (only `x`, `y`, `z` are read).
+ * @param cols - Position columns (`x`, `y`, `z`).
  * @param candidateIndices - Indices into dataTable rows (mutated).
  * @param count - Number of valid entries.
  * @param camera - Camera basis (forward used for pinhole, eye for both).
  * @param projection - Projection mode; selects the depth metric.
  * @param scratch - Reusable scratch buffers, grown on demand.
- * @param cameraB - Shutter-close basis for analytic motion blur (pinhole
- * only): splats are ordered by the mean of their open and close depths.
+ * @param cameraB - Shutter-close basis for analytic motion blur: splats are
+ * ordered by the mean of their open and close depths (pinhole) or squared
+ * distances (equirect), matching the GPU key pass.
  */
 const sortCandidatesByDepth = (
-    cols: SplatColumnRefs,
+    cols: Pick<SplatColumnRefs, 'x' | 'y' | 'z'>,
     candidateIndices: Uint32Array,
     count: number,
     camera: CameraBasis,
@@ -93,7 +94,15 @@ const sortCandidatesByDepth = (
     const { depth, radix } = scratch;
     const ex = camera.eye.x, ey = camera.eye.y, ez = camera.eye.z;
 
-    if (projection === 'pinhole' && cameraB) {
+    if (projection !== 'pinhole' && cameraB) {
+        const exB = cameraB.eye.x, eyB = cameraB.eye.y, ezB = cameraB.eye.z;
+        for (let i = 0; i < count; i++) {
+            const s = candidateIndices[i];
+            const dx = x[s] - ex, dy = y[s] - ey, dz = z[s] - ez;
+            const dxB = x[s] - exB, dyB = y[s] - eyB, dzB = z[s] - ezB;
+            depth[i] = 0.5 * ((dx * dx + dy * dy + dz * dz) + (dxB * dxB + dyB * dyB + dzB * dzB));
+        }
+    } else if (projection === 'pinhole' && cameraB) {
         const fx = camera.forward.x, fy = camera.forward.y, fz = camera.forward.z;
         const exB = cameraB.eye.x, eyB = cameraB.eye.y, ezB = cameraB.eye.z;
         const fxB = cameraB.forward.x, fyB = cameraB.forward.y, fzB = cameraB.forward.z;

@@ -2,9 +2,9 @@ import { GraphicsDevice } from 'playcanvas';
 
 import { type CameraBasis, type Projection, type RenderCamera, buildCameraBasis } from './camera';
 import { TILE_SIZE, storageBindingLimit } from './config';
-import { getSplatColumnRefs, numSHCoeffsPerChannel, sceneSHBands, type SplatColumnRefs } from './preprocess';
-import { DataTable } from '../data-table';
-import { GpuSceneRasterizer } from '../gpu/gpu-scene-rasterizer';
+import { SortScratch, sortCandidatesByDepth } from './preprocess';
+import { type ChunkDataPool, type ChunkSource, type SHBands, colorStride } from '../chunk';
+import { GpuSceneRasterizer, ResidentUploadError, type SceneView, type SortedOrder, type StreamedRange } from '../gpu/gpu-scene-rasterizer';
 
 /**
  * Largest group (sub-frame) edge in tiles: 4096 px, a 256 MB running-state
@@ -14,12 +14,30 @@ import { GpuSceneRasterizer } from '../gpu/gpu-scene-rasterizer';
  */
 const MAX_GROUP_TILES = 4096 / TILE_SIZE;
 
+/** Bytes of the projection record per gaussian: the largest per-row working buffer. */
+const PROJECTION_BYTES = 12 * 4;
+
+/** Per-gaussian working bytes besides the layers: projection records, coverage, scan offsets. */
+const WORKING_BYTES = PROJECTION_BYTES + 4 + 4;
+
+/** Per-gaussian bytes of the depth sort: keys plus the sorter's three ping-pong buffers. */
+const SORT_BYTES = 4 + 12;
+
 interface BackgroundRGBA {
     r: number;
     g: number;
     b: number;
     a: number;
 }
+
+/**
+ * How the scene is held for rendering, from most to least GPU memory:
+ * `resident` (every layer on the GPU, nothing per pass), `streamed-gpu`
+ * (positions and the depth sort on the GPU; attributes streamed from the
+ * source per pass in sorted order), `streamed-cpu` (positions in RAM and the
+ * sort on the CPU; only range-sized buffers on the GPU).
+ */
+type SceneTier = 'resident' | 'streamed-gpu' | 'streamed-cpu';
 
 /** Fixed per-scene render settings; the camera pose varies per {@link SceneRenderer.render}. */
 interface SceneRendererOptions {
@@ -31,59 +49,79 @@ interface SceneRendererOptions {
     background: BackgroundRGBA;
     /** Clamp frame-filling splats to the image; default true. */
     sizeClamp?: boolean;
+    /** Most GPU bytes a tier may hold for the scene; tiers past it are skipped. Default: unlimited. */
+    residentBudget?: number;
+    /** Use this tier regardless of fit (tests); default picks the first that fits. */
+    tier?: SceneTier;
 }
 
 /**
- * Bytes of GPU memory the resident path holds for a scene: the column
- * copies plus the per-splat working buffers (projection records, coverage,
- * scan offsets, depth keys and the depth sort's three ping-pong buffers).
+ * Bytes of GPU memory the resident tier holds for a scene: the three layers
+ * as stored plus the per-splat working buffers (projection records,
+ * coverage, scan offsets, depth keys and the depth sort's ping-pong buffers).
  *
  * @param numSplats - Row count.
  * @param numSHBands - SH bands above DC.
  * @returns Resident bytes.
  */
-const residentSceneBytes = (numSplats: number, numSHBands: number): number => {
-    const coeffs = numSHCoeffsPerChannel(numSHBands);
-    return numSplats * (14 * 4 + coeffs * 3 * 4 + 12 * 4 + 4 + 4 + 4 + 12);
+const residentSceneBytes = (numSplats: number, numSHBands: SHBands): number => {
+    return numSplats * (12 + 32 + colorStride(numSHBands) + WORKING_BYTES + SORT_BYTES);
 };
 
 /**
  * Whether a scene's resident buffers each fit one storage binding on this
- * device. The chunked path has no such limit and remains the fallback.
+ * device: the largest per-splat buffer is the projection record or the
+ * colour layer.
  *
  * @param device - The graphics device.
  * @param numSplats - Row count.
  * @param numSHBands - SH bands above DC.
  * @returns True when every per-scene buffer fits a binding.
  */
-const residentSceneFits = (device: GraphicsDevice, numSplats: number, numSHBands: number): boolean => {
-    const limit = storageBindingLimit(device);
-    const coeffs = numSHCoeffsPerChannel(numSHBands);
-    const largest = Math.max(14 * 4, coeffs * 3 * 4, 12 * 4) * numSplats;
-    return largest <= limit;
+const residentSceneFits = (device: GraphicsDevice, numSplats: number, numSHBands: SHBands): boolean => {
+    return Math.max(PROJECTION_BYTES, colorStride(numSHBands)) * numSplats <= storageBindingLimit(device);
 };
 
 /**
- * Renders many views of one scene held resident on the GPU.
+ * Renders many views of one scene held on the GPU, or streamed through it.
  *
- * Construct, `upload()` once, then `render()` per view. A render sends the
- * GPU only the camera: the near-plane cull, the depth sort and the
- * attribute gather all run there. See {@link GpuSceneRasterizer}.
+ * Construct, `upload()` once, then `render()` per view. `upload` picks the
+ * first {@link SceneTier} that fits the device's binding limit and the
+ * caller's budget, falling to the next when the device refuses the
+ * allocation. A render sends the GPU only the camera when resident; the
+ * streamed tiers gather the gaussians' records from the source per pass in
+ * depth order. See {@link GpuSceneRasterizer}.
  */
 class SceneRenderer {
     private device: GraphicsDevice;
-    private dataTable: DataTable;
+    private source: ChunkSource;
+    private pool: ChunkDataPool;
     private options: SceneRendererOptions;
-    private cols: SplatColumnRefs;
-    private numSHBands: 0 | 1 | 2 | 3;
+    private numSHBands: SHBands;
     private raster: GpuSceneRasterizer;
+    /** Most gaussians per streamed range: a pool chunk, or fewer if a range buffer would exceed a binding. */
+    private rangeRows: number;
+    /** `streamed-cpu` only: the positions and the sort's scratch. */
+    private positions: { x: Float32Array; y: Float32Array; z: Float32Array } | null = null;
+    private candidates: Uint32Array | null = null;
+    private sortScratch: SortScratch | null = null;
 
-    constructor(device: GraphicsDevice, dataTable: DataTable, options: SceneRendererOptions) {
+    /** Gaussians in the scene (LOD 0). */
+    readonly numSplats: number;
+    /** The tier `upload` chose, or null before it ran. */
+    tier: SceneTier | null = null;
+    /** GPU bytes the chosen tier holds for the scene. */
+    gpuBytes = 0;
+
+    constructor(device: GraphicsDevice, source: ChunkSource, pool: ChunkDataPool, options: SceneRendererOptions) {
         this.device = device;
-        this.dataTable = dataTable;
+        this.source = source;
+        this.pool = pool;
         this.options = options;
-        this.numSHBands = sceneSHBands(dataTable);
-        this.cols = getSplatColumnRefs(dataTable, this.numSHBands);
+        this.numSplats = source.meta.lodCounts[0];
+        this.numSHBands = source.meta.shBands;
+        const perRow = Math.max(PROJECTION_BYTES, colorStride(this.numSHBands));
+        this.rangeRows = Math.max(1, Math.min(pool.chunkSize, Math.floor(storageBindingLimit(device) / perRow)));
 
         const imageTilesX = Math.ceil(options.width / TILE_SIZE);
         const imageTilesY = Math.ceil(options.height / TILE_SIZE);
@@ -108,22 +146,43 @@ class SceneRenderer {
     }
 
     /**
-     * Resident GPU bytes this scene needs.
+     * Load the scene into the first tier that fits. Throws
+     * `ResidentUploadError` only if even the range buffers are refused.
      *
-     * @returns Bytes.
+     * @returns The tier chosen.
      */
-    get residentBytes(): number {
-        return residentSceneBytes(this.dataTable.numRows, this.numSHBands);
+    async upload(): Promise<SceneTier> {
+        const { device, source, pool, options, numSplats: n, numSHBands: bands } = this;
+        const budget = options.residentBudget ?? Infinity;
+        const forced = options.tier;
+        const rangeBytes = this.rangeRows * (12 + 32 + colorStride(bands) + WORKING_BYTES + 4);
+
+        if (forced === 'resident' || (forced === undefined && residentSceneFits(device, n, bands) && residentSceneBytes(n, bands) <= budget)) {
+            try {
+                await this.raster.uploadScene(source, pool);
+                return this.chose('resident', residentSceneBytes(n, bands));
+            } catch (e) {
+                if (forced || !(e instanceof ResidentUploadError)) throw e;
+            }
+        }
+        const streamedBytes = n * (12 + SORT_BYTES) + rangeBytes;
+        if (forced === 'streamed-gpu' || (forced === undefined && 12 * n <= storageBindingLimit(device) && streamedBytes <= budget)) {
+            try {
+                await this.raster.uploadPositions(source, pool, this.rangeRows);
+                return this.chose('streamed-gpu', streamedBytes);
+            } catch (e) {
+                if (forced || !(e instanceof ResidentUploadError)) throw e;
+            }
+        }
+        await this.raster.prepareStreamed(n, this.rangeRows, bands);
+        await this.loadPositions();
+        return this.chose('streamed-cpu', rangeBytes);
     }
 
-    /**
-     * Upload the scene. Throws `ResidentUploadError` if the device runs out
-     * of memory; the instance is then unusable and should be destroyed.
-     *
-     * @returns Resolves once the upload is issued and the error scope has cleared.
-     */
-    upload(): Promise<void> {
-        return this.raster.uploadScene(this.cols, this.dataTable.numRows);
+    private chose(tier: SceneTier, gpuBytes: number): SceneTier {
+        this.tier = tier;
+        this.gpuBytes = gpuBytes;
+        return tier;
     }
 
     /**
@@ -146,6 +205,9 @@ class SceneRenderer {
      * @returns RGBA bytes, `width × height × 4`.
      */
     renderSlices(cameras: RenderCamera[]): Promise<Uint8Array> {
+        if (!this.tier) {
+            throw new Error('SceneRenderer: upload before render');
+        }
         const { projection, width, height, motionBlur } = this.options;
         const views = cameras.map((camera) => {
             if ((camera.projection ?? 'pinhole') !== projection || camera.width !== width || camera.height !== height) {
@@ -168,12 +230,97 @@ class SceneRenderer {
                 apertureScale: camera.apertureScale ?? 0
             };
         });
-        return this.raster.render(views);
+        if (this.tier === 'resident') {
+            return this.raster.render(views);
+        }
+        return this.raster.renderStreamed(views, view => this.ranges(view));
+    }
+
+    /**
+     * The streamed tiers' range producer: the view's visible gaussians in
+     * depth order, gathered from the source in ranges. The source coalesces
+     * each gather into file-order reads internally.
+     *
+     * @param view - The view being rendered.
+     * @yields One range at a time; the rasterizer releases its buffers.
+     */
+    private async *ranges(view: SceneView): AsyncGenerator<StreamedRange> {
+        const { order, visible } = this.tier === 'streamed-gpu' ? await this.raster.sortedOrder() : this.cpuOrder(view);
+        const { layouts } = this.source.meta;
+        for (let base = 0; base < visible; base += this.rangeRows) {
+            const count = Math.min(this.rangeRows, visible - base);
+            const position = this.pool.acquire('position', layouts.position!, count);
+            const geometric = this.pool.acquire('geometric', layouts.geometric!, count);
+            const color = this.pool.acquire('color', layouts.color!, count);
+            await this.source.read({ indices: order, indexOffset: base, count, lod: 0, position, geometric, color });
+            yield { count, position, geometric, color };
+        }
+    }
+
+    /**
+     * `streamed-cpu`: read the position layer into RAM for the cull and sort.
+     */
+    private async loadPositions(): Promise<void> {
+        const { source, pool, numSplats: n } = this;
+        const x = new Float32Array(n);
+        const y = new Float32Array(n);
+        const z = new Float32Array(n);
+        const { meta } = source;
+        const numChunks = meta.numChunks[0] ?? 0;
+        for (let k = 0; k < numChunks; k++) {
+            const count = Math.min(meta.chunkSize, n - k * meta.chunkSize);
+            const position = pool.acquire('position', meta.layouts.position!, count);
+            await source.read({ chunkIndex: k, lod: 0, position });
+            const p = new Float32Array(position.data, 0, count * 3);
+            const rowStart = k * meta.chunkSize;
+            for (let i = 0; i < count; i++) {
+                x[rowStart + i] = p[i * 3];
+                y[rowStart + i] = p[i * 3 + 1];
+                z[rowStart + i] = p[i * 3 + 2];
+            }
+            position.release();
+        }
+        this.positions = { x, y, z };
+        this.candidates = new Uint32Array(n);
+        this.sortScratch = new SortScratch();
+    }
+
+    /**
+     * `streamed-cpu`: the near-plane cull and depth sort on the CPU, with the
+     * GPU key pass's tests (both shutter poses under motion blur).
+     *
+     * @param view - The view.
+     * @returns The visible gaussians front to back.
+     */
+    private cpuOrder(view: SceneView): SortedOrder {
+        const { x, y, z } = this.positions!;
+        const candidates = this.candidates!;
+        const { basis, basisB, near } = view;
+        const n = this.numSplats;
+        let count = 0;
+        if (this.options.projection === 'pinhole') {
+            const cz = (b: CameraBasis, i: number) => b.forward.x * (x[i] - b.eye.x) + b.forward.y * (y[i] - b.eye.y) + b.forward.z * (z[i] - b.eye.z);
+            for (let i = 0; i < n; i++) {
+                if (cz(basis, i) > near && (!basisB || cz(basisB, i) > near)) candidates[count++] = i;
+            }
+        } else {
+            const nearSq = near * near;
+            const r2 = (b: CameraBasis, i: number) => {
+                const dx = x[i] - b.eye.x, dy = y[i] - b.eye.y, dz = z[i] - b.eye.z;
+                return dx * dx + dy * dy + dz * dz;
+            };
+            for (let i = 0; i < n; i++) {
+                if (r2(basis, i) > nearSq && (!basisB || r2(basisB, i) > nearSq)) candidates[count++] = i;
+            }
+        }
+        sortCandidatesByDepth(this.positions!, candidates, count, basis, this.options.projection, this.sortScratch!, basisB);
+        return { order: candidates, visible: count };
     }
 
     destroy(): void {
         this.raster.destroy();
+        this.positions = this.candidates = this.sortScratch = null;
     }
 }
 
-export { SceneRenderer, residentSceneBytes, residentSceneFits, type SceneRendererOptions };
+export { SceneRenderer, residentSceneBytes, residentSceneFits, type SceneRendererOptions, type SceneTier };

@@ -2,13 +2,12 @@ import { basename, extname } from 'pathe';
 import { Vec3 } from 'playcanvas';
 
 import { logWrittenFile } from './utils';
-import { computeWriteTransform, DataTable } from '../data-table';
-import { ResidentUploadError } from '../gpu/gpu-scene-rasterizer';
+import { type ChunkDataPool, type ChunkSource } from '../chunk';
+import { computeWriteTransform } from '../data-table';
 import { type FileSystem, writeFile } from '../io/write';
-import { renderSplats, SceneRenderer, residentSceneBytes, residentSceneFits } from '../render';
+import { SceneRenderer, type SceneTier } from '../render';
 import { type Projection, type RenderCamera } from '../render/camera';
 import { type CameraTrack } from '../render/camera-track';
-import { sceneSHBands } from '../render/preprocess';
 import type { DeviceCreator } from '../types';
 import { fmtBytes, fmtTime, logger, Transform, WebPCodec } from '../utils';
 import { runEncodeWebp, WorkerQueue } from '../workers';
@@ -31,8 +30,10 @@ type WriteImageOptions = {
      */
     filename: string;
 
-    /** Gaussian splat data to render. */
-    dataTable: DataTable;
+    /** The scene to render (its LOD 0). Its pending transform is honoured by moving the camera into the scene's space. */
+    source: ChunkSource;
+    /** Pool for the source's read buffers; its chunk size must be at least the source's. */
+    pool: ChunkDataPool;
 
     /**
      * Camera projection mode. Default: `'pinhole'`.
@@ -103,8 +104,8 @@ type WriteImageOptions = {
      * motion blur: the camera moves from (`cameraPosition`, `lookAt`,
      * `up`) at shutter-open to (`cameraEndPosition`, `lookAtEnd`,
      * `upEnd`) at shutter-close, and every gaussian is integrated over
-     * its motion in `motionSamples` shutter slices. Pinhole only. Not
-     * valid with `cameraTrack`, whose motion blur comes from `shutter`.
+     * its motion in `motionSamples` shutter slices. Not valid with
+     * `cameraTrack`, whose motion blur comes from `shutter`.
      */
     cameraEndPosition?: Vec3Like;
 
@@ -197,7 +198,8 @@ const frameFilename = (filename: string, frame: number, digits: number): string 
  * ```ts
  * await writeImage({
  *     filename: 'view.webp',
- *     dataTable,
+ *     source,
+ *     pool,
  *     cameraPosition: { x: 0, y: 0, z: 5 },
  *     fov: 60,
  *     width: 1920, height: 1080,
@@ -208,7 +210,8 @@ const frameFilename = (filename: string, frame: number, digits: number): string 
 const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<void> => {
     const {
         filename,
-        dataTable,
+        source,
+        pool,
         projection = 'pinhole',
         cameraPosition = { x: 2, y: 1, z: -2 },
         lookAt = { x: 0, y: 0, z: 0 },
@@ -289,9 +292,6 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     if (motionEnabled && (!Number.isInteger(motionN) || motionN < 1)) {
         throw new Error(`writeImage: --motion-samples must be a positive integer, got ${motionN}.`);
     }
-    if (motionEnabled && projection === 'equirect') {
-        throw new Error('writeImage: motion blur is not supported with --projection equirect.');
-    }
 
     // Frame range: a single frame without a track, else the track's frames.
     let frameStart = 0;
@@ -310,13 +310,13 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     const digits = Math.max(4, String(frameEnd).length);
 
     // The camera, its defaults and the renderer's conventions live in the
-    // PlayCanvas default space, while the table stays in its source space
-    // (e.g. Transform.PLY). Rather than rewriting every column into the
-    // camera's space, move the camera into the table's: positions and
+    // PlayCanvas default space, while the scene stays in its source space
+    // (e.g. Transform.PLY). Rather than baking every gaussian into the
+    // camera's space, move the camera into the scene's: positions and
     // targets through the inverse transform, directions through its
     // rotation, and lengths (near plane, focus, sensor) by its scale. The
     // image is the same; the per-render pass over the whole scene is not.
-    const delta = computeWriteTransform(dataTable.transform, Transform.IDENTITY);
+    const delta = computeWriteTransform(source.meta.transform, Transform.IDENTITY);
     const toData = delta ? delta.clone().invert() : null;
     const tmp = new Vec3();
     const toDataPoint = (p: Vec3Like): Vec3Like => {
@@ -442,38 +442,29 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         logger.info(`motion blur: ${motionN} slice${motionN === 1 ? '' : 's'}, shutter ${motionShutter}`);
     }
 
-    // Resident path when the scene fits: one upload, then every pass only
-    // sends the sorted order. Otherwise (or if the device refuses the
-    // allocation) each pass streams the scene through the chunked path.
-    let scene: SceneRenderer | null = null;
-    const numRows = dataTable.numRows;
-    const residentBytes = residentSceneBytes(numRows, sceneSHBands(dataTable));
-    const withinBudget = residentBudget === undefined || residentBytes <= residentBudget;
-    if (withinBudget && residentSceneFits(device, numRows, sceneSHBands(dataTable))) {
-        const candidate = new SceneRenderer(device, dataTable, {
-            projection,
-            width: width!,
-            height: height!,
-            motionBlur: motionEnabled,
-            background
-        });
-        try {
-            await candidate.upload();
-            scene = candidate;
-            logger.info(`scene resident on GPU (${fmtBytes(residentBytes)})`);
-        } catch (e) {
-            if (!(e instanceof ResidentUploadError)) throw e;
-            candidate.destroy();
-            logger.warn(`${e.message}; streaming the scene per pass instead`);
-        }
-    } else {
-        logger.info(`scene streamed per pass (${fmtBytes(residentBytes)} resident would ${withinBudget ? 'exceed a storage binding' : 'exceed the resident budget'})`);
-    }
-    const renderView = (camera: RenderCamera): Promise<Uint8Array> => {
-        return scene ? scene.render(camera) : renderSplats(device, dataTable, camera, background);
+    // Resident when the scene fits the device and the budget: one upload,
+    // then every pass sends only the camera. Otherwise the renderer streams
+    // the gaussians from the source per pass in depth order, sorting on the
+    // GPU while the positions fit and on the CPU past that.
+    const scene = new SceneRenderer(device, source, pool, {
+        projection,
+        width: width!,
+        height: height!,
+        motionBlur: motionEnabled,
+        background,
+        residentBudget
+    });
+    const tierNote: Record<SceneTier, string> = {
+        'resident': 'scene resident on GPU',
+        'streamed-gpu': 'scene streamed per pass, positions and depth sort on GPU',
+        'streamed-cpu': 'scene streamed per pass, depth sort on CPU'
     };
 
     try {
+        const tier = await scene.upload();
+        logger.info(`${tierNote[tier]} (${fmtBytes(scene.gpuBytes)})`);
+        const renderView = (camera: RenderCamera): Promise<Uint8Array> => scene.render(camera);
+
         // Camera for a motion-blur pass over [tA, tB]: shutter-open pose at
         // tA, shutter-close pose at tB, focus distance and aperture scale from
         // the slice midpoint.
@@ -499,7 +490,7 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         // track's frames: a looping timeline wraps from its last frame back
         // to its first, and a shutter reaching into that jump would ghost the
         // end frames of a clip that plays once.
-        const renderFrame = async (center: number, halfWin: number): Promise<Uint8Array> => {
+        const renderFrame = (center: number, halfWin: number): Promise<Uint8Array> => {
             if (!motionEnabled) {
                 return renderView(buildCamera(poseAt(center)));
             }
@@ -518,20 +509,8 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
             for (let i = 0; i < motionN; i++) {
                 slices.push(sliceCamera(t0 + (t1 - t0) * i / motionN, t0 + (t1 - t0) * (i + 1) / motionN));
             }
-            if (scene) {
-                // Resident: the slices accumulate on the GPU; one readback per frame.
-                return scene.renderSlices(slices);
-            }
-            const pixels = width! * height! * 4;
-            const accum = new Float32Array(pixels);
-            for (const slice of slices) {
-                const frame = await renderSplats(device, dataTable, slice, background);
-                for (let p = 0; p < pixels; p++) accum[p] += frame[p];
-            }
-            const rgba = new Uint8Array(pixels);
-            const inv = 1 / motionN;
-            for (let p = 0; p < pixels; p++) rgba[p] = Math.round(accum[p] * inv);
-            return rgba;
+            // The slices accumulate on the GPU; one readback per frame.
+            return scene.renderSlices(slices);
         };
 
         const webPCodec = await WebPCodec.create(); // cheap: create() memoizes the wasm module
@@ -582,7 +561,7 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
             logger.info(`${frameCount} frames ${first} … ${last} (${fmtBytes(totalBytes)}): render ${fmtTime(renderMs)}, total ${fmtTime(performance.now() - tStart)} with encode ${where}`);
         }
     } finally {
-        scene?.destroy();
+        scene.destroy();
     }
 
     g.end();

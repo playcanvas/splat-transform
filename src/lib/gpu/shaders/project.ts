@@ -13,11 +13,12 @@
  * embedded by the tile-AABB chunk via JS-template substitution at
  * construction time (see `sharedCincludes` in the rasterizer ctor).
  *
- * Motion blur (`MOTION_BLUR`, pinhole only) projects each gaussian a
- * second time with the shutter-close basis, averages the two 2D
- * covariances, moves the centre to the shutter midpoint and stores the
- * half displacement in the record's two spare floats (`v0.w`, `v2.w`) for
- * the rasterizer to integrate over.
+ * Motion blur (`MOTION_BLUR`) projects each gaussian a second time with
+ * the shutter-close basis, averages the two 2D covariances, moves the
+ * centre to the shutter midpoint and stores the half displacement in the
+ * record's two spare floats (`v0.w`, `v2.w`) for the rasterizer to
+ * integrate over. Under equirect the displacement takes the short way
+ * round the ±π seam, as the rasterizer's per-pixel offset does.
  *
  * @param coeffsPerChannel - Per-channel SH coefficient count (0/3/8/15).
  * @returns WGSL source for the project compute shader.
@@ -31,22 +32,27 @@ const projectWgsl = (coeffsPerChannel: number) => /* wgsl */`
 @group(0) @binding(3) var<storage, read_write> coverage: array<u32>;
 
 // Splat attribute access. The chunked path uploads an interleaved record
-// per gaussian (\`splats\`, stride \`splatStride\`); the resident path keeps the
-// scene's columns on the GPU (\`splatsBase\` for the 14 base attributes,
-// \`splatsSH\` for the SH rest coefficients, both column-major with stride
-// \`numSplats\`) and processes gaussians in the depth-sorted \`order\`. Both
-// resolve to the same f32 values, so the two paths render identically.
-#ifdef SOA
-@group(0) @binding(1) var<storage, read> splatsBase: array<f32>;
-@group(0) @binding(4) var<storage, read> splatsSH: array<f32>;
-@group(0) @binding(5) var<storage, read> order: array<u32>;
+// per gaussian (\`splats\`, stride \`splatStride\`); the scene rasterizer holds
+// the source's layers as they are stored (\`position\` 3, \`geometric\` 8 and
+// \`color\` 3 + SH floats per gaussian) and processes gaussians in the
+// depth-sorted \`order\`. Both resolve to the same f32 values, so the two
+// paths render identically.
+#ifdef SCENE
+@group(0) @binding(1) var<storage, read> position: array<f32>;
+@group(0) @binding(4) var<storage, read> geometric: array<f32>;
+@group(0) @binding(5) var<storage, read> color: array<f32>;
+@group(0) @binding(6) var<storage, read> order: array<u32>;
+
+const COLOR_STRIDE_F32: u32 = ${3 + 3 * coeffsPerChannel}u;
 
 fn attr(c: u32, s: u32) -> f32 {
-    return splatsBase[c * uniforms.numSplats + s];
+    if (c < 3u) { return position[s * 3u + c]; }
+    if (c < 11u) { return geometric[s * 8u + (c - 3u)]; }
+    return color[s * COLOR_STRIDE_F32 + (c - 11u)];
 }
 
 fn shc(k: u32, s: u32) -> f32 {
-    return splatsSH[k * uniforms.numSplats + s];
+    return color[s * COLOR_STRIDE_F32 + 3u + k];
 }
 #else
 @group(0) @binding(1) var<storage, read> splats: array<f32>;
@@ -62,6 +68,7 @@ fn shc(k: u32, s: u32) -> f32 {
 
 #include "covariance3DFns"
 #include "jacobianPinholeFns"
+#include "jacobianEquirectFns"
 
 const SH_C0: f32 = 0.28209479177387814;
 const SH_C1: f32 = 0.4886025119029199;
@@ -98,7 +105,7 @@ fn main(
     let i = (wgId.y * numWg.x + wgId.x) * 64u + lid.x;
     if (i >= uniforms.chunkSize) { return; }
 
-#ifdef SOA
+#ifdef SCENE
     let s = order[i];
 #else
     let s = i;
@@ -163,24 +170,47 @@ fn main(
     let cxB = uniforms.rightBX * wxB + uniforms.rightBY * wyB + uniforms.rightBZ * wzB;
     let cyB = uniforms.downBX * wxB + uniforms.downBY * wyB + uniforms.downBZ * wzB;
     let czB = uniforms.forwardBX * wxB + uniforms.forwardBY * wyB + uniforms.forwardBZ * wzB;
+#ifdef PROJECTION_EQUIRECT
+    let r2B = cxB * cxB + cyB * cyB + czB * czB;
+    if (!(r2B > uniforms.near * uniforms.near)) { writeInvalid(i); return; }
+    let rB = sqrt(r2B);
+    let rxzClampedB = max(sqrt(cxB * cxB + czB * czB), POLE_EPS * rB);
+    let screenXB = (atan2(cxB, czB) * invTwoPi + 0.5) * imgWf;
+    let screenYB = (asin(clamp(cyB / rB, -1.0, 1.0)) * invPi + 0.5) * imgHf;
+#else
     if (!(czB > uniforms.near)) { writeInvalid(i); return; }
     let invZB = 1.0 / czB;
     let screenXB = uniforms.focalX * cxB * invZB + f32(uniforms.imageWidth) * 0.5;
     let screenYB = uniforms.focalY * cyB * invZB + f32(uniforms.imageHeight) * 0.5;
+#endif
     let ccB = camCov(
         uniforms.rightBX, uniforms.rightBY, uniforms.rightBZ,
         uniforms.downBX, uniforms.downBY, uniforms.downBZ,
         uniforms.forwardBX, uniforms.forwardBY, uniforms.forwardBZ,
         sig00, sig01, sig02, sig11, sig12, sig22
     );
+#ifdef PROJECTION_EQUIRECT
+    let covB = cov2dEquirect(cxB, cyB, czB, r2B, rxzClampedB, ccB.c00, ccB.c01, ccB.c02, ccB.c11, ccB.c12, ccB.c22);
+#else
     let covB = cov2dPinhole(cxB, cyB, czB, invZB, ccB.c00, ccB.c01, ccB.c02, ccB.c11, ccB.c12, ccB.c22);
+#endif
     cov00 = 0.5 * (cov00 + covB.x);
     cov01 = 0.5 * (cov01 + covB.y);
     cov11 = 0.5 * (cov11 + covB.z);
-    hx = 0.5 * (screenXB - screenX);
+    var dxB = screenXB - screenX;
+#ifdef PROJECTION_EQUIRECT
+    // Shortest way round the seam; the rasterizer wraps each pixel's
+    // offset the same way. Keep the midpoint inside the image so the tile
+    // walk wraps from it.
+    if (dxB > imgWf * 0.5) { dxB = dxB - imgWf; } else if (dxB < -imgWf * 0.5) { dxB = dxB + imgWf; }
+#endif
+    hx = 0.5 * dxB;
     hy = 0.5 * (screenYB - screenY);
     screenX = screenX + hx;
     screenY = screenY + hy;
+#ifdef PROJECTION_EQUIRECT
+    if (screenX < 0.0) { screenX = screenX + imgWf; } else if (screenX >= imgWf) { screenX = screenX - imgWf; }
+#endif
     czView = 0.5 * (cz + czB);
     eyeX = 0.5 * (uniforms.eyeX + uniforms.eyeBX);
     eyeY = 0.5 * (uniforms.eyeY + uniforms.eyeBY);

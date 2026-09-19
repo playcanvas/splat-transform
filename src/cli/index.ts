@@ -930,7 +930,7 @@ IMAGE OUTPUT (.webp) — lossless WebP rendered via GPU rasterizer
                                             world unit = decimeter → 0.24, world unit = millimeter → 24.
         --camera-pos-end   <x,y,z>          End camera position. When set, enables camera motion blur: the camera moves
                                             from --camera-pos (shutter open) to --camera-pos-end (shutter close) and every
-                                            gaussian is integrated over its motion. Pinhole only. Default: disabled.
+                                            gaussian is integrated over its motion. Default: disabled.
         --camera-target-end <x,y,z>         End camera target. Default: same as --camera-target. Only with --camera-pos-end.
         --camera-up-end    <x,y,z>          End up vector. Default: same as --camera-up. Only with --camera-pos-end.
         --shutter          <0..1>           Fraction of the start→end segment integrated, centered on the midpoint

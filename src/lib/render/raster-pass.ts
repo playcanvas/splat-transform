@@ -112,9 +112,6 @@ const renderRasterPass = async (
     // sort by the mean depth and bound both footprints.
     let basisB: CameraBasis | undefined;
     if (camera.shutterClose) {
-        if (projection !== 'pinhole') {
-            throw new Error('renderRasterPass: motion blur is pinhole-only');
-        }
         const { position, target, up } = camera.shutterClose;
         basisB = buildCameraBasis({ ...camera, position, target, up });
     }

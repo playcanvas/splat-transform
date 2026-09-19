@@ -20,7 +20,7 @@ import { type CameraBasis, type Projection } from '../render/camera';
 import { TILE_SIZE } from '../render/config';
 import { constantsChunk } from './shaders/chunks/constants';
 import { covariance3D, covariance3DFns } from './shaders/chunks/covariance-3d';
-import { jacobianEquirect } from './shaders/chunks/jacobian-equirect';
+import { jacobianEquirect, jacobianEquirectFns } from './shaders/chunks/jacobian-equirect';
 import { jacobianPinhole, jacobianPinholeFns } from './shaders/chunks/jacobian-pinhole';
 import { packRGBA8 } from './shaders/chunks/pack-rgba8';
 import { projectionEquirect } from './shaders/chunks/projection-equirect';
@@ -144,7 +144,7 @@ interface SplatRasterizerOptions {
     /**
      * Shutter-close camera basis. When set, the shaders integrate each
      * gaussian over its screen-space motion between this basis and the
-     * primary one (motion blur). Omit for a static render. Pinhole only.
+     * primary one (motion blur). Omit for a static render.
      */
     basisB?: CameraBasis;
 }
@@ -367,9 +367,6 @@ class GpuSplatRasterizer {
         // here with the resolved `maxCoveragePerSplat` so the chunk
         // bodies stay JS-template-free.
         const projection = options.projection;
-        if (options.basisB && projection !== 'pinhole') {
-            throw new Error('GpuSplatRasterizer: motion blur is pinhole-only');
-        }
         const sharedCincludes = new Map<string, string>([
             ['uniformsStruct', uniformsStruct],
             ['constants', constantsChunk],
@@ -379,6 +376,7 @@ class GpuSplatRasterizer {
             ['jacobianPinhole', jacobianPinhole],
             ['jacobianPinholeFns', jacobianPinholeFns],
             ['jacobianEquirect', jacobianEquirect],
+            ['jacobianEquirectFns', jacobianEquirectFns],
             ['tileAabbPinhole', tileAabbPinhole(options.maxCoveragePerSplat)],
             ['tileAabbEquirect', tileAabbEquirect(options.maxCoveragePerSplat)],
             ['tileWalkPinhole', tileWalkPinhole],
