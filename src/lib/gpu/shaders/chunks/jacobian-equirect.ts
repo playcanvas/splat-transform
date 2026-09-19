@@ -38,7 +38,7 @@ const jacobianEquirect = /* wgsl */`
     let u12 = jy0 * c02 + jy1 * c12 + jy2 * c22;
 
     var cov00 = u00 * jx0 + u02 * jx2;
-    let cov01 = u00 * jy0 + u01 * jy1 + u02 * jy2;
+    var cov01 = u00 * jy0 + u01 * jy1 + u02 * jy2;
     var cov11 = u10 * jy0 + u11 * jy1 + u12 * jy2;
 `;
 

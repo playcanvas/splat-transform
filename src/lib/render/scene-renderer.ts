@@ -2,7 +2,7 @@ import { GraphicsDevice } from 'playcanvas';
 
 import { type CameraBasis, type Projection, type RenderCamera, buildCameraBasis } from './camera';
 import { TILE_SIZE, storageBindingLimit } from './config';
-import { SortScratch, getSplatColumnRefs, numSHCoeffsPerChannel, sceneSHBands, sortCandidatesByDepth, type SplatColumnRefs } from './preprocess';
+import { getSplatColumnRefs, numSHCoeffsPerChannel, sceneSHBands, type SplatColumnRefs } from './preprocess';
 import { DataTable } from '../data-table';
 import { GpuSceneRasterizer } from '../gpu/gpu-scene-rasterizer';
 
@@ -36,7 +36,7 @@ interface SceneRendererOptions {
 /**
  * Bytes of GPU memory the resident path holds for a scene: the column
  * copies plus the per-splat working buffers (projection records, coverage,
- * scan offsets and the sorted order).
+ * scan offsets, depth keys and the depth sort's three ping-pong buffers).
  *
  * @param numSplats - Row count.
  * @param numSHBands - SH bands above DC.
@@ -44,7 +44,7 @@ interface SceneRendererOptions {
  */
 const residentSceneBytes = (numSplats: number, numSHBands: number): number => {
     const coeffs = numSHCoeffsPerChannel(numSHBands);
-    return numSplats * (14 * 4 + coeffs * 3 * 4 + 12 * 4 + 4 + 4 + 4);
+    return numSplats * (14 * 4 + coeffs * 3 * 4 + 12 * 4 + 4 + 4 + 4 + 12);
 };
 
 /**
@@ -66,11 +66,9 @@ const residentSceneFits = (device: GraphicsDevice, numSplats: number, numSHBands
 /**
  * Renders many views of one scene held resident on the GPU.
  *
- * Construct, `upload()` once, then `render()` per view. Each render culls
- * against the near plane and depth-sorts on the CPU (a few tens of
- * milliseconds per million splats) and hands only the sorted index order
- * to the GPU, which gathers the attributes itself. See
- * {@link GpuSceneRasterizer} for the GPU side.
+ * Construct, `upload()` once, then `render()` per view. A render sends the
+ * GPU only the camera: the near-plane cull, the depth sort and the
+ * attribute gather all run there. See {@link GpuSceneRasterizer}.
  */
 class SceneRenderer {
     private device: GraphicsDevice;
@@ -79,8 +77,6 @@ class SceneRenderer {
     private cols: SplatColumnRefs;
     private numSHBands: 0 | 1 | 2 | 3;
     private raster: GpuSceneRasterizer;
-    private candidates: Uint32Array;
-    private sortScratch = new SortScratch();
 
     constructor(device: GraphicsDevice, dataTable: DataTable, options: SceneRendererOptions) {
         this.device = device;
@@ -88,7 +84,6 @@ class SceneRenderer {
         this.options = options;
         this.numSHBands = sceneSHBands(dataTable);
         this.cols = getSplatColumnRefs(dataTable, this.numSHBands);
-        this.candidates = new Uint32Array(dataTable.numRows);
 
         const imageTilesX = Math.ceil(options.width / TILE_SIZE);
         const imageTilesY = Math.ceil(options.height / TILE_SIZE);
@@ -153,38 +148,13 @@ class SceneRenderer {
             basisB = buildCameraBasis({ ...camera, position, target, up });
         }
 
-        // Near-plane cull on centres (pinhole: camera depth; equirect: radius),
-        // exactly as the chunked path. The GPU applies the exact footprint test.
-        const { x: xCol, y: yCol, z: zCol } = this.cols;
-        const numRows = this.dataTable.numRows;
-        const candidates = this.candidates;
-        const ex = basis.eye.x, ey = basis.eye.y, ez = basis.eye.z;
-        const near = camera.near;
-        let count = 0;
-        if (projection === 'pinhole') {
-            const fx = basis.forward.x, fy = basis.forward.y, fz = basis.forward.z;
-            for (let i = 0; i < numRows; i++) {
-                const cz = fx * (xCol[i] - ex) + fy * (yCol[i] - ey) + fz * (zCol[i] - ez);
-                if (cz > near) candidates[count++] = i;
-            }
-        } else {
-            const nearSq = near * near;
-            for (let i = 0; i < numRows; i++) {
-                const dx = xCol[i] - ex;
-                const dy = yCol[i] - ey;
-                const dz = zCol[i] - ez;
-                if (dx * dx + dy * dy + dz * dz > nearSq) candidates[count++] = i;
-            }
-        }
-        sortCandidatesByDepth(this.cols, candidates, count, basis, projection, this.sortScratch, basisB);
-
         return this.raster.render({
             basis,
             basisB,
-            near,
+            near: camera.near,
             focusDistance: camera.focusDistance ?? 0,
             apertureScale: camera.apertureScale ?? 0
-        }, candidates, count);
+        });
     }
 
     destroy(): void {

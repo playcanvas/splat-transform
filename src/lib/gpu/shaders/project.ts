@@ -163,7 +163,7 @@ fn main(
     let cxB = uniforms.rightBX * wxB + uniforms.rightBY * wyB + uniforms.rightBZ * wzB;
     let cyB = uniforms.downBX * wxB + uniforms.downBY * wyB + uniforms.downBZ * wzB;
     let czB = uniforms.forwardBX * wxB + uniforms.forwardBY * wyB + uniforms.forwardBZ * wzB;
-    if (czB <= uniforms.near) { writeInvalid(i); return; }
+    if (!(czB > uniforms.near)) { writeInvalid(i); return; }
     let invZB = 1.0 / czB;
     let screenXB = uniforms.focalX * cxB * invZB + f32(uniforms.imageWidth) * 0.5;
     let screenYB = uniforms.focalY * cyB * invZB + f32(uniforms.imageHeight) * 0.5;

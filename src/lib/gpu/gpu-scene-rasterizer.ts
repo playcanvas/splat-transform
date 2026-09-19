@@ -30,6 +30,7 @@ import { tileAabbPinhole } from './shaders/chunks/tile-aabb-pinhole';
 import { tileWalkEquirect } from './shaders/chunks/tile-walk-equirect';
 import { tileWalkPinhole } from './shaders/chunks/tile-walk-pinhole';
 import { clearStateWgsl } from './shaders/clear-state';
+import { depthKeysWgsl } from './shaders/depth-keys';
 import { finalizeWgsl } from './shaders/finalize';
 import { findBoundariesWgsl } from './shaders/find-boundaries';
 import { initTileOffsetsWgsl } from './shaders/init-tile-offsets';
@@ -114,11 +115,14 @@ const numSHCoeffsPerChannel = (bands: number): number => {
 /**
  * Resident-scene splat rasterizer.
  *
- * The scene's columns are uploaded once, column-major, and every render
- * then only uploads the depth-sorted index order of the visible gaussians.
- * The GPU gathers attributes by index, so there is no per-render CPU pack.
+ * The scene's columns are uploaded once, column-major; a render uploads
+ * nothing. Per render the GPU keys every gaussian by view depth and radix
+ * sorts the keys (stable, identity payload, so ties break by row index as
+ * the CPU sort does); the sorted index buffer is the order the project
+ * shader gathers attributes in. Gaussians behind the near plane are keyed
+ * like any other and invalidated by the project shader.
  *
- * Per render and group (sub-frame): project all visible gaussians in one
+ * Per render and group (sub-frame): project every gaussian in one
  * dispatch → two-level block scan of their tile coverage → read back the
  * block prefixes and the total → allocate the pair buffers to exactly that
  * total (or cut the depth-sorted list into ranges at scan-block boundaries
@@ -137,9 +141,12 @@ class GpuSceneRasterizer {
     private bgFormats: BindGroupFormat[] = [];
     private radixSort: ComputeRadixSort;
     private sortKeyBits: number;
+    /** Depth sort over the scene; separate from the tile sort so neither rebuilds its passes. */
+    private depthSort: ComputeRadixSort;
     private maxDispatchDim: number;
     private dispatchSize = new Vec2();
 
+    private depthKeysCompute: Compute;
     private projectCompute: Compute;
     private scanBlocksCompute: Compute;
     private scanSumsCompute: Compute;
@@ -154,7 +161,7 @@ class GpuSceneRasterizer {
     private numSplats = 0;
     private baseBuffer: StorageBuffer | null = null;
     private shBuffer: StorageBuffer | null = null;
-    private orderBuffer: StorageBuffer | null = null;
+    private depthKeysBuffer: StorageBuffer | null = null;
     private projBuffer: StorageBuffer | null = null;
     private coverageBuffer: StorageBuffer | null = null;
     private emitOffsetBuffer: StorageBuffer | null = null;
@@ -194,6 +201,7 @@ class GpuSceneRasterizer {
         const { radixBits } = this.radixSort;
         const passes = Math.max(1, Math.ceil(Math.log2(Math.max(2, numTiles)) / radixBits));
         this.sortKeyBits = Math.min(passes, Math.floor(32 / radixBits)) * radixBits;
+        this.depthSort = new ComputeRadixSort(device);
 
         const coeffs = numSHCoeffsPerChannel(options.numSHBands);
         const projection = options.projection;
@@ -252,6 +260,7 @@ class GpuSceneRasterizer {
             return new Compute(device, shader, name);
         };
 
+        this.depthKeysCompute = mk('scene-depth-keys', depthKeysWgsl(), [ro('splatsBase'), rw('sortKeys')]);
         this.projectCompute = mk('scene-project', projectWgsl(coeffs), [ro('splatsBase'), rw('projected'), rw('coverage'), ro('splatsSH'), ro('order')]);
         this.scanBlocksCompute = mk('scene-scan-blocks', scanBlocksWgsl(), [ro('coverage'), rw('emitOffset'), rw('blockSums')]);
         this.scanSumsCompute = mk('scene-scan-sums', scanSumsWgsl(), [rw('blockSums'), rw('totalPairs')]);
@@ -302,7 +311,9 @@ class GpuSceneRasterizer {
             const numBlocks = Math.ceil(numSplats / SCAN_BLOCK);
             this.baseBuffer = new StorageBuffer(device, numSplats * BASE_COLUMNS * 4, BUFFERUSAGE_COPY_DST);
             this.shBuffer = new StorageBuffer(device, Math.max(4, numSplats * coeffs * 3 * 4), BUFFERUSAGE_COPY_DST);
-            this.orderBuffer = new StorageBuffer(device, numSplats * 4, BUFFERUSAGE_COPY_DST);
+            // The depth sort borrows this as one of its ping-pong buffers
+            // (destructive keys), so it needs the sorter's copy usages.
+            this.depthKeysBuffer = new StorageBuffer(device, numSplats * 4, BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST);
             this.projBuffer = new StorageBuffer(device, numSplats * PROJECTION_STRIDE_F32 * 4, 0);
             this.coverageBuffer = new StorageBuffer(device, numSplats * 4, 0);
             this.emitOffsetBuffer = new StorageBuffer(device, numSplats * 4, 0);
@@ -330,9 +341,10 @@ class GpuSceneRasterizer {
         }
         this.numSplats = numSplats;
 
+        this.depthKeysCompute.setParameter('splatsBase', this.baseBuffer);
+        this.depthKeysCompute.setParameter('sortKeys', this.depthKeysBuffer);
         this.projectCompute.setParameter('splatsBase', this.baseBuffer);
         this.projectCompute.setParameter('splatsSH', this.shBuffer);
-        this.projectCompute.setParameter('order', this.orderBuffer);
         this.projectCompute.setParameter('projected', this.projBuffer);
         this.projectCompute.setParameter('coverage', this.coverageBuffer);
         this.scanBlocksCompute.setParameter('coverage', this.coverageBuffer);
@@ -347,16 +359,13 @@ class GpuSceneRasterizer {
     }
 
     /**
-     * Render one view. `order` holds the visible gaussians' row indices in
-     * front-to-back order; only its first `count` entries are used.
+     * Render one view.
      *
      * @param view - Camera basis (and shutter-close basis under motion blur).
-     * @param order - Depth-sorted visible row indices.
-     * @param count - Number of visible gaussians.
      * @returns RGBA bytes, `imageWidth × imageHeight × 4`.
      */
-    async render(view: SceneView, order: Uint32Array, count: number): Promise<Uint8Array> {
-        if (!this.orderBuffer) {
+    async render(view: SceneView): Promise<Uint8Array> {
+        if (!this.depthKeysBuffer) {
             throw new Error('GpuSceneRasterizer: uploadScene before render');
         }
         if (this.options.motionBlur && !view.basisB) {
@@ -370,15 +379,30 @@ class GpuSceneRasterizer {
         const numGroupsY = Math.ceil(imageTilesY / o.groupTilesY);
         const image = new Uint8Array(width * height * 4);
 
-        if (count > 0) {
-            this.orderBuffer.write(0, order, 0, count);
+        if (this.numSplats > 0) {
+            // Depth sort: key every gaussian, sort all 32 key bits (float
+            // order is exact), and bind the sorter's index buffer as the
+            // order the project shader gathers in. The sorter keeps that
+            // buffer until the next depth sort, so every group of this
+            // render reads the same order. Skips writing sorted keys and
+            // borrows the keys buffer as scratch; both are rewritten per
+            // render anyway.
+            this.setUniforms(view, 0, 0, Math.min(o.groupTilesX, imageTilesX), Math.min(o.groupTilesY, imageTilesY));
+            this.dispatch2D(this.depthKeysCompute, Math.ceil(this.numSplats / 64), 'scene-depth-keys');
+            this.depthSort.sort(this.depthKeysBuffer, this.numSplats, 32, undefined, true, true);
+            const order = this.depthSort.sortedIndices;
+            if (!order) {
+                throw new Error('ComputeRadixSort returned a null index buffer after sort()');
+            }
+            this.projectCompute.setParameter('order', order);
+            this.submit();
         }
 
         for (let gy = 0; gy < numGroupsY; gy++) {
             for (let gx = 0; gx < numGroupsX; gx++) {
                 const tilesX = Math.min(o.groupTilesX, imageTilesX - gx * o.groupTilesX);
                 const tilesY = Math.min(o.groupTilesY, imageTilesY - gy * o.groupTilesY);
-                const bytes = await this.renderGroup(view, count, gx, gy, tilesX, tilesY);
+                const bytes = await this.renderGroup(view, gx, gy, tilesX, tilesY);
 
                 const originX = gx * this.groupPixelW;
                 const originY = gy * this.groupPixelH;
@@ -394,9 +418,10 @@ class GpuSceneRasterizer {
         return image;
     }
 
-    private async renderGroup(view: SceneView, count: number, gx: number, gy: number, tilesX: number, tilesY: number): Promise<Uint8Array> {
+    private async renderGroup(view: SceneView, gx: number, gy: number, tilesX: number, tilesY: number): Promise<Uint8Array> {
         const device = this.device;
-        this.setUniforms(view, count, gx, gy, tilesX, tilesY);
+        const count = this.numSplats;
+        this.setUniforms(view, gx, gy, tilesX, tilesY);
 
         // Clear running state: colour 0, transmittance 1. Four pixels per thread.
         const groupPixels = tilesX * tilesY * TILE_SIZE * TILE_SIZE;
@@ -404,8 +429,9 @@ class GpuSceneRasterizer {
         device.computeDispatch([this.clearStateCompute], 'scene-clear-state');
 
         if (count > 0) {
-            // Project every visible gaussian against this group, then scan
-            // its tile coverage: block-local offsets plus block totals, then
+            // Project every gaussian against this group (those behind the
+            // near plane come out invalid, with no coverage), then scan the
+            // tile coverage: block-local offsets plus block totals, then
             // the block totals into exclusive prefixes and a grand total.
             this.dispatch2D(this.projectCompute, Math.ceil(count / 64), 'scene-project');
             const numBlocks = Math.ceil(count / SCAN_BLOCK);
@@ -514,15 +540,17 @@ class GpuSceneRasterizer {
         this.device.computeDispatch([compute], name);
     }
 
-    private setUniforms(view: SceneView, count: number, gx: number, gy: number, tilesX: number, tilesY: number): void {
+    private setUniforms(view: SceneView, gx: number, gy: number, tilesX: number, tilesY: number): void {
         const o = this.options;
         const b = view.basis;
         const bb = view.basisB;
+        const count = this.numSplats;
         const originX = gx * this.groupPixelW;
         const originY = gy * this.groupPixelH;
         const maxX = originX + tilesX * TILE_SIZE;
         const maxY = originY + tilesY * TILE_SIZE;
         const computes = [
+            this.depthKeysCompute,
             this.clearStateCompute, this.projectCompute, this.scanBlocksCompute, this.scanSumsCompute,
             this.emitCompute, this.initTileOffsetsCompute, this.findBoundariesCompute,
             this.rasterizeCompute, this.finalizeCompute
@@ -581,12 +609,12 @@ class GpuSceneRasterizer {
     private releaseScene(): void {
         this.baseBuffer?.destroy();
         this.shBuffer?.destroy();
-        this.orderBuffer?.destroy();
+        this.depthKeysBuffer?.destroy();
         this.projBuffer?.destroy();
         this.coverageBuffer?.destroy();
         this.emitOffsetBuffer?.destroy();
         this.blockSumsBuffer?.destroy();
-        this.baseBuffer = this.shBuffer = this.orderBuffer = this.projBuffer = null;
+        this.baseBuffer = this.shBuffer = this.depthKeysBuffer = this.projBuffer = null;
         this.coverageBuffer = this.emitOffsetBuffer = this.blockSumsBuffer = null;
         this.numSplats = 0;
     }
@@ -601,6 +629,7 @@ class GpuSceneRasterizer {
         this.runningStateBuffer.destroy();
         this.outputBuffer.destroy();
         this.radixSort.destroy();
+        this.depthSort.destroy();
         for (const s of this.shaders) s.destroy();
         for (const f of this.bgFormats) f.destroy();
     }

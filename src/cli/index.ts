@@ -517,7 +517,7 @@ const parseArguments = async () => {
     let renderCameraTrack: CameraTrack | undefined;
     if (v['camera-track'] !== undefined) {
         let trackPath = v['camera-track'];
-        if ((await lstat(trackPath).catch(() => null))?.isDirectory()) {
+        if ((await lstat(trackPath).catch((): null => null))?.isDirectory()) {
             trackPath = join(trackPath, 'document.json');
         }
         let trackJson: unknown;
