@@ -59,8 +59,8 @@ export type { LodStats, LodStatsData, SourceStats } from './stats';
 // High-level read/write
 export { readFile, readFileInfo, getInputFormat } from './read';
 export type { InputFormat, ReadFileOptions, FileInfo } from './read';
-export { writeFile, writeSource, getOutputFormat } from './write';
-export type { OutputFormat, WriteOptions, WriteSourceOptions } from './write';
+export { writeSource, getOutputFormat } from './write';
+export type { OutputFormat, WriteSourceOptions } from './write';
 export { writeLodSource } from './writers';
 export type { WriteLodSourceOptions } from './writers';
 
