@@ -4,12 +4,10 @@
  * unsigned order is the front-to-back order of the chunked path's CPU sort.
  *
  * - pinhole: camera-space depth `forward · (p − eye)`;
- * - equirect: radial distance squared (monotone in the distance);
- * - with MOTION_BLUR, the mean of the shutter-open and shutter-close values,
- *   so a moving gaussian composites at its mid-shutter depth.
+ * - equirect: radial distance squared (monotone in the distance).
  *
- * Gaussians the project shader will invalidate (behind the near plane at
- * either shutter pose, or with a NaN position) get the largest key and sort
+ * Gaussians the project shader will invalidate (behind the near plane, or
+ * with a NaN position) get the largest key and sort
  * to the tail; the visible ones are counted into `visibleCount`, so a caller
  * streaming attributes in sorted order can stop at the last visible one. The
  * near tests are the project shader's, so the two agree. A stable radix
@@ -64,26 +62,10 @@ fn main(
         let r2 = wx * wx + wy * wy + wz * wz;
         visible = r2 > uniforms.near * uniforms.near;
         depth = r2;
-    #ifdef MOTION_BLUR
-        let wxB = posX - uniforms.eyeBX;
-        let wyB = posY - uniforms.eyeBY;
-        let wzB = posZ - uniforms.eyeBZ;
-        let r2B = wxB * wxB + wyB * wyB + wzB * wzB;
-        visible = visible && (r2B > uniforms.near * uniforms.near);
-        depth = 0.5 * (r2 + r2B);
-    #endif
 #else
         let cz = uniforms.forwardX * wx + uniforms.forwardY * wy + uniforms.forwardZ * wz;
         visible = cz > uniforms.near;
         depth = cz;
-    #ifdef MOTION_BLUR
-        let wxB = posX - uniforms.eyeBX;
-        let wyB = posY - uniforms.eyeBY;
-        let wzB = posZ - uniforms.eyeBZ;
-        let czB = uniforms.forwardBX * wxB + uniforms.forwardBY * wyB + uniforms.forwardBZ * wzB;
-        visible = visible && (czB > uniforms.near);
-        depth = 0.5 * (cz + czB);
-    #endif
 #endif
 
         var key = 0xFFFFFFFFu;

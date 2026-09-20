@@ -19,9 +19,9 @@ import {
 import { type CameraBasis, type Projection } from '../render/camera';
 import { TILE_SIZE } from '../render/config';
 import { constantsChunk } from './shaders/chunks/constants';
-import { covariance3D, covariance3DFns } from './shaders/chunks/covariance-3d';
-import { jacobianEquirect, jacobianEquirectFns } from './shaders/chunks/jacobian-equirect';
-import { jacobianPinhole, jacobianPinholeFns } from './shaders/chunks/jacobian-pinhole';
+import { covariance3D } from './shaders/chunks/covariance-3d';
+import { jacobianEquirect } from './shaders/chunks/jacobian-equirect';
+import { jacobianPinhole } from './shaders/chunks/jacobian-pinhole';
 import { packRGBA8 } from './shaders/chunks/pack-rgba8';
 import { projectionEquirect } from './shaders/chunks/projection-equirect';
 import { projectionPinhole } from './shaders/chunks/projection-pinhole';
@@ -141,12 +141,6 @@ interface SplatRasterizerOptions {
     apertureScale: number;
     /** RGBA background, each channel in [0, 1]. */
     bgR: number; bgG: number; bgB: number; bgA: number;
-    /**
-     * Shutter-close camera basis. When set, the shaders integrate each
-     * gaussian over its screen-space motion between this basis and the
-     * primary one (motion blur). Omit for a static render.
-     */
-    basisB?: CameraBasis;
 }
 
 const numSHCoeffsPerChannel = (bands: number): number => {
@@ -374,9 +368,7 @@ class GpuSplatRasterizer {
             ['projectionPinhole', projectionPinhole],
             ['projectionEquirect', projectionEquirect],
             ['jacobianPinhole', jacobianPinhole],
-            ['jacobianPinholeFns', jacobianPinholeFns],
             ['jacobianEquirect', jacobianEquirect],
-            ['jacobianEquirectFns', jacobianEquirectFns],
             ['tileAabbPinhole', tileAabbPinhole(options.maxCoveragePerSplat)],
             ['tileAabbEquirect', tileAabbEquirect(options.maxCoveragePerSplat)],
             ['tileWalkPinhole', tileWalkPinhole],
@@ -385,8 +377,7 @@ class GpuSplatRasterizer {
             ['shBand2', shBand2],
             ['shBand3', shBand3],
             ['quatRotation', quatRotation],
-            ['covariance3D', covariance3D],
-            ['covariance3DFns', covariance3DFns]
+            ['covariance3D', covariance3D]
         ]);
 
         // Per-render variant flags consumed by `#ifdef` directives in
@@ -402,7 +393,6 @@ class GpuSplatRasterizer {
         if (options.numSHBands >= 2) sharedCdefines.set('SH_BAND_2', '');
         if (options.numSHBands >= 3) sharedCdefines.set('SH_BAND_3', '');
         if (options.sizeClamp === false) sharedCdefines.set('NO_SIZE_CLAMP', '');
-        if (options.basisB) sharedCdefines.set('MOTION_BLUR', '');
 
         const mkShader = (
             name: string,
@@ -632,21 +622,11 @@ class GpuSplatRasterizer {
             c.setParameter('groupPixelOriginY', originY);
             c.setParameter('bgR', o.bgR); c.setParameter('bgG', o.bgG);
             c.setParameter('bgB', o.bgB); c.setParameter('bgA', o.bgA);
-            const bb = o.basisB;
-            c.setParameter('rightBX', bb?.right.x ?? 0); c.setParameter('rightBY', bb?.right.y ?? 0); c.setParameter('rightBZ', bb?.right.z ?? 0);
-            c.setParameter('_p7', 0);
-            c.setParameter('downBX', bb?.down.x ?? 0); c.setParameter('downBY', bb?.down.y ?? 0); c.setParameter('downBZ', bb?.down.z ?? 0);
-            c.setParameter('_p8', 0);
-            c.setParameter('forwardBX', bb?.forward.x ?? 0); c.setParameter('forwardBY', bb?.forward.y ?? 0); c.setParameter('forwardBZ', bb?.forward.z ?? 0);
-            c.setParameter('_p9', 0);
-            c.setParameter('eyeBX', bb?.eye.x ?? 0); c.setParameter('eyeBY', bb?.eye.y ?? 0); c.setParameter('eyeBZ', bb?.eye.z ?? 0);
-            c.setParameter('_p10', 0);
             // Chunked path: interleaved input, whole chunk per dispatch.
             c.setParameter('numSplats', 0); c.setParameter('rangeStart', 0);
             c.setParameter('emitBase', 0); c.setParameter('sliceIndex', 0);
             c.setParameter('sliceCount', 1);
-            c.setParameter('focalXB', bb?.focalX ?? 0); c.setParameter('focalYB', bb?.focalY ?? 0);
-            c.setParameter('_p13', 0);
+            c.setParameter('_p7', 0); c.setParameter('_p8', 0); c.setParameter('_p9', 0);
         }
     }
 

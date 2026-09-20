@@ -1,10 +1,9 @@
 /**
  * Equirect Jacobian + 2D EWA covariance.
  *
- * Reads:   cx, cy, cz, r2, rxzClamped,
+ * Reads:   cx, cy, cz, r2, rxz, rxzClamped, imgWf, imgHf, invTwoPi, invPi,
  *          c00, c01, c02, c11, c12, c22 (camera-space 3D covariance)
  * Defines: cov00, cov01, cov11 (all var, so later dilation steps can add to them)
- * Requires: `jacobianEquirectFns` at module scope
  *
  * With longitude θ = atan2(cx, cz) and latitude φ = asin(cy/r) (cy is
  * the camera-down axis, so φ > 0 = below the horizon), the per-axis
@@ -20,25 +19,8 @@
  * u11·jy0 terms that the pinhole simplification dropped.
  */
 const jacobianEquirect = /* wgsl */`
-    let cov2 = cov2dEquirect(cx, cy, cz, r2, rxzClamped, c00, c01, c02, c11, c12, c22);
-    var cov00 = cov2.x;
-    var cov01 = cov2.y;
-    var cov11 = cov2.z;
-`;
-
-/**
- * Module-scope function form of the equirect Jacobian + EWA projection,
- * returning `(cov00, cov01, cov11)`. The inline chunk above calls it for
- * the primary pose; the motion-blur path calls it again for the
- * shutter-close pose. Include once at module scope, before `jacobianEquirect`.
- */
-const jacobianEquirectFns = /* wgsl */`
-fn cov2dEquirect(
-    cx: f32, cy: f32, cz: f32, r2: f32, rxzClamped: f32,
-    c00: f32, c01: f32, c02: f32, c11: f32, c12: f32, c22: f32
-) -> vec3<f32> {
-    let kx = f32(uniforms.imageWidth) * 0.15915494309189535;
-    let ky = f32(uniforms.imageHeight) * 0.3183098861837907;
+    let kx = imgWf * invTwoPi;
+    let ky = imgHf * invPi;
     let invRxzC2 = 1.0 / (rxzClamped * rxzClamped);
     let invR2 = 1.0 / r2;
     let invR2Rxz = invR2 / rxzClamped;
@@ -55,12 +37,9 @@ fn cov2dEquirect(
     let u11 = jy0 * c01 + jy1 * c11 + jy2 * c12;
     let u12 = jy0 * c02 + jy1 * c12 + jy2 * c22;
 
-    return vec3<f32>(
-        u00 * jx0 + u02 * jx2,
-        u00 * jy0 + u01 * jy1 + u02 * jy2,
-        u10 * jy0 + u11 * jy1 + u12 * jy2
-    );
-}
+    var cov00 = u00 * jx0 + u02 * jx2;
+    var cov01 = u00 * jy0 + u01 * jy1 + u02 * jy2;
+    var cov11 = u10 * jy0 + u11 * jy1 + u12 * jy2;
 `;
 
-export { jacobianEquirect, jacobianEquirectFns };
+export { jacobianEquirect };

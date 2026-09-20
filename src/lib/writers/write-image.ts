@@ -5,7 +5,7 @@ import { logWrittenFile } from './utils';
 import { type ChunkDataPool, type ChunkSource } from '../chunk';
 import { computeWriteTransform } from '../data-table';
 import { type FileSystem, writeFile } from '../io/write';
-import { SceneRenderer, type SceneTier } from '../render';
+import { SceneRenderer, type SceneTier, motionSampleCount } from '../render';
 import { type Projection, type RenderCamera } from '../render/camera';
 import { type CameraTrack } from '../render/camera-track';
 import type { DeviceCreator } from '../types';
@@ -103,8 +103,8 @@ type WriteImageOptions = {
      * End camera position for motion blur. When set, enables camera
      * motion blur: the camera moves from (`cameraPosition`, `lookAt`,
      * `up`) at shutter-open to (`cameraEndPosition`, `lookAtEnd`,
-     * `upEnd`) at shutter-close, and every gaussian is integrated over
-     * its motion in `motionSamples` shutter slices. Not valid with
+     * `upEnd`) at shutter-close, and the frame averages renders at
+     * `motionSamples` instants across the shutter. Not valid with
      * `cameraTrack`, whose motion blur comes from `shutter`.
      */
     cameraEndPosition?: Vec3Like;
@@ -132,12 +132,14 @@ type WriteImageOptions = {
     shutter?: number;
 
     /**
-     * Number of shutter slices for motion blur; cost is N× a single
-     * render. Each slice integrates every gaussian's motion exactly, so
-     * streaks are smooth at any N; more slices refine the compositing
-     * between overlapping gaussians (1 slice is a single pass with a
-     * small exposure bias, 4 is visually converged on typical scenes).
-     * Default: `4`. Only meaningful when motion blur is enabled.
+     * Renders averaged per motion-blurred frame, at evenly spaced instants
+     * across the shutter; cost is N× a single render. Each instant is
+     * composited exactly, so the mean converges to the true time average
+     * as N grows; too few instants show as discrete copies wherever the
+     * motion between them exceeds a couple of pixels. Default: chosen per
+     * frame from the camera motion so consecutive instants are about 2 px
+     * apart at the look-at distance (see `motionSampleCount`), at most 64.
+     * Only meaningful when motion blur is enabled.
      */
     motionSamples?: number;
 
@@ -284,13 +286,12 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         throw new Error('writeImage: --camera-pos-end is not valid with --camera-track; motion blur along a track comes from --shutter.');
     }
     const motionEnabled = cameraTrack ? (shutter !== undefined && shutter > 0) : cameraEndPosition !== undefined;
-    const motionN = motionEnabled ? (motionSamples ?? 4) : 1;
     const motionShutter = motionEnabled ? (shutter ?? 1) : 0;
     if (motionEnabled && (motionShutter < 0 || motionShutter > 1)) {
         throw new Error(`writeImage: --shutter must be in [0, 1], got ${motionShutter}.`);
     }
-    if (motionEnabled && (!Number.isInteger(motionN) || motionN < 1)) {
-        throw new Error(`writeImage: --motion-samples must be a positive integer, got ${motionN}.`);
+    if (motionSamples !== undefined && (!Number.isInteger(motionSamples) || motionSamples < 1)) {
+        throw new Error(`writeImage: --motion-samples must be a positive integer, got ${motionSamples}.`);
     }
 
     // Frame range: a single frame without a track, else the track's frames.
@@ -439,7 +440,7 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         logger.info(`camera track: frames ${frameStart}-${frameEnd} of ${cameraTrack.frameCount} at ${cameraTrack.frameRate} fps`);
     }
     if (motionEnabled) {
-        logger.info(`motion blur: ${motionN} slice${motionN === 1 ? '' : 's'}, shutter ${motionShutter}`);
+        logger.info(`motion blur: shutter ${motionShutter}, ${motionSamples !== undefined ? `${motionSamples} samples` : 'samples from the camera motion'}`);
     }
 
     // Resident when the scene fits the device and the budget: one upload,
@@ -450,7 +451,6 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         projection,
         width: width!,
         height: height!,
-        motionBlur: motionEnabled,
         background,
         residentBudget
     });
@@ -465,21 +465,6 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         logger.info(`${tierNote[tier]} (${fmtBytes(scene.gpuBytes)})`);
         const renderView = (camera: RenderCamera): Promise<Uint8Array> => scene.render(camera);
 
-        // Camera for a motion-blur pass over [tA, tB]: shutter-open pose and
-        // fov at tA, shutter-close pose and fov at tB, focus distance and
-        // aperture scale from the slice midpoint.
-        const sliceCamera = (tA: number, tB: number): RenderCamera => {
-            const open = buildCamera(poseAt(tA));
-            const close = buildCamera(poseAt(tB));
-            const { focusDistance, apertureScale } = buildCamera(poseAt(0.5 * (tA + tB)));
-            return {
-                ...open,
-                focusDistance,
-                apertureScale,
-                shutterClose: { position: close.position, target: close.target, up: close.up, fovY: close.fovY }
-            };
-        };
-
         // One output frame centered on time `center`, its shutter spanning
         // ±halfWin around it. Along a track the window is clipped to the
         // track's frames: a looping timeline wraps from its last frame back
@@ -491,21 +476,17 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
             }
             const t0 = cameraTrack ? Math.max(0, center - halfWin) : center - halfWin;
             const t1 = cameraTrack ? Math.min(cameraTrack.frameCount - 1, center + halfWin) : center + halfWin;
-            if (motionN === 1) {
-                return renderView(sliceCamera(t0, t1));
+            // Frame averaging: render the pose at N evenly spaced instants
+            // across the shutter and accumulate them on the GPU in float,
+            // quantizing once. Each instant composites exactly, so the mean
+            // converges to the true time average as N grows; unless the
+            // caller fixed N, it keeps consecutive instants about 2 px apart.
+            const n = motionSamples ?? motionSampleCount(buildCamera(poseAt(t0)), buildCamera(poseAt(t1)));
+            const instants: RenderCamera[] = [];
+            for (let i = 0; i < n; i++) {
+                instants.push(buildCamera(poseAt(t0 + (t1 - t0) * (i + 0.5) / n)));
             }
-            // Camera motion blur over N shutter slices, averaged in float to
-            // avoid 8-bit truncation per slice. Each slice integrates every
-            // gaussian's motion exactly, so the streak is smooth at any N;
-            // more slices refine the per-instant compositing between
-            // overlapping gaussians, which a single slice approximates with a
-            // fixed order and time-averaged alphas.
-            const slices: RenderCamera[] = [];
-            for (let i = 0; i < motionN; i++) {
-                slices.push(sliceCamera(t0 + (t1 - t0) * i / motionN, t0 + (t1 - t0) * (i + 1) / motionN));
-            }
-            // The slices accumulate on the GPU; one readback per frame.
-            return scene.renderSlices(slices);
+            return n === 1 ? renderView(instants[0]) : scene.renderSlices(instants);
         };
 
         const webPCodec = await WebPCodec.create(); // cheap: create() memoizes the wasm module

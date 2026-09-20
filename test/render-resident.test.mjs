@@ -134,7 +134,6 @@ const makeRenderer = async (scene, camera, tier) => {
         projection: camera.projection ?? 'pinhole',
         width: camera.width,
         height: camera.height,
-        motionBlur: camera.shutterClose !== undefined,
         background,
         tier
     });
@@ -162,7 +161,7 @@ const withBindingLimit = async (bytes, fn) => {
 };
 
 describe('scene renderer matches the chunked path', () => {
-    it('static pinhole, defocus, motion blur, equirect and equirect blur are byte-identical in every tier', async (t) => {
+    it('static pinhole, defocus and equirect are byte-identical in every tier', async (t) => {
         if (!device) return t.skip('no WebGPU adapter available');
         const { Vec3 } = await import('playcanvas');
         const { renderSplats } = await import('../src/lib/render/index.js');
@@ -191,22 +190,7 @@ describe('scene renderer matches the chunked path', () => {
         const cases = [
             ['static', pinhole],
             ['defocus', { ...pinhole, focusDistance: 10, apertureScale: 2 }],
-            // Shutter-close eye moves 0.5 units along +z: depths stay on the grid.
-            ['motion blur', {
-                ...pinhole,
-                shutterClose: { position: new Vec3(0.5, 0.25, 10.5), target: new Vec3(0.5, 0.25, 0.5), up }
-            }],
-            // Zoom across the shutter: the eye stays put, the fov opens from 60° to 90°.
-            ['zoom blur', {
-                ...pinhole,
-                shutterClose: { position: pinhole.position, target: pinhole.target, up, fovY: Math.PI / 2 }
-            }],
-            ['equirect', equirect],
-            // The eye moves half a unit on the grid; squared distances stay exact.
-            ['equirect blur', {
-                ...equirect,
-                shutterClose: { position: new Vec3(0.75, 0.25, 0.25), target: new Vec3(0.75, 0.25, -1.5), up }
-            }]
+            ['equirect', equirect]
         ];
 
         for (const [label, camera] of cases) {
@@ -220,29 +204,6 @@ describe('scene renderer matches the chunked path', () => {
                     renderer.destroy();
                 }
             }
-        }
-    });
-
-    it('a zoom across the shutter blurs the frame', async (t) => {
-        if (!device) return t.skip('no WebGPU adapter available');
-        const { Vec3 } = await import('playcanvas');
-        const scene = await makeScene(20000, 7);
-        const up = new Vec3(0, 1, 0);
-        const still = { position: new Vec3(0, 0, 10), target: new Vec3(0, 0, 0), up, fovY: Math.PI / 3, width: 256, height: 192, near: 0.125 };
-        const zoom = { ...still, shutterClose: { position: still.position, target: still.target, up, fovY: Math.PI / 2 } };
-        const stillRenderer = await makeRenderer(scene, still, 'resident');
-        const zoomRenderer = await makeRenderer(scene, zoom, 'resident');
-        try {
-            const a = await stillRenderer.render(still);
-            const b = await zoomRenderer.render(zoom);
-            let differing = 0;
-            for (let i = 0; i < a.length; i++) {
-                if (a[i] !== b[i]) differing++;
-            }
-            assert.ok(differing > a.length / 20, `zoom blur should change the frame (${differing} of ${a.length} bytes differ)`);
-        } finally {
-            stillRenderer.destroy();
-            zoomRenderer.destroy();
         }
     });
 
@@ -275,17 +236,16 @@ describe('scene renderer matches the chunked path', () => {
         const { Vec3 } = await import('playcanvas');
         const scene = await makeScene(20000, 7);
         const up = new Vec3(0, 1, 0);
-        const slice = (zA, zB) => ({
-            position: new Vec3(0, 0, zA),
+        const slice = z => ({
+            position: new Vec3(0, 0, z),
             target: new Vec3(0, 0, 0),
             up,
             fovY: Math.PI / 3,
             width: 256,
             height: 192,
-            near: 0.125,
-            shutterClose: { position: new Vec3(0.25, 0, zB), target: new Vec3(0.25, 0, 0), up }
+            near: 0.125
         });
-        const slices = [slice(10, 10.25), slice(10.25, 10.5), slice(10.5, 10.75), slice(10.75, 11)];
+        const slices = [slice(10), slice(10.25), slice(10.5), slice(10.75)];
         for (const tier of ['resident', 'streamed-gpu']) {
             const renderer = await makeRenderer(scene, slices[0], tier);
             try {

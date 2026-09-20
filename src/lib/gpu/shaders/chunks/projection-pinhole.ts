@@ -13,8 +13,8 @@ const projectionPinhole = /* wgsl */`
     if (!(cz > uniforms.near)) { writeInvalid(i); return; }
 
     let invZ = 1.0 / cz;
-    var screenX = uniforms.focalX * cx * invZ + f32(uniforms.imageWidth) * 0.5;
-    var screenY = uniforms.focalY * cy * invZ + f32(uniforms.imageHeight) * 0.5;
+    let screenX = uniforms.focalX * cx * invZ + f32(uniforms.imageWidth) * 0.5;
+    let screenY = uniforms.focalY * cy * invZ + f32(uniforms.imageHeight) * 0.5;
 `;
 
 export { projectionPinhole };

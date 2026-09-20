@@ -20,9 +20,9 @@ import { type CameraBasis, type Projection } from '../render/camera';
 import { PAIR_BUFFER_BUDGET_BYTES, PAIR_BUFFER_TOTAL_BYTES_PER_ELEMENT, TILE_SIZE, storageBindingLimit } from '../render/config';
 import { accumulateWgsl } from './shaders/accumulate';
 import { constantsChunk } from './shaders/chunks/constants';
-import { covariance3D, covariance3DFns } from './shaders/chunks/covariance-3d';
-import { jacobianEquirect, jacobianEquirectFns } from './shaders/chunks/jacobian-equirect';
-import { jacobianPinhole, jacobianPinholeFns } from './shaders/chunks/jacobian-pinhole';
+import { covariance3D } from './shaders/chunks/covariance-3d';
+import { jacobianEquirect } from './shaders/chunks/jacobian-equirect';
+import { jacobianPinhole } from './shaders/chunks/jacobian-pinhole';
 import { packRGBA8 } from './shaders/chunks/pack-rgba8';
 import { projectionEquirect } from './shaders/chunks/projection-equirect';
 import { projectionPinhole } from './shaders/chunks/projection-pinhole';
@@ -92,20 +92,16 @@ interface SceneRasterizerOptions {
     groupTilesY: number;
     /** Clamp frame-filling splats to the image (see `SIZE_CLAMP_FRAC`); default true. */
     sizeClamp?: boolean;
-    /** Compile the motion-blur shader variant; every render must then supply `basisB`. */
-    motionBlur: boolean;
     /** RGBA background, each channel in [0, 1]. */
     bgR: number; bgG: number; bgB: number; bgA: number;
 }
 
 /**
  * Camera for one render. The basis rows are (right, down, forward) of the
- * world→camera rotation; `basisB` is the shutter-close basis when the
- * instance was built with `motionBlur`.
+ * world→camera rotation.
  */
 interface SceneView {
     basis: CameraBasis;
-    basisB?: CameraBasis;
     near: number;
     focusDistance: number;
     apertureScale: number;
@@ -192,8 +188,8 @@ class GpuSceneRasterizer {
     private findBoundariesCompute: Compute;
     private rasterizeCompute: Compute;
     private finalizeCompute: Compute;
-    /** Slice accumulation; only built with the `motionBlur` option. */
-    private accumulateCompute: Compute | null = null;
+    /** Slice accumulation, in place of finalize for multi-view frames. */
+    private accumulateCompute: Compute;
 
     // Scene (set by the upload methods).
     /** Gaussians in the scene: the depth sort's extent. */
@@ -268,9 +264,7 @@ class GpuSceneRasterizer {
             ['projectionPinhole', projectionPinhole],
             ['projectionEquirect', projectionEquirect],
             ['jacobianPinhole', jacobianPinhole],
-            ['jacobianPinholeFns', jacobianPinholeFns],
             ['jacobianEquirect', jacobianEquirect],
-            ['jacobianEquirectFns', jacobianEquirectFns],
             // No coverage cap: the pair buffers are sized from the measured
             // total, so the bbox is never truncated. The cap only has to be
             // unreachable; a group's tile area is the largest bbox possible.
@@ -282,8 +276,7 @@ class GpuSceneRasterizer {
             ['shBand2', shBand2],
             ['shBand3', shBand3],
             ['quatRotation', quatRotation],
-            ['covariance3D', covariance3D],
-            ['covariance3DFns', covariance3DFns]
+            ['covariance3D', covariance3D]
         ]);
         const cdefines = new Map<string, string>([['SCENE', '']]);
         if (projection === 'equirect') cdefines.set('PROJECTION_EQUIRECT', '');
@@ -291,7 +284,6 @@ class GpuSceneRasterizer {
         if (options.numSHBands >= 2) cdefines.set('SH_BAND_2', '');
         if (options.numSHBands >= 3) cdefines.set('SH_BAND_3', '');
         if (options.sizeClamp === false) cdefines.set('NO_SIZE_CLAMP', '');
-        if (options.motionBlur) cdefines.set('MOTION_BLUR', '');
 
         const U = SHADERSTAGE_COMPUTE;
         const ro = (name: string) => new BindStorageBufferFormat(name, U, true);
@@ -327,9 +319,7 @@ class GpuSceneRasterizer {
         this.findBoundariesCompute = mk('scene-find-boundaries', findBoundariesWgsl(), [ro('totalPairs'), ro('sortedTileKeys'), rw('tileOffsets')]);
         this.rasterizeCompute = mk('scene-rasterize', rasterizeBinnedWgsl(), [ro('projected'), rw('runningState'), ro('tileOffsets'), ro('sortedSplatIndices')]);
         this.finalizeCompute = mk('scene-finalize', finalizeWgsl(), [ro('runningState'), rw('output')]);
-        if (options.motionBlur) {
-            this.accumulateCompute = mk('scene-accumulate', accumulateWgsl(), [ro('runningState'), rw('accum'), rw('output')]);
-        }
+        this.accumulateCompute = mk('scene-accumulate', accumulateWgsl(), [ro('runningState'), rw('accum'), rw('output')]);
 
         const groupPixels = this.groupPixelW * this.groupPixelH;
         this.visibleCountBuffer = new StorageBuffer(device, 4, BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST);
@@ -337,12 +327,8 @@ class GpuSceneRasterizer {
         this.totalPairsBuffer = new StorageBuffer(device, 4, BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST);
         this.runningStateBuffer = new StorageBuffer(device, groupPixels * 16, BUFFERUSAGE_COPY_DST);
         this.outputBuffer = new StorageBuffer(device, groupPixels * 4, BUFFERUSAGE_COPY_SRC);
-        if (this.accumulateCompute) {
-            this.accumBuffer = new StorageBuffer(device, groupPixels * 16, 0);
-            this.accumulateCompute.setParameter('runningState', this.runningStateBuffer);
-            this.accumulateCompute.setParameter('accum', this.accumBuffer);
-            this.accumulateCompute.setParameter('output', this.outputBuffer);
-        }
+        this.accumulateCompute.setParameter('runningState', this.runningStateBuffer);
+        this.accumulateCompute.setParameter('output', this.outputBuffer);
 
         this.depthKeysCompute.setParameter('visibleCount', this.visibleCountBuffer);
         this.scanSumsCompute.setParameter('totalPairs', this.totalPairsBuffer);
@@ -446,11 +432,11 @@ class GpuSceneRasterizer {
 
     /**
      * Render one view, or the mean of several, from the resident scene. With
-     * more than one view each is a shutter slice of one motion-blurred
-     * frame: the slices accumulate on the GPU in float and the frame
+     * more than one view each is one shutter sample of a motion-blurred
+     * frame: the samples accumulate on the GPU in float and the frame
      * quantizes once.
      *
-     * @param views - One view, or the shutter slices of a frame (needs the `motionBlur` option).
+     * @param views - One view, or the shutter samples of a frame.
      * @returns RGBA bytes, `imageWidth × imageHeight × 4`.
      */
     render(views: SceneView[]): Promise<Uint8Array> {
@@ -519,14 +505,6 @@ class GpuSceneRasterizer {
         if (views.length === 0) {
             throw new Error('GpuSceneRasterizer: render needs at least one view');
         }
-        if (views.length > 1 && !this.accumulateCompute) {
-            throw new Error('GpuSceneRasterizer: slice accumulation needs the motionBlur option');
-        }
-        for (const view of views) {
-            if (this.options.motionBlur && !view.basisB) {
-                throw new Error('GpuSceneRasterizer: motion blur render needs the shutter-close basis');
-            }
-        }
     }
 
     /**
@@ -548,7 +526,12 @@ class GpuSceneRasterizer {
         const numGroupsX = Math.ceil(imageTilesX / o.groupTilesX);
         const numGroupsY = Math.ceil(imageTilesY / o.groupTilesY);
         const image = new Uint8Array(width * height * 4);
-        const pack = views.length > 1 ? this.accumulateCompute! : this.finalizeCompute;
+        if (views.length > 1 && !this.accumBuffer) {
+            // The accumulator is group-sized; allocate it on the first multi-view frame.
+            this.accumBuffer = new StorageBuffer(this.device, this.groupPixelW * this.groupPixelH * 16, 0);
+            this.accumulateCompute.setParameter('accum', this.accumBuffer);
+        }
+        const pack = views.length > 1 ? this.accumulateCompute : this.finalizeCompute;
         const packName = views.length > 1 ? 'scene-accumulate' : 'scene-finalize';
 
         for (let gy = 0; gy < numGroupsY; gy++) {
@@ -912,7 +895,6 @@ class GpuSceneRasterizer {
     private setUniforms(view: SceneView, gx: number, gy: number, tilesX: number, tilesY: number, sliceIndex: number, sliceCount: number): void {
         const o = this.options;
         const b = view.basis;
-        const bb = view.basisB;
         const originX = gx * this.groupPixelW;
         const originY = gy * this.groupPixelH;
         const maxX = originX + tilesX * TILE_SIZE;
@@ -951,21 +933,12 @@ class GpuSceneRasterizer {
             c.setParameter('groupPixelOriginY', originY);
             c.setParameter('bgR', o.bgR); c.setParameter('bgG', o.bgG);
             c.setParameter('bgB', o.bgB); c.setParameter('bgA', o.bgA);
-            c.setParameter('rightBX', bb?.right.x ?? 0); c.setParameter('rightBY', bb?.right.y ?? 0); c.setParameter('rightBZ', bb?.right.z ?? 0);
-            c.setParameter('_p7', 0);
-            c.setParameter('downBX', bb?.down.x ?? 0); c.setParameter('downBY', bb?.down.y ?? 0); c.setParameter('downBZ', bb?.down.z ?? 0);
-            c.setParameter('_p8', 0);
-            c.setParameter('forwardBX', bb?.forward.x ?? 0); c.setParameter('forwardBY', bb?.forward.y ?? 0); c.setParameter('forwardBZ', bb?.forward.z ?? 0);
-            c.setParameter('_p9', 0);
-            c.setParameter('eyeBX', bb?.eye.x ?? 0); c.setParameter('eyeBY', bb?.eye.y ?? 0); c.setParameter('eyeBZ', bb?.eye.z ?? 0);
-            c.setParameter('_p10', 0);
             c.setParameter('numSplats', this.numSplats);
             c.setParameter('rangeStart', 0);
             c.setParameter('emitBase', 0);
             c.setParameter('sliceIndex', sliceIndex);
             c.setParameter('sliceCount', sliceCount);
-            c.setParameter('focalXB', bb?.focalX ?? 0); c.setParameter('focalYB', bb?.focalY ?? 0);
-            c.setParameter('_p13', 0);
+            c.setParameter('_p7', 0); c.setParameter('_p8', 0); c.setParameter('_p9', 0);
         }
     }
 

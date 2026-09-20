@@ -32,8 +32,8 @@ const projectionEquirect = /* wgsl */`
     let lon = atan2(cx, cz);
     let sinLat = clamp(cy / r, -1.0, 1.0);
     let lat = asin(sinLat);
-    var screenX = (lon * invTwoPi + 0.5) * imgWf;
-    var screenY = (lat * invPi + 0.5) * imgHf;
+    let screenX = (lon * invTwoPi + 0.5) * imgWf;
+    let screenY = (lat * invPi + 0.5) * imgHf;
 `;
 
 export { projectionEquirect };

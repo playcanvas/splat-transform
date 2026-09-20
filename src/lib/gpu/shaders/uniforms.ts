@@ -31,12 +31,8 @@ struct Uniforms {
     groupPixelMinX: u32, groupPixelMinY: u32, groupPixelMaxX: u32, groupPixelMaxY: u32,
     groupTilesX: u32, groupTilesY: u32, groupPixelOriginX: u32, groupPixelOriginY: u32,
     bgR: f32, bgG: f32, bgB: f32, bgA: f32,
-    rightBX: f32, rightBY: f32, rightBZ: f32, _p7: f32,
-    downBX: f32, downBY: f32, downBZ: f32, _p8: f32,
-    forwardBX: f32, forwardBY: f32, forwardBZ: f32, _p9: f32,
-    eyeBX: f32, eyeBY: f32, eyeBZ: f32, _p10: f32,
     numSplats: u32, rangeStart: u32, emitBase: u32, sliceIndex: u32,
-    sliceCount: u32, focalXB: f32, focalYB: f32, _p13: u32,
+    sliceCount: u32, _p7: u32, _p8: u32, _p9: u32,
 }
 `;
 
@@ -91,23 +87,6 @@ const uniformFormatEntries = (): UniformFormat[] => [
     new UniformFormat('bgG', UNIFORMTYPE_FLOAT),
     new UniformFormat('bgB', UNIFORMTYPE_FLOAT),
     new UniformFormat('bgA', UNIFORMTYPE_FLOAT),
-    // Shutter-close camera basis for analytic motion blur (zero when unused).
-    new UniformFormat('rightBX', UNIFORMTYPE_FLOAT),
-    new UniformFormat('rightBY', UNIFORMTYPE_FLOAT),
-    new UniformFormat('rightBZ', UNIFORMTYPE_FLOAT),
-    new UniformFormat('_p7', UNIFORMTYPE_FLOAT),
-    new UniformFormat('downBX', UNIFORMTYPE_FLOAT),
-    new UniformFormat('downBY', UNIFORMTYPE_FLOAT),
-    new UniformFormat('downBZ', UNIFORMTYPE_FLOAT),
-    new UniformFormat('_p8', UNIFORMTYPE_FLOAT),
-    new UniformFormat('forwardBX', UNIFORMTYPE_FLOAT),
-    new UniformFormat('forwardBY', UNIFORMTYPE_FLOAT),
-    new UniformFormat('forwardBZ', UNIFORMTYPE_FLOAT),
-    new UniformFormat('_p9', UNIFORMTYPE_FLOAT),
-    new UniformFormat('eyeBX', UNIFORMTYPE_FLOAT),
-    new UniformFormat('eyeBY', UNIFORMTYPE_FLOAT),
-    new UniformFormat('eyeBZ', UNIFORMTYPE_FLOAT),
-    new UniformFormat('_p10', UNIFORMTYPE_FLOAT),
     // Resident (column-major) scene layout: column stride, and the splat /
     // pair offsets of the range being emitted. Zero for the chunked path.
     new UniformFormat('numSplats', UNIFORMTYPE_UINT),
@@ -117,10 +96,9 @@ const uniformFormatEntries = (): UniformFormat[] => [
     // finalize runs instead of accumulate).
     new UniformFormat('sliceIndex', UNIFORMTYPE_UINT),
     new UniformFormat('sliceCount', UNIFORMTYPE_UINT),
-    // Shutter-close focal lengths in pixels (zero when unused).
-    new UniformFormat('focalXB', UNIFORMTYPE_FLOAT),
-    new UniformFormat('focalYB', UNIFORMTYPE_FLOAT),
-    new UniformFormat('_p13', UNIFORMTYPE_UINT)
+    new UniformFormat('_p7', UNIFORMTYPE_UINT),
+    new UniformFormat('_p8', UNIFORMTYPE_UINT),
+    new UniformFormat('_p9', UNIFORMTYPE_UINT)
 ];
 
 export { uniformsStruct, uniformFormatEntries };

@@ -145,10 +145,10 @@ type Options = {
     renderShutter?: number;
 
     /**
-     * Number of shutter slices for motion blur; cost is N× a single
-     * render. Each slice integrates every gaussian's motion exactly, so
-     * more slices only refine the compositing between overlapping
-     * gaussians. Default: `4`. No effect without `renderCameraEndPosition`.
+     * Renders averaged per motion-blurred frame, at evenly spaced instants
+     * across the shutter; cost is N× a single render. Default: chosen per
+     * frame from the camera motion so consecutive instants are about 2 px
+     * apart, at most 64. No effect without motion blur.
      */
     renderMotionSamples?: number;
 

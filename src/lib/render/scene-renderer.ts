@@ -1,6 +1,6 @@
 import { GraphicsDevice } from 'playcanvas';
 
-import { type CameraBasis, type Projection, type RenderCamera, buildCameraBasis } from './camera';
+import { type Projection, type RenderCamera, buildCameraBasis } from './camera';
 import { TILE_SIZE, storageBindingLimit } from './config';
 import { SortScratch, sortCandidatesByDepth } from './preprocess';
 import { type ChunkDataPool, type ChunkSource, type SHBands, colorStride } from '../chunk';
@@ -48,8 +48,6 @@ interface SceneRendererOptions {
     projection: Projection;
     width: number;
     height: number;
-    /** Whether renders carry a shutter-close pose (motion blur). Fixed per instance. */
-    motionBlur: boolean;
     background: BackgroundRGBA;
     /** Clamp frame-filling splats to the image; default true. */
     sizeClamp?: boolean;
@@ -147,7 +145,6 @@ class SceneRenderer {
             groupTilesX,
             groupTilesY,
             sizeClamp: options.sizeClamp,
-            motionBlur: options.motionBlur,
             bgR: bg.r,
             bgG: bg.g,
             bgB: bg.b,
@@ -198,8 +195,8 @@ class SceneRenderer {
     /**
      * Render one view.
      *
-     * @param camera - Camera in the scene's space; must match the projection, size
-     * and motion-blur setting the renderer was built with.
+     * @param camera - Camera in the scene's space; must match the projection and
+     * size the renderer was built with.
      * @returns RGBA bytes, `width × height × 4`.
      */
     render(camera: RenderCamera): Promise<Uint8Array> {
@@ -207,34 +204,24 @@ class SceneRenderer {
     }
 
     /**
-     * Render the mean of several views: the shutter slices of one
-     * motion-blurred frame, accumulated on the GPU in float and quantized
-     * once. Needs a renderer built with `motionBlur`.
+     * Render the mean of several views: the shutter samples of one
+     * motion-blurred frame, each composited exactly at its instant,
+     * accumulated on the GPU in float and quantized once.
      *
-     * @param cameras - The slices, each carrying `shutterClose`; same constraints as {@link render}.
+     * @param cameras - The samples; same constraints as {@link render}.
      * @returns RGBA bytes, `width × height × 4`.
      */
     renderSlices(cameras: RenderCamera[]): Promise<Uint8Array> {
         if (!this.tier) {
             throw new Error('SceneRenderer: upload before render');
         }
-        const { projection, width, height, motionBlur } = this.options;
+        const { projection, width, height } = this.options;
         const views = cameras.map((camera) => {
             if ((camera.projection ?? 'pinhole') !== projection || camera.width !== width || camera.height !== height) {
                 throw new Error('SceneRenderer: camera projection or size differs from the renderer\'s');
             }
-            if (motionBlur !== (camera.shutterClose !== undefined)) {
-                throw new Error('SceneRenderer: camera motion blur differs from the renderer\'s');
-            }
-            const basis = buildCameraBasis(camera);
-            let basisB: CameraBasis | undefined;
-            if (camera.shutterClose) {
-                const { position, target, up, fovY = camera.fovY } = camera.shutterClose;
-                basisB = buildCameraBasis({ ...camera, position, target, up, fovY });
-            }
             return {
-                basis,
-                basisB,
+                basis: buildCameraBasis(camera),
                 near: camera.near,
                 focusDistance: camera.focusDistance ?? 0,
                 apertureScale: camera.apertureScale ?? 0
@@ -297,7 +284,7 @@ class SceneRenderer {
 
     /**
      * `streamed-cpu`: the near-plane cull and depth sort on the CPU, with the
-     * GPU key pass's tests (both shutter poses under motion blur).
+     * GPU key pass's tests.
      *
      * @param view - The view.
      * @returns The visible gaussians front to back.
@@ -305,25 +292,23 @@ class SceneRenderer {
     private cpuOrder(view: SceneView): SortedOrder {
         const { x, y, z } = this.positions!;
         const candidates = this.candidates!;
-        const { basis, basisB, near } = view;
+        const { basis, near } = view;
+        const { eye, forward } = basis;
         const n = this.numSplats;
         let count = 0;
         if (this.options.projection === 'pinhole') {
-            const cz = (b: CameraBasis, i: number) => b.forward.x * (x[i] - b.eye.x) + b.forward.y * (y[i] - b.eye.y) + b.forward.z * (z[i] - b.eye.z);
             for (let i = 0; i < n; i++) {
-                if (cz(basis, i) > near && (!basisB || cz(basisB, i) > near)) candidates[count++] = i;
+                const cz = forward.x * (x[i] - eye.x) + forward.y * (y[i] - eye.y) + forward.z * (z[i] - eye.z);
+                if (cz > near) candidates[count++] = i;
             }
         } else {
             const nearSq = near * near;
-            const r2 = (b: CameraBasis, i: number) => {
-                const dx = x[i] - b.eye.x, dy = y[i] - b.eye.y, dz = z[i] - b.eye.z;
-                return dx * dx + dy * dy + dz * dz;
-            };
             for (let i = 0; i < n; i++) {
-                if (r2(basis, i) > nearSq && (!basisB || r2(basisB, i) > nearSq)) candidates[count++] = i;
+                const dx = x[i] - eye.x, dy = y[i] - eye.y, dz = z[i] - eye.z;
+                if (dx * dx + dy * dy + dz * dz > nearSq) candidates[count++] = i;
             }
         }
-        sortCandidatesByDepth(this.positions!, candidates, count, basis, this.options.projection, this.sortScratch!, basisB);
+        sortCandidatesByDepth(this.positions!, candidates, count, basis, this.options.projection, this.sortScratch!);
         return { order: candidates, visible: count };
     }
 
