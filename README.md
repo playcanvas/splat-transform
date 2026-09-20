@@ -278,8 +278,8 @@ Apply when writing `.webp` (lossless WebP rendered via GPU rasterizer).
     --shutter          <0..1>           Fraction of the start→end segment integrated, centered on the midpoint
                                         (1.0 = full motion; 0.5 = 180° shutter). Default: 1. Only with --camera-pos-end.
     --motion-samples   <n>              Renders averaged per motion-blurred frame, at evenly spaced instants across
-                                        the shutter. Cost is N× a single render. Default: chosen from the camera
-                                        motion so consecutive instants are about 2 px apart (at most 64).
+                                        the shutter. Cost is N× a single render; too few show as discrete copies
+                                        where the motion between instants exceeds a couple of pixels. Default: 1.
     --webp-effort      <0-9>            Lossless WebP compression effort. Every level is lossless; higher is
                                         smaller but much slower (6 is about 8x slower than 0 for ~20% smaller
                                         files). Default: 0.

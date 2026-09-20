@@ -146,9 +146,8 @@ type Options = {
 
     /**
      * Renders averaged per motion-blurred frame, at evenly spaced instants
-     * across the shutter; cost is N× a single render. Default: chosen per
-     * frame from the camera motion so consecutive instants are about 2 px
-     * apart, at most 64. No effect without motion blur.
+     * across the shutter; cost is N× a single render. Default: `1`. No
+     * effect without motion blur.
      */
     renderMotionSamples?: number;
 

@@ -5,7 +5,7 @@ import { logWrittenFile } from './utils';
 import { type ChunkDataPool, type ChunkSource } from '../chunk';
 import { computeWriteTransform } from '../data-table';
 import { type FileSystem, writeFile } from '../io/write';
-import { SceneRenderer, type SceneTier, motionSampleCount } from '../render';
+import { SceneRenderer, type SceneTier } from '../render';
 import { type Projection, type RenderCamera } from '../render/camera';
 import { type CameraTrack } from '../render/camera-track';
 import type { DeviceCreator } from '../types';
@@ -19,6 +19,9 @@ type Vec3Like = { x: number; y: number; z: number };
  * while the next one renders. Bounds the RGBA frames held in memory.
  */
 const MAX_PENDING_ENCODES = 4;
+
+/** Renders averaged per motion-blurred frame unless the caller sets `motionSamples`. */
+const DEFAULT_MOTION_SAMPLES = 1;
 
 /**
  * Options for writing a rendered splat image.
@@ -136,9 +139,7 @@ type WriteImageOptions = {
      * across the shutter; cost is N× a single render. Each instant is
      * composited exactly, so the mean converges to the true time average
      * as N grows; too few instants show as discrete copies wherever the
-     * motion between them exceeds a couple of pixels. Default: chosen per
-     * frame from the camera motion so consecutive instants are about 2 px
-     * apart at the look-at distance (see `motionSampleCount`), at most 64.
+     * motion between them exceeds a couple of pixels. Default: `1`.
      * Only meaningful when motion blur is enabled.
      */
     motionSamples?: number;
@@ -286,12 +287,13 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         throw new Error('writeImage: --camera-pos-end is not valid with --camera-track; motion blur along a track comes from --shutter.');
     }
     const motionEnabled = cameraTrack ? (shutter !== undefined && shutter > 0) : cameraEndPosition !== undefined;
+    const motionN = motionEnabled ? (motionSamples ?? DEFAULT_MOTION_SAMPLES) : 1;
     const motionShutter = motionEnabled ? (shutter ?? 1) : 0;
     if (motionEnabled && (motionShutter < 0 || motionShutter > 1)) {
         throw new Error(`writeImage: --shutter must be in [0, 1], got ${motionShutter}.`);
     }
-    if (motionSamples !== undefined && (!Number.isInteger(motionSamples) || motionSamples < 1)) {
-        throw new Error(`writeImage: --motion-samples must be a positive integer, got ${motionSamples}.`);
+    if (motionEnabled && (!Number.isInteger(motionN) || motionN < 1)) {
+        throw new Error(`writeImage: --motion-samples must be a positive integer, got ${motionN}.`);
     }
 
     // Frame range: a single frame without a track, else the track's frames.
@@ -440,7 +442,7 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         logger.info(`camera track: frames ${frameStart}-${frameEnd} of ${cameraTrack.frameCount} at ${cameraTrack.frameRate} fps`);
     }
     if (motionEnabled) {
-        logger.info(`motion blur: shutter ${motionShutter}, ${motionSamples !== undefined ? `${motionSamples} samples` : 'samples from the camera motion'}`);
+        logger.info(`motion blur: shutter ${motionShutter}, ${motionN} sample${motionN === 1 ? '' : 's'}`);
     }
 
     // Resident when the scene fits the device and the budget: one upload,
@@ -479,14 +481,14 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
             // Frame averaging: render the pose at N evenly spaced instants
             // across the shutter and accumulate them on the GPU in float,
             // quantizing once. Each instant composites exactly, so the mean
-            // converges to the true time average as N grows; unless the
-            // caller fixed N, it keeps consecutive instants about 2 px apart.
-            const n = motionSamples ?? motionSampleCount(buildCamera(poseAt(t0)), buildCamera(poseAt(t1)));
+            // converges to the true time average as N grows; too few show as
+            // discrete copies where the motion between them exceeds a couple
+            // of pixels.
             const instants: RenderCamera[] = [];
-            for (let i = 0; i < n; i++) {
-                instants.push(buildCamera(poseAt(t0 + (t1 - t0) * (i + 0.5) / n)));
+            for (let i = 0; i < motionN; i++) {
+                instants.push(buildCamera(poseAt(t0 + (t1 - t0) * (i + 0.5) / motionN)));
             }
-            return n === 1 ? renderView(instants[0]) : scene.renderSlices(instants);
+            return motionN === 1 ? renderView(instants[0]) : scene.renderSlices(instants);
         };
 
         const webPCodec = await WebPCodec.create(); // cheap: create() memoizes the wasm module
