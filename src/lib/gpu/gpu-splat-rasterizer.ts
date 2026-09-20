@@ -644,8 +644,9 @@ class GpuSplatRasterizer {
             // Chunked path: interleaved input, whole chunk per dispatch.
             c.setParameter('numSplats', 0); c.setParameter('rangeStart', 0);
             c.setParameter('emitBase', 0); c.setParameter('sliceIndex', 0);
-            c.setParameter('sliceCount', 1); c.setParameter('_p11', 0);
-            c.setParameter('_p12', 0); c.setParameter('_p13', 0);
+            c.setParameter('sliceCount', 1);
+            c.setParameter('focalXB', bb?.focalX ?? 0); c.setParameter('focalYB', bb?.focalY ?? 0);
+            c.setParameter('_p13', 0);
         }
     }
 

@@ -180,8 +180,8 @@ fn main(
 #else
     if (!(czB > uniforms.near)) { writeInvalid(i); return; }
     let invZB = 1.0 / czB;
-    let screenXB = uniforms.focalX * cxB * invZB + f32(uniforms.imageWidth) * 0.5;
-    let screenYB = uniforms.focalY * cyB * invZB + f32(uniforms.imageHeight) * 0.5;
+    let screenXB = uniforms.focalXB * cxB * invZB + f32(uniforms.imageWidth) * 0.5;
+    let screenYB = uniforms.focalYB * cyB * invZB + f32(uniforms.imageHeight) * 0.5;
 #endif
     let ccB = camCov(
         uniforms.rightBX, uniforms.rightBY, uniforms.rightBZ,
@@ -192,7 +192,7 @@ fn main(
 #ifdef PROJECTION_EQUIRECT
     let covB = cov2dEquirect(cxB, cyB, czB, r2B, rxzClampedB, ccB.c00, ccB.c01, ccB.c02, ccB.c11, ccB.c12, ccB.c22);
 #else
-    let covB = cov2dPinhole(cxB, cyB, czB, invZB, ccB.c00, ccB.c01, ccB.c02, ccB.c11, ccB.c12, ccB.c22);
+    let covB = cov2dPinhole(cxB, cyB, czB, invZB, uniforms.focalXB, uniforms.focalYB, ccB.c00, ccB.c01, ccB.c02, ccB.c11, ccB.c12, ccB.c22);
 #endif
     cov00 = 0.5 * (cov00 + covB.x);
     cov01 = 0.5 * (cov01 + covB.y);

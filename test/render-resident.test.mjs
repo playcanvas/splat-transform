@@ -46,9 +46,10 @@ const TIERS = ['resident', 'streamed-gpu', 'streamed-cpu'];
  *
  * @param {number} n - Gaussians in the main group.
  * @param {number} seed - PRNG seed.
+ * @param {number} [scaleBase] - Smallest log scale; the default gives small gaussians, 0 frame-filling ones.
  * @returns {Promise<{ dataTable: object, source: object, pool: object }>} The scene as a table and as a source.
  */
-const makeScene = async (n, seed) => {
+const makeScene = async (n, seed, scaleBase = -3) => {
     const { Column, DataTable, dataTableToChunkSource } = await import('../src/lib/index.js');
     const { createChunkDataPool } = await import('../src/lib/chunk/index.js');
     let s = seed >>> 0;
@@ -79,7 +80,7 @@ const makeScene = async (n, seed) => {
         rot[2][i] = b * Math.sin(2 * Math.PI * u3);
         rot[3][i] = b * Math.cos(2 * Math.PI * u3);
         for (let k = 0; k < 3; k++) {
-            scale[k][i] = -3 + 2.5 * rnd();
+            scale[k][i] = scaleBase + 2.5 * rnd();
             fdc[k][i] = -1.5 + 3 * rnd();
         }
         opacity[i] = -2 + 6 * rnd();
@@ -142,6 +143,24 @@ const makeRenderer = async (scene, camera, tier) => {
     return renderer;
 };
 
+/**
+ * Run `fn` with the device reporting a smaller storage-binding limit. The
+ * renderer sizes its groups and pair sorts from it; the engine reads only
+ * the dispatch limit at render time.
+ *
+ * @param {number} bytes - The binding limit to report.
+ * @param {() => Promise<void>} fn - The work.
+ */
+const withBindingLimit = async (bytes, fn) => {
+    const real = device.limits;
+    device.limits = { maxStorageBufferBindingSize: bytes, maxComputeWorkgroupsPerDimension: real.maxComputeWorkgroupsPerDimension };
+    try {
+        await fn();
+    } finally {
+        device.limits = real;
+    }
+};
+
 describe('scene renderer matches the chunked path', () => {
     it('static pinhole, defocus, motion blur, equirect and equirect blur are byte-identical in every tier', async (t) => {
         if (!device) return t.skip('no WebGPU adapter available');
@@ -177,6 +196,11 @@ describe('scene renderer matches the chunked path', () => {
                 ...pinhole,
                 shutterClose: { position: new Vec3(0.5, 0.25, 10.5), target: new Vec3(0.5, 0.25, 0.5), up }
             }],
+            // Zoom across the shutter: the eye stays put, the fov opens from 60° to 90°.
+            ['zoom blur', {
+                ...pinhole,
+                shutterClose: { position: pinhole.position, target: pinhole.target, up, fovY: Math.PI / 2 }
+            }],
             ['equirect', equirect],
             // The eye moves half a unit on the grid; squared distances stay exact.
             ['equirect blur', {
@@ -197,6 +221,53 @@ describe('scene renderer matches the chunked path', () => {
                 }
             }
         }
+    });
+
+    it('a zoom across the shutter blurs the frame', async (t) => {
+        if (!device) return t.skip('no WebGPU adapter available');
+        const { Vec3 } = await import('playcanvas');
+        const scene = await makeScene(20000, 7);
+        const up = new Vec3(0, 1, 0);
+        const still = { position: new Vec3(0, 0, 10), target: new Vec3(0, 0, 0), up, fovY: Math.PI / 3, width: 256, height: 192, near: 0.125 };
+        const zoom = { ...still, shutterClose: { position: still.position, target: still.target, up, fovY: Math.PI / 2 } };
+        const stillRenderer = await makeRenderer(scene, still, 'resident');
+        const zoomRenderer = await makeRenderer(scene, zoom, 'resident');
+        try {
+            const a = await stillRenderer.render(still);
+            const b = await zoomRenderer.render(zoom);
+            let differing = 0;
+            for (let i = 0; i < a.length; i++) {
+                if (a[i] !== b[i]) differing++;
+            }
+            assert.ok(differing > a.length / 20, `zoom blur should change the frame (${differing} of ${a.length} bytes differ)`);
+        } finally {
+            stillRenderer.destroy();
+            zoomRenderer.destroy();
+        }
+    });
+
+    it('renders in groups and cuts ranges within a small storage binding', async (t) => {
+        if (!device) return t.skip('no WebGPU adapter available');
+        const { Vec3 } = await import('playcanvas');
+        const { renderSplats } = await import('../src/lib/render/index.js');
+        // Frame-filling gaussians: every scan block's pairs exceed the cap below.
+        const scene = await makeScene(6000, 11, 0);
+        const camera = { position: new Vec3(0, 0, 10), target: new Vec3(0, 0, 0), up: new Vec3(0, 1, 0), fovY: Math.PI / 3, width: 256, height: 192, near: 0.125 };
+        const reference = await renderSplats(device, scene.dataTable, camera, background);
+        assert.ok(countForeground(reference) > 1000, 'scene should cover the frame');
+
+        // A 64 KiB binding: groups of one tile row (twelve per frame) and
+        // sorts of at most 16K pairs, so blocks are cut inside.
+        await withBindingLimit(64 * 1024, async () => {
+            for (const tier of TIERS) {
+                const renderer = await makeRenderer(scene, camera, tier);
+                try {
+                    compare(await renderer.render(camera), reference, `small binding (${tier})`);
+                } finally {
+                    renderer.destroy();
+                }
+            }
+        });
     });
 
     it('GPU slice accumulation matches the float mean of the slices', async (t) => {

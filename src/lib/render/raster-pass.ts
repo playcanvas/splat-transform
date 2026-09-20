@@ -112,8 +112,8 @@ const renderRasterPass = async (
     // sort by the mean depth and bound both footprints.
     let basisB: CameraBasis | undefined;
     if (camera.shutterClose) {
-        const { position, target, up } = camera.shutterClose;
-        basisB = buildCameraBasis({ ...camera, position, target, up });
+        const { position, target, up, fovY = camera.fovY } = camera.shutterClose;
+        basisB = buildCameraBasis({ ...camera, position, target, up, fovY });
     }
 
     // ---- Frustum cull ----
@@ -229,16 +229,8 @@ const renderRasterPass = async (
         const focalX = basis.focalX, focalY = basis.focalY;
         const halfW = width * 0.5, halfH = height * 0.5;
         const sxColRef = cols.scaleX, syColRef = cols.scaleY, szColRef = cols.scaleZ;
-        // Tan-of-half-FOV cap; matches the project shader's Jacobian clamp.
-        const limX = JACOBIAN_LIMIT_FACTOR * halfW / focalX;
-        const limY = JACOBIAN_LIMIT_FACTOR * halfH / focalY;
-        const limX2 = limX * limX;
-        const limY2 = limY * limY;
         // Additive squared-radius safety: AA dilation + disc-floor bump.
         const lambdaSafety = AA_DILATION_COV + Math.sqrt(DISCRIMINANT_FLOOR);
-        // Per-buffer base focal scale (max of focals so the bound is
-        // valid against either axis).
-        const focalMax = Math.max(focalX, focalY);
 
         // Packed Uint16 buffer of (sx0, sx1, sy0, sy1) per candidate.
         // sx0 = 0xFFFF sentinel marks "off-screen, skip in pass 2".
@@ -258,19 +250,22 @@ const renderRasterPass = async (
         const fxB = basisB?.forward.x ?? 0, fyB = basisB?.forward.y ?? 0, fzB = basisB?.forward.z ?? 0;
         const rxB = basisB?.right.x ?? 0, ryB = basisB?.right.y ?? 0, rzB = basisB?.right.z ?? 0;
         const dxB = basisB?.down.x ?? 0, dyB = basisB?.down.y ?? 0, dzB = basisB?.down.z ?? 0;
+        const focalXB = basisB?.focalX ?? 0, focalYB = basisB?.focalY ?? 0;
 
-        // Geometric part of the bound at one camera-space point:
-        // (focal/cz)² · (1 + tx² + ty²) · maxScale² with tx = cx/cz,
-        // ty = cy/cz both clamped to ±lim. Matches the project shader's
-        // clamp so the bound is tight.
-        const lambdaGeom = (cx: number, cy: number, invZ: number, maxScale: number): number => {
+        // Geometric part of the bound at one camera-space point under a
+        // pose's focal lengths: (focal/cz)² · (1 + tx² + ty²) · maxScale²
+        // with tx = cx/cz, ty = cy/cz both clamped to ±lim, the
+        // tan-of-half-FOV cap. Matches the project shader's clamp so the
+        // bound is tight; the larger focal keeps it valid against either axis.
+        const lambdaGeom = (cx: number, cy: number, invZ: number, maxScale: number, fx: number, fy: number): number => {
+            const limX = JACOBIAN_LIMIT_FACTOR * halfW / fx;
+            const limY = JACOBIAN_LIMIT_FACTOR * halfH / fy;
             const tx = cx * invZ;
             const ty = cy * invZ;
             const txClamped = tx > limX ? limX : (tx < -limX ? -limX : tx);
             const tyClamped = ty > limY ? limY : (ty < -limY ? -limY : ty);
-            const tx2 = Math.min(txClamped * txClamped, limX2);
-            const ty2 = Math.min(tyClamped * tyClamped, limY2);
-            const jFactorSq = 1 + tx2 + ty2;
+            const jFactorSq = 1 + txClamped * txClamped + tyClamped * tyClamped;
+            const focalMax = Math.max(fx, fy);
             return (focalMax * invZ) * (focalMax * invZ) * jFactorSq * maxScale * maxScale;
         };
 
@@ -293,7 +288,7 @@ const renderRasterPass = async (
                 Math.exp(syColRef[idx]),
                 Math.exp(szColRef[idx])
             );
-            let lambdaMaxBound = lambdaGeom(cx, cy, invZ, maxScale);
+            let lambdaMaxBound = lambdaGeom(cx, cy, invZ, maxScale, focalX, focalY);
             let centerX = screenX;
             let centerY = screenY;
             let czView = cz;
@@ -315,9 +310,9 @@ const renderRasterPass = async (
                 const cxB = rxB * wxB + ryB * wyB + rzB * wzB;
                 const cyB = dxB * wxB + dyB * wyB + dzB * wzB;
                 const invZB = 1.0 / czB;
-                const screenXB = focalX * cxB * invZB + halfW;
-                const screenYB = focalY * cyB * invZB + halfH;
-                lambdaMaxBound = Math.max(lambdaMaxBound, lambdaGeom(cxB, cyB, invZB, maxScale));
+                const screenXB = focalXB * cxB * invZB + halfW;
+                const screenYB = focalYB * cyB * invZB + halfH;
+                lambdaMaxBound = Math.max(lambdaMaxBound, lambdaGeom(cxB, cyB, invZB, maxScale, focalXB, focalYB));
                 centerX = 0.5 * (screenX + screenXB);
                 centerY = 0.5 * (screenY + screenYB);
                 czView = 0.5 * (cz + czB);

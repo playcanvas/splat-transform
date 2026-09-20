@@ -7,12 +7,16 @@ import { type ChunkDataPool, type ChunkSource, type SHBands, colorStride } from 
 import { GpuSceneRasterizer, ResidentUploadError, type SceneView, type SortedOrder, type StreamedRange } from '../gpu/gpu-scene-rasterizer';
 
 /**
- * Largest group (sub-frame) edge in tiles: 4096 px, a 256 MB running-state
- * buffer. Larger images render as a grid of groups; each group projects the
- * whole visible list again with the group's cull, which is cheap next to
- * the per-group binning and rasterization it saves.
+ * Pixel budget of one group (sub-frame): 4096², a 256 MB running-state
+ * buffer, or less where the device's storage binding cannot hold that.
+ * Larger images render as a grid of groups; each group projects the whole
+ * visible list again with the group's cull, which is cheap next to the
+ * per-group binning and rasterization it saves.
  */
-const MAX_GROUP_TILES = 4096 / TILE_SIZE;
+const MAX_GROUP_PIXELS = 4096 * 4096;
+
+/** Bytes per pixel of the largest group-sized buffers: the running state and the slice accumulator. */
+const STATE_BYTES_PER_PIXEL = 16;
 
 /** Bytes of the projection record per gaussian: the largest per-row working buffer. */
 const PROJECTION_BYTES = 12 * 4;
@@ -125,9 +129,15 @@ class SceneRenderer {
 
         const imageTilesX = Math.ceil(options.width / TILE_SIZE);
         const imageTilesY = Math.ceil(options.height / TILE_SIZE);
+        // Group tiles within the pixel budget and one storage binding.
         // Equirect binning wraps the X axis, so its X extent is never split.
-        const groupTilesX = options.projection === 'equirect' ? imageTilesX : Math.min(imageTilesX, MAX_GROUP_TILES);
-        const groupTilesY = Math.min(imageTilesY, MAX_GROUP_TILES);
+        const maxGroupPixels = Math.min(MAX_GROUP_PIXELS, storageBindingLimit(device) / STATE_BYTES_PER_PIXEL);
+        const maxGroupTiles = Math.floor(maxGroupPixels / (TILE_SIZE * TILE_SIZE));
+        const groupTilesX = options.projection === 'equirect' ? imageTilesX : Math.min(imageTilesX, maxGroupTiles);
+        const groupTilesY = Math.min(imageTilesY, Math.floor(maxGroupTiles / groupTilesX));
+        if (groupTilesY < 1) {
+            throw new Error(`SceneRenderer: a ${options.width}-pixel tile row exceeds the device's storage binding limit`);
+        }
         const bg = options.background;
         this.raster = new GpuSceneRasterizer(device, {
             numSHBands: this.numSHBands,
@@ -219,8 +229,8 @@ class SceneRenderer {
             const basis = buildCameraBasis(camera);
             let basisB: CameraBasis | undefined;
             if (camera.shutterClose) {
-                const { position, target, up } = camera.shutterClose;
-                basisB = buildCameraBasis({ ...camera, position, target, up });
+                const { position, target, up, fovY = camera.fovY } = camera.shutterClose;
+                basisB = buildCameraBasis({ ...camera, position, target, up, fovY });
             }
             return {
                 basis,

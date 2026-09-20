@@ -17,7 +17,7 @@ import {
 
 import { type ChunkData, type ChunkDataPool, type ChunkLayer, type ChunkSource, type ReadRequest, colorStride } from '../chunk';
 import { type CameraBasis, type Projection } from '../render/camera';
-import { PAIR_BUFFER_BUDGET_BYTES, PAIR_BUFFER_TOTAL_BYTES_PER_ELEMENT, TILE_SIZE } from '../render/config';
+import { PAIR_BUFFER_BUDGET_BYTES, PAIR_BUFFER_TOTAL_BYTES_PER_ELEMENT, TILE_SIZE, storageBindingLimit } from '../render/config';
 import { accumulateWgsl } from './shaders/accumulate';
 import { constantsChunk } from './shaders/chunks/constants';
 import { covariance3D, covariance3DFns } from './shaders/chunks/covariance-3d';
@@ -55,8 +55,8 @@ const GEOMETRIC_F32 = 8;
 /**
  * Pairs the range cutter aims for per sort: the shared pair-buffer budget
  * spread over the six pair-sized buffers (two here, four inside the radix
- * sort). A single scan block whose pairs exceed this still sorts in one
- * range; the budget is a target, the allocation is always exact.
+ * sort). Each instance also caps a range so every pair buffer fits one
+ * storage binding; the budget is a target, the allocation is always exact.
  */
 const PAIR_BUDGET = Math.floor(PAIR_BUFFER_BUDGET_BYTES / PAIR_BUFFER_TOTAL_BYTES_PER_ELEMENT);
 
@@ -230,6 +230,10 @@ class GpuSceneRasterizer {
     private tileKeysBuffer: StorageBuffer | null = null;
     private splatValuesBuffer: StorageBuffer | null = null;
     private pairCapacity = 0;
+    /** Most pairs per sort: the budget, or fewer where a pair buffer would exceed a binding. */
+    private pairCap: number;
+    /** Readback of one scan block's per-splat offsets, for cutting inside an oversized block. */
+    private blockOffsets = new Uint32Array(SCAN_BLOCK);
 
     /** Pixels per group axis. */
     readonly groupPixelW: number;
@@ -242,6 +246,7 @@ class GpuSceneRasterizer {
         this.groupPixelH = options.groupTilesY * TILE_SIZE;
         // @ts-ignore - limits is a WebGPU-device property not on the public type.
         this.maxDispatchDim = (device as { limits?: { maxComputeWorkgroupsPerDimension?: number } }).limits?.maxComputeWorkgroupsPerDimension ?? 65535;
+        this.pairCap = Math.min(PAIR_BUDGET, Math.floor(storageBindingLimit(device) / 4));
 
         // Direct-dispatch radix sort: the pair count is known on the CPU by
         // the time each range sorts.
@@ -634,24 +639,61 @@ class GpuSceneRasterizer {
         const totalPairs = total[0];
 
         // Cut the depth-sorted list into ranges at scan-block boundaries so
-        // each sort stays within the pair budget. A range that is a single
-        // block exceeding the budget is sorted whole.
+        // each sort stays within the pair cap; a block that exceeds it on
+        // its own is cut inside, from its per-splat offsets.
+        // Pairs before a block; past the last block, the grand total.
+        const pairsBefore = (block: number): number => (block < numBlocks ? prefix[block] : totalPairs);
         let startBlock = 0;
         while (startBlock < numBlocks) {
             const rangeBase = prefix[startBlock];
             let endBlock = startBlock + 1;
-            while (endBlock < numBlocks && prefix[endBlock] - rangeBase <= PAIR_BUDGET) {
-                endBlock++;
-            }
-            // `prefix[endBlock]` past the last block is the grand total.
-            const rangeEnd = endBlock < numBlocks ? prefix[endBlock] : totalPairs;
-            const rangePairs = rangeEnd - rangeBase;
-            if (rangePairs > 0) {
-                const splatStart = startBlock * SCAN_BLOCK;
-                const splatCount = Math.min(count, endBlock * SCAN_BLOCK) - splatStart;
-                this.rasterizeCut(splatStart, splatCount, rangeBase, rangePairs, tilesX, tilesY);
+            if (pairsBefore(endBlock) - rangeBase > this.pairCap) {
+                await this.rasterBlock(startBlock, count, rangeBase, pairsBefore(endBlock), tilesX, tilesY);
+            } else {
+                while (endBlock < numBlocks && pairsBefore(endBlock + 1) - rangeBase <= this.pairCap) {
+                    endBlock++;
+                }
+                const rangePairs = pairsBefore(endBlock) - rangeBase;
+                if (rangePairs > 0) {
+                    const splatStart = startBlock * SCAN_BLOCK;
+                    const splatCount = Math.min(count, endBlock * SCAN_BLOCK) - splatStart;
+                    this.rasterizeCut(splatStart, splatCount, rangeBase, rangePairs, tilesX, tilesY);
+                }
             }
             startBlock = endBlock;
+        }
+    }
+
+    /**
+     * Rasterize one scan block whose pairs exceed the cap: read back its
+     * block-local per-splat offsets and cut it into ranges within the cap.
+     * One splat's pairs are at most the group's tiles, which always fit.
+     *
+     * @param block - The scan block.
+     * @param count - Gaussians in the range being rasterized.
+     * @param blockBase - Pairs before the block.
+     * @param blockEnd - Pairs before the next block.
+     * @param tilesX - Active group width in tiles.
+     * @param tilesY - Active group height in tiles.
+     */
+    private async rasterBlock(block: number, count: number, blockBase: number, blockEnd: number, tilesX: number, tilesY: number): Promise<void> {
+        const splatStart = block * SCAN_BLOCK;
+        const splatCount = Math.min(count, splatStart + SCAN_BLOCK) - splatStart;
+        const offsets = await this.emitOffsetBuffer!.read(splatStart * 4, splatCount * 4, this.blockOffsets, true) as Uint32Array;
+        // Block-local pairs before a splat; past the last splat, the block's total.
+        const localBefore = (j: number): number => (j < splatCount ? offsets[j] : blockEnd - blockBase);
+        let start = 0;
+        while (start < splatCount) {
+            const base = localBefore(start);
+            let end = start + 1;
+            while (end < splatCount && localBefore(end + 1) - base <= this.pairCap) {
+                end++;
+            }
+            const pairs = localBefore(end) - base;
+            if (pairs > 0) {
+                this.rasterizeCut(splatStart + start, end - start, blockBase + base, pairs, tilesX, tilesY);
+            }
+            start = end;
         }
     }
 
@@ -827,7 +869,8 @@ class GpuSceneRasterizer {
         const numBlocks = Math.ceil(rows / SCAN_BLOCK);
         this.projBuffer = new StorageBuffer(device, Math.max(4, rows * PROJECTION_STRIDE_F32 * 4), 0);
         this.coverageBuffer = new StorageBuffer(device, Math.max(4, rows * 4), 0);
-        this.emitOffsetBuffer = new StorageBuffer(device, Math.max(4, rows * 4), 0);
+        // Read back one block at a time when a block's pairs exceed the cap.
+        this.emitOffsetBuffer = new StorageBuffer(device, Math.max(4, rows * 4), BUFFERUSAGE_COPY_SRC);
         this.blockSumsBuffer = new StorageBuffer(device, Math.max(1, numBlocks) * 4, BUFFERUSAGE_COPY_SRC);
         this.blockPrefix = new Uint32Array(numBlocks + 1);
     }
@@ -921,7 +964,8 @@ class GpuSceneRasterizer {
             c.setParameter('emitBase', 0);
             c.setParameter('sliceIndex', sliceIndex);
             c.setParameter('sliceCount', sliceCount);
-            c.setParameter('_p11', 0); c.setParameter('_p12', 0); c.setParameter('_p13', 0);
+            c.setParameter('focalXB', bb?.focalX ?? 0); c.setParameter('focalYB', bb?.focalY ?? 0);
+            c.setParameter('_p13', 0);
         }
     }
 
@@ -952,6 +996,11 @@ class GpuSceneRasterizer {
         this.numSplats = 0;
         this.capacity = 0;
         this.streamed = false;
+        // The sorter keeps its ping-pong buffers across sorts of one count:
+        // a fresh one, so a fallback after a refused allocation never reuses
+        // the failed buffers and an unused sorter holds nothing.
+        this.depthSort.destroy();
+        this.depthSort = new ComputeRadixSort(this.device);
     }
 
     /** Release all GPU resources. */

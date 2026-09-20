@@ -465,23 +465,18 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         logger.info(`${tierNote[tier]} (${fmtBytes(scene.gpuBytes)})`);
         const renderView = (camera: RenderCamera): Promise<Uint8Array> => scene.render(camera);
 
-        // Camera for a motion-blur pass over [tA, tB]: shutter-open pose at
-        // tA, shutter-close pose at tB, focus distance and aperture scale from
-        // the slice midpoint.
-        const toVec3 = (v: Vec3Like) => new Vec3(v.x, v.y, v.z);
+        // Camera for a motion-blur pass over [tA, tB]: shutter-open pose and
+        // fov at tA, shutter-close pose and fov at tB, focus distance and
+        // aperture scale from the slice midpoint.
         const sliceCamera = (tA: number, tB: number): RenderCamera => {
-            const open = poseAt(tA);
-            const close = poseAt(tB);
+            const open = buildCamera(poseAt(tA));
+            const close = buildCamera(poseAt(tB));
+            const { focusDistance, apertureScale } = buildCamera(poseAt(0.5 * (tA + tB)));
             return {
-                ...buildCamera(poseAt(0.5 * (tA + tB))),
-                position: toVec3(open.pos),
-                target: toVec3(open.tgt),
-                up: toVec3(open.up),
-                shutterClose: {
-                    position: toVec3(close.pos),
-                    target: toVec3(close.tgt),
-                    up: toVec3(close.up)
-                }
+                ...open,
+                focusDistance,
+                apertureScale,
+                shutterClose: { position: close.position, target: close.target, up: close.up, fovY: close.fovY }
             };
         };
 

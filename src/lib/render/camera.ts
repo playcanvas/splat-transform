@@ -64,12 +64,13 @@ type RenderCamera = {
     apertureScale?: number;
     /**
      * Camera pose at shutter close. When set, the render is motion-blurred:
-     * `position`, `target` and `up` describe the shutter-open pose and each
-     * gaussian is integrated over its screen-space path between the two
-     * (linear motion, averaged footprint, fixed compositing order; exact
-     * per pixel in closed form). Omit for a static render. Pinhole only.
+     * `position`, `target`, `up` and `fovY` describe the shutter-open pose
+     * and each gaussian is integrated over its screen-space path between
+     * the two (linear motion, averaged footprint, fixed compositing order;
+     * exact per pixel in closed form). `fovY` defaults to the open pose's.
+     * Omit for a static render.
      */
-    shutterClose?: { position: Vec3; target: Vec3; up: Vec3 };
+    shutterClose?: { position: Vec3; target: Vec3; up: Vec3; fovY?: number };
 };
 
 /**
