@@ -485,10 +485,10 @@ splat-transform input.ply view.webp \
 splat-transform input.ply pano.webp \
     --projection equirect --camera-pos 0,1,0 --camera-target 0,1,1
 
-# Camera motion blur (dolly from start to end pose over a 180° shutter)
+# Camera motion blur (dolly from start to end pose over a 180° shutter, 16 instants averaged)
 splat-transform input.ply view.webp \
     --camera-pos 2,1,-2 --camera-pos-end 3,1,-2 \
-    --shutter 0.5
+    --shutter 0.5 --motion-samples 16
 ```
 
 ### Device Selection for SOG Compression

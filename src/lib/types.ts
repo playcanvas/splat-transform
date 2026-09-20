@@ -118,7 +118,8 @@ type Options = {
      * End camera position for motion blur. When set, enables camera
      * motion blur: the renderer averages multiple sub-frames with the
      * camera interpolated between `renderCameraPosition` (shutter open)
-     * and `renderCameraEndPosition` (shutter close). Pinhole only.
+     * and `renderCameraEndPosition` (shutter close). Not valid with
+     * `renderCameraTrack`, whose motion blur comes from `renderShutter`.
      */
     renderCameraEndPosition?: { x: number; y: number; z: number };
 
@@ -137,10 +138,11 @@ type Options = {
     renderUpEnd?: { x: number; y: number; z: number };
 
     /**
-     * Shutter fraction in `[0, 1]`. Controls what portion of the
-     * start→end camera segment is integrated, centered on the midpoint
-     * (standard shutter-angle convention: 1.0 = full motion, 0.5 = 180°
-     * shutter). Default: `1`. No effect without `renderCameraEndPosition`.
+     * Shutter fraction in `[0, 1]`. For a start→end camera segment, the
+     * portion the frame averages over, centered on the midpoint (standard
+     * shutter-angle convention: 1.0 = full motion, 0.5 = 180° shutter);
+     * default `1`. Along `renderCameraTrack`, setting it enables motion
+     * blur over that fraction of the frame interval; default off.
      */
     renderShutter?: number;
 

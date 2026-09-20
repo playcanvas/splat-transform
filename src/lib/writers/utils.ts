@@ -1,3 +1,5 @@
+import { extname } from 'pathe';
+
 import { type SplatModel } from '../splat-model';
 import { fmtBytes, logger } from '../utils';
 
@@ -35,4 +37,20 @@ const logWrittenFile = (filename: string, bytes: number): void => {
     logger.info(`${filename} (${fmtBytes(bytes)})`);
 };
 
-export { logWrittenFile, splatModelComment };
+/**
+ * Output filename of one frame of an image sequence: `<name>.NNNN<ext>`,
+ * the frame number padded to at least four digits and to the width of the
+ * last frame's.
+ *
+ * @param filename - The sequence's output filename.
+ * @param frame - The frame number.
+ * @param lastFrame - The last frame number of the sequence, which sets the padding.
+ * @returns The frame's filename.
+ */
+const frameFilename = (filename: string, frame: number, lastFrame: number): string => {
+    const ext = extname(filename);
+    const digits = Math.max(4, String(lastFrame).length);
+    return `${filename.slice(0, filename.length - ext.length)}.${String(frame).padStart(digits, '0')}${ext}`;
+};
+
+export { frameFilename, logWrittenFile, splatModelComment };

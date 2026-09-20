@@ -232,3 +232,29 @@ describe('CLI filter-nan (zero-norm rotation)', () => {
         assert.match(header, /element vertex 3\n/, 'zero-norm rotation row should be dropped');
     });
 });
+
+describe('CLI image sequences', () => {
+    it('refuses to overwrite existing frames of a camera track without -w', async () => {
+        const { mkdtemp, rm, writeFile } = await import('node:fs/promises');
+        const { tmpdir } = await import('node:os');
+        const { join } = await import('node:path');
+        const dir = await mkdtemp(join(tmpdir(), 'st-image-seq-cli-'));
+        try {
+            // Two identical frames; the track only has to load, since the
+            // overwrite check runs before any rendering.
+            const pose = { position: [0, 5, -8], target: [0, 0, 0] };
+            await writeFile(join(dir, 'track.json'), JSON.stringify({ frameRate: 30, frames: [pose, pose] }));
+            await writeFile(join(dir, 'seq.0001.webp'), 'stale');
+            const result = await runCli([
+                'test/fixtures/generator.mjs',
+                '-p', 'width=2,height=2,spacing=1,scale=0.1',
+                join(dir, 'seq.webp'),
+                '--camera-track', join(dir, 'track.json')
+            ]);
+            assert.notStrictEqual(result.code, 0, 'the CLI should refuse to overwrite a frame');
+            assert.match(result.stderr + result.stdout, /seq\.0001\.webp' already exists/);
+        } finally {
+            await rm(dir, { recursive: true, force: true });
+        }
+    });
+});

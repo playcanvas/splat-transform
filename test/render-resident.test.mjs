@@ -302,3 +302,25 @@ describe('scene renderer matches the chunked path', () => {
         }
     });
 });
+
+describe('pair prefix unwrap', () => {
+    it('recovers prefixes past 2^32 from the u32 scan', async () => {
+        const { unwrapPrefixes } = await import('../src/lib/gpu/gpu-scene-rasterizer.js');
+        // Four blocks of 1.5 billion pairs: the true prefixes 0, 1.5e9, 3e9,
+        // 4.5e9 and total 6e9 wrap twice in u32.
+        const block = 1.5e9;
+        const truth = [0, block, 2 * block, 3 * block, 4 * block];
+        const wrapped = truth.map(v => v % 2 ** 32);
+        const out = new Float64Array(5);
+        unwrapPrefixes(Uint32Array.from(wrapped.slice(0, 4)), 4, wrapped[4], out);
+        assert.deepStrictEqual(Array.from(out), truth);
+
+        // Exactly 2^32 pairs: the total reads back as 0.
+        unwrapPrefixes(Uint32Array.from([0, 2 ** 31]), 2, 0, out);
+        assert.deepStrictEqual(Array.from(out.subarray(0, 3)), [0, 2 ** 31, 2 ** 32]);
+
+        // Empty blocks repeat a prefix without wrapping.
+        unwrapPrefixes(Uint32Array.from([0, 7, 7, 9]), 4, 9, out);
+        assert.deepStrictEqual(Array.from(out.subarray(0, 5)), [0, 7, 7, 9, 9]);
+    });
+});

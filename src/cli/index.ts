@@ -55,6 +55,7 @@ import { readLccSource, readLccEnvironmentSource } from '../lib/readers/read-lcc
 import { readLcc2Source, readLcc2EnvironmentSource } from '../lib/readers/read-lcc2';
 import { readLodSource, readLodEnvironmentSource } from '../lib/readers/read-lod';
 import { loadCameraTrack, type CameraTrack } from '../lib/render/camera-track';
+import { frameFilename } from '../lib/writers/utils';
 
 /**
  * CLI-specific options extending library options.
@@ -1141,6 +1142,18 @@ const main = async () => {
             // check overwrite before doing any work
             if (await fileExists(outputFilename)) {
                 failExit(`File '${outputFilename}' already exists. Use -w option to overwrite.`);
+            }
+
+            // a camera track writes one file per frame, not the named output
+            if (outputFormat === 'image' && options.renderCameraTrack) {
+                const first = options.renderFrames?.[0] ?? 0;
+                const last = options.renderFrames?.[1] ?? options.renderCameraTrack.frameCount - 1;
+                for (let frame = first; frame <= last; frame++) {
+                    const file = frameFilename(outputFilename, frame, last);
+                    if (await fileExists(file)) {
+                        failExit(`File '${file}' already exists. Use -w option to overwrite.`);
+                    }
+                }
             }
 
             // for unbundled HTML, also check for additional files

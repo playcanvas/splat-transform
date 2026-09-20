@@ -6,8 +6,7 @@
  * Defines: invZ, screenX, screenY
  *
  * Splats with cz <= near (or a NaN position) are written invalid and the
- * shader returns. `screenX`/`screenY` are `var` so the motion-blur branch
- * can move the footprint centre to the shutter midpoint.
+ * shader returns.
  */
 const projectionPinhole = /* wgsl */`
     if (!(cz > uniforms.near)) { writeInvalid(i); return; }

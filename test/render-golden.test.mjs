@@ -102,3 +102,22 @@ describe('Render goldens', { skip: distExists ? false : 'dist/cli.mjs missing â€
         });
     }
 });
+
+describe('Render options', { skip: distExists ? false : 'dist/cli.mjs missing â€” run `npm run build` first' }, () => {
+    it('a still ignores the end target and end up without an end position', async () => {
+        // Without --camera-pos-end there is no motion, so the end options
+        // must not move the camera: the still is the start pose.
+        const args = CASES[0].args;
+        const plainPath = join(tmpdir(), `still-plain-${process.pid}.webp`);
+        const endsPath = join(tmpdir(), `still-ends-${process.pid}.webp`);
+        const plain = await runCli([...args, plainPath, '-w', '-q']);
+        const ends = await runCli([...args, '--camera-target-end', '3,0,0', '--camera-up-end', '1,0,0', endsPath, '-w', '-q']);
+        assert.strictEqual(plain.code, 0, plain.stderr);
+        assert.strictEqual(ends.code, 0, ends.stderr);
+        const [a, b] = await Promise.all([readFile(plainPath).then(decodeRgba), readFile(endsPath).then(decodeRgba)]);
+        assert.ok(
+            Buffer.from(a.rgba.buffer, a.rgba.byteOffset, a.rgba.byteLength).equals(Buffer.from(b.rgba.buffer, b.rgba.byteOffset, b.rgba.byteLength)),
+            'end options changed a still'
+        );
+    });
+});

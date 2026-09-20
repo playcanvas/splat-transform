@@ -133,6 +133,28 @@ const numSHCoeffsPerChannel = (bands: number): number => {
 };
 
 /**
+ * Recover the true pair prefixes from the GPU's u32 scan, which wraps past
+ * 2³² pairs in one pass. Each block adds far fewer than 2³², so a prefix
+ * below its predecessor marks exactly one wrap; the grand total is treated
+ * as the prefix past the last block.
+ *
+ * @param prefix - Exclusive block prefixes as read back, `numBlocks` entries.
+ * @param numBlocks - Blocks in the range.
+ * @param total - The grand total as read back.
+ * @param out - Receives `numBlocks + 1` true prefixes; the last is the true total.
+ */
+const unwrapPrefixes = (prefix: Uint32Array, numBlocks: number, total: number, out: Float64Array): void => {
+    let carry = 0;
+    let previous = 0;
+    for (let b = 0; b <= numBlocks; b++) {
+        const wrapped = b < numBlocks ? prefix[b] : total;
+        if (wrapped < previous) carry += 2 ** 32;
+        previous = wrapped;
+        out[b] = wrapped + carry;
+    }
+};
+
+/**
  * Scene splat rasterizer over a {@link ChunkSource}'s LOD 0.
  *
  * Two ways to hold the scene, chosen by the caller:
@@ -211,6 +233,8 @@ class GpuSceneRasterizer {
     private emitOffsetBuffer: StorageBuffer | null = null;
     private blockSumsBuffer: StorageBuffer | null = null;
     private blockPrefix = new Uint32Array(0);
+    /** True pairs before each block and the true total, unwrapped from the u32 scan. */
+    private blockBefore = new Float64Array(0);
     private totalReadback = new Uint32Array(1);
     private orderReadback = new Uint32Array(0);
     private visibleReadback = new Uint32Array(1);
@@ -619,24 +643,25 @@ class GpuSceneRasterizer {
             this.blockSumsBuffer!.read(0, numBlocks * 4, this.blockPrefix, true) as Promise<Uint32Array>,
             this.totalPairsBuffer.read(0, 4, this.totalReadback, true) as Promise<Uint32Array>
         ]);
-        const totalPairs = total[0];
+        // True pairs before each block (`before[numBlocks]` is the total):
+        // the GPU scan is u32 and wraps past 2³² pairs in a pass.
+        const before = this.blockBefore;
+        unwrapPrefixes(prefix, numBlocks, total[0], before);
 
         // Cut the depth-sorted list into ranges at scan-block boundaries so
         // each sort stays within the pair cap; a block that exceeds it on
         // its own is cut inside, from its per-splat offsets.
-        // Pairs before a block; past the last block, the grand total.
-        const pairsBefore = (block: number): number => (block < numBlocks ? prefix[block] : totalPairs);
         let startBlock = 0;
         while (startBlock < numBlocks) {
-            const rangeBase = prefix[startBlock];
+            const rangeBase = before[startBlock];
             let endBlock = startBlock + 1;
-            if (pairsBefore(endBlock) - rangeBase > this.pairCap) {
-                await this.rasterBlock(startBlock, count, rangeBase, pairsBefore(endBlock), tilesX, tilesY);
+            if (before[endBlock] - rangeBase > this.pairCap) {
+                await this.rasterBlock(startBlock, count, rangeBase, before[endBlock], tilesX, tilesY);
             } else {
-                while (endBlock < numBlocks && pairsBefore(endBlock + 1) - rangeBase <= this.pairCap) {
+                while (endBlock < numBlocks && before[endBlock + 1] - rangeBase <= this.pairCap) {
                     endBlock++;
                 }
-                const rangePairs = pairsBefore(endBlock) - rangeBase;
+                const rangePairs = before[endBlock] - rangeBase;
                 if (rangePairs > 0) {
                     const splatStart = startBlock * SCAN_BLOCK;
                     const splatCount = Math.min(count, endBlock * SCAN_BLOCK) - splatStart;
@@ -704,7 +729,9 @@ class GpuSceneRasterizer {
         emit.setParameter('splatValues', this.splatValuesBuffer!);
         emit.setParameter('chunkSize', splatCount);
         emit.setParameter('rangeStart', splatStart);
-        emit.setParameter('emitBase', rangeBase);
+        // The shader subtracts the base from the u32 block prefixes, so the
+        // true base modulo 2³² gives the right slots for any cut under 2³² pairs.
+        emit.setParameter('emitBase', rangeBase % 2 ** 32);
         this.dispatch2D(emit, Math.ceil(splatCount / 64), 'scene-emit-pairs');
 
         // Stable sort by tile keeps each tile's pairs in emission (depth) order.
@@ -856,6 +883,7 @@ class GpuSceneRasterizer {
         this.emitOffsetBuffer = new StorageBuffer(device, Math.max(4, rows * 4), BUFFERUSAGE_COPY_SRC);
         this.blockSumsBuffer = new StorageBuffer(device, Math.max(1, numBlocks) * 4, BUFFERUSAGE_COPY_SRC);
         this.blockPrefix = new Uint32Array(numBlocks + 1);
+        this.blockBefore = new Float64Array(numBlocks + 1);
     }
 
     private bindWorking(): void {
@@ -994,4 +1022,4 @@ class GpuSceneRasterizer {
     }
 }
 
-export { GpuSceneRasterizer, ResidentUploadError, type SceneRasterizerOptions, type SceneView, type StreamedRange, type SortedOrder };
+export { GpuSceneRasterizer, ResidentUploadError, unwrapPrefixes, type SceneRasterizerOptions, type SceneView, type StreamedRange, type SortedOrder };

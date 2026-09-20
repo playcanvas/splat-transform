@@ -1,7 +1,7 @@
-import { basename, extname } from 'pathe';
+import { basename } from 'pathe';
 import { Vec3 } from 'playcanvas';
 
-import { logWrittenFile } from './utils';
+import { frameFilename, logWrittenFile } from './utils';
 import { type ChunkDataPool, type ChunkSource } from '../chunk';
 import { computeWriteTransform } from '../data-table';
 import { type FileSystem, writeFile } from '../io/write';
@@ -178,19 +178,6 @@ type WriteImageOptions = {
 type Pose = { pos: Vec3Like; tgt: Vec3Like; up: Vec3Like; fov: number };
 
 /**
- * `<stem>.NNNN<ext>` for frame `frame` of a sequence.
- *
- * @param filename - The sequence's base filename.
- * @param frame - Frame index.
- * @param digits - Zero-padding width.
- * @returns The per-frame filename.
- */
-const frameFilename = (filename: string, frame: number, digits: number): string => {
-    const ext = extname(filename);
-    return `${filename.slice(0, filename.length - ext.length)}.${String(frame).padStart(digits, '0')}${ext}`;
-};
-
-/**
  * Renders the splat scene to a lossless WebP image written via `fs`, or to
  * a sequence of them along a camera track.
  *
@@ -310,8 +297,6 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         }
     }
     const frameCount = frameEnd - frameStart + 1;
-    const digits = Math.max(4, String(frameEnd).length);
-
     // The camera, its defaults and the renderer's conventions live in the
     // PlayCanvas default space, while the scene stays in its source space
     // (e.g. Transform.PLY). Rather than baking every gaussian into the
@@ -495,7 +480,8 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         const halfWin = motionShutter / 2;
 
         if (!cameraTrack) {
-            const rgba = await renderFrame(0.5, halfWin);
+            // A still is the start pose; a blurred frame centres on the segment.
+            const rgba = await renderFrame(motionEnabled ? 0.5 : 0, halfWin);
             const encodingGroup = logger.group('Encoding');
             const webp = webPCodec.encodeLosslessRGBA(rgba, width, height, width * 4, webpEffort);
             encodingGroup.end();
@@ -524,7 +510,7 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
                 const t0 = performance.now();
                 const rgba = await renderFrame(f, halfWin);
                 renderMs += performance.now() - t0;
-                const job: Promise<void> = encodeFrame(rgba, frameFilename(filename, f, digits)).finally(() => pending.delete(job));
+                const job: Promise<void> = encodeFrame(rgba, frameFilename(filename, f, frameEnd)).finally(() => pending.delete(job));
                 pending.add(job);
                 if (pending.size >= MAX_PENDING_ENCODES) await Promise.race(pending);
                 if (encodeError) throw encodeError;
@@ -533,8 +519,8 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
             await Promise.all(pending);
             if (encodeError) throw encodeError;
             bar.end();
-            const first = basename(frameFilename(filename, frameStart, digits));
-            const last = basename(frameFilename(filename, frameEnd, digits));
+            const first = basename(frameFilename(filename, frameStart, frameEnd));
+            const last = basename(frameFilename(filename, frameEnd, frameEnd));
             const where = WorkerQueue.isInline ? 'inline' : 'on worker threads';
             logger.info(`${frameCount} frames ${first} … ${last} (${fmtBytes(totalBytes)}): render ${fmtTime(renderMs)}, total ${fmtTime(performance.now() - tStart)} with encode ${where}`);
         }
