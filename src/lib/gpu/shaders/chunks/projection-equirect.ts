@@ -7,8 +7,8 @@
  * Defines: r2, r, rxz2, rxz, rxzClamped, invTwoPi, invPi, imgWf, imgHf,
  *          lon, sinLat, lat, screenX, screenY
  *
- * Splats inside the near sphere (r <= near) are written invalid and the
- * shader returns. The longitude atan2 is undefined at the camera origin
+ * Splats inside the near sphere (r <= near, or a NaN position) are written
+ * invalid and the shader returns. The longitude atan2 is undefined at the camera origin
  * and degenerates near the poles where rxz → 0; rxzClamped (>= POLE_EPS·r)
  * keeps every denominator in the Jacobian chunk finite for splats
  * arbitrarily close to the zenith / nadir.
@@ -19,7 +19,7 @@
  */
 const projectionEquirect = /* wgsl */`
     let r2 = cx * cx + cy * cy + cz * cz;
-    if (r2 <= uniforms.near * uniforms.near) { writeInvalid(i); return; }
+    if (!(r2 > uniforms.near * uniforms.near)) { writeInvalid(i); return; }
     let r = sqrt(r2);
     let rxz2 = cx * cx + cz * cz;
     let rxz = sqrt(rxz2);

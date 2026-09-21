@@ -21,7 +21,7 @@ import { materializeToDataTable } from '../src/lib/compat/data-table.js';
 import {
     DataTable, WebPCodec,
     MemoryFileSystem, MemoryReadFileSystem,
-    resolveSplatModel, writeFile, writeSource
+    resolveSplatModel, writeSource
 } from '../src/lib/index.js';
 import { concatSource } from '../src/lib/ops/index.js';
 import { readPly, splatModelFromComments } from '../src/lib/readers/read-ply.js';
@@ -59,14 +59,6 @@ const plyHeaderText = (bytes) => {
 const writeChunked = async (source, pool, filename, outputFormat) => {
     const fs = new MemoryFileSystem();
     await writeSource({ filename, outputFormat, source, pool, options: {} }, fs);
-    return fs.results;
-};
-
-// Write through the DataTable writers (the compat API surface).
-const writeTabular = async (source, pool, filename, outputFormat) => {
-    const fs = new MemoryFileSystem();
-    const dataTable = await materializeToDataTable(source, pool);
-    await writeFile({ filename, outputFormat, dataTable, model: source.meta.model, options: {} }, fs);
     return fs.results;
 };
 
@@ -202,26 +194,24 @@ describe('2dgs scenes', () => {
     // The streaming writer copies each layer as contiguous 32-bit word runs;
     // omitting a column mid-layer splits the geometric run in two, so check the
     // values on the far side of the gap still land in the right output column.
-    it('writes correct values around the dropped column (both writers)', async () => {
+    it('writes correct values around the dropped column', async () => {
         const reference = createTestDataTable(16);
-        for (const write of [writeChunked, writeTabular]) {
-            const { source, pool } = await openPly(make2dgsTable(16));
-            const bytes = (await write(source, pool, 'out.ply', 'ply')).get('out.ply');
+        const { source, pool } = await openPly(make2dgsTable(16));
+        const bytes = (await writeChunked(source, pool, 'out.ply', 'ply')).get('out.ply');
 
-            const pool2 = createChunkDataPool();
-            const table = await materializeToDataTable(
-                await readPly(await sourceFromBytes(bytes), pool2), pool2
+        const pool2 = createChunkDataPool();
+        const table = await materializeToDataTable(
+            await readPly(await sourceFromBytes(bytes), pool2), pool2
+        );
+        for (const name of ['rot_3', 'scale_0', 'scale_1', 'opacity', 'f_dc_0']) {
+            assert.deepStrictEqual(
+                Array.from(table.getColumnByName(name).data),
+                Array.from(reference.getColumnByName(name).data),
+                name
             );
-            for (const name of ['rot_3', 'scale_0', 'scale_1', 'opacity', 'f_dc_0']) {
-                assert.deepStrictEqual(
-                    Array.from(table.getColumnByName(name).data),
-                    Array.from(reference.getColumnByName(name).data),
-                    `${name} via ${write === writeChunked ? 'writeSource' : 'writeFile'}`
-                );
-            }
-            // re-reading the output re-materializes the column
-            assert.strictEqual(table.getColumnByName('scale_2').data[0], -Infinity);
         }
+        // re-reading the output re-materializes the column
+        assert.strictEqual(table.getColumnByName('scale_2').data[0], -Infinity);
     });
 
     // SPZ can't hold the tag, so the flat axis has to survive as data. Its

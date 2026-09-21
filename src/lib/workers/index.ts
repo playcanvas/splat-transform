@@ -35,11 +35,12 @@ const runQuantize1dColumns = async (columns: { name: string, data: TypedArray }[
  * @param rgba - RGBA pixel data. Transferred: unusable after this call.
  * @param width - Image width in pixels.
  * @param height - Image height in pixels.
+ * @param effort - Lossless compression effort 0–9; the codec's default when omitted.
  * @returns The encoded WebP data.
  * @ignore
  */
-const runEncodeWebp = (rgba: Uint8Array, width: number, height: number): Promise<Uint8Array> => {
-    return WorkerQueue.run('encodeWebp', { rgba, width, height }, [rgba.buffer as ArrayBuffer]);
+const runEncodeWebp = (rgba: Uint8Array, width: number, height: number, effort?: number): Promise<Uint8Array> => {
+    return WorkerQueue.run('encodeWebp', { rgba, width, height, effort }, [rgba.buffer as ArrayBuffer]);
 };
 
 export { WorkerQueue, runQuantize1dColumns, runEncodeWebp };

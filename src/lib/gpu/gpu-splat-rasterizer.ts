@@ -16,10 +16,13 @@ import {
     UniformFormat
 } from 'playcanvas';
 
+import { type CameraBasis, type Projection } from '../render/camera';
+import { TILE_SIZE } from '../render/config';
 import { constantsChunk } from './shaders/chunks/constants';
 import { covariance3D } from './shaders/chunks/covariance-3d';
 import { jacobianEquirect } from './shaders/chunks/jacobian-equirect';
 import { jacobianPinhole } from './shaders/chunks/jacobian-pinhole';
+import { packRGBA8 } from './shaders/chunks/pack-rgba8';
 import { projectionEquirect } from './shaders/chunks/projection-equirect';
 import { projectionPinhole } from './shaders/chunks/projection-pinhole';
 import { quatRotation } from './shaders/chunks/quat-rotation';
@@ -40,8 +43,6 @@ import { projectWgsl } from './shaders/project';
 import { rasterizeBinnedWgsl } from './shaders/rasterize-binned';
 import { tileBinEmitPairsWgsl } from './shaders/tile-bin-emit-pairs';
 import { uniformsStruct, uniformFormatEntries } from './shaders/uniforms';
-import { type CameraBasis, type Projection } from '../render/camera';
-import { TILE_SIZE } from '../render/config';
 
 /** 12 floats per projected splat: vec4 × 3. */
 const PROJECTION_STRIDE_F32 = 12;
@@ -92,11 +93,11 @@ interface SplatRasterizerOptions {
      */
     slots?: number;
     /**
-     * Fade out splats whose projected radius approaches the image height, default
-     * true; see `RADIUS_FADE_START_FRAC`. Off for measurement renders, where a splat
-     * that legitimately fills the frame must keep its full alpha.
+     * Clamp splats whose projected radius exceeds the shorter image edge, default
+     * true; see `SIZE_CLAMP_FRAC`. Off for measurement renders, where a splat that
+     * legitimately fills the frame must render at its true size.
      */
-    radiusFade?: boolean;
+    sizeClamp?: boolean;
     /**
      * Hard upper bound on per-splat tile coverage. The project shader
      * clamps `coverage[i] = min(rawBboxArea, maxCoveragePerSplat)`, so
@@ -363,6 +364,7 @@ class GpuSplatRasterizer {
         const sharedCincludes = new Map<string, string>([
             ['uniformsStruct', uniformsStruct],
             ['constants', constantsChunk],
+            ['packRGBA8', packRGBA8],
             ['projectionPinhole', projectionPinhole],
             ['projectionEquirect', projectionEquirect],
             ['jacobianPinhole', jacobianPinhole],
@@ -390,7 +392,7 @@ class GpuSplatRasterizer {
         if (options.numSHBands >= 1) sharedCdefines.set('SH_BAND_1', '');
         if (options.numSHBands >= 2) sharedCdefines.set('SH_BAND_2', '');
         if (options.numSHBands >= 3) sharedCdefines.set('SH_BAND_3', '');
-        if (options.radiusFade === false) sharedCdefines.set('NO_RADIUS_FADE', '');
+        if (options.sizeClamp === false) sharedCdefines.set('NO_SIZE_CLAMP', '');
 
         const mkShader = (
             name: string,
@@ -620,6 +622,11 @@ class GpuSplatRasterizer {
             c.setParameter('groupPixelOriginY', originY);
             c.setParameter('bgR', o.bgR); c.setParameter('bgG', o.bgG);
             c.setParameter('bgB', o.bgB); c.setParameter('bgA', o.bgA);
+            // Chunked path: interleaved input, whole chunk per dispatch.
+            c.setParameter('numSplats', 0); c.setParameter('rangeStart', 0);
+            c.setParameter('emitBase', 0); c.setParameter('sliceIndex', 0);
+            c.setParameter('sliceCount', 1);
+            c.setParameter('_p7', 0); c.setParameter('_p8', 0); c.setParameter('_p9', 0);
         }
     }
 

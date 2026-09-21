@@ -69,7 +69,7 @@ class SortScratch {
  * shared `radixSortIndicesByFloat`, providing depths as the parallel
  * Float32 keys.
  *
- * @param cols - Pre-resolved column references (only `x`, `y`, `z` are read).
+ * @param cols - Position columns (`x`, `y`, `z`).
  * @param candidateIndices - Indices into dataTable rows (mutated).
  * @param count - Number of valid entries.
  * @param camera - Camera basis (forward used for pinhole, eye for both).
@@ -77,7 +77,7 @@ class SortScratch {
  * @param scratch - Reusable scratch buffers, grown on demand.
  */
 const sortCandidatesByDepth = (
-    cols: SplatColumnRefs,
+    cols: Pick<SplatColumnRefs, 'x' | 'y' | 'z'>,
     candidateIndices: Uint32Array,
     count: number,
     camera: CameraBasis,

@@ -18,7 +18,7 @@ const tileWalkPinhole = /* wgsl */`
     let maxTY = min(i32(uniforms.groupTilesY) - 1, i32(floor((sY + radius - goy) / tsz)));
     if (maxTX < minTX || maxTY < minTY) { return; }
 
-    var slot = emitOffset[i];
+    var slot = emitOffset[i] + pairBase(i);
     let end = slot + cap;
     for (var ty: i32 = minTY; ty <= maxTY; ty = ty + 1) {
         if (slot >= end) { break; }

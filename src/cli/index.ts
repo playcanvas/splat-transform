@@ -54,6 +54,8 @@ import { resolveLodLevels } from '../lib/ops';
 import { readLccSource, readLccEnvironmentSource } from '../lib/readers/read-lcc';
 import { readLcc2Source, readLcc2EnvironmentSource } from '../lib/readers/read-lcc2';
 import { readLodSource, readLodEnvironmentSource } from '../lib/readers/read-lod';
+import { loadCameraTrack, type CameraTrack } from '../lib/render/camera-track';
+import { frameFilename } from '../lib/writers/utils';
 
 /**
  * CLI-specific options extending library options.
@@ -155,6 +157,7 @@ const cliOptionsConfig = {
     tty: { type: 'boolean' },
     'sh-iterations': { type: 'string', short: 'i', default: '10' },
     'max-workers': { type: 'string' },
+    'webp-effort': { type: 'string' },
     'list-gpus': { type: 'boolean', default: false },
     gpu: { type: 'string', short: 'g', default: '-1' },
     'select-lod': { type: 'string', short: 'L', default: '' },
@@ -188,6 +191,8 @@ const cliOptionsConfig = {
     'camera-up-end': { type: 'string' },
     'shutter': { type: 'string' },
     'motion-samples': { type: 'string' },
+    'camera-track': { type: 'string' },
+    'frames': { type: 'string' },
 
     'scratch-dir': { type: 'string' },
 
@@ -504,6 +509,37 @@ const parseArguments = async () => {
     if (renderMotionSamples !== undefined && renderMotionSamples < 1) {
         throw new Error(`Invalid --motion-samples value: ${v['motion-samples']}. Must be >= 1.`);
     }
+    const webpEffort = v['webp-effort'] !== undefined ? parseInteger(v['webp-effort']) : undefined;
+    if (webpEffort !== undefined && (webpEffort < 0 || webpEffort > 9)) {
+        throw new Error(`Invalid --webp-effort value: ${v['webp-effort']}. Must be in [0, 9].`);
+    }
+    // Camera animation: an editor project (.ssproj directory or its document.json),
+    // viewer settings.json, or a plain frames list. Poses without a fov use --camera-fov.
+    let renderCameraTrack: CameraTrack | undefined;
+    if (v['camera-track'] !== undefined) {
+        let trackPath = v['camera-track'];
+        if ((await lstat(trackPath).catch((): null => null))?.isDirectory()) {
+            trackPath = join(trackPath, 'document.json');
+        }
+        let trackJson: unknown;
+        try {
+            trackJson = JSON.parse(await pathReadFile(trackPath, 'utf-8'));
+        } catch (e) {
+            throw new Error(`Failed to read camera track JSON: ${trackPath} (${(e as Error).message})`);
+        }
+        renderCameraTrack = loadCameraTrack(trackJson, renderFov ?? 60);
+    }
+    let renderFrames: [number, number] | undefined;
+    if (v.frames !== undefined) {
+        const m = v.frames.match(/^(\d+)(?:-(\d+))?$/);
+        if (!m) {
+            throw new Error(`Invalid --frames value: ${v.frames}. Expected a frame or an inclusive range, e.g. 0-47.`);
+        }
+        renderFrames = [parseInteger(m[1]), parseInteger(m[2] ?? m[1])];
+        if (renderFrames[1] < renderFrames[0]) {
+            throw new Error(`Invalid --frames value: ${v.frames}. The range end precedes its start.`);
+        }
+    }
     let renderBackground: { r: number; g: number; b: number; a: number } | undefined;
     if (v.background !== undefined) {
         const parts = v.background.split(',').map((p: string) => parseNumber(p.trim()));
@@ -528,6 +564,7 @@ const parseArguments = async () => {
         mem: v.memory,
         noTty: v.tty === undefined ? undefined : !v.tty,
         iterations: parseInteger(v['sh-iterations']),
+        webpEffort,
         listGpus: v['list-gpus'],
         deviceIdx,
         scratchDir: v['scratch-dir'],
@@ -535,6 +572,9 @@ const parseArguments = async () => {
         // Half the machine's RAM, capped at 48 GiB — derived here because the
         // library is node-free and cannot read os.totalmem() itself.
         memoryBudgetBytes: Math.min(48 * 2 ** 30, Math.floor(totalmem() / 2)),
+        // The image writer's GPU-resident copy of the scene shares RAM with the
+        // in-memory table on unified-memory machines, so bound it the same way.
+        renderResidentBudget: Math.min(48 * 2 ** 30, Math.floor(totalmem() / 2)),
         lodSelect: v['select-lod'].split(',').filter(v => !!v).map(parseInteger),
         viewerSettingsJson: viewerSettingsPath && await readJsonFile(viewerSettingsPath),
         unbundled: v.unbundled,
@@ -567,7 +607,9 @@ const parseArguments = async () => {
         renderLookAtEnd,
         renderUpEnd,
         renderShutter,
-        renderMotionSamples
+        renderMotionSamples,
+        renderCameraTrack,
+        renderFrames
     };
 
     for (const t of tokens) {
@@ -834,6 +876,8 @@ GENERAL
         --memory                            Show peak memory in progress output
         --tty                               Interactive bar rendering (--no-tty to disable)
     -w, --overwrite                         Overwrite output file if it exists
+        --webp-effort      <0-9>            Lossless WebP compression effort for image, SOG, HTML and LOD output.
+                                            Higher tries harder to reduce size. Default: libwebp’s default lossless settings.
 
 GPU (used by SOG compression and GPU voxelization: --filter-cluster, --filter-floaters, .voxel.json output)
         --list-gpus                         List available GPU adapters and exit
@@ -842,7 +886,7 @@ GPU (used by SOG compression and GPU voxelization: --filter-cluster, --filter-fl
 
 SOG COMPRESSION (.sog, meta.json, lod-meta.json, .html outputs)
     -i, --sh-iterations    <n>              SH compression iterations (more=better). Default: 10
-        --max-workers      <n>              Worker threads for SOG encoding (0 = inline/serial). Default: 4
+        --max-workers      <n>              Worker threads for SOG and image-sequence encoding (0 = inline/serial). Default: 4
 
 SPZ OUTPUT (.spz)
         --spz-version      <3|4>            The SPZ format version to write. Default: 4
@@ -887,15 +931,24 @@ IMAGE OUTPUT (.webp) — lossless WebP rendered via GPU rasterizer
         --sensor-size      <n>              Vertical sensor height in world units. Gives --f-stop a physical meaning.
                                             Default: 0.024 (35mm full-frame, world units = meters). Scale to your world:
                                             world unit = decimeter → 0.24, world unit = millimeter → 24.
-        --camera-pos-end   <x,y,z>          End camera position. When set, enables camera motion blur: the renderer
-                                            averages sub-frames with the camera interpolated from --camera-pos (shutter open)
-                                            to --camera-pos-end (shutter close). Default: disabled (no motion blur).
+        --camera-pos-end   <x,y,z>          End camera position. When set, enables camera motion blur: the camera moves
+                                            from --camera-pos (shutter open) to --camera-pos-end (shutter close) and the
+                                            frame averages renders at instants across the shutter. Default: disabled.
         --camera-target-end <x,y,z>         End camera target. Default: same as --camera-target. Only with --camera-pos-end.
         --camera-up-end    <x,y,z>          End up vector. Default: same as --camera-up. Only with --camera-pos-end.
-        --shutter          <0..1>           Fraction of the start→end segment integrated, centered on the midpoint
-                                            (1.0 = full motion; 0.5 = 180° shutter). Default: 1. Only with --camera-pos-end.
-        --motion-samples   <n>              Sub-frames to accumulate for motion blur. Cost is N× a single render.
-                                            Default: 16. Only with --camera-pos-end.
+        --shutter          <0..1>           Fraction of the start→end segment averaged, centered on its midpoint. Default: 0.5.
+                                            With --camera-track, fraction of the frame interval averaged around each frame.
+                                            Default for tracks: off. 1.0 = full interval; 0.5 = 180° shutter.
+        --motion-samples   <n>              Renders averaged per motion-blurred frame, at evenly spaced instants across
+                                            the shutter. Cost is N× a single render; too few show as discrete copies
+                                            where the motion between instants exceeds a couple of pixels. Default: 16.
+        --camera-track     <path>           Render a camera animation as a frame sequence: a supersplat editor project
+                                            (.ssproj directory or its document.json), a viewer settings.json with
+                                            animTracks, or a JSON { frameRate, frames: [{ position, target, fov }] }.
+                                            Frames are written as <name>.NNNN.webp. Replaces --camera-pos/--camera-target;
+                                            the track's target is the defocus focus point. With --shutter, each frame is
+                                            motion-blurred over that fraction of the frame interval.
+        --frames           <a[-b]>          Inclusive frame range of the track to render. Default: all frames.
 
 EXAMPLES
     # Convert formats
@@ -1089,6 +1142,18 @@ const main = async () => {
             // check overwrite before doing any work
             if (await fileExists(outputFilename)) {
                 failExit(`File '${outputFilename}' already exists. Use -w option to overwrite.`);
+            }
+
+            // a camera track writes one file per frame, not the named output
+            if (outputFormat === 'image' && options.renderCameraTrack) {
+                const first = options.renderFrames?.[0] ?? 0;
+                const last = options.renderFrames?.[1] ?? options.renderCameraTrack.frameCount - 1;
+                for (let frame = first; frame <= last; frame++) {
+                    const file = frameFilename(outputFilename, frame, last);
+                    if (await fileExists(file)) {
+                        failExit(`File '${file}' already exists. Use -w option to overwrite.`);
+                    }
+                }
             }
 
             // for unbundled HTML, also check for additional files
@@ -1417,6 +1482,7 @@ const main = async () => {
                 mainSource,
                 envSource,
                 iterations: options.iterations,
+                webpEffort: options.webpEffort,
                 createDevice: deviceCreator,
                 chunkCount: options.lodChunkCount,
                 chunkExtent: options.lodChunkExtent,

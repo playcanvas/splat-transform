@@ -3,7 +3,7 @@
  *
  * Reads:   cx, cy, cz, r2, rxz, rxzClamped, imgWf, imgHf, invTwoPi, invPi,
  *          c00, c01, c02, c11, c12, c22 (camera-space 3D covariance)
- * Defines: cov00 (var), cov01 (let), cov11 (var)
+ * Defines: cov00, cov01, cov11 (all var, so later dilation steps can add to them)
  *
  * With longitude θ = atan2(cx, cz) and latitude φ = asin(cy/r) (cy is
  * the camera-down axis, so φ > 0 = below the horizon), the per-axis
@@ -38,7 +38,7 @@ const jacobianEquirect = /* wgsl */`
     let u12 = jy0 * c02 + jy1 * c12 + jy2 * c22;
 
     var cov00 = u00 * jx0 + u02 * jx2;
-    let cov01 = u00 * jy0 + u01 * jy1 + u02 * jy2;
+    var cov01 = u00 * jy0 + u01 * jy1 + u02 * jy2;
     var cov11 = u10 * jy0 + u11 * jy1 + u12 * jy2;
 `;
 

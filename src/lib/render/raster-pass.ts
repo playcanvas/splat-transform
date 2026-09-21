@@ -220,16 +220,8 @@ const renderRasterPass = async (
         const focalX = basis.focalX, focalY = basis.focalY;
         const halfW = width * 0.5, halfH = height * 0.5;
         const sxColRef = cols.scaleX, syColRef = cols.scaleY, szColRef = cols.scaleZ;
-        // Tan-of-half-FOV cap; matches the project shader's Jacobian clamp.
-        const limX = JACOBIAN_LIMIT_FACTOR * halfW / focalX;
-        const limY = JACOBIAN_LIMIT_FACTOR * halfH / focalY;
-        const limX2 = limX * limX;
-        const limY2 = limY * limY;
         // Additive squared-radius safety: AA dilation + disc-floor bump.
         const lambdaSafety = AA_DILATION_COV + Math.sqrt(DISCRIMINANT_FLOOR);
-        // Per-buffer base focal scale (max of focals so the bound is
-        // valid against either axis).
-        const focalMax = Math.max(focalX, focalY);
 
         // Packed Uint16 buffer of (sx0, sx1, sy0, sy1) per candidate.
         // sx0 = 0xFFFF sentinel marks "off-screen, skip in pass 2".
@@ -238,6 +230,30 @@ const renderRasterPass = async (
         const SF_OFFSCREEN = 0xFFFF;
         const ranges = new Uint16Array(candidateCount * 4);
         const subFrameCounts = new Uint32Array(numSubFrames);
+
+        // Defocus widens every footprint by the circle of confusion, so
+        // the bound must include it or a splat straddling a sub-frame
+        // edge drops out of the neighbouring list.
+        const aperture = camera.apertureScale ?? 0;
+        const focus = camera.focusDistance ?? 0;
+        // Tan-of-half-FOV cap; matches the project shader's Jacobian clamp.
+        const limX = JACOBIAN_LIMIT_FACTOR * halfW / focalX;
+        const limY = JACOBIAN_LIMIT_FACTOR * halfH / focalY;
+        // The larger focal keeps the bound valid against either axis.
+        const focalMax = Math.max(focalX, focalY);
+
+        // Geometric part of the bound at one camera-space point:
+        // (focal/cz)² · (1 + tx² + ty²) · maxScale² with tx = cx/cz,
+        // ty = cy/cz both clamped to ±lim. Matches the project shader's
+        // clamp so the bound is tight.
+        const lambdaGeom = (cx: number, cy: number, invZ: number, maxScale: number): number => {
+            const tx = cx * invZ;
+            const ty = cy * invZ;
+            const txClamped = tx > limX ? limX : (tx < -limX ? -limX : tx);
+            const tyClamped = ty > limY ? limY : (ty < -limY ? -limY : ty);
+            const jFactorSq = 1 + txClamped * txClamped + tyClamped * tyClamped;
+            return (focalMax * invZ) * (focalMax * invZ) * jFactorSq * maxScale * maxScale;
+        };
 
         // Pass 1: compute ranges, count per sub-frame.
         for (let i = 0; i < candidateCount; i++) {
@@ -258,17 +274,11 @@ const renderRasterPass = async (
                 Math.exp(syColRef[idx]),
                 Math.exp(szColRef[idx])
             );
-            // Jacobian factor: (focal/cz)² · (1 + tx² + ty²) with
-            // tx = cx/cz, ty = cy/cz both clamped to ±lim. Matches the
-            // project shader's clamp so the bound is tight.
-            const tx = cx * invZ;
-            const ty = cy * invZ;
-            const txClamped = tx > limX ? limX : (tx < -limX ? -limX : tx);
-            const tyClamped = ty > limY ? limY : (ty < -limY ? -limY : ty);
-            const tx2 = Math.min(txClamped * txClamped, limX2);
-            const ty2 = Math.min(tyClamped * tyClamped, limY2);
-            const jFactorSq = 1 + tx2 + ty2;
-            const lambdaMaxBound = (focalMax * invZ) * (focalMax * invZ) * jFactorSq * maxScale * maxScale + lambdaSafety;
+            let lambdaMaxBound = lambdaGeom(cx, cy, invZ, maxScale) + lambdaSafety;
+            if (aperture > 0) {
+                const coc = aperture * Math.abs(1 - focus / cz);
+                lambdaMaxBound += coc * coc;
+            }
             // +1 px ceil safety to match the GPU's `ceil(radius)`.
             const screenR = Math.ceil(SIGMA_CUTOFF * Math.sqrt(lambdaMaxBound)) + 1;
             const minX = screenX - screenR;

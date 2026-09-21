@@ -32,11 +32,11 @@ const taskHandlers = {
         };
     },
 
-    encodeWebp: async (args: { rgba: Uint8Array, width: number, height: number }): Promise<TaskOutput<Uint8Array>> => {
+    encodeWebp: async (args: { rgba: Uint8Array, width: number, height: number, effort?: number }): Promise<TaskOutput<Uint8Array>> => {
         // create() memoizes the wasm module per realm (each worker compiles
         // its own copy on first use)
         const codec = await WebPCodec.create();
-        const webp = codec.encodeLosslessRGBA(args.rgba, args.width, args.height);
+        const webp = codec.encodeLosslessRGBA(args.rgba, args.width, args.height, args.width * 4, args.effort);
         return { result: webp, transfer: [webp.buffer as ArrayBuffer] };
     },
 

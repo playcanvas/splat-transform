@@ -59,8 +59,8 @@ export type { LodStats, LodStatsData, SourceStats } from './stats';
 // High-level read/write
 export { readFile, readFileInfo, getInputFormat } from './read';
 export type { InputFormat, ReadFileOptions, FileInfo } from './read';
-export { writeFile, writeSource, getOutputFormat } from './write';
-export type { OutputFormat, WriteOptions, WriteSourceOptions } from './write';
+export { writeSource, getOutputFormat } from './write';
+export type { OutputFormat, WriteSourceOptions } from './write';
 export { writeLodSource } from './writers';
 export type { WriteLodSourceOptions } from './writers';
 
@@ -81,6 +81,11 @@ export { readKsplat, readMjs, readPly, readSog, readSplat, readSpz } from './rea
 // Individual writers (advanced use; DataTable-input compat set)
 export { writeSog, writeSpz, writePly, writeCompressedPly, writeCsv, writeHtml, writeImage, writeGlb, writeVoxel } from './writers';
 export type { WriteImageOptions, WriteVoxelOptions, VoxelMetadata } from './writers';
+
+// Camera animation tracks for multi-frame image output (editor project,
+// viewer settings, or a plain frame list)
+export { loadCameraTrack } from './render/camera-track';
+export type { CameraTrack, TrackPose } from './render/camera-track';
 
 // ---------------------------------------------------------------------------
 // Infrastructure

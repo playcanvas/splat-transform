@@ -45,4 +45,25 @@ describe('WebPCodec', () => {
         assert.strictEqual(decoded.height, height);
         assert.deepStrictEqual(Array.from(decoded.rgba), Array.from(rgba));
     });
+
+    it('uses the default WebP encoder unless an effort level is explicitly provided', async (t) => {
+        const codec = await WebPCodec.create();
+        const defaultEncoder = t.mock.method(codec.Module, '_webp_encode_lossless_rgba');
+        const preset = t.mock.method(codec.Module, '_webp_encode_lossless_rgba_level');
+        const rgba = new Uint8Array([37, 74, 111, 255]);
+
+        codec.encodeLosslessRGBA(rgba, 1, 1);
+        codec.encodeLosslessRGBA(rgba, 1, 1, 4, undefined);
+        assert.strictEqual(defaultEncoder.mock.callCount(), 2);
+        assert.strictEqual(preset.mock.callCount(), 0);
+
+        for (const effort of [0, 9]) {
+            rgba[3] = 0;
+            const webp = codec.encodeLosslessRGBA(rgba, 1, 1, 4, effort);
+            assert.deepStrictEqual(codec.decodeRGBA(webp).rgba, rgba);
+            assert.strictEqual(preset.mock.calls.at(-1).arguments[4], effort);
+        }
+        assert.strictEqual(defaultEncoder.mock.callCount(), 2);
+        assert.strictEqual(preset.mock.callCount(), 2);
+    });
 });

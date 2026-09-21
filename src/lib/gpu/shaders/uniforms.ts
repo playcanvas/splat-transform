@@ -31,6 +31,8 @@ struct Uniforms {
     groupPixelMinX: u32, groupPixelMinY: u32, groupPixelMaxX: u32, groupPixelMaxY: u32,
     groupTilesX: u32, groupTilesY: u32, groupPixelOriginX: u32, groupPixelOriginY: u32,
     bgR: f32, bgG: f32, bgB: f32, bgA: f32,
+    numSplats: u32, rangeStart: u32, emitBase: u32, sliceIndex: u32,
+    sliceCount: u32, _p7: u32, _p8: u32, _p9: u32,
 }
 `;
 
@@ -84,7 +86,19 @@ const uniformFormatEntries = (): UniformFormat[] => [
     new UniformFormat('bgR', UNIFORMTYPE_FLOAT),
     new UniformFormat('bgG', UNIFORMTYPE_FLOAT),
     new UniformFormat('bgB', UNIFORMTYPE_FLOAT),
-    new UniformFormat('bgA', UNIFORMTYPE_FLOAT)
+    new UniformFormat('bgA', UNIFORMTYPE_FLOAT),
+    // Resident (column-major) scene layout: column stride, and the splat /
+    // pair offsets of the range being emitted. Zero for the chunked path.
+    new UniformFormat('numSplats', UNIFORMTYPE_UINT),
+    new UniformFormat('rangeStart', UNIFORMTYPE_UINT),
+    new UniformFormat('emitBase', UNIFORMTYPE_UINT),
+    // Motion-blur slice being accumulated and the slice count (1 and 0 when
+    // finalize runs instead of accumulate).
+    new UniformFormat('sliceIndex', UNIFORMTYPE_UINT),
+    new UniformFormat('sliceCount', UNIFORMTYPE_UINT),
+    new UniformFormat('_p7', UNIFORMTYPE_UINT),
+    new UniformFormat('_p8', UNIFORMTYPE_UINT),
+    new UniformFormat('_p9', UNIFORMTYPE_UINT)
 ];
 
 export { uniformsStruct, uniformFormatEntries };

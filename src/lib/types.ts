@@ -1,5 +1,7 @@
 import type { ExperienceSettings } from '@playcanvas/supersplat-viewer/settings';
 
+import type { CameraTrack } from './render/camera-track';
+
 /**
  * Collision mesh shape generated alongside voxel output.
  *
@@ -14,6 +16,9 @@ type CollisionMeshShape = 'smooth' | 'faces';
 type Options = {
     /** Number of iterations for SOG SH compression (higher = better quality). Default: 10 */
     iterations?: number;
+
+    /** Lossless WebP compression effort for image, SOG, HTML and LOD output, 0–9. Omit to use the default WebP encoder. */
+    webpEffort?: number;
 
     /** LOD levels to read from LCC input. Default: all levels. */
     lodSelect?: number[];
@@ -116,7 +121,8 @@ type Options = {
      * End camera position for motion blur. When set, enables camera
      * motion blur: the renderer averages multiple sub-frames with the
      * camera interpolated between `renderCameraPosition` (shutter open)
-     * and `renderCameraEndPosition` (shutter close).
+     * and `renderCameraEndPosition` (shutter close). Not valid with
+     * `renderCameraTrack`, whose motion blur comes from `renderShutter`.
      */
     renderCameraEndPosition?: { x: number; y: number; z: number };
 
@@ -135,19 +141,43 @@ type Options = {
     renderUpEnd?: { x: number; y: number; z: number };
 
     /**
-     * Shutter fraction in `[0, 1]`. Controls what portion of the
-     * start→end camera segment is integrated, centered on the midpoint
-     * (standard shutter-angle convention: 1.0 = full motion, 0.5 = 180°
-     * shutter). Default: `1`. No effect without `renderCameraEndPosition`.
+     * Shutter fraction in `[0, 1]`. For a start→end camera segment, the
+     * portion the frame averages over, centered on the midpoint (standard
+     * shutter-angle convention: 1.0 = full motion, 0.5 = 180° shutter);
+     * default `0.5`. Along `renderCameraTrack`, setting it enables motion
+     * blur over that fraction of the frame interval; default off.
      */
     renderShutter?: number;
 
     /**
-     * Number of sub-frames to accumulate for motion blur. More samples =
-     * smoother streaks at proportionally higher cost. Default: `16`.
-     * No effect without `renderCameraEndPosition`.
+     * Renders averaged per motion-blurred frame, at evenly spaced instants
+     * across the shutter; cost is N× a single render. Default: `16`. No
+     * effect without motion blur.
      */
     renderMotionSamples?: number;
+
+    /**
+     * Camera animation to render as a frame sequence (see `loadCameraTrack`).
+     * Replaces `renderCameraPosition` / `renderLookAt` / `renderFov`; the
+     * output filename gains a zero-padded frame index before its extension.
+     * With `renderShutter` set, each frame is motion-blurred over that
+     * fraction of the frame interval.
+     */
+    renderCameraTrack?: CameraTrack;
+
+    /**
+     * Inclusive frame range of `renderCameraTrack` to render. Default: every
+     * frame of the track.
+     */
+    renderFrames?: [number, number];
+
+    /**
+     * Most bytes the image writer may hold GPU-resident for the scene.
+     * Scenes over it, or that the device refuses to allocate, stream
+     * through the chunked path instead. Default: no limit beyond the
+     * device's binding limits.
+     */
+    renderResidentBudget?: number;
 };
 
 /**

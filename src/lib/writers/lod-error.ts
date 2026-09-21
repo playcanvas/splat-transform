@@ -266,7 +266,7 @@ class ViewRenderer {
         this.chunkInput = new Float32Array(this.chunkCap * splatInputStride(numSHBands));
 
         // The view fields are placeholders; setView supplies them per render. No
-        // radius fade: a leaf's frame is sized to its bound, so a splat spanning the
+        // size clamp: a leaf's frame is sized to its bound, so a splat spanning the
         // whole frame is the scene, not an outlier, and must render at full alpha.
         this.rasterizer = new GpuSplatRasterizer(device, {
             numSHBands,
@@ -275,7 +275,7 @@ class ViewRenderer {
             groupTilesY: maxTiles,
             chunkCap: this.chunkCap,
             slots,
-            radiusFade: false,
+            sizeClamp: false,
             maxCoveragePerSplat,
             imageWidth: maxSize,
             imageHeight: maxSize,

@@ -158,6 +158,8 @@ These options configure a run as a whole rather than operating on splat data —
     --memory                            Show peak memory in progress output
     --tty                               Interactive bar rendering (default on a TTY; --no-tty to disable)
 -w, --overwrite                         Overwrite output file if it exists
+    --webp-effort      <0-9>            Lossless WebP compression effort for image, SOG, HTML and LOD output.
+                                        Higher tries harder to reduce size. Default: libwebp’s default lossless settings.
 ```
 
 ### GPU Options
@@ -270,15 +272,24 @@ Apply when writing `.webp` (lossless WebP rendered via GPU rasterizer).
     --sensor-size      <n>              Vertical sensor height in world units. Gives --f-stop a physical meaning.
                                         Default: 0.024 (35mm full-frame, world units = meters). Scale to your world:
                                         world unit = decimeter → 0.24, world unit = millimeter → 24.
-    --camera-pos-end   <x,y,z>          End camera position. When set, enables camera motion blur: the renderer
-                                        averages sub-frames with the camera interpolated from --camera-pos (shutter open)
-                                        to --camera-pos-end (shutter close). Default: disabled (no motion blur).
+    --camera-pos-end   <x,y,z>          End camera position. When set, enables camera motion blur: the camera moves
+                                        from --camera-pos (shutter open) to --camera-pos-end (shutter close) and the
+                                        frame averages renders at instants across the shutter. Default: disabled.
     --camera-target-end <x,y,z>         End camera target. Default: same as --camera-target. Only with --camera-pos-end.
     --camera-up-end    <x,y,z>          End up vector. Default: same as --camera-up. Only with --camera-pos-end.
-    --shutter          <0..1>           Fraction of the start→end segment integrated, centered on the midpoint
-                                        (1.0 = full motion; 0.5 = 180° shutter). Default: 1. Only with --camera-pos-end.
-    --motion-samples   <n>              Sub-frames to accumulate for motion blur. Cost is N× a single render.
-                                        Default: 16. Only with --camera-pos-end.
+    --shutter          <0..1>           Fraction of the start→end segment averaged, centered on its midpoint. Default: 0.5.
+                                        With --camera-track, fraction of the frame interval averaged around each frame.
+                                        Default for tracks: off. 1.0 = full interval; 0.5 = 180° shutter.
+    --motion-samples   <n>              Renders averaged per motion-blurred frame, at evenly spaced instants across
+                                        the shutter. Cost is N× a single render; too few show as discrete copies
+                                        where the motion between instants exceeds a couple of pixels. Default: 16.
+    --camera-track     <path>           Render a camera animation as a frame sequence: a supersplat editor project
+                                        (.ssproj directory or its document.json), a viewer settings.json with
+                                        animTracks, or a JSON { frameRate, frames: [{ position, target, fov }] }.
+                                        Frames are written as <name>.NNNN.webp. Replaces --camera-pos/--camera-target;
+                                        the track's target is the defocus focus point. With --shutter, each frame is
+                                        motion-blurred over that fraction of the frame interval.
+    --frames           <a[-b]>          Inclusive frame range of the track to render. Default: all frames.
 ```
 
 ## Examples
@@ -474,10 +485,10 @@ splat-transform input.ply view.webp \
 splat-transform input.ply pano.webp \
     --projection equirect --camera-pos 0,1,0 --camera-target 0,1,1
 
-# Camera motion blur (dolly from start to end pose over the shutter)
+# Camera motion blur (dolly from start to end pose over a 180° shutter, 16 instants averaged)
 splat-transform input.ply view.webp \
     --camera-pos 2,1,-2 --camera-pos-end 3,1,-2 \
-    --motion-samples 16 --shutter 1
+    --shutter 0.5 --motion-samples 16
 ```
 
 ### Device Selection for SOG Compression

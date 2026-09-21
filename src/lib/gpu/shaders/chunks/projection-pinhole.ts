@@ -5,10 +5,11 @@
  *          uniforms.imageWidth, uniforms.imageHeight
  * Defines: invZ, screenX, screenY
  *
- * Splats with cz <= near are written invalid and the shader returns.
+ * Splats with cz <= near (or a NaN position) are written invalid and the
+ * shader returns.
  */
 const projectionPinhole = /* wgsl */`
-    if (cz <= uniforms.near) { writeInvalid(i); return; }
+    if (!(cz > uniforms.near)) { writeInvalid(i); return; }
 
     let invZ = 1.0 / cz;
     let screenX = uniforms.focalX * cx * invZ + f32(uniforms.imageWidth) * 0.5;

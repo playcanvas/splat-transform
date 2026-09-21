@@ -5,7 +5,7 @@
  *          uniforms.imageWidth, uniforms.imageHeight,
  *          c00, c01, c02, c11, c12, c22 (camera-space 3D covariance),
  *          JACOBIAN_LIMIT_FACTOR (from constants chunk)
- * Defines: cov00 (var), cov01 (let), cov11 (var)
+ * Defines: cov00, cov01, cov11 (all var, so later dilation steps can add to them)
  *
  * J is the 2×3 matrix
  *   [[jx0,   0, jx2],
@@ -34,7 +34,7 @@ const jacobianPinhole = /* wgsl */`
     let u12 = jy1 * c12 + jy2 * c22;
 
     var cov00 = u00 * jx0 + u02 * jx2;
-    let cov01 = u01 * jy1 + u02 * jy2;
+    var cov01 = u01 * jy1 + u02 * jy2;
     var cov11 = u11 * jy1 + u12 * jy2;
 `;
 
