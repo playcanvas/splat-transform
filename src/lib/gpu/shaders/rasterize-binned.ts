@@ -58,6 +58,13 @@ fn main(
     let px = f32(imagePixelX) + 0.5;
     let py = f32(imagePixelY) + 0.5;
 
+    // Defocus spreads opacity across many pixels. Individually faint
+    // contributions can still accumulate into visible surfaces and tails.
+    var minAlpha = MIN_ALPHA;
+#ifndef PROJECTION_EQUIRECT
+    minAlpha = select(MIN_ALPHA, 0.0, uniforms.apertureScale > 0.0);
+#endif
+
 #ifdef PROJECTION_EQUIRECT
     let imgWf2 = f32(uniforms.imageWidth);
     let halfImgW = imgWf2 * 0.5;
@@ -88,7 +95,7 @@ fn main(
         // eliminates faint ring artifacts at splat edges. Matches the
         // PlayCanvas engine.
         let alpha = min(OPACITY_CAP, v1.w * max(0.0, exp(power) - GAUSSIAN_FLOOR));
-        if (alpha < MIN_ALPHA) { continue; }
+        if (alpha <= 0.0 || alpha < minAlpha) { continue; }
         let weight = T * alpha;
         let v2 = projected[splatIdx * 3u + 2u];
         color = color + weight * v2.rgb;

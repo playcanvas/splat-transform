@@ -1,5 +1,5 @@
 /**
- * Packs the running-state (linear color + residual transmittance) into a
+ * Packs the running-state (premultiplied gamma color + residual transmittance) into a
  * single RGBA8-packed u32 per group pixel. Composites the user-supplied
  * background under the residual transmittance so the final image carries
  * the chosen `bgR/bgG/bgB/bgA` everywhere the splats didn't fully cover.
@@ -29,10 +29,10 @@ fn main(
     let pixelIdx = localPixelY * groupPixelW + localPixelX;
     let state = runningState[pixelIdx];
 
-    let color = state.rgb + state.a * vec3<f32>(uniforms.bgR, uniforms.bgG, uniforms.bgB);
+    let color = state.rgb + state.a * uniforms.bgA * vec3<f32>(uniforms.bgR, uniforms.bgG, uniforms.bgB);
     let alphaOut = (1.0 - state.a) + state.a * uniforms.bgA;
 
-    output[pixelIdx] = packRGBA8(vec4<f32>(color, alphaOut));
+    output[pixelIdx] = packRGBA8(vec4<f32>(color / max(alphaOut, 1e-8), alphaOut));
 }
 `;
 

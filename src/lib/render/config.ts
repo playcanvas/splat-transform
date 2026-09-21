@@ -43,7 +43,8 @@ export const OPACITY_CAP = 0.99;
 /**
  * Per-splat alpha cutoff. Contributions below this are dropped — saves
  * work for splats whose evaluated 2D Gaussian falls below quantization
- * threshold. INRIA reference.
+ * threshold. INRIA reference. Disabled for defocus, where many faint
+ * contributions must accumulate before quantization.
  */
 export const MIN_ALPHA = 1.0 / 255.0;
 

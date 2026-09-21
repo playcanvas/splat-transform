@@ -97,6 +97,7 @@ const writeImageSource = async (filename: string, source: ChunkSource, pool: Chu
         near: options.renderNear,
         background: options.renderBackground,
         fStop: options.renderFStop,
+        dofSamples: options.renderDofSamples,
         focusDistance: options.renderFocusDistance,
         sensorSize: options.renderSensorSize,
         cameraEndPosition: options.renderCameraEndPosition,

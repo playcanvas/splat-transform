@@ -6,7 +6,7 @@ import { type ChunkDataPool, type ChunkSource } from '../chunk';
 import { computeWriteTransform } from '../data-table';
 import { type FileSystem, writeFile } from '../io/write';
 import { SceneRenderer, type SceneTier } from '../render';
-import { type Projection, type RenderCamera } from '../render/camera';
+import { type Projection, type RenderCamera, buildApertureCameras } from '../render/camera';
 import { type CameraTrack } from '../render/camera-track';
 import type { DeviceCreator } from '../types';
 import { fmtBytes, fmtTime, logger, Transform, WebPCodec } from '../utils';
@@ -22,6 +22,9 @@ const MAX_PENDING_ENCODES = 4;
 
 /** Renders averaged per motion-blurred frame unless the caller sets `motionSamples`. */
 const DEFAULT_MOTION_SAMPLES = 16;
+
+/** Aperture samples per instant unless the caller sets `dofSamples`. */
+const DEFAULT_DOF_SAMPLES = 32;
 
 /**
  * Options for writing a rendered splat image.
@@ -83,6 +86,14 @@ type WriteImageOptions = {
      * `projection: 'equirect'` is an error.
      */
     fStop?: number;
+
+    /**
+     * Circular-aperture samples averaged for depth of field. Default: 32.
+     * Higher counts reduce sampling artifacts and cost more render passes.
+     * With motion blur, each of its instants uses this many samples.
+     * Has no effect without `fStop`; one sample renders the lens center.
+     */
+    dofSamples?: number;
 
     /**
      * Camera-space Z of the focus plane in world units. Defaults to the
@@ -207,6 +218,7 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         up = { x: 0, y: 1, z: 0 },
         background = { r: 0, g: 0, b: 0, a: 1 },
         fStop,
+        dofSamples,
         cameraEndPosition,
         lookAtEnd,
         upEnd,
@@ -231,6 +243,9 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         }
         if (fStop !== undefined) {
             throw new Error('writeImage: --f-stop is not valid with --projection equirect (defocus blur needs a focal length, which the equirect projection does not have).');
+        }
+        if (dofSamples !== undefined) {
+            throw new Error('writeImage: --dof-samples is not valid with --projection equirect.');
         }
         if (focusDistance !== undefined) {
             throw new Error('writeImage: --focus-distance is not valid with --projection equirect.');
@@ -263,6 +278,12 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         if (!(sensorSize > 0)) {
             throw new Error(`Invalid sensor-size: ${sensorSize}. Must be > 0.`);
         }
+    }
+
+    const dofEnabled = projection !== 'equirect' && fStop !== undefined;
+    const dofN = dofEnabled ? (dofSamples ?? DEFAULT_DOF_SAMPLES) : 1;
+    if (dofSamples !== undefined && (!Number.isInteger(dofSamples) || dofSamples < 1)) {
+        throw new Error(`writeImage: --dof-samples must be a positive integer, got ${dofSamples}.`);
     }
 
     // Motion blur. Along a start→end segment it is enabled by
@@ -358,21 +379,8 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
 
     const g = logger.group('Render');
 
-    // Resolve DoF for pinhole only. The project shader consumes a single
-    // pre-baked scalar `apertureScale` (pixel CoC per unit relative
-    // defocus) and the focus distance. Physical CoC for a thin lens is:
-    //
-    //     CoC_pixels = (focal_real² / (N · focus)) × |1 − focus/cz|
-    //                  × image_height / sensor_height
-    //
-    // where focal_real is the real lens focal length implied by the pose's
-    // fov and `sensorSize`. Apply image_height / sensor_height to convert
-    // physical CoC (sensor units) to pixels. Defaulting `sensorSize` to
-    // 0.024 makes f-stops behave like a 35mm full-frame camera when world
-    // units are meters; scale to suit non-meter scenes. Focus defaults to
-    // the look-at point — which, under motion blur or along a track, moves
-    // with the pose.
-    const dofEnabled = projection !== 'equirect' && fStop !== undefined;
+    // Focus defaults to the look-at plane, including along a camera track.
+    // Defocus is integrated over the lens below, not applied to each splat.
     const buildCamera = (pose: Pose): RenderCamera => {
         const { pos, tgt, up: u } = pose;
         const fovY = projection === 'equirect' ? 0 : (pose.fov * Math.PI) / 180;
@@ -380,7 +388,6 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
             throw new Error(`writeImage: invalid fov ${pose.fov}° on the camera track.`);
         }
         let fDist = 0;
-        let aScale = 0;
         if (dofEnabled) {
             if (focusDistance !== undefined) {
                 fDist = focusDistance;
@@ -391,9 +398,6 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
                 }
                 fDist = fwdLen;
             }
-            const focalRealWorld = (sensorSize / 2) / Math.tan(fovY * 0.5);
-            const focalYPx = (height! / 2) / Math.tan(fovY * 0.5);
-            aScale = focalRealWorld * focalYPx / (fStop! * fDist);
         }
         return {
             projection,
@@ -404,8 +408,7 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
             width: width!,
             height: height!,
             near,
-            focusDistance: fDist,
-            apertureScale: aScale
+            focusDistance: fDist
         };
     };
 
@@ -417,8 +420,8 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
 
     if (projection === 'equirect') {
         logger.info(`${width}x${height} equirect`);
-    } else if (startCamera.apertureScale! > 0) {
-        logger.info(`${width}x${height} fov ${+firstPose.fov.toFixed(3)}° f/${fStop} focus ${startCamera.focusDistance!.toFixed(3)} sensor ${options.sensorSize ?? 0.024}`);
+    } else if (dofEnabled) {
+        logger.info(`${width}x${height} fov ${+firstPose.fov.toFixed(3)}° f/${fStop} focus ${startCamera.focusDistance!.toFixed(3)} sensor ${options.sensorSize ?? 0.024}, ${dofN} aperture samples`);
     } else {
         logger.info(`${width}x${height} fov ${+firstPose.fov.toFixed(3)}°`);
     }
@@ -449,7 +452,13 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     try {
         const tier = await scene.upload();
         logger.info(`${tierNote[tier]} (${fmtBytes(scene.gpuBytes)})`);
-        const renderView = (camera: RenderCamera): Promise<Uint8Array> => scene.render(camera);
+        const apertureViews = (camera: RenderCamera): RenderCamera[] => {
+            if (!dofEnabled) return [camera];
+            // Focal length from the vertical sensor size and FOV; the
+            // entrance-pupil diameter is focal length / f-number.
+            const radius = sensorSize / (4 * fStop! * Math.tan(camera.fovY * 0.5));
+            return buildApertureCameras(camera, radius, dofN);
+        };
 
         // One output frame centered on time `center`, its shutter spanning
         // ±halfWin around it. Along a track the window is clipped to the
@@ -458,21 +467,21 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         // end frames of a clip that plays once.
         const renderFrame = (center: number, halfWin: number): Promise<Uint8Array> => {
             if (!motionEnabled) {
-                return renderView(buildCamera(poseAt(center)));
+                return scene.renderSlices(apertureViews(buildCamera(poseAt(center))));
             }
             const t0 = cameraTrack ? Math.max(0, center - halfWin) : center - halfWin;
             const t1 = cameraTrack ? Math.min(cameraTrack.frameCount - 1, center + halfWin) : center + halfWin;
             // Frame averaging: render the pose at N evenly spaced instants
-            // across the shutter and accumulate them on the GPU in float,
-            // quantizing once. Each instant composites exactly, so the mean
-            // converges to the true time average as N grows; too few show as
+            // across the shutter and accumulate them on the GPU in linear
+            // light, quantizing once. Each instant resolves visibility, so
+            // the mean converges as N grows; too few samples show as
             // discrete copies where the motion between them exceeds a couple
             // of pixels.
             const instants: RenderCamera[] = [];
             for (let i = 0; i < motionN; i++) {
-                instants.push(buildCamera(poseAt(t0 + (t1 - t0) * (i + 0.5) / motionN)));
+                instants.push(...apertureViews(buildCamera(poseAt(t0 + (t1 - t0) * (i + 0.5) / motionN))));
             }
-            return motionN === 1 ? renderView(instants[0]) : scene.renderSlices(instants);
+            return scene.renderSlices(instants);
         };
 
         const webPCodec = await WebPCodec.create(); // cheap: create() memoizes the wasm module
