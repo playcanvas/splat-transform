@@ -22,6 +22,18 @@ import { runEncodeWebp, runQuantize1dColumns } from '../workers';
 
 const GEOMETRIC_COLS = ['rot_0', 'rot_1', 'rot_2', 'rot_3', 'scale_0', 'scale_1', 'scale_2', 'opacity'];
 
+// Small sources are gathered in one multi-layer pass. This keeps the common
+// PLY -> SOG path from re-reading an interleaved input once per layer while
+// preserving the layer-at-a-time memory profile for larger scenes.
+const SINGLE_PASS_GATHER_MAX_BYTES = 64 * 1024 * 1024;
+
+type GatheredSogLayers = {
+    position: Float32Array | null;
+    geometric: Float32Array[] | null;
+    colorDc: Float32Array[] | null;
+    shRest: Float32Array | null;
+};
+
 const logTransform = (value: number): number => {
     return Math.sign(value) * Math.log(Math.abs(value) + 1);
 };
@@ -73,6 +85,71 @@ const gatherColumns = async (source: ChunkSource, pool: ChunkDataPool, layer: Ch
     return cols;
 };
 
+// Gather every SOG input layer with one source.read() per chunk. Interleaved
+// file sources can then fetch and scan each source record once instead of once
+// for position, geometric, and color. The caller only uses this below a fixed
+// byte limit; large scenes retain the layer-at-a-time path above.
+const gatherSogLayers = async (source: ChunkSource, pool: ChunkDataPool): Promise<GatheredSogLayers> => {
+    const { meta } = source;
+    const n = meta.numGaussians;
+    const positionLayout = meta.layouts.position!;
+    const geometricLayout = meta.layouts.geometric!;
+    const colorLayout = meta.layouts.color!;
+    const positionStride = positionLayout.stride >>> 2;
+    const geometricStride = geometricLayout.stride >>> 2;
+    const colorStride = colorLayout.stride >>> 2;
+    const restCount = [0, 9, 24, 45][meta.shBands];
+
+    const position = new Float32Array(n * positionStride);
+    const geometric = GEOMETRIC_COLS.map(() => new Float32Array(n));
+    const colorDc = Array.from({ length: 3 }, () => new Float32Array(n));
+    const shRest = new Float32Array(n * restCount);
+
+    let base = 0;
+    const numChunks = meta.numChunks[0] ?? 0;
+    for (let k = 0; k < numChunks; k++) {
+        const count = Math.min(meta.chunkSize, n - base);
+        const positionData = pool.acquire('position', positionLayout, count);
+        const geometricData = pool.acquire('geometric', geometricLayout, count);
+        const colorData = pool.acquire('color', colorLayout, count);
+        try {
+            await source.read({
+                chunkIndex: k,
+                position: positionData,
+                geometric: geometricData,
+                color: colorData
+            });
+
+            const pos = new Float32Array(positionData.data, 0, count * positionStride);
+            position.set(pos, base * positionStride);
+
+            const geo = new Float32Array(geometricData.data, 0, count * geometricStride);
+            for (let c = 0; c < geometric.length; c++) {
+                const column = geometric[c];
+                for (let i = 0; i < count; i++) column[base + i] = geo[i * geometricStride + c];
+            }
+
+            const color = new Float32Array(colorData.data, 0, count * colorStride);
+            for (let i = 0; i < count; i++) {
+                const offset = i * colorStride;
+                colorDc[0][base + i] = color[offset];
+                colorDc[1][base + i] = color[offset + 1];
+                colorDc[2][base + i] = color[offset + 2];
+                if (restCount > 0) {
+                    shRest.set(color.subarray(offset + 3, offset + 3 + restCount), (base + i) * restCount);
+                }
+            }
+        } finally {
+            positionData.release();
+            geometricData.release();
+            colorData.release();
+        }
+        base += count;
+    }
+
+    return { position, geometric, colorDc, shRest };
+};
+
 type WriteSogSourceOptions = {
     filename: string;
     bundle: boolean;
@@ -94,9 +171,10 @@ type ShNMeta = { count: number; bands: number; codebook: number[]; files: string
 
 /**
  * Native SOG writer: encodes a {@link ChunkSource} to the PlayCanvas SOG format,
- * reading the source one layer at a time. Each layer is gathered, consumed, and
- * **released before the next is loaded** (each phase below is its own scope), so
- * peak resident scene data is the largest single layer — not the whole scene.
+ * Small sources are gathered in one multi-layer pass to avoid re-reading
+ * interleaved inputs. Larger sources are read one layer at a time; each layer is
+ * consumed and **released before the next is loaded**, so peak resident scene
+ * data remains the largest single layer rather than the whole scene.
  *
  * Output is equivalent to the legacy DataTable `writeSog` (same Morton order,
  * quantization/clustering, texel encoding), and byte-identical for the per-file
@@ -154,6 +232,15 @@ const writeSogSource = async (
         );
     }
 
+    const gatheredBytes = numRows * (
+        meta.layouts.position!.stride +
+        meta.layouts.geometric!.stride +
+        meta.layouts.color!.stride
+    );
+    let gathered = gatheredBytes <= SINGLE_PASS_GATHER_MAX_BYTES ?
+        await gatherSogLayers(baked, pool) :
+        null;
+
     const bundleWriter = bundle ? await fs.createWriter(outputFilename) : null;
     const zipFs = bundleWriter ? new ZipFileSystem(bundleWriter) : null;
     const outputFs = zipFs || fs;
@@ -203,7 +290,8 @@ const writeSogSource = async (
         // is used) + means. `pos` is released when this scope returns (only
         // `indices` + the small means meta escape).
         const meansMeta = await (async () => {
-            const pos = await gatherInterleaved(baked, pool, 'position');
+            const pos = gathered?.position ?? await gatherInterleaved(baked, pool, 'position');
+            if (gathered) gathered.position = null;
             if (!externalOrder) sortMortonInterleaved(pos, indices);
 
             const mm = [[Infinity, -Infinity], [Infinity, -Infinity], [Infinity, -Infinity]];
@@ -239,7 +327,8 @@ const writeSogSource = async (
         // ---- Phase 2: geometric — quaternions + scales. The 32 B/gaussian layer
         // is released on return; only the 1 B/gaussian `opacityData` escapes.
         const { scalesCodebook, opacityData } = await (async () => {
-            const geom = await gatherColumns(baked, pool, 'geometric', GEOMETRIC_COLS);
+            const geom = gathered?.geometric ?? await gatherColumns(baked, pool, 'geometric', GEOMETRIC_COLS);
+            if (gathered) gathered.geometric = null;
             const [r0, r1, r2, r3, s0, s1, s2, op] = geom;
 
             const quats = new Uint8Array(width * height * channels);
@@ -290,11 +379,21 @@ const writeSogSource = async (
             // record, so it copies out as one block per gaussian — no de/re-interleave.
             const layout = meta.layouts.color!;
             const sw = layout.stride >>> 2;
-            const fdc0 = new Float32Array(numRows);
-            const fdc1 = new Float32Array(numRows);
-            const fdc2 = new Float32Array(numRows);
-            const shRest = restCount > 0 ? new Float32Array(numRows * restCount) : new Float32Array(0);
-            {
+            let fdc0: Float32Array;
+            let fdc1: Float32Array;
+            let fdc2: Float32Array;
+            let shRest: Float32Array;
+            if (gathered) {
+                [fdc0, fdc1, fdc2] = gathered.colorDc!;
+                shRest = gathered.shRest!;
+                gathered.colorDc = null;
+                gathered.shRest = null;
+                gathered = null;
+            } else {
+                fdc0 = new Float32Array(numRows);
+                fdc1 = new Float32Array(numRows);
+                fdc2 = new Float32Array(numRows);
+                shRest = restCount > 0 ? new Float32Array(numRows * restCount) : new Float32Array(0);
                 const numChunks = meta.numChunks[0] ?? 0;
                 let base = 0;
                 for (let c = 0; c < numChunks; c++) {
