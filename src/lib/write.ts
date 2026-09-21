@@ -104,7 +104,7 @@ const writeImageSource = async (filename: string, source: ChunkSource, pool: Chu
         upEnd: options.renderUpEnd,
         shutter: options.renderShutter,
         motionSamples: options.renderMotionSamples,
-        webpEffort: options.renderWebpEffort,
+        webpEffort: options.webpEffort,
         cameraTrack: options.renderCameraTrack,
         frames: options.renderFrames,
         residentBudget: options.renderResidentBudget,
@@ -159,6 +159,7 @@ const writeSource = async (writeSourceOptions: WriteSourceOptions, fs: FileSyste
                 filename,
                 bundle: outputFormat === 'sog-bundle',
                 iterations: options.iterations ?? 10,
+                webpEffort: options.webpEffort,
                 createDevice
             }, fs);
             break;
@@ -215,6 +216,7 @@ const writeSource = async (writeSourceOptions: WriteSourceOptions, fs: FileSyste
                 viewerSettingsJson: options.viewerSettingsJson,
                 bundle: outputFormat === 'html-bundle',
                 iterations: options.iterations ?? 10,
+                webpEffort: options.webpEffort,
                 createDevice
             }, fs);
             break;

@@ -77,6 +77,8 @@ type WriteSogSourceOptions = {
     filename: string;
     bundle: boolean;
     iterations: number;
+    /** Lossless WebP compression effort, 0–9. Omit to use the default WebP encoder. */
+    webpEffort?: number;
     createDevice?: DeviceCreator;
     logging?: 'own' | 'flat' | 'silent';
     // Optional pre-computed gaussian ordering (texel placement order): a
@@ -114,7 +116,7 @@ const writeSogSource = async (
     options: WriteSogSourceOptions,
     fs: FileSystem
 ): Promise<void> => {
-    const { filename: outputFilename, bundle, iterations, createDevice } = options;
+    const { filename: outputFilename, bundle, iterations, webpEffort, createDevice } = options;
     const logging = options.logging ?? 'own';
     const emitInfo = logging !== 'silent';
     const openGroup = logging === 'own';
@@ -162,7 +164,7 @@ const writeSogSource = async (
 
     const writeWebp = (filename: string, data: Uint8Array, w = width, h = height): Promise<void> => {
         const pathname = zipFs ? filename : resolve(dirname(outputFilename), filename);
-        const encoded = runEncodeWebp(data, w, h);
+        const encoded = runEncodeWebp(data, w, h, webpEffort);
         const write = writeChain.then(async () => {
             const webp = await encoded;
             await writeFile(outputFs, pathname, webp);

@@ -21,7 +21,7 @@ type Vec3Like = { x: number; y: number; z: number };
 const MAX_PENDING_ENCODES = 4;
 
 /** Renders averaged per motion-blurred frame unless the caller sets `motionSamples`. */
-const DEFAULT_MOTION_SAMPLES = 1;
+const DEFAULT_MOTION_SAMPLES = 16;
 
 /**
  * Options for writing a rendered splat image.
@@ -128,7 +128,7 @@ type WriteImageOptions = {
      * Shutter fraction in `[0, 1]`. For a start→end segment, the portion
      * actually integrated, centered on the midpoint (standard
      * shutter-angle convention: 1.0 = full motion, 0.5 = 180° shutter);
-     * default `1`. For a `cameraTrack`, setting it enables motion blur
+     * default `0.5`. For a `cameraTrack`, setting it enables motion blur
      * over that fraction of the frame interval, centered on each frame;
      * default off.
      */
@@ -139,7 +139,7 @@ type WriteImageOptions = {
      * across the shutter; cost is N× a single render. Each instant is
      * composited exactly, so the mean converges to the true time average
      * as N grows; too few instants show as discrete copies wherever the
-     * motion between them exceeds a couple of pixels. Default: `1`.
+     * motion between them exceeds a couple of pixels. Default: `16`.
      * Only meaningful when motion blur is enabled.
      */
     motionSamples?: number;
@@ -155,9 +155,8 @@ type WriteImageOptions = {
     frames?: [number, number];
 
     /**
-     * WebP lossless compression effort, 0–9. Every level is lossless; higher
-     * levels shrink the file at a steep cost in encode time (about 8× slower
-     * from 0 to 6 for roughly 20% smaller output). Default: `0`.
+     * WebP lossless compression effort, 0–9. Higher levels spend more time
+     * trying to reduce file size. Omit to use the default WebP encoder.
      */
     webpEffort?: number;
 
@@ -215,7 +214,7 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         motionSamples,
         cameraTrack,
         frames,
-        webpEffort = 0,
+        webpEffort,
         residentBudget,
         createDevice
     } = options;
@@ -275,7 +274,7 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     }
     const motionEnabled = cameraTrack ? (shutter !== undefined && shutter > 0) : cameraEndPosition !== undefined;
     const motionN = motionEnabled ? (motionSamples ?? DEFAULT_MOTION_SAMPLES) : 1;
-    const motionShutter = motionEnabled ? (shutter ?? 1) : 0;
+    const motionShutter = motionEnabled ? (shutter ?? 0.5) : 0;
     if (motionEnabled && (motionShutter < 0 || motionShutter > 1)) {
         throw new Error(`writeImage: --shutter must be in [0, 1], got ${motionShutter}.`);
     }

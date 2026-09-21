@@ -17,6 +17,9 @@ type Options = {
     /** Number of iterations for SOG SH compression (higher = better quality). Default: 10 */
     iterations?: number;
 
+    /** Lossless WebP compression effort for image, SOG, HTML and LOD output, 0–9. Omit to use the default WebP encoder. */
+    webpEffort?: number;
+
     /** LOD levels to read from LCC input. Default: all levels. */
     lodSelect?: number[];
 
@@ -141,23 +144,17 @@ type Options = {
      * Shutter fraction in `[0, 1]`. For a start→end camera segment, the
      * portion the frame averages over, centered on the midpoint (standard
      * shutter-angle convention: 1.0 = full motion, 0.5 = 180° shutter);
-     * default `1`. Along `renderCameraTrack`, setting it enables motion
+     * default `0.5`. Along `renderCameraTrack`, setting it enables motion
      * blur over that fraction of the frame interval; default off.
      */
     renderShutter?: number;
 
     /**
      * Renders averaged per motion-blurred frame, at evenly spaced instants
-     * across the shutter; cost is N× a single render. Default: `1`. No
+     * across the shutter; cost is N× a single render. Default: `16`. No
      * effect without motion blur.
      */
     renderMotionSamples?: number;
-
-    /**
-     * WebP lossless compression effort for image output, 0–9. All levels
-     * are lossless; higher is smaller but much slower. Default: `0`.
-     */
-    renderWebpEffort?: number;
 
     /**
      * Camera animation to render as a frame sequence (see `loadCameraTrack`).

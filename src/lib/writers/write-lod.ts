@@ -564,6 +564,8 @@ type WriteLodSourceOptions = {
     mainSource: ChunkSource;
     envSource: ChunkSource | null;
     iterations: number;
+    /** Lossless WebP compression effort, 0–9. Omit to use the default WebP encoder. */
+    webpEffort?: number;
     /**
      * Supplies the GPU that SOG encoding uses and, with `lodErrors`, that the
      * per-leaf error tables are rendered on.
@@ -607,7 +609,7 @@ type WriteLodSourceOptions = {
  * @ignore
  */
 const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) => {
-    const { filename, envSource, iterations, createDevice, chunkCount, chunkExtent, chunkMin = 8, lodErrors = false } = options;
+    const { filename, envSource, iterations, webpEffort, createDevice, chunkCount, chunkExtent, chunkMin = 8, lodErrors = false } = options;
 
     // Bake the pending coordinate-space transform to PLY once, up front, so the
     // partition/bounds passes (extractSlim, calcBound, morton) and the per-unit
@@ -831,7 +833,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
             await writeSogSource(
                 envSource!,
                 pool,
-                { filename: envPathname, bundle: false, iterations, createDevice, logging: 'flat' },
+                { filename: envPathname, bundle: false, iterations, webpEffort, createDevice, logging: 'flat' },
                 fs
             );
         } finally {
@@ -895,6 +897,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
                     filename: pathname,
                     bundle: false,
                     iterations,
+                    webpEffort,
                     createDevice,
                     indices: identity,
                     logging: 'flat'

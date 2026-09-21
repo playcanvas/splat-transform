@@ -158,6 +158,8 @@ These options configure a run as a whole rather than operating on splat data —
     --memory                            Show peak memory in progress output
     --tty                               Interactive bar rendering (default on a TTY; --no-tty to disable)
 -w, --overwrite                         Overwrite output file if it exists
+    --webp-effort      <0-9>            Lossless WebP compression effort for image, SOG, HTML and LOD output.
+                                        Higher tries harder to reduce size. Default: libwebp’s default lossless settings.
 ```
 
 ### GPU Options
@@ -275,15 +277,12 @@ Apply when writing `.webp` (lossless WebP rendered via GPU rasterizer).
                                         frame averages renders at instants across the shutter. Default: disabled.
     --camera-target-end <x,y,z>         End camera target. Default: same as --camera-target. Only with --camera-pos-end.
     --camera-up-end    <x,y,z>          End up vector. Default: same as --camera-up. Only with --camera-pos-end.
-    --shutter          <0..1>           Fraction of the start→end segment averaged, centered on its midpoint. Default: 1.
+    --shutter          <0..1>           Fraction of the start→end segment averaged, centered on its midpoint. Default: 0.5.
                                         With --camera-track, fraction of the frame interval averaged around each frame.
                                         Default for tracks: off. 1.0 = full interval; 0.5 = 180° shutter.
     --motion-samples   <n>              Renders averaged per motion-blurred frame, at evenly spaced instants across
                                         the shutter. Cost is N× a single render; too few show as discrete copies
-                                        where the motion between instants exceeds a couple of pixels. Default: 1.
-    --webp-effort      <0-9>            Lossless WebP compression effort. Every level is lossless; higher is
-                                        smaller but much slower (6 is about 8x slower than 0 for ~20% smaller
-                                        files). Default: 0.
+                                        where the motion between instants exceeds a couple of pixels. Default: 16.
     --camera-track     <path>           Render a camera animation as a frame sequence: a supersplat editor project
                                         (.ssproj directory or its document.json), a viewer settings.json with
                                         animTracks, or a JSON { frameRate, frames: [{ position, target, fov }] }.

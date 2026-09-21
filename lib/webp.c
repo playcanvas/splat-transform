@@ -35,7 +35,8 @@ int webp_encode_lossless_rgba(const uint8_t *rgba, int width, int height, int st
 }
 
 // Lossless encode at a chosen effort level (0 = fastest / largest,
-// 9 = slowest / smallest; the simple API above corresponds to level 6).
+// 9 = slowest, searching harder for smaller output). Omitting the level
+// uses the simple API above with its default settings instead of selecting a preset.
 // `exact` keeps the RGB of fully transparent pixels, so the round trip is
 // bit-exact for every channel, not just the visible ones.
 EMSCRIPTEN_KEEPALIVE
