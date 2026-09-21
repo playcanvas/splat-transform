@@ -1,6 +1,6 @@
 import { GraphicsDevice } from 'playcanvas';
 
-import { type CameraBasis, type Projection, type RenderCamera, buildCameraBasis } from './camera';
+import { type Projection, type RenderCamera, buildCameraBasis } from './camera';
 import {
     AA_DILATION_COV,
     DISCRIMINANT_FLOOR,

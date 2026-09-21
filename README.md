@@ -275,8 +275,9 @@ Apply when writing `.webp` (lossless WebP rendered via GPU rasterizer).
                                         frame averages renders at instants across the shutter. Default: disabled.
     --camera-target-end <x,y,z>         End camera target. Default: same as --camera-target. Only with --camera-pos-end.
     --camera-up-end    <x,y,z>          End up vector. Default: same as --camera-up. Only with --camera-pos-end.
-    --shutter          <0..1>           Fraction of the start→end segment integrated, centered on the midpoint
-                                        (1.0 = full motion; 0.5 = 180° shutter). Default: 1. Only with --camera-pos-end.
+    --shutter          <0..1>           Fraction of the start→end segment averaged, centered on its midpoint. Default: 1.
+                                        With --camera-track, fraction of the frame interval averaged around each frame.
+                                        Default for tracks: off. 1.0 = full interval; 0.5 = 180° shutter.
     --motion-samples   <n>              Renders averaged per motion-blurred frame, at evenly spaced instants across
                                         the shutter. Cost is N× a single render; too few show as discrete copies
                                         where the motion between instants exceeds a couple of pixels. Default: 1.

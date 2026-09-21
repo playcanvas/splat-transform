@@ -69,7 +69,7 @@ class MemoryWriter implements Writer {
  * @example
  * ```ts
  * const fs = new MemoryFileSystem();
- * await writeFile({ filename: 'output.ply', ... }, fs);
+ * await writeSource({ filename: 'output.ply', outputFormat: 'ply', source, pool, options: {} }, fs);
  *
  * // Get the generated data
  * const data = fs.results.get('output.ply');
