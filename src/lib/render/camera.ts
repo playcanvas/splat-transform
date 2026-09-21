@@ -164,14 +164,16 @@ const buildCameraBasis = (camera: RenderCamera): CameraBasis => {
 const buildApertureCameras = (camera: RenderCamera, radius: number, samples: number): RenderCamera[] => {
     const basis = buildCameraBasis(camera);
     const goldenAngle = Math.PI * (3 - Math.sqrt(5));
-    const pairs = Math.floor(samples / 2);
+    const triple = samples > 1 && samples % 2 !== 0 ? 3 : 0;
     return Array.from({ length: samples }, (_, i) => {
-        // Opposite pairs keep the lens centered at every sample count;
-        // an odd count adds the lens center. Radius stratifies disk area.
-        const pair = Math.floor(i / 2);
-        const r = pair < pairs ? radius * Math.sqrt((pair + 0.5) / pairs) : 0;
-        const angle = pair * goldenAngle;
-        const sign = i % 2 === 0 ? 1 : -1;
+        // Opposite pairs and an optional equilateral triple keep the lens
+        // centered. Each group samples the midpoint of its share of disk
+        // area, avoiding a sharp center contribution for odd counts > 1.
+        const pair = Math.floor((i - triple) / 2);
+        const area = i < triple ? 1.5 : triple + 2 * pair + 1;
+        const r = samples === 1 ? 0 : radius * Math.sqrt(area / samples);
+        const angle = i < triple ? i * 2 * Math.PI / 3 : pair * goldenAngle;
+        const sign = i < triple || (i - triple) % 2 === 0 ? 1 : -1;
         const x = sign * r * Math.cos(angle);
         const y = sign * r * Math.sin(angle);
         const offset = basis.right.clone().mulScalar(x).add(basis.down.clone().mulScalar(y));

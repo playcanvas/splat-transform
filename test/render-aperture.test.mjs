@@ -45,11 +45,28 @@ describe('aperture cameras', () => {
         }
     });
 
+    it('keeps odd aperture samples off center without reducing the disk second moment', () => {
+        const radius = 0.2;
+        for (const count of [3, 5, 17, 31, 33]) {
+            const views = buildApertureCameras(camera, radius, count);
+            const mean = new Vec3();
+            let radiusSquared = 0;
+            for (const view of views) {
+                const offset = view.position.clone().sub(camera.position);
+                assert.ok(offset.length() > 1e-12, `${count}: no pinhole contribution`);
+                mean.add(offset);
+                radiusSquared += offset.lengthSq();
+            }
+            assert.ok(mean.length() < 1e-12, `${count}: centered lens`);
+            assert.ok(Math.abs(radiusSquared / count - radius * radius / 2) < 1e-12, `${count}: uniform disk second moment`);
+        }
+    });
+
     it('samples a centered disk and produces the expected defocus displacement', () => {
         const b = buildCameraBasis(camera);
         const point = camera.position.clone().add(b.forward.clone().mulScalar(2));
         const base = project(camera, point);
-        for (const count of [1, 16, 31, 32, 64]) {
+        for (const count of [1, 2, 3, 5, 16, 31, 32, 33, 64]) {
             const mean = new Vec3();
             const views = buildApertureCameras(camera, 0.2, count);
             assert.equal(views.length, count);

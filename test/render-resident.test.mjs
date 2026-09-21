@@ -465,3 +465,40 @@ describe('pair prefix unwrap', () => {
         assert.deepStrictEqual(Array.from(out.subarray(0, 5)), [0, 7, 7, 9, 9]);
     });
 });
+
+describe('pair-sort capacity', () => {
+    it('reserves complete sorter workgroups when pair counts grow between views', async () => {
+        const { GpuSceneRasterizer } = await import('../src/lib/gpu/gpu-scene-rasterizer.js');
+        const stop = new Error('stop after checking sort allocation');
+        for (const granularity of [2048, 3840]) {
+            let allocatedGroups = 0;
+            let allocatedElements = 0;
+            const sorter = {
+                capacity: 0,
+                prepareIndirect: () => new Uint32Array([1, granularity, 0, 0]),
+                sort(_keys, count) {
+                    // Model the engine's allocation contract: changing capacity
+                    // within the same workgroup count does not resize buffers.
+                    const effective = Math.max(count, this.capacity);
+                    const groups = Math.ceil(effective / granularity);
+                    if (groups !== allocatedGroups) {
+                        allocatedGroups = groups;
+                        allocatedElements = effective;
+                    }
+                    assert.ok(count <= allocatedElements, `${granularity}: ${count} elements exceed ${allocatedElements} allocated`);
+                    throw stop;
+                }
+            };
+            const rasterizer = {
+                device: {}, radixSort: sorter,
+                ensurePairCapacity() {}, dispatch2D() {},
+                totalReadback: new Uint32Array(1),
+                totalPairsBuffer: { write() {} },
+                emitCompute: { setParameter() {} }
+            };
+            for (const count of [3800, 4097, 6000, 7681, 8000, 4000]) {
+                assert.throws(() => GpuSceneRasterizer.prototype.rasterizeCut.call(rasterizer, 0, 1, 0, count, 1, 1), err => err === stop);
+            }
+        }
+    });
+});

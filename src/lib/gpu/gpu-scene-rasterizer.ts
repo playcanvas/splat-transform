@@ -735,10 +735,10 @@ class GpuSceneRasterizer {
         this.dispatch2D(emit, Math.ceil(splatCount / 64), 'scene-emit-pairs');
 
         // Stable sort by tile keeps each tile's pairs in emission (depth) order.
-        // The sort grows buffers only when its 2048-element workgroup count
-        // grows. Reserve the whole workgroup so later aperture views with
-        // more pairs in the same workgroup count cannot overrun its buffers.
-        this.radixSort.capacity = Math.max(this.radixSort.capacity, Math.ceil(rangePairs / SCAN_BLOCK) * SCAN_BLOCK);
+        // The sort grows buffers only when its workgroup count grows.
+        // Reserve whole workgroups using the active sorter's granularity.
+        const sortBlock = this.radixSort.prepareIndirect()[1];
+        this.radixSort.capacity = Math.max(this.radixSort.capacity, Math.ceil(rangePairs / sortBlock) * sortBlock);
         this.radixSort.sort(this.tileKeysBuffer!, rangePairs, this.sortKeyBits, this.splatValuesBuffer!);
         const sortedKeys = this.radixSort.sortedKeys;
         const sortedValues = this.radixSort.sortedIndices;
