@@ -204,9 +204,9 @@ class SceneRenderer {
     }
 
     /**
-     * Render the mean of several views: the shutter samples of one
-     * motion-blurred frame, each composited exactly at its instant,
-     * accumulated on the GPU in float and quantized once.
+     * Render the mean of several views: shutter or aperture samples,
+     * each composited separately with its own visibility,
+     * accumulated on the GPU in premultiplied linear light and quantized once.
      *
      * @param cameras - The samples; same constraints as {@link render}.
      * @returns RGBA bytes, `width × height × 4`.

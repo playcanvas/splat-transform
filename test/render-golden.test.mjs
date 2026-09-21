@@ -104,6 +104,26 @@ describe('Render goldens', { skip: distExists ? false : 'dist/cli.mjs missing â€
 });
 
 describe('Render options', { skip: distExists ? false : 'dist/cli.mjs missing â€” run `npm run build` first' }, () => {
+    it('defaults to 32 aperture samples and one sample matches a pinhole render', async () => {
+        const args = CASES[0].args;
+        const render = async (name, extra) => {
+            const path = join(tmpdir(), `aperture-${name}-${process.pid}.webp`);
+            const result = await runCli([...args, ...extra, path, '-w', '-q']);
+            assert.strictEqual(result.code, 0, result.stderr);
+            return (await decodeRgba(await readFile(path))).rgba;
+        };
+        const dof = ['--f-stop', '1', '--sensor-size', '0.5'];
+        const defaults = await render('default', dof);
+        assert.deepStrictEqual(defaults, await render('explicit', [...dof, '--dof-samples', '32']));
+        const pinhole = await render('pinhole', []);
+        assert.deepStrictEqual(pinhole, await render('single', [...dof, '--dof-samples', '1']));
+        assert.notDeepStrictEqual(defaults, pinhole);
+        const motion = ['--camera-pos-end', '1,5,-8', '--motion-samples', '2'];
+        const motionImage = await render('motion', motion);
+        assert.deepStrictEqual(motionImage, await render('motion-single', [...motion, ...dof, '--dof-samples', '1']));
+        assert.notDeepStrictEqual(motionImage, await render('motion-dof', [...motion, ...dof, '--dof-samples', '4']));
+    });
+
     it('defaults to 16 motion samples and a half-interval shutter', async () => {
         const args = [...CASES[0].args, '--camera-pos-end', '1,0,3'];
         const render = async (name, extra) => {

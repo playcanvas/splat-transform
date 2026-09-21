@@ -102,6 +102,9 @@ type Options = {
      */
     renderFStop?: number;
 
+    /** Circular-aperture samples per instant for image depth of field. Default: 32; only used with renderFStop. */
+    renderDofSamples?: number;
+
     /**
      * Camera-space Z of the focus plane in world units for image output.
      * Defaults to the distance from the camera to the look-at point when

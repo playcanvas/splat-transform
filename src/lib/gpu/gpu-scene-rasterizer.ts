@@ -735,6 +735,10 @@ class GpuSceneRasterizer {
         this.dispatch2D(emit, Math.ceil(splatCount / 64), 'scene-emit-pairs');
 
         // Stable sort by tile keeps each tile's pairs in emission (depth) order.
+        // The sort grows buffers only when its workgroup count grows.
+        // Reserve whole workgroups using the active sorter's granularity.
+        const sortBlock = this.radixSort.prepareIndirect()[1];
+        this.radixSort.capacity = Math.max(this.radixSort.capacity, Math.ceil(rangePairs / sortBlock) * sortBlock);
         this.radixSort.sort(this.tileKeysBuffer!, rangePairs, this.sortKeyBits, this.splatValuesBuffer!);
         const sortedKeys = this.radixSort.sortedKeys;
         const sortedValues = this.radixSort.sortedIndices;
@@ -947,7 +951,7 @@ class GpuSceneRasterizer {
             c.setParameter('near', view.near); c.setParameter('_p4', 0);
             c.setParameter('focusDistance', view.focusDistance);
             c.setParameter('apertureScale', view.apertureScale);
-            c.setParameter('_p5', 0); c.setParameter('_p6', 0);
+            c.setParameter('offsetX', b.offsetX ?? 0); c.setParameter('offsetY', b.offsetY ?? 0);
             c.setParameter('imageWidth', o.imageWidth); c.setParameter('imageHeight', o.imageHeight);
             c.setParameter('splatStride', 0);
             c.setParameter('chunkSize', this.capacity);

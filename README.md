@@ -269,6 +269,8 @@ Apply when writing `.webp` (lossless WebP rendered via GPU rasterizer).
                                         smaller = more blur. Pinhole only. Default: disabled (no defocus).
     --focus-distance   <n>              Camera-space Z of the focus plane (world units). Default: distance to --camera-target.
                                         Pinhole only; only meaningful with --f-stop.
+    --dof-samples      <n>              Aperture samples per instant with --f-stop. Default: 32. More samples reduce
+                                        sampling artifacts at greater cost; multiplies --motion-samples when combined.
     --sensor-size      <n>              Vertical sensor height in world units. Gives --f-stop a physical meaning.
                                         Default: 0.024 (35mm full-frame, world units = meters). Scale to your world:
                                         world unit = decimeter → 0.24, world unit = millimeter → 24.
@@ -477,6 +479,9 @@ splat-transform input.ply view.webp --background 0,0,0,0
 # Defocus blur (focus on camera-target, f/2.8 aperture)
 splat-transform input.ply view.webp --f-stop 2.8
 
+# Smoother aperture sampling for strongly defocused edges
+splat-transform input.ply view.webp --f-stop 1 --dof-samples 64
+
 # Defocus with explicit focus distance and a smaller world scale
 splat-transform input.ply view.webp \
     --f-stop 2.8 --focus-distance 3 --sensor-size 0.1
@@ -490,6 +495,8 @@ splat-transform input.ply view.webp \
     --camera-pos 2,1,-2 --camera-pos-end 3,1,-2 \
     --shutter 0.5 --motion-samples 16
 ```
+
+Depth of field and motion blur resolve visibility separately for each sample, then average in linear light before encoding the final image. Reconstructed splat colours are treated as sRGB; transparent outputs use premultiplied linear colour during averaging. When both effects are enabled, each shutter instant uses `--dof-samples` aperture views.
 
 ### Device Selection for SOG Compression
 

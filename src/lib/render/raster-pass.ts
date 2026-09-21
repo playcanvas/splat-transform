@@ -267,8 +267,8 @@ const renderRasterPass = async (
             const cx = rx2 * wx + ry2 * wy + rz2 * wz;
             const cy = dx2 * wx + dy2 * wy + dz2 * wz;
             const invZ = 1.0 / cz;
-            const screenX = focalX * cx * invZ + halfW;
-            const screenY = focalY * cy * invZ + halfH;
+            const screenX = focalX * cx * invZ + halfW + (basis.offsetX ?? 0);
+            const screenY = focalY * cy * invZ + halfH + (basis.offsetY ?? 0);
             const maxScale = Math.max(
                 Math.exp(sxColRef[idx]),
                 Math.exp(syColRef[idx]),
@@ -379,6 +379,8 @@ const renderRasterPass = async (
         eyeZ: basis.eye.z,
         focalX: basis.focalX,
         focalY: basis.focalY,
+        offsetX: basis.offsetX,
+        offsetY: basis.offsetY,
         focusDistance: camera.focusDistance ?? 0,
         apertureScale: camera.apertureScale ?? 0,
         bgR: background.r,

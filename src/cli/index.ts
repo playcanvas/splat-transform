@@ -184,6 +184,7 @@ const cliOptionsConfig = {
     'camera-near': { type: 'string' },
     'background': { type: 'string' },
     'f-stop': { type: 'string' },
+    'dof-samples': { type: 'string' },
     'focus-distance': { type: 'string' },
     'sensor-size': { type: 'string' },
     'camera-pos-end': { type: 'string' },
@@ -478,6 +479,10 @@ const parseArguments = async () => {
     if (renderFStop !== undefined && renderFStop <= 0) {
         throw new Error(`Invalid --f-stop value: ${v['f-stop']}. Must be > 0.`);
     }
+    const renderDofSamples = v['dof-samples'] !== undefined ? parseInteger(v['dof-samples']) : undefined;
+    if (renderDofSamples !== undefined && renderDofSamples < 1) {
+        throw new Error(`Invalid --dof-samples value: ${v['dof-samples']}. Must be >= 1.`);
+    }
     const renderFocusDistance = v['focus-distance'] !== undefined ? parseNumber(v['focus-distance'], 0) : undefined;
     if (renderFocusDistance !== undefined && renderFocusDistance <= 0) {
         throw new Error(`Invalid --focus-distance value: ${v['focus-distance']}. Must be > 0.`);
@@ -601,6 +606,7 @@ const parseArguments = async () => {
         renderNear,
         renderBackground,
         renderFStop,
+        renderDofSamples,
         renderFocusDistance,
         renderSensorSize,
         renderCameraEndPosition,
@@ -928,6 +934,8 @@ IMAGE OUTPUT (.webp) — lossless WebP rendered via GPU rasterizer
                                             smaller = more blur. Pinhole only. Default: disabled (no defocus).
         --focus-distance   <n>              Camera-space Z of the focus plane (world units). Default: distance to --camera-target.
                                             Pinhole only; only meaningful with --f-stop.
+        --dof-samples      <n>              Aperture samples per instant with --f-stop. Default: 32. More samples reduce
+                                            sampling artifacts at greater cost; multiplies --motion-samples when combined.
         --sensor-size      <n>              Vertical sensor height in world units. Gives --f-stop a physical meaning.
                                             Default: 0.024 (35mm full-frame, world units = meters). Scale to your world:
                                             world unit = decimeter → 0.24, world unit = millimeter → 24.

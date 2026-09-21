@@ -127,16 +127,16 @@ interface SplatRasterizerOptions {
     eyeX: number; eyeY: number; eyeZ: number;
     /** Focal lengths in pixel units. */
     focalX: number; focalY: number;
+    offsetX?: number; offsetY?: number;
     /**
      * Camera-space Z of the focus plane, world units. Pinhole-only;
      * unused when `projection === 'equirect'`.
      */
     focusDistance: number;
     /**
-     * DoF strength as a pixel-space scalar: the CoC radius in pixels when
-     * `|1 − focusDistance/cz| = 1`. `0` disables defocus. The writer
-     * derives this from `--f-stop` + `--sensor-size` using the thin-lens
-     * CoC formula. Pinhole-only.
+     * Approximate defocus Gaussian sigma in pixels when
+     * `|1 − focusDistance/cz| = 1`. `0` disables covariance dilation;
+     * the image writer uses aperture sampling instead. Pinhole-only.
      */
     apertureScale: number;
     /** RGBA background, each channel in [0, 1]. */
@@ -608,7 +608,7 @@ class GpuSplatRasterizer {
             c.setParameter('near', o.near); c.setParameter('_p4', 0);
             c.setParameter('focusDistance', o.focusDistance);
             c.setParameter('apertureScale', o.apertureScale);
-            c.setParameter('_p5', 0); c.setParameter('_p6', 0);
+            c.setParameter('offsetX', o.offsetX ?? 0); c.setParameter('offsetY', o.offsetY ?? 0);
             c.setParameter('imageWidth', o.imageWidth); c.setParameter('imageHeight', o.imageHeight);
             c.setParameter('splatStride', this.inputStride);
             // chunkSize set per-dispatch
@@ -648,6 +648,7 @@ class GpuSplatRasterizer {
         o.forwardX = basis.forward.x; o.forwardY = basis.forward.y; o.forwardZ = basis.forward.z;
         o.eyeX = basis.eye.x; o.eyeY = basis.eye.y; o.eyeZ = basis.eye.z;
         o.focalX = basis.focalX; o.focalY = basis.focalY;
+        o.offsetX = basis.offsetX; o.offsetY = basis.offsetY;
         o.near = near;
         o.imageWidth = imageWidth;
         o.imageHeight = imageHeight;

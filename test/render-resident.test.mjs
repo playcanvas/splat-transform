@@ -161,6 +161,92 @@ const withBindingLimit = async (bytes, fn) => {
 };
 
 describe('scene renderer matches the chunked path', () => {
+    it('aperture averaging softens an opaque edge and keeps the focus plane sharp', async (t) => {
+        if (!device) return t.skip('no WebGPU adapter available');
+        const { Vec3 } = await import('playcanvas');
+        const { Column, DataTable, dataTableToChunkSource } = await import('../src/lib/index.js');
+        const { createChunkDataPool } = await import('../src/lib/chunk/index.js');
+        const { SceneRenderer } = await import('../src/lib/render/index.js');
+        const { buildApertureCameras } = await import('../src/lib/render/camera.js');
+        const n = 40 * 80;
+        const values = {
+            x: 0, y: 0, z: 0,
+            rot_0: 1, rot_1: 0, rot_2: 0, rot_3: 0,
+            scale_0: Math.log(0.04), scale_1: Math.log(0.04), scale_2: Math.log(1e-8),
+            opacity: 10, f_dc_0: 0.5 / 0.28209479177387814,
+            f_dc_1: 0.5 / 0.28209479177387814, f_dc_2: 0.5 / 0.28209479177387814
+        };
+        const table = new DataTable(Object.entries(values).map(([name, value]) => new Column(name, new Float32Array(n).fill(value))));
+        for (let i = 0; i < n; i++) {
+            table.getColumnByName('x').data[i] = -2 + (i % 40 + 0.5) * 0.05;
+            table.getColumnByName('y').data[i] = -2 + (Math.floor(i / 40) + 0.5) * 0.05;
+        }
+        const source = dataTableToChunkSource(table);
+        const pool = createChunkDataPool();
+        const camera = {
+            position: new Vec3(0, 0, 2), target: new Vec3(0, 0, 0), up: new Vec3(0, 1, 0),
+            fovY: Math.PI / 2, width: 64, height: 64, near: 0.125, focusDistance: 4
+        };
+        for (const tier of TIERS) {
+            const renderer = new SceneRenderer(device, source, pool, {
+                projection: 'pinhole', width: 64, height: 64, background: { r: 0, g: 0, b: 0, a: 1 }, tier
+            });
+            await renderer.upload();
+            try {
+                const sharp = await renderer.render(camera);
+                const blurred = await renderer.renderSlices(buildApertureCameras(camera, 1, 64));
+                const red = (image, x) => image[(32 * 64 + x) * 4];
+                assert.equal(red(sharp, 36), 0, `${tier}: outside the sharp edge`);
+                assert.ok(red(blurred, 36) > 10, `${tier}: blur extends into the background`);
+                assert.ok(red(sharp, 28) > 240, `${tier}: opaque surface`);
+                assert.ok(red(blurred, 28) < 240, `${tier}: background blends through the edge`);
+                const focused = await renderer.renderSlices(buildApertureCameras({ ...camera, focusDistance: 2 }, 1, 32));
+                for (let i = 0; i < sharp.length; i++) {
+                    assert.ok(Math.abs(focused[i] - sharp[i]) <= 1, `${tier}: focus plane changed at byte ${i}`);
+                }
+            } finally {
+                renderer.destroy();
+            }
+        }
+        await source.close();
+    });
+
+    it('accumulates defocused splats whose individual opacity is below 1/255', async (t) => {
+        if (!device) return t.skip('no WebGPU adapter available');
+        const { Vec3 } = await import('playcanvas');
+        const { Column, DataTable, dataTableToChunkSource } = await import('../src/lib/index.js');
+        const { createChunkDataPool } = await import('../src/lib/chunk/index.js');
+        const values = {
+            x: 0, y: 0, z: 0,
+            rot_0: 1, rot_1: 0, rot_2: 0, rot_3: 0,
+            scale_0: Math.log(0.01), scale_1: Math.log(0.01), scale_2: Math.log(0.01),
+            opacity: 0, f_dc_0: 0, f_dc_1: 0, f_dc_2: 0
+        };
+        const dataTable = new DataTable(Object.entries(values).map(([name, value]) =>
+            new Column(name, new Float32Array(256).fill(value))
+        ));
+        const source = dataTableToChunkSource(dataTable);
+        const scene = { source, pool: createChunkDataPool() };
+        // A 10-pixel defocus sigma reduces every splat's peak alpha below
+        // 1/255, but their combined contribution should remain visible.
+        const camera = {
+            position: new Vec3(0, 0, 2), target: new Vec3(0, 0, 0), up: new Vec3(0, 1, 0),
+            fovY: Math.PI / 3, width: 64, height: 64, near: 0.125,
+            focusDistance: 4, apertureScale: 10
+        };
+        const renderer = await makeRenderer(scene, camera, 'resident');
+        try {
+            const image = await renderer.render(camera);
+            const red = x => image[(32 * 64 + x) * 4];
+            assert.ok(red(32) > 50, 'faint splats must accumulate at the center');
+            assert.ok(red(47) > 30, 'faint splat tails must accumulate away from the center');
+            assert.strictEqual(red(63), Math.round(background.r * 255), 'outside the footprint stays background');
+        } finally {
+            renderer.destroy();
+            await source.close();
+        }
+    });
+
     it('static pinhole, defocus and equirect are byte-identical in every tier', async (t) => {
         if (!device) return t.skip('no WebGPU adapter available');
         const { Vec3 } = await import('playcanvas');
@@ -189,6 +275,7 @@ describe('scene renderer matches the chunked path', () => {
         };
         const cases = [
             ['static', pinhole],
+            ['off-axis', { ...pinhole, offsetX: 17, offsetY: -9 }],
             ['defocus', { ...pinhole, focusDistance: 10, apertureScale: 2 }],
             ['equirect', equirect]
         ];
@@ -231,7 +318,55 @@ describe('scene renderer matches the chunked path', () => {
         });
     });
 
-    it('GPU slice accumulation matches the float mean of the slices', async (t) => {
+    it('integrates exposure without dark transparent fringes or per-sample highlight clipping', async (t) => {
+        if (!device) return t.skip('no WebGPU adapter available');
+        const { Vec3 } = await import('playcanvas');
+        const { SceneRenderer } = await import('../src/lib/render/index.js');
+        const { dataTableToChunkSource } = await import('../src/lib/index.js');
+        const scene = await makeScene(8, 1);
+        for (const column of scene.dataTable.columns) column.data.fill(0);
+        scene.dataTable.getColumnByName('rot_0').data.fill(1);
+        scene.dataTable.getColumnByName('opacity').data.fill(20);
+        const camera = {
+            position: new Vec3(0, 0, 2), target: new Vec3(0, 0, 0), up: new Vec3(0, 1, 0),
+            fovY: Math.PI / 2, width: 16, height: 16, near: 0.125
+        };
+        const empty = { ...camera, target: new Vec3(0, 0, 4) };
+        const encode = c => c <= 0.0031308 ? c * 12.92 : 1.055 * c ** (1 / 2.4) - 0.055;
+        for (const tier of TIERS) {
+            for (const [color, bgAlpha] of [[1, 1], [1, 0], [1, 0.5], [1.2, 1]]) {
+                for (let c = 0; c < 3; c++) scene.dataTable.getColumnByName(`f_dc_${c}`).data.fill((color - 0.5) / 0.28209479177387814);
+                const source = dataTableToChunkSource(scene.dataTable);
+                const renderer = new SceneRenderer(device, source, scene.pool, {
+                    projection: 'pinhole', width: 16, height: 16,
+                    background: { r: bgAlpha === 0 ? 0.75 : 0, g: 0, b: 0, a: bgAlpha }, tier
+                });
+                await renderer.upload();
+                try {
+                    const image = await renderer.renderSlices([camera, empty]);
+                    const pixel = Array.from(image.subarray((8 * 16 + 8) * 4, (8 * 16 + 8) * 4 + 4));
+                    const alpha = (1 + bgAlpha) / 2;
+                    const linear = ((color + 0.055) / 1.055) ** 2.4;
+                    const rgb = Math.round(255 * Math.min(1, encode(linear / (2 * alpha))));
+                    const expected = [rgb, rgb, rgb, Math.round(alpha * 255)];
+                    for (let c = 0; c < 4; c++) assert.ok(Math.abs(pixel[c] - expected[c]) <= 1, `${tier}, color ${color}, bg alpha ${bgAlpha}: ${pixel} != ${expected}`);
+                    if (bgAlpha === 0) {
+                        const single = await renderer.render(camera);
+                        // Straight RGBA retains white even where surface coverage is partial.
+                        for (let p = 0; p < single.length; p += 4) {
+                            if (single[p + 3] > 0) assert.equal(single[p], 255);
+                        }
+                    }
+                } finally {
+                    renderer.destroy();
+                    await source.close();
+                }
+            }
+        }
+        await scene.source.close();
+    });
+
+    it('GPU slice accumulation matches the linear-light mean of the slices', async (t) => {
         if (!device) return t.skip('no WebGPU adapter available');
         const { Vec3 } = await import('playcanvas');
         const scene = await makeScene(20000, 7);
@@ -246,31 +381,37 @@ describe('scene renderer matches the chunked path', () => {
             near: 0.125
         });
         const slices = [slice(10), slice(10.25), slice(10.5), slice(10.75)];
-        for (const tier of ['resident', 'streamed-gpu']) {
+        for (const tier of TIERS) {
             const renderer = await makeRenderer(scene, slices[0], tier);
             try {
                 const gpu = await renderer.renderSlices(slices);
                 assert.ok(countForeground(gpu) > 1000, `${tier}: scene should cover the frame`);
 
                 // Reference: each slice rendered alone and the 8-bit results
-                // averaged in float. The GPU averages before quantizing, so the
+                // decoded to linear light and averaged. The GPU averages before quantizing, so the
                 // two may differ by the per-slice rounding: at most one level.
+                const decode = c => c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+                const encode = c => c <= 0.0031308 ? c * 12.92 : 1.055 * c ** (1 / 2.4) - 0.055;
                 const accum = new Float32Array(gpu.length);
                 for (const s of slices) {
                     const img = await renderer.render(s);
-                    for (let p = 0; p < img.length; p++) accum[p] += img[p];
+                    for (let p = 0; p < img.length; p++) accum[p] += p % 4 === 3 ? img[p] / 255 : decode(img[p] / 255);
                 }
                 let maxDiff = 0;
                 for (let p = 0; p < gpu.length; p++) {
-                    const d = Math.abs(gpu[p] - Math.round(accum[p] / slices.length));
+                    const mean = accum[p] / slices.length;
+                    const d = Math.abs(gpu[p] - Math.round(255 * (p % 4 === 3 ? mean : encode(mean))));
                     if (d > maxDiff) maxDiff = d;
                 }
                 assert.ok(maxDiff <= 1, `${tier}: accumulated frame differs from the slice mean by ${maxDiff} levels`);
 
-                // Two identical slices: their float mean is exact, so the result
-                // must equal the single render byte for byte.
+                // The colour-space round trip can move a value across an
+                // 8-bit rounding boundary, but must not visibly change it.
                 const twice = await renderer.renderSlices([slices[0], slices[0]]);
-                compare(twice, await renderer.render(slices[0]), `${tier}: identical slices`);
+                const single = await renderer.render(slices[0]);
+                for (let p = 0; p < single.length; p++) {
+                    assert.ok(Math.abs(twice[p] - single[p]) <= 1, `${tier}: identical slices at ${p}`);
+                }
             } finally {
                 renderer.destroy();
             }
@@ -322,5 +463,42 @@ describe('pair prefix unwrap', () => {
         // Empty blocks repeat a prefix without wrapping.
         unwrapPrefixes(Uint32Array.from([0, 7, 7, 9]), 4, 9, out);
         assert.deepStrictEqual(Array.from(out.subarray(0, 5)), [0, 7, 7, 9, 9]);
+    });
+});
+
+describe('pair-sort capacity', () => {
+    it('reserves complete sorter workgroups when pair counts grow between views', async () => {
+        const { GpuSceneRasterizer } = await import('../src/lib/gpu/gpu-scene-rasterizer.js');
+        const stop = new Error('stop after checking sort allocation');
+        for (const granularity of [2048, 3840]) {
+            let allocatedGroups = 0;
+            let allocatedElements = 0;
+            const sorter = {
+                capacity: 0,
+                prepareIndirect: () => new Uint32Array([1, granularity, 0, 0]),
+                sort(_keys, count) {
+                    // Model the engine's allocation contract: changing capacity
+                    // within the same workgroup count does not resize buffers.
+                    const effective = Math.max(count, this.capacity);
+                    const groups = Math.ceil(effective / granularity);
+                    if (groups !== allocatedGroups) {
+                        allocatedGroups = groups;
+                        allocatedElements = effective;
+                    }
+                    assert.ok(count <= allocatedElements, `${granularity}: ${count} elements exceed ${allocatedElements} allocated`);
+                    throw stop;
+                }
+            };
+            const rasterizer = {
+                device: {}, radixSort: sorter,
+                ensurePairCapacity() {}, dispatch2D() {},
+                totalReadback: new Uint32Array(1),
+                totalPairsBuffer: { write() {} },
+                emitCompute: { setParameter() {} }
+            };
+            for (const count of [3800, 4097, 6000, 7681, 8000, 4000]) {
+                assert.throws(() => GpuSceneRasterizer.prototype.rasterizeCut.call(rasterizer, 0, 1, 0, count, 1, 1), err => err === stop);
+            }
+        }
     });
 });

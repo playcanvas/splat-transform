@@ -50,14 +50,18 @@ type RenderCamera = {
     height: number;
     /** Near clipping distance in world units. For pinhole, splats with `cz <= near` are culled; for equirect, splats with radial `r <= near`. */
     near: number;
+    /** Horizontal shift of the projected image in pixels. Pinhole only. */
+    offsetX?: number;
+    /** Vertical shift of the projected image in pixels. Pinhole only. */
+    offsetY?: number;
     /**
      * Camera-space Z of the focus plane in world units. Pinhole only;
-     * ignored for equirect. Optional — only meaningful when
-     * `apertureScale > 0`.
+     * ignored for equirect. Used by aperture sampling and by the
+     * covariance-dilation approximation when `apertureScale > 0`.
      */
     focusDistance?: number;
     /**
-     * DoF strength as a pixel-space scalar: the CoC radius in pixels
+     * Approximate DoF strength as a pixel-space scalar: Gaussian sigma in pixels
      * when `|1 − focusDistance/cz| = 1`. Pinhole only; ignored for
      * equirect. Default `0` disables defocus.
      */
@@ -82,6 +86,9 @@ type CameraBasis = {
     focalX: number;
     /** Vertical focal length in pixels. */
     focalY: number;
+    /** Projection shift in pixels, for off-axis pinhole views. */
+    offsetX?: number;
+    offsetY?: number;
 };
 
 const sub = (a: Vec3, b: Vec3) => new Vec3(a.x - b.x, a.y - b.y, a.z - b.z);
@@ -138,8 +145,47 @@ const buildCameraBasis = (camera: RenderCamera): CameraBasis => {
         down,
         forward,
         focalX,
-        focalY
+        focalY,
+        offsetX: camera.offsetX ?? 0,
+        offsetY: camera.offsetY ?? 0
     };
 };
 
-export { type Projection, type RenderCamera, type CameraBasis, buildCameraBasis };
+/**
+ * Sample a circular lens with parallel, off-axis pinhole views. Projection
+ * shifts keep every point on the focus plane at the same image position.
+ *
+ * @param camera - Pinhole camera with a positive focusDistance.
+ * @param radius - Lens radius in scene units.
+ * @param samples - Positive number of equally weighted aperture samples.
+ * @returns Views to composite separately and average in floating point.
+ * @ignore
+ */
+const buildApertureCameras = (camera: RenderCamera, radius: number, samples: number): RenderCamera[] => {
+    const basis = buildCameraBasis(camera);
+    const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+    const triple = samples > 1 && samples % 2 !== 0 ? 3 : 0;
+    return Array.from({ length: samples }, (_, i) => {
+        // Opposite pairs and an optional equilateral triple keep the lens
+        // centered. Each group samples the midpoint of its share of disk
+        // area, avoiding a sharp center contribution for odd counts > 1.
+        const pair = Math.floor((i - triple) / 2);
+        const area = i < triple ? 1.5 : triple + 2 * pair + 1;
+        const r = samples === 1 ? 0 : radius * Math.sqrt(area / samples);
+        const angle = i < triple ? i * 2 * Math.PI / 3 : pair * goldenAngle;
+        const sign = i < triple || (i - triple) % 2 === 0 ? 1 : -1;
+        const x = sign * r * Math.cos(angle);
+        const y = sign * r * Math.sin(angle);
+        const offset = basis.right.clone().mulScalar(x).add(basis.down.clone().mulScalar(y));
+        return {
+            ...camera,
+            position: camera.position.clone().add(offset),
+            target: camera.target.clone().add(offset),
+            offsetX: (camera.offsetX ?? 0) + basis.focalX * x / camera.focusDistance!,
+            offsetY: (camera.offsetY ?? 0) + basis.focalY * y / camera.focusDistance!,
+            apertureScale: 0
+        };
+    });
+};
+
+export { type Projection, type RenderCamera, type CameraBasis, buildCameraBasis, buildApertureCameras };

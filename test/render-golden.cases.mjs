@@ -44,13 +44,11 @@ const CASES = [
         goldenPath: 'fixtures/golden-render/mid.webp'
     },
     {
-        // 'tiny' scene + DoF. Exercises the DoF code paths end-to-end:
-        // CoC uniform plumbing, per-splat covariance dilation, energy-
-        // preserving alpha rescale, and default focus-distance derivation
+        // 'tiny' scene + DoF. Exercises aperture sampling, off-axis
+        // projection, float accumulation, and default focus distance
         // (look-at distance, since --focus-distance is omitted).
         // sensor-size scales f-stop into the unitless world the synthetic
-        // scene lives in so the blur is clearly visible (~3 px CoC across
-        // the grid's depth range).
+        // scene lives in so the blur is visible across the grid's depth.
         name: 'tiny-dof',
         args: [
             'test/fixtures/generator.mjs',
