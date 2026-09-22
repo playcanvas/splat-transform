@@ -23,11 +23,37 @@ describe('camera track up vectors', () => {
         close(track.poseAt(2).up, { x: 0, y: 0, z: 1 });
     });
 
-    it('frame list: rejects a malformed up', () => {
-        assert.throws(
-            () => loadCameraTrack({ frames: [{ position: [0, 0, 5], target: [0, 0, 0], up: [0, 1] }] }, 60),
-            /frames\[0\]\.up must be an array of three numbers/
-        );
+    it('frame list: normalizes ups on load so magnitude does not bias the lerp', () => {
+        const track = loadCameraTrack({
+            frames: [
+                { position: [0, 0, 5], target: [0, 0, 0], up: [0, 3, 0] },
+                { position: [0, 0, 5], target: [0, 0, 0], up: [0.5, 0, 0] }
+            ]
+        }, 60);
+        const s = Math.SQRT1_2;
+        close(track.poseAt(0).up, { x: 0, y: 1, z: 0 });
+        close(track.poseAt(0.5).up, { x: s, y: s, z: 0 });
+    });
+
+    it('frame list: rejects malformed and zero ups', () => {
+        const pose = up => ({ position: [0, 0, 5], target: [0, 0, 0], up });
+        assert.throws(() => loadCameraTrack({ frames: [pose([0, 1])] }, 60), /frames\[0\]\.up must be an array of three numbers/);
+        assert.throws(() => loadCameraTrack({ frames: [pose([0, 0, 0])] }, 60), /frames\[0\]\.up must not be a zero vector/);
+        assert.throws(() => loadCameraTrack({ frames: [pose(undefined)] }, 60, { x: 0, y: 0, z: 0 }), /default up must not be a zero vector/);
+    });
+
+    it('frame list: opposing ups roll through the right vector instead of collapsing', () => {
+        // Camera at +Z looking at the origin: forward is -Z, right = forward × up = +X for up +Y.
+        const pose = up => ({ position: [0, 0, 5], target: [0, 0, 0], up });
+        const track = loadCameraTrack({ frames: [pose([0, 1, 0]), pose([0, -3, 0])] }, 60);
+        close(track.poseAt(0.5).up, { x: 1, y: 0, z: 0 });
+        const s = Math.SQRT1_2;
+        close(track.poseAt(0.25).up, { x: s, y: s, z: 0 });
+        close(track.poseAt(0.75).up, { x: s, y: -s, z: 0 });
+        for (let t = 0; t <= 1; t += 1 / 16) {
+            const u = track.poseAt(t).up;
+            assert.ok(Math.abs(Math.hypot(u.x, u.y, u.z) - 1) < 1e-9, `up at ${t} is not unit length`);
+        }
     });
 
     it('editor document and viewer settings use the default up', () => {
