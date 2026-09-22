@@ -4,7 +4,7 @@
  *
  *  - SH0: the two read paths agree byte-for-byte — decode -> writeSog (DataTable
  *    shim) vs readPly -> writeSogSource (native) — proving the deterministic
- *    machinery (per-layer gather, Morton order, encoding, texel layout, meta).
+ *    machinery (single-pass gather, Morton order, encoding, texel layout, meta).
  *  - SH3: round-trips within tolerance — k-means clustering is non-deterministic
  *    across runs (random init), so the SH path is validated by decode + epsilon,
  *    the same way the existing SOG goldens are.
@@ -28,6 +28,7 @@ import { permuteSource } from '../src/lib/ops/index.js';
 import { decodePlyToDataTable, readPly } from '../src/lib/readers/read-ply.js';
 import { readSogSource } from '../src/lib/readers/read-sog.js';
 import { createChunkDataPool } from '../src/lib/chunk/index.js';
+import { writeCompressedPly } from '../src/lib/writers/write-compressed-ply.js';
 import { writeSog, writeSogSource } from '../src/lib/writers/write-sog.js';
 
 const sourceFromBytes = (bytes) => {
@@ -71,6 +72,70 @@ describe('writeSogSource: native SOG from a ChunkSource', () => {
         await writeSogSource(src, pool, { filename: 'out.sog', bundle: false, iterations: 5, logging: 'silent' }, nativeFs);
 
         assertFilesEqual(legacyFs, nativeFs);
+    });
+
+    it('reads a small interleaved PLY body once', async () => {
+        const plyBytes = encodePlyBinary(createTestDataTable(3000));
+        assert.ok(plyBytes.length > 128 * 1024, 'fixture must exceed the header probe');
+
+        const inner = await sourceFromBytes(plyBytes);
+        const ranges = [];
+        const trackingSource = {
+            size: inner.size,
+            seekable: inner.seekable,
+            read(start = 0, end = inner.size) {
+                ranges.push([start, end]);
+                return inner.read(start, end);
+            },
+            close() {
+                inner.close();
+            }
+        };
+
+        const pool = createChunkDataPool();
+        const src = await readPly(trackingSource, pool);
+        await writeSogSource(src, pool,
+            { filename: 'out.sog', bundle: false, iterations: 5, logging: 'silent' },
+            new MemoryFileSystem());
+        await src.close();
+
+        const bodyReads = ranges.filter(([start]) => start > 0);
+        assert.strictEqual(bodyReads.length, 1, `expected one PLY body read, got ${JSON.stringify(bodyReads)}`);
+        assert.strictEqual(bodyReads[0][1], plyBytes.length, 'body read must reach end of file');
+    });
+
+    it('does not re-read compressed PLY ranges for each SOG layer', async () => {
+        const dt = createTestDataTable(300, { includeSH: true, shBands: 3 });
+        dt.transform = Transform.PLY.clone();
+        const compressedFs = new MemoryFileSystem();
+        await writeCompressedPly({ filename: 'in.compressed.ply', dataTable: dt }, compressedFs);
+        const plyBytes = compressedFs.results.get('in.compressed.ply');
+
+        const inner = await sourceFromBytes(plyBytes);
+        const ranges = [];
+        const trackingSource = {
+            size: inner.size,
+            seekable: inner.seekable,
+            read(start = 0, end = inner.size) {
+                ranges.push([start, end]);
+                return inner.read(start, end);
+            },
+            close() {
+                inner.close();
+            }
+        };
+
+        const pool = createChunkDataPool();
+        const src = await readPly(trackingSource, pool);
+        await writeSogSource(src, pool,
+            { filename: 'out.sog', bundle: false, iterations: 5, logging: 'silent' },
+            new MemoryFileSystem());
+        await src.close();
+
+        const bodyReads = ranges.filter(([start]) => start > 0);
+        assert.strictEqual(bodyReads.length, 3, `expected bounds, vertex and SH reads, got ${JSON.stringify(bodyReads)}`);
+        assert.strictEqual(new Set(bodyReads.map(range => range.join(':'))).size, bodyReads.length,
+            `compressed PLY ranges must not be repeated: ${JSON.stringify(bodyReads)}`);
     });
 
     it('SH3 round-trips within tolerance (k-means is non-deterministic)', async () => {

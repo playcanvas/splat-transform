@@ -4,8 +4,6 @@ import { logWrittenFile } from './utils';
 import {
     createChunkDataPool,
     type ChunkDataPool,
-    type ChunkLayer,
-    type ReadRequest,
     type ChunkSource
 } from '../chunk';
 import { dataTableToChunkSource } from '../compat/data-table';
@@ -26,51 +24,84 @@ const logTransform = (value: number): number => {
     return Math.sign(value) * Math.log(Math.abs(value) + 1);
 };
 
-// Gather a layer's data as one interleaved Float32Array `[g0 words, g1 words, ...]`
-// (a contiguous copy per chunk — the layer is already packed).
-const gatherInterleaved = async (source: ChunkSource, pool: ChunkDataPool, layer: ChunkLayer): Promise<Float32Array> => {
-    const { meta } = source;
-    const n = meta.numGaussians;
-    const layout = meta.layouts[layer]!;
-    const sw = layout.stride >>> 2;
-    const out = new Float32Array(n * sw);
-    const numChunks = meta.numChunks[0] ?? 0;
-    let base = 0;
-    for (let k = 0; k < numChunks; k++) {
-        const count = Math.min(meta.chunkSize, n - base);
-        const cd = pool.acquire(layer, layout, count);
-        await source.read({ chunkIndex: k, [layer]: cd } as ReadRequest);
-        out.set(new Float32Array(cd.data, 0, count * sw), base * sw);
-        cd.release();
-        base += count;
-    }
-    return out;
+type SogLayers = {
+    /** Interleaved xyz, for the Morton sort and the means textures. */
+    position: Float32Array;
+    /** One column per `GEOMETRIC_COLS` entry, for quantize1d and the quaternion pack. */
+    geometric: Float32Array[];
+    /** `f_dc_0..2` columns, for quantize1d. */
+    colorDc: Float32Array[];
+    /** Interleaved `f_rest_*`, for k-means (empty at 0 bands). */
+    shRest: Float32Array;
 };
 
-// Gather a layer into per-column Float32Arrays, in the layer's canonical word
-// order (so `names[c]` maps to source word `c`). Used where downstream helpers
-// (quantize1d / kmeans) want individual columns.
-const gatherColumns = async (source: ChunkSource, pool: ChunkDataPool, layer: ChunkLayer, names: string[]): Promise<Float32Array[]> => {
+// Gather every SOG input layer with one source.read() per chunk, so an
+// interleaved file source fetches and scans each record once rather than once
+// per layer. The whole scene is resident afterwards: fine for single SOG
+// output, whose practical ceiling is ~1-2M gaussians (larger scenes are written
+// as many small units by the LOD writer), and it lets every texture pipeline
+// start immediately instead of waiting on a per-layer read.
+const gatherSogLayers = async (source: ChunkSource, pool: ChunkDataPool): Promise<SogLayers> => {
     const { meta } = source;
     const n = meta.numGaussians;
-    const layout = meta.layouts[layer]!;
-    const sw = layout.stride >>> 2;
-    const cols = names.map(() => new Float32Array(n));
-    const numChunks = meta.numChunks[0] ?? 0;
+    const positionLayout = meta.layouts.position!;
+    const geometricLayout = meta.layouts.geometric!;
+    const colorLayout = meta.layouts.color!;
+    const positionStride = positionLayout.stride >>> 2;
+    const geometricStride = geometricLayout.stride >>> 2;
+    const colorStride = colorLayout.stride >>> 2;
+    const restCount = [0, 9, 24, 45][meta.shBands];
+
+    const position = new Float32Array(n * positionStride);
+    const geometric = GEOMETRIC_COLS.map(() => new Float32Array(n));
+    const colorDc = Array.from({ length: 3 }, () => new Float32Array(n));
+    const shRest = new Float32Array(n * restCount);
+
     let base = 0;
+    const numChunks = meta.numChunks[0] ?? 0;
     for (let k = 0; k < numChunks; k++) {
         const count = Math.min(meta.chunkSize, n - base);
-        const cd = pool.acquire(layer, layout, count);
-        await source.read({ chunkIndex: k, [layer]: cd } as ReadRequest);
-        const f = new Float32Array(cd.data, 0, count * sw);
-        for (let c = 0; c < names.length; c++) {
-            const col = cols[c];
-            for (let i = 0; i < count; i++) col[base + i] = f[i * sw + c];
+        const positionData = pool.acquire('position', positionLayout, count);
+        const geometricData = pool.acquire('geometric', geometricLayout, count);
+        const colorData = pool.acquire('color', colorLayout, count);
+        try {
+            await source.read({
+                chunkIndex: k,
+                position: positionData,
+                geometric: geometricData,
+                color: colorData
+            });
+
+            const pos = new Float32Array(positionData.data, 0, count * positionStride);
+            position.set(pos, base * positionStride);
+
+            const geo = new Float32Array(geometricData.data, 0, count * geometricStride);
+            for (let c = 0; c < geometric.length; c++) {
+                const column = geometric[c];
+                for (let i = 0; i < count; i++) column[base + i] = geo[i * geometricStride + c];
+            }
+
+            // f_rest occupies words [3, 3+restCount) of each record, so it copies
+            // out as one block per gaussian - no de/re-interleave.
+            const color = new Float32Array(colorData.data, 0, count * colorStride);
+            for (let i = 0; i < count; i++) {
+                const offset = i * colorStride;
+                colorDc[0][base + i] = color[offset];
+                colorDc[1][base + i] = color[offset + 1];
+                colorDc[2][base + i] = color[offset + 2];
+                if (restCount > 0) {
+                    shRest.set(color.subarray(offset + 3, offset + 3 + restCount), (base + i) * restCount);
+                }
+            }
+        } finally {
+            positionData.release();
+            geometricData.release();
+            colorData.release();
         }
-        cd.release();
         base += count;
     }
-    return cols;
+
+    return { position, geometric, colorDc, shRest };
 };
 
 type WriteSogSourceOptions = {
@@ -93,10 +124,20 @@ type WriteSogSourceOptions = {
 type ShNMeta = { count: number; bands: number; codebook: number[]; files: string[] };
 
 /**
- * Native SOG writer: encodes a {@link ChunkSource} to the PlayCanvas SOG format,
- * reading the source one layer at a time. Each layer is gathered, consumed, and
- * **released before the next is loaded** (each phase below is its own scope), so
- * peak resident scene data is the largest single layer — not the whole scene.
+ * Native SOG writer: encodes a {@link ChunkSource} to the PlayCanvas SOG format.
+ *
+ * The source is gathered once, every layer in one read per chunk, so an
+ * interleaved file input is scanned a single time. The gathered scene stays
+ * resident for the duration of the write — position, geometric and color
+ * together — which is the right trade for single SOG output (bounded by the
+ * ~1-2M gaussian practical ceiling below; larger scenes go through the LOD
+ * writer as many small units).
+ *
+ * The texture pipelines are independent, so the worker-side jobs (scale and
+ * color quantization, then SH k-means) are started before the main thread does
+ * its own Morton sort and texel packing, and WebP encodes are queued as each
+ * texture is ready. The pool is busy from the outset and the wall-clock is the
+ * longest pipeline rather than the sum.
  *
  * Output is equivalent to the legacy DataTable `writeSog` (same Morton order,
  * quantization/clustering, texel encoding), and byte-identical for the per-file
@@ -105,7 +146,7 @@ type ShNMeta = { count: number; bands: number; codebook: number[]; files: string
  * `runEncodeWebp` consume the gathered layers directly.
  *
  * @param source - The source to encode (its pending transform is baked to PLY space).
- * @param pool - Pool for the temporary per-layer read buffers.
+ * @param pool - Pool for the temporary per-chunk read buffers.
  * @param options - Output options.
  * @param fs - File system to write through.
  * @ignore
@@ -154,6 +195,8 @@ const writeSogSource = async (
         );
     }
 
+    const layers = await gatherSogLayers(baked, pool);
+
     const bundleWriter = bundle ? await fs.createWriter(outputFilename) : null;
     const zipFs = bundleWriter ? new ZipFileSystem(bundleWriter) : null;
     const outputFs = zipFs || fs;
@@ -199,11 +242,32 @@ const writeSogSource = async (
     if (!externalOrder) for (let i = 0; i < numRows; i++) indices[i] = i;
 
     try {
-        // ---- Phase 1: positions — Morton order (unless a caller-supplied order
-        // is used) + means. `pos` is released when this scope returns (only
-        // `indices` + the small means meta escape).
-        const meansMeta = await (async () => {
-            const pos = await gatherInterleaved(baked, pool, 'position');
+        // ---- Worker-side jobs first, so the pool is busy while the main thread
+        // runs its own passes below. Quantize-bearing textures go first (each
+        // is a full-column pass); SH k-means mostly waits on the GPU.
+        const [r0, r1, r2, r3, s0, s1, s2, op] = layers.geometric;
+        const [fdc0, fdc1, fdc2] = layers.colorDc;
+        const scalesQuant = runQuantize1dColumns([
+            { name: 'scale_0', data: s0 }, { name: 'scale_1', data: s1 }, { name: 'scale_2', data: s2 }
+        ]);
+        const colorsQuant = runQuantize1dColumns([
+            { name: 'f_dc_0', data: fdc0 }, { name: 'f_dc_1', data: fdc1 }, { name: 'f_dc_2', data: fdc2 }
+        ]);
+        const restCount = [0, 9, 24, 45][shBands];
+        const paletteSize = Math.min(64, 2 ** Math.floor(Math.log2(numRows / 1024))) * 1024;
+        const shCluster = shBands > 0 ? (async () => {
+            const gpuDevice = createDevice ? await createDevice() : undefined;
+            return kmeansInterleaved(layers.shRest, numRows, restCount, paletteSize, iterations, gpuDevice);
+        })() : null;
+        // If the main thread throws below, these settle later; mark their
+        // rejections handled so the original error propagates instead of an
+        // unhandled rejection.
+        [scalesQuant, colorsQuant, shCluster].forEach(p => p?.catch(() => {}));
+
+        // ---- means: Morton order (unless a caller-supplied order is used) +
+        // log-encoded positions split into low/high bytes.
+        const meansMeta = (() => {
+            const pos = layers.position;
             if (!externalOrder) sortMortonInterleaved(pos, indices);
 
             const mm = [[Infinity, -Infinity], [Infinity, -Infinity], [Infinity, -Infinity]];
@@ -236,12 +300,8 @@ const writeSogSource = async (
             return { mins: minMax.map(v => v[0]), maxs: minMax.map(v => v[1]) };
         })();
 
-        // ---- Phase 2: geometric — quaternions + scales. The 32 B/gaussian layer
-        // is released on return; only the 1 B/gaussian `opacityData` escapes.
-        const { scalesCodebook, opacityData } = await (async () => {
-            const geom = await gatherColumns(baked, pool, 'geometric', GEOMETRIC_COLS);
-            const [r0, r1, r2, r3, s0, s1, s2, op] = geom;
-
+        // ---- quats: largest-3 packed quaternions.
+        {
             const quats = new Uint8Array(width * height * channels);
             const q = [0, 0, 0, 0];
             const sqrt2 = Math.sqrt(2);
@@ -266,116 +326,71 @@ const writeSogSource = async (
                 quats[ti * 4 + 3] = 252 + maxComp;
             }
             pending.push(writeWebp('quats.webp', quats));
+        }
 
-            const sd = await runQuantize1dColumns([
-                { name: 'scale_0', data: s0 }, { name: 'scale_1', data: s1 }, { name: 'scale_2', data: s2 }
-            ]);
-            pending.push(writeLabels('scales.webp', sd.labels.map(c => c.data), indices));
+        // ---- scales: quantized log-scales.
+        const sd = await scalesQuant;
+        pending.push(writeLabels('scales.webp', sd.labels.map(c => c.data), indices));
+        const scalesCodebook = Array.from(sd.centroids);
 
-            const od = new Uint8Array(numRows);
+        // ---- sh0: quantized DC + sigmoid(opacity).
+        const opacityData = new Uint8Array(numRows);
+        for (let i = 0; i < numRows; ++i) {
+            opacityData[i] = Math.max(0, Math.min(255, sigmoid(op[i]) * 255));
+        }
+        const cd = await colorsQuant;
+        pending.push(writeLabels('sh0.webp', [...cd.labels.map(c => c.data), opacityData], indices));
+        const colorsCodebook = Array.from(cd.centroids);
+
+        // ---- shN: k-means palette + per-gaussian labels.
+        let shN: ShNMeta | null = null;
+        if (shCluster) {
+            const shCoeffs = [0, 3, 8, 15][shBands];
+            const { centroids, labels } = await shCluster;
+            const numCentroids = centroids.length / restCount;
+
+            // quantize the centroid palette to a uint8 codebook. De-interleave
+            // the (small) centroids into restCount columns for the quantizer.
+            const cbCols: { name: string, data: Float32Array }[] = [];
+            for (let j = 0; j < restCount; ++j) {
+                const col = new Float32Array(numCentroids);
+                for (let i = 0; i < numCentroids; ++i) col[i] = centroids[i * restCount + j];
+                cbCols.push({ name: shRestNames[j], data: col });
+            }
+            const codebookPromise = runQuantize1dColumns(cbCols);
+
+            const labelsBuf = new Uint8Array(width * height * channels);
             for (let i = 0; i < numRows; ++i) {
-                od[i] = Math.max(0, Math.min(255, sigmoid(op[i]) * 255));
-            }
-            return { scalesCodebook: Array.from(sd.centroids), opacityData: od };
-        })();
-
-        // ---- Phase 3: color — sh0 (DC + opacity) and SH rest. The color layer
-        // is released on return.
-        const { colorsCodebook, shN } = await (async (): Promise<{ colorsCodebook: number[]; shN: ShNMeta | null }> => {
-            const restCount = [0, 9, 24, 45][shBands];
-
-            // Gather the color layer once, splitting it into the 3 DC columns
-            // (for sh0 quantization) and the SH-rest as a contiguous interleaved
-            // buffer (for k-means). f_rest occupies words [3, 3+restCount) of each
-            // record, so it copies out as one block per gaussian — no de/re-interleave.
-            const layout = meta.layouts.color!;
-            const sw = layout.stride >>> 2;
-            const fdc0 = new Float32Array(numRows);
-            const fdc1 = new Float32Array(numRows);
-            const fdc2 = new Float32Array(numRows);
-            const shRest = restCount > 0 ? new Float32Array(numRows * restCount) : new Float32Array(0);
-            {
-                const numChunks = meta.numChunks[0] ?? 0;
-                let base = 0;
-                for (let c = 0; c < numChunks; c++) {
-                    const count = Math.min(meta.chunkSize, numRows - base);
-                    const cdBuf = pool.acquire('color', layout, count);
-                    await baked.read({ chunkIndex: c, color: cdBuf } as ReadRequest);
-                    const f = new Float32Array(cdBuf.data, 0, count * sw);
-                    for (let i = 0; i < count; i++) {
-                        const o = i * sw;
-                        fdc0[base + i] = f[o];
-                        fdc1[base + i] = f[o + 1];
-                        fdc2[base + i] = f[o + 2];
-                    }
-                    if (restCount > 0) {
-                        for (let i = 0; i < count; i++) {
-                            shRest.set(f.subarray(i * sw + 3, i * sw + 3 + restCount), (base + i) * restCount);
-                        }
-                    }
-                    cdBuf.release();
-                    base += count;
-                }
+                const label = labels[indices[i]];
+                const ti = i;
+                labelsBuf[ti * 4 + 0] = 0xff & label;
+                labelsBuf[ti * 4 + 1] = 0xff & (label >> 8);
+                labelsBuf[ti * 4 + 2] = 0;
+                labelsBuf[ti * 4 + 3] = 0xff;
             }
 
-            const cd = await runQuantize1dColumns([
-                { name: 'f_dc_0', data: fdc0 }, { name: 'f_dc_1', data: fdc1 }, { name: 'f_dc_2', data: fdc2 }
-            ]);
-            pending.push(writeLabels('sh0.webp', [...cd.labels.map(c => c.data), opacityData], indices));
-            const codebook = Array.from(cd.centroids);
-
-            let shNLocal: ShNMeta | null = null;
-            if (shBands > 0) {
-                const shCoeffs = [0, 3, 8, 15][shBands];
-                const paletteSize = Math.min(64, 2 ** Math.floor(Math.log2(numRows / 1024))) * 1024;
-                const gpuDevice = createDevice ? await createDevice() : undefined;
-                const { centroids, labels } = await kmeansInterleaved(shRest, numRows, restCount, paletteSize, iterations, gpuDevice);
-                const numCentroids = centroids.length / restCount;
-
-                // quantize the centroid palette to a uint8 codebook. De-interleave
-                // the (small) centroids into restCount columns for the quantizer.
-                const cbCols: { name: string, data: Float32Array }[] = [];
-                for (let j = 0; j < restCount; ++j) {
-                    const col = new Float32Array(numCentroids);
-                    for (let i = 0; i < numCentroids; ++i) col[i] = centroids[i * restCount + j];
-                    cbCols.push({ name: shRestNames[j], data: col });
+            const cb = await codebookPromise;
+            const cbLabels = cb.labels.map(c => c.data); // restCount columns, length numCentroids
+            const centroidsBuf = new Uint8Array(64 * shCoeffs * Math.ceil(numCentroids / 64) * channels);
+            for (let i = 0; i < numCentroids; ++i) {
+                for (let j = 0; j < shCoeffs; ++j) {
+                    centroidsBuf[i * shCoeffs * 4 + j * 4 + 0] = cbLabels[shCoeffs * 0 + j][i];
+                    centroidsBuf[i * shCoeffs * 4 + j * 4 + 1] = cbLabels[shCoeffs * 1 + j][i];
+                    centroidsBuf[i * shCoeffs * 4 + j * 4 + 2] = cbLabels[shCoeffs * 2 + j][i];
+                    centroidsBuf[i * shCoeffs * 4 + j * 4 + 3] = 0xff;
                 }
-                const codebookPromise = runQuantize1dColumns(cbCols);
-
-                const labelsBuf = new Uint8Array(width * height * channels);
-                for (let i = 0; i < numRows; ++i) {
-                    const label = labels[indices[i]];
-                    const ti = i;
-                    labelsBuf[ti * 4 + 0] = 0xff & label;
-                    labelsBuf[ti * 4 + 1] = 0xff & (label >> 8);
-                    labelsBuf[ti * 4 + 2] = 0;
-                    labelsBuf[ti * 4 + 3] = 0xff;
-                }
-
-                const cb = await codebookPromise;
-                const cbLabels = cb.labels.map(c => c.data); // restCount columns, length numCentroids
-                const centroidsBuf = new Uint8Array(64 * shCoeffs * Math.ceil(numCentroids / 64) * channels);
-                for (let i = 0; i < numCentroids; ++i) {
-                    for (let j = 0; j < shCoeffs; ++j) {
-                        centroidsBuf[i * shCoeffs * 4 + j * 4 + 0] = cbLabels[shCoeffs * 0 + j][i];
-                        centroidsBuf[i * shCoeffs * 4 + j * 4 + 1] = cbLabels[shCoeffs * 1 + j][i];
-                        centroidsBuf[i * shCoeffs * 4 + j * 4 + 2] = cbLabels[shCoeffs * 2 + j][i];
-                        centroidsBuf[i * shCoeffs * 4 + j * 4 + 3] = 0xff;
-                    }
-                }
-                pending.push(
-                    writeWebp('shN_centroids.webp', centroidsBuf, 64 * shCoeffs, Math.ceil(numCentroids / 64)),
-                    writeWebp('shN_labels.webp', labelsBuf)
-                );
-                shNLocal = {
-                    count: paletteSize,
-                    bands: shBands,
-                    codebook: Array.from(cb.centroids),
-                    files: ['shN_centroids.webp', 'shN_labels.webp']
-                };
             }
-            return { colorsCodebook: codebook, shN: shNLocal };
-        })();
+            pending.push(
+                writeWebp('shN_centroids.webp', centroidsBuf, 64 * shCoeffs, Math.ceil(numCentroids / 64)),
+                writeWebp('shN_labels.webp', labelsBuf)
+            );
+            shN = {
+                count: paletteSize,
+                bands: shBands,
+                codebook: Array.from(cb.centroids),
+                files: ['shN_centroids.webp', 'shN_labels.webp']
+            };
+        }
 
         await Promise.all(pending);
 

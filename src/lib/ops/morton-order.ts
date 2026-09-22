@@ -69,22 +69,45 @@ const sortMortonStrided = (
             morton[i] = encodeMorton3(ix, iy, iz);
         }
 
-        // sort indices by morton code
-        const order = new Uint32Array(indices.length);
-        for (let i = 0; i < order.length; i++) {
-            order[i] = i;
+        // Sort indices by morton code: LSD radix, three stable passes of 10
+        // bits over the 30-bit key. Stable, so equal codes keep their input
+        // order (matching a stable comparison sort), and linear rather than
+        // n log n through a comparator callback. Passes ping-pong between
+        // `indices`/`morton` and the scratch pair; three passes end in scratch,
+        // so the result is copied back into the caller's `indices`.
+        const n = indices.length;
+        const scratchIndices = new Uint32Array(n);
+        const scratchMorton = new Uint32Array(n);
+        const counts = new Uint32Array(1024);
+        let srcIdx: Uint32Array = indices, srcKey: Uint32Array = morton;
+        let dstIdx: Uint32Array = scratchIndices, dstKey: Uint32Array = scratchMorton;
+        for (let shift = 0; shift < 30; shift += 10) {
+            counts.fill(0);
+            for (let i = 0; i < n; ++i) {
+                counts[(srcKey[i] >>> shift) & 1023]++;
+            }
+            // exclusive prefix sum -> bucket start offsets
+            let sum = 0;
+            for (let d = 0; d < 1024; ++d) {
+                const c = counts[d];
+                counts[d] = sum;
+                sum += c;
+            }
+            for (let i = 0; i < n; ++i) {
+                const o = counts[(srcKey[i] >>> shift) & 1023]++;
+                dstIdx[o] = srcIdx[i];
+                dstKey[o] = srcKey[i];
+            }
+            [srcIdx, dstIdx] = [dstIdx, srcIdx];
+            [srcKey, dstKey] = [dstKey, srcKey];
         }
-        order.sort((a, b) => morton[a] - morton[b]);
-
-        const tmpIndices = indices.slice();
-        for (let i = 0; i < indices.length; ++i) {
-            indices[i] = tmpIndices[order[i]];
-        }
+        indices.set(srcIdx);
+        const sortedMorton = srcKey;
 
         // recursively refine the largest equal-code buckets
         let start = 0, end = 1;
-        while (start < indices.length) {
-            while (end < indices.length && morton[order[end]] === morton[order[start]]) {
+        while (start < n) {
+            while (end < n && sortedMorton[end] === sortedMorton[start]) {
                 ++end;
             }
             if (end - start > 256) {
