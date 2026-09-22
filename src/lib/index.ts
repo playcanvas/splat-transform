@@ -12,7 +12,7 @@ export type {
 } from './chunk';
 
 // Structural combinators (lazy views over sources)
-export { bakeTransform, concatSource, selectLod, stackLods } from './ops';
+export { bakeTransform, concatSource, selectLod, stackLods, sortMortonColumns, sortMortonInterleaved } from './ops';
 
 // How a scene was trained (carried on `ChunkSourceMetadata.model`). The per-format
 // spellings of the tag live with their reader/writer.
