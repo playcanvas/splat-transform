@@ -4,7 +4,7 @@
  *
  *  - SH0: the two read paths agree byte-for-byte — decode -> writeSog (DataTable
  *    shim) vs readPly -> writeSogSource (native) — proving the deterministic
- *    machinery (per-layer gather, Morton order, encoding, texel layout, meta).
+ *    machinery (single-pass gather, Morton order, encoding, texel layout, meta).
  *  - SH3: round-trips within tolerance — k-means clustering is non-deterministic
  *    across runs (random init), so the SH path is validated by decode + epsilon,
  *    the same way the existing SOG goldens are.
