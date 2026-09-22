@@ -40,6 +40,13 @@ const DEFAULT_MEMORY_BUDGET = 48 * 2 ** 30;
 /** Conservative host bytes per core row for two overlapping core+halo views. */
 const MULTI_BLOCK_BYTES_PER_CORE = 1024;
 
+/**
+ * Resident block plans per input gaussian: 12 B per planned commit, and the
+ * planner records every legal commit — up to 3 per 4 members at MAX_GROUP 4,
+ * measured ~0.72 N — alive from planning through the end of the merge stream.
+ */
+const PLAN_BYTES_PER_GAUSSIAN = 9;
+
 // Per-gaussian residency of re-costed selection beyond the base state: splat
 // cache (16 f32) + neighbour ids (k u32) + integer structure (union-find,
 // chains, seq/round bookkeeping: 8×u32) + heap (5 arrays × 1.25N ≈ 25 B).
@@ -93,7 +100,10 @@ const chooseBlockSize = (
     device?: GraphicsDevice
 ): number => {
     const residentIndex = n * 16;
-    const available = Math.max(0, budget - residentInputBytes - residentIndex - outputPositionBytes);
+    const available = Math.max(
+        0,
+        budget - residentInputBytes - residentIndex - n * PLAN_BYTES_PER_GAUSSIAN - outputPositionBytes
+    );
     let blockSize = Math.min(BLOCK_SIZE, Math.max(1 << 16, Math.floor(available / MULTI_BLOCK_BYTES_PER_CORE)));
     const limits = (device as unknown as {
         limits?: {
@@ -501,12 +511,14 @@ const decimateSource = async (
             const producer = createBlockProducerSource(outMeta, () => createStream(n => mergeBar.tick(n)));
 
             // Intermediate generation: materialize (RAM when comfortably within
-            // budget, else temp PLY spill), then advance the loop.
+            // budget, else temp PLY spill), then advance the loop. This
+            // generation's block plans stay resident while it materializes.
             const estBytes = outCount * (12 + 32 + colorDim * 4 + otherStride);
+            const planBytes = plans ? N * PLAN_BYTES_PER_GAUSSIAN : 0;
             let nextSrc: ChunkSource;
             let disposeNext: (() => Promise<void>) | null = null;
 
-            if (estBytes <= budget / 4) {
+            if (estBytes + planBytes <= budget / 4) {
                 nextSrc = await compact(producer, pool);
                 residentInputBytes = estBytes;
             } else {
