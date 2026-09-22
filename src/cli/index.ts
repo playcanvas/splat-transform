@@ -70,7 +70,7 @@ interface CliOptions extends LibOptions {
     noTty: boolean | undefined;
     listGpus: boolean;
     deviceIdx: number;  // -1 = auto, -2 = CPU, 0+ = GPU index
-    scratchDir: string | undefined;  // decimation spill location (default: output directory)
+    scratchDir: string | undefined;  // decimation intermediate location (explicit only, never defaulted)
     memoryBudgetBytes: number;  // decimation residency policy ceiling (not an allocation, not user-facing)
 }
 
@@ -864,8 +864,8 @@ ACTIONS (executed in order; can be repeated)
         --decimate-adaptive <n|n%>          Simplify, allocating removal by local error (adaptive).
                                               Much better on mixed-scale content such as skies.
                                               Either must be the final action, with a .ply output
-        --scratch-dir      <path>           Directory for decimation spill files (deep targets on huge
-                                              scenes). Default: the output file's directory
+        --scratch-dir      <path>           Directory for intermediate levels when a deep decimation
+                                              target exceeds memory. Nothing is written without it
     -F, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel. Default: 0.05,0.1,0.004
     -C, --filter-cluster   [res,op,min]     Keep only the connected cluster at --seed-pos. Default: 1.0,0.999,0.1
     -p, --params           <key=val,...>    Pass parameters to .mjs generator script
@@ -1352,12 +1352,14 @@ const main = async () => {
                 if (keepCount < 1) {
                     failExit(`--decimate target resolves to ${keepCount} gaussians; must keep at least 1`);
                 }
-                const spill = {
+                // Explicit only: a deep target that exceeds the memory budget fails
+                // rather than writing intermediates somewhere the user did not name.
+                const spill = options.scratchDir ? {
                     writeFs: new NodeFileSystem(),
                     readFs: new NodeReadFileSystem(),
-                    scratchDir: options.scratchDir ?? dirname(outputFilename),
+                    scratchDir: options.scratchDir,
                     remove: (path: string) => unlink(path)
-                };
+                } : undefined;
                 combined = decimateAction.adaptive ?
                     await decimateSourceAdaptive(combined, pool, {
                         targetCount: keepCount,

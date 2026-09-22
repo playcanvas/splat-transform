@@ -1,13 +1,9 @@
 import { join } from 'pathe';
 import { type GraphicsDevice } from 'playcanvas';
 
-import {
-    allocatePlanPrefixes,
-    storeBlockPlan,
-    type StoredBlockPlan
-} from './block-allocation';
+import { allocatePlanPrefixes } from './block-allocation';
 import { blockPlanMergeStream } from './block-merge-stream';
-import { planBlockMerges } from './block-plan';
+import { planBlockMerges, type BlockPlan } from './block-plan';
 import { prepareGpuBlock, type PreparedBlock } from './block-prepare';
 import { createBlockProducerSource, type DestBuffers } from './block-producer';
 import { mergeStream } from './merge-stream';
@@ -23,7 +19,7 @@ import {
 } from '../chunk';
 import { type ReadFileSystem } from '../io/read';
 import { type FileSystem } from '../io/write';
-import { bakeTransform, permuteSource } from '../ops';
+import { bakeTransform } from '../ops';
 import { readPly } from '../readers/read-ply';
 import { type DeviceCreator } from '../types';
 import { fmtBytes, fmtCount, logger, Transform } from '../utils';
@@ -43,6 +39,13 @@ const DEFAULT_MEMORY_BUDGET = 48 * 2 ** 30;
 
 /** Conservative host bytes per core row for two overlapping core+halo views. */
 const MULTI_BLOCK_BYTES_PER_CORE = 1024;
+
+/**
+ * Resident block plans per input gaussian: 12 B per planned commit, and the
+ * planner records every legal commit — up to 3 per 4 members at MAX_GROUP 4,
+ * measured ~0.72 N — alive from planning through the end of the merge stream.
+ */
+const PLAN_BYTES_PER_GAUSSIAN = 9;
 
 // Per-gaussian residency of re-costed selection beyond the base state: splat
 // cache (16 f32) + neighbour ids (k u32) + integer structure (union-find,
@@ -97,7 +100,10 @@ const chooseBlockSize = (
     device?: GraphicsDevice
 ): number => {
     const residentIndex = n * 16;
-    const available = Math.max(0, budget - residentInputBytes - residentIndex - outputPositionBytes);
+    const available = Math.max(
+        0,
+        budget - residentInputBytes - residentIndex - n * PLAN_BYTES_PER_GAUSSIAN - outputPositionBytes
+    );
     let blockSize = Math.min(BLOCK_SIZE, Math.max(1 << 16, Math.floor(available / MULTI_BLOCK_BYTES_PER_CORE)));
     const limits = (device as unknown as {
         limits?: {
@@ -231,72 +237,17 @@ const decimateSource = async (
             }
 
             const partSub = logger.group('Partitioning');
-            let partition = kdPartition(positions, blockSize, generation);
-            let { order, blocks } = partition;
+            const partition = kdPartition(positions, blockSize, generation);
+            const { order, blocks } = partition;
             partSub.end();
 
             if (generation === 1 && N >= COHERENCE_MIN_N) {
                 const runs = blocks.map(b => coherenceRuns(order, b.start, b.end, COHERENCE_GAP_ROWS)).sort((a, b) => a - b);
                 const median = runs[runs.length >> 1] ?? 0;
                 if (median > INCOHERENT_RUNS_PER_BLOCK) {
-                    if (blocks.length > 1) {
-                        if (!opts.spill) {
-                            throw new Error(
-                                'multi-block adaptive decimation needs scratch storage to stage spatially incoherent input; ' +
-                            'provide opts.spill / --scratch-dir'
-                            );
-                        }
-                        const rowBytes = 12 + 32 + colorDim * 4 + otherStride;
-                        logger.info(
-                            'spatially incoherent input: staging one KD-ordered PLY ' +
-                        `(estimated ${fmtBytes(N * rowBytes)})`
-                        );
-                        const spill = opts.spill;
-                        const filename = join(
-                            spill.scratchDir,
-                            `.decimate-stage-${Date.now().toString(36)}.tmp.ply`
-                        );
-                        const stagedView = permuteSource(src, order);
-                        let plySrc: ChunkSource;
-                        try {
-                            await writePlyStreaming(stagedView, pool, { filename }, spill.writeFs);
-                            const readSource = await spill.readFs.createSource(filename);
-                            plySrc = await readPly(readSource, pool);
-                        } catch (err) {
-                            try {
-                                await spill.remove?.(filename);
-                            } catch {
-                            // Preserve the staging failure.
-                            }
-                            throw err;
-                        }
-
-                        const reordered: ResidentPositions = {
-                            x: new Float32Array(N),
-                            y: new Float32Array(N),
-                            z: new Float32Array(N)
-                        };
-                        for (let i = 0; i < N; i++) {
-                            const g = order[i];
-                            reordered.x[i] = positions.x[g];
-                            reordered.y[i] = positions.y[g];
-                            reordered.z[i] = positions.z[g];
-                        }
-
-                        await src.close();
-                        await disposeCurrentInput?.();
-                        src = plySrc;
-                        positions = reordered;
-                        disposeCurrentInput = async () => {
-                            await spill.remove?.(filename);
-                        };
-                        partition = kdPartition(positions, blockSize, generation);
-                        ({ order, blocks } = partition);
-                    } else {
-                        logger.warn(
-                            'input is spatially incoherent (scattered gathers expected); run a one-time --morton-order prepass for much faster IO'
-                        );
-                    }
+                    logger.warn(
+                        'input is spatially incoherent (scattered gathers expected); run a one-time --morton-order prepass for much faster IO'
+                    );
                 }
             }
 
@@ -310,7 +261,7 @@ const decimateSource = async (
             const needed = N - generationTarget;
             const multiBlock = blocks.length > 1;
             let selection: SelectionResult | undefined;
-            let storedPlans: StoredBlockPlan[] | undefined;
+            let plans: BlockPlan[] | undefined;
             let planPrefixes: Uint32Array | undefined;
             let removed: number;
 
@@ -321,22 +272,9 @@ const decimateSource = async (
                     `${fmtCount(blockSize)}-splat cores); provide a device, or use --decimate`
                     );
                 }
-                if (!opts.spill) {
-                    throw new Error(
-                        'multi-block adaptive decimation needs scratch storage for merge plans ' +
-                    `(approximately ${fmtBytes(N * 12)} this generation); provide opts.spill / --scratch-dir`
-                    );
-                }
-                if (generation === 1) {
-                    const rowBytes = 12 + 32 + colorDim * 4 + otherStride;
-                    logger.info(
-                        `decimate scratch estimate: staging up to ${fmtBytes(N * rowBytes)}; ` +
-                    `merge plans up to ${fmtBytes(N * 12)} per generation`
-                    );
-                }
 
                 const planBar = logger.bar('planning local merges', N);
-                storedPlans = new Array(blocks.length);
+                plans = new Array(blocks.length);
                 let cappedHalos = 0;
                 let frozen = 0;
                 let unfrozen = 0;
@@ -392,11 +330,11 @@ const decimateSource = async (
                         reverseInvalidations += plan.diagnostics!.reverseInvalidations;
                         heapPops += plan.diagnostics!.heapPops;
                         staleHeapPops += plan.diagnostics!.staleHeapPops;
-                        storedPlans[bi] = await storeBlockPlan(opts.spill, generation, bi, plan);
+                        plans[bi] = plan;
                         planBar.tick(prepared.ownedCount);
                     }
                     const allocationStarted = Date.now();
-                    const allocation = await allocatePlanPrefixes(storedPlans, opts.spill, needed);
+                    const allocation = allocatePlanPrefixes(plans, needed);
                     allocationMs = Date.now() - allocationStarted;
                     planPrefixes = allocation.prefixes;
                     removed = allocation.removed;
@@ -407,11 +345,6 @@ const decimateSource = async (
                         } catch {
                         // Preserve the active planning failure.
                         }
-                    }
-                    try {
-                        await Promise.all(storedPlans.filter(Boolean).map(plan => opts.spill!.remove?.(plan.path)));
-                    } catch {
-                        // Preserve the planning failure.
                     }
                     throw err;
                 } finally {
@@ -460,15 +393,7 @@ const decimateSource = async (
                 removed = selection.removed;
             }
 
-            let plansDisposed = false;
-            const disposePlans = async (): Promise<void> => {
-                if (plansDisposed || !storedPlans) return;
-                plansDisposed = true;
-                await Promise.all(storedPlans.map(plan => opts.spill?.remove?.(plan.path)));
-            };
-
             if (removed === 0) {
-                await disposePlans();
                 if (multiBlock && boundaryRetries < 8) {
                     boundaryRetries++;
                     logger.warn(
@@ -490,7 +415,6 @@ const decimateSource = async (
             boundaryRetries = 0;
             const removedFraction = removed / N;
             if (removed < needed && removedFraction < MIN_ITERATION_PROGRESS) {
-                await disposePlans();
                 gen.end();
                 throw new Error(
                     `decimation stalled at ${N} splats (target ${targetCount}): a generation removed only ` +
@@ -530,16 +454,15 @@ const decimateSource = async (
             const createStream = (
                 tick: (n: number) => void
             ): AsyncGenerator<number, void, DestBuffers> => {
-                if (storedPlans) {
+                if (plans) {
                     return blockPlanMergeStream({
                         source: genSrc,
                         pool,
                         pos: genPositions,
                         order,
                         blocks,
-                        plans: storedPlans,
+                        plans,
                         prefixes: planPrefixes!,
-                        scratch: opts.spill!,
                         nextPositions
                     }, genChunkSize, tick);
                 }
@@ -577,11 +500,7 @@ const decimateSource = async (
                             try {
                                 await genSrc.close();
                             } finally {
-                                try {
-                                    await disposePlans();
-                                } finally {
-                                    await disposeSpill?.();
-                                }
+                                await disposeSpill?.();
                             }
                         }
                     }
@@ -592,45 +511,43 @@ const decimateSource = async (
             const producer = createBlockProducerSource(outMeta, () => createStream(n => mergeBar.tick(n)));
 
             // Intermediate generation: materialize (RAM when comfortably within
-            // budget, else temp PLY spill), then advance the loop.
+            // budget, else temp PLY spill), then advance the loop. This
+            // generation's block plans stay resident while it materializes.
             const estBytes = outCount * (12 + 32 + colorDim * 4 + otherStride);
+            const planBytes = plans ? N * PLAN_BYTES_PER_GAUSSIAN : 0;
             let nextSrc: ChunkSource;
             let disposeNext: (() => Promise<void>) | null = null;
 
-            try {
-                if (estBytes <= budget / 4) {
-                    nextSrc = await compact(producer, pool);
-                    residentInputBytes = estBytes;
-                } else {
-                    residentInputBytes = 0;
-                    if (!opts.spill) {
-                        throw new Error(
-                            `decimation intermediate generation needs ${fmtBytes(estBytes)}, over the in-memory budget — ` +
-                        'a spill location is required (opts.spill / --scratch-dir)'
-                        );
-                    }
-                    const spill = opts.spill;
-                    const filename = join(spill.scratchDir, `.decimate-gen${generation}.${Date.now().toString(36)}.tmp.ply`);
-                    let plySrc: ChunkSource;
-                    try {
-                        await writePlyStreaming(producer, pool, { filename }, spill.writeFs);
-                        const readSource = await spill.readFs.createSource(filename);
-                        plySrc = await readPly(readSource, pool);
-                    } catch (err) {
-                        try {
-                            await spill.remove?.(filename);
-                        } catch {
-                            // Preserve the generation failure.
-                        }
-                        throw err;
-                    }
-                    nextSrc = plySrc;
-                    disposeNext = async () => {
-                        await spill.remove?.(filename);
-                    };
+            if (estBytes + planBytes <= budget / 4) {
+                nextSrc = await compact(producer, pool);
+                residentInputBytes = estBytes;
+            } else {
+                residentInputBytes = 0;
+                if (!opts.spill) {
+                    throw new Error(
+                        `decimation intermediate generation needs ${fmtBytes(estBytes)}, over the in-memory budget — ` +
+                    'a spill location is required (opts.spill / --scratch-dir)'
+                    );
                 }
-            } finally {
-                await disposePlans();
+                const spill = opts.spill;
+                const filename = join(spill.scratchDir, `.decimate-gen${generation}.${Date.now().toString(36)}.tmp.ply`);
+                let plySrc: ChunkSource;
+                try {
+                    await writePlyStreaming(producer, pool, { filename }, spill.writeFs);
+                    const readSource = await spill.readFs.createSource(filename);
+                    plySrc = await readPly(readSource, pool);
+                } catch (err) {
+                    try {
+                        await spill.remove?.(filename);
+                    } catch {
+                        // Preserve the generation failure.
+                    }
+                    throw err;
+                }
+                nextSrc = plySrc;
+                disposeNext = async () => {
+                    await spill.remove?.(filename);
+                };
             }
             try {
                 mergeBar.end();
@@ -663,7 +580,7 @@ const decimateSource = async (
     } catch (err) {
         // Construction failures own the current input just like a returned
         // decimation source does. Preserve the active error while making a
-        // best effort to remove any staged/intermediate generation.
+        // best effort to remove any intermediate generation.
         try {
             await src.close();
         } catch {

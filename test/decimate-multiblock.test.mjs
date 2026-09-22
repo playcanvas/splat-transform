@@ -4,8 +4,6 @@ import { after, before, describe, it } from 'node:test';
 import { makeSyntheticSource } from './helpers/synthetic-source.mjs';
 
 import { decimateSourceAdaptive } from '../src/lib/decimate/index.js';
-import { MemoryReadSource } from '../src/lib/io/read/memory-file-system.js';
-import { MemoryFileSystem } from '../src/lib/io/write/memory-file-system.js';
 
 let device = null;
 
@@ -31,7 +29,7 @@ describe('decimateSourceAdaptive multi-block adaptive path', () => {
         );
     });
 
-    it('hits the exact quota through scratch plans and removes every plan on close', { timeout: 120000 }, async (t) => {
+    it('hits the exact quota through in-memory block plans with no scratch storage', { timeout: 120000 }, async (t) => {
         if (!device) return t.skip('no WebGPU adapter available');
 
         // Dynamic sizing bottoms out at 65,536 rows. Four extra rows force
@@ -39,27 +37,12 @@ describe('decimateSourceAdaptive multi-block adaptive path', () => {
         const n = 65540;
         const targetCount = 65000;
         const { source, pool } = await makeSyntheticSource(n, 0, 9876, { chunkSize: 1024 });
-        const writeFs = new MemoryFileSystem();
-        const spill = {
-            writeFs,
-            readFs: {
-                async createSource(path) {
-                    const bytes = writeFs.results.get(path);
-                    if (!bytes) throw new Error(`missing scratch file ${path}`);
-                    return new MemoryReadSource(bytes);
-                }
-            },
-            scratchDir: 'scratch',
-            async remove(path) {
-                writeFs.results.delete(path);
-            }
-        };
 
+        // No spill: a single generation must never need scratch storage.
         const out = await decimateSourceAdaptive(source, pool, {
             targetCount,
             createDevice: async () => device,
-            memoryBudgetBytes: 1,
-            spill
+            memoryBudgetBytes: 1
         });
         assert.strictEqual(out.meta.numGaussians, targetCount);
         let rows = 0;
@@ -75,6 +58,5 @@ describe('decimateSourceAdaptive multi-block adaptive path', () => {
         }
         assert.strictEqual(rows, targetCount);
         await out.close();
-        assert.strictEqual(writeFs.results.size, 0, 'all block plans cleaned');
     });
 });

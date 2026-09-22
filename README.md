@@ -125,10 +125,10 @@ Actions execute in the order specified and can be repeated. Any action may appea
                                           Memory-bounded and streaming: scales to scenes of 100M+
                                           Gaussians. Must be the final action, and the output must
                                           be .ply (write a decimated PLY first, then convert in a
-                                          second invocation). Deep targets on huge scenes spill
-                                          temporary files to --scratch-dir (default: the output
-                                          file's directory).
-    --scratch-dir      <path>           Directory for decimation spill files
+                                          second invocation). A deep target on a huge scene needs
+                                          --scratch-dir for its intermediate levels; nothing is
+                                          written to disk without it.
+    --scratch-dir      <path>           Directory for decimation intermediates (explicit only)
 -F, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel.
                                           Evaluates each Gaussian at occupied voxel centers.
                                           Default: size=0.05, opacity=0.1, min=0.004 (1/255).

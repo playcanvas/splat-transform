@@ -775,7 +775,34 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
         layouts
     };
 
+    // One whole-float record into one destination row (float offsets). Shared
+    // by `fill`'s fast path and the gather read, so the caller owns the views:
+    // on incoherent input gather runs are a few records long and there are
+    // millions of them, and building views per record was most of the decode.
+    const fillFloatRecord = (recF32: Float32Array, rb: number, dstF32: Float32Array, db: number, plan: LayerPlan): void => {
+        // 2DGS: no source field targets the scale_2 slot, so fill it here.
+        // -Infinity log scale is linear 0 — a zero-thickness surfel.
+        if (plan.synthScale2) dstF32[db + SCALE_2_WORD] = -Infinity;
+        const { srcIdx, dstIdx } = plan;
+        for (let j = 0; j < srcIdx.length; j++) {
+            dstF32[db + dstIdx[j]] = recF32[rb + srcIdx[j]];
+        }
+    };
+
     const fill = (recordBytes: Uint8Array, count: number, chunkData: ChunkData, plan: LayerPlan, dstRow: number): void => {
+        // Fast path: whole-float record -> de-interleave via Float32Array views
+        // (no DataView). Little-endian only, matching the binary PLY format.
+        if (plan.allFloat) {
+            const recF32 = new Float32Array(recordBytes.buffer, recordBytes.byteOffset, recordBytes.byteLength >> 2);
+            const dstF32 = new Float32Array(chunkData.data);
+            const sStrideF = recordStride >> 2;
+            const dStrideF = plan.stride >> 2;
+            for (let i = 0; i < count; i++) {
+                fillFloatRecord(recF32, i * sStrideF, dstF32, (dstRow + i) * dStrideF, plan);
+            }
+            return;
+        }
+
         // 2DGS: no source field targets the scale_2 slot, so fill it here (order
         // relative to the de-interleave below doesn't matter). -Infinity log scale
         // is linear 0 — a zero-thickness surfel.
@@ -785,25 +812,6 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
             for (let i = 0; i < count; i++) {
                 dstF32[(dstRow + i) * dStrideF + SCALE_2_WORD] = -Infinity;
             }
-        }
-
-        // Fast path: whole-float record -> de-interleave via Float32Array views
-        // (no DataView). Little-endian only, matching the binary PLY format.
-        if (plan.allFloat) {
-            const recF32 = new Float32Array(recordBytes.buffer, recordBytes.byteOffset, recordBytes.byteLength >> 2);
-            const dstF32 = new Float32Array(chunkData.data);
-            const sStrideF = recordStride >> 2;
-            const dStrideF = plan.stride >> 2;
-            const { srcIdx, dstIdx } = plan;
-            const nf = srcIdx.length;
-            for (let i = 0; i < count; i++) {
-                const rb = i * sStrideF;
-                const db = (dstRow + i) * dStrideF;
-                for (let j = 0; j < nf; j++) {
-                    dstF32[db + dstIdx[j]] = recF32[rb + srcIdx[j]];
-                }
-            }
-            return;
         }
 
         // General path: mixed types via DataView readers.
@@ -861,6 +869,10 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
             const slot = sortGatherSlots(count, s => indices[indexOffset + s]);
             const byteAt = (t: number) => indices[indexOffset + slot[t]] * recordStride;
 
+            // Whole-float layers de-interleave through views built once per
+            // request (destinations) and once per run (records), not per record.
+            const sStrideF = recordStride >> 2;
+            const dstF32 = requested.map(layer => (plans[layer]!.allFloat ? new Float32Array(request[layer]!.data) : null));
             for (const run of gatherRuns(count, byteAt, recordStride)) {
                 const need = run.recordCount * recordStride;
                 if (!gatherScratch || gatherScratch.length < need) {
@@ -873,11 +885,19 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
                     throw new Error(`readPly: short gather read (${got}/${need}) at byte ${base}`);
                 }
 
+                const recF32 = new Float32Array(recordBytes.buffer, recordBytes.byteOffset, recordBytes.byteLength >> 2);
                 for (let t = run.j0; t < run.j1; t++) {
                     const row = (byteAt(t) - run.firstByte) / recordStride;
-                    const rec = recordBytes.subarray(row * recordStride, (row + 1) * recordStride);
-                    for (const layer of requested) {
-                        fill(rec, 1, request[layer]!, plans[layer]!, slot[t]);
+                    for (let li = 0; li < requested.length; li++) {
+                        const layer = requested[li];
+                        const plan = plans[layer]!;
+                        const dst = dstF32[li];
+                        if (dst) {
+                            fillFloatRecord(recF32, row * sStrideF, dst, slot[t] * (plan.stride >> 2), plan);
+                        } else {
+                            const rec = recordBytes.subarray(row * recordStride, (row + 1) * recordStride);
+                            fill(rec, 1, request[layer]!, plan, slot[t]);
+                        }
                     }
                 }
             }
