@@ -287,9 +287,10 @@ Apply when writing `.webp` (lossless WebP rendered via GPU rasterizer).
                                         where the motion between instants exceeds a couple of pixels. Default: 16.
     --camera-track     <path>           Render a camera animation as a frame sequence: a supersplat editor project
                                         (.ssproj directory or its document.json), a viewer settings.json with
-                                        animTracks, or a JSON { frameRate, frames: [{ position, target, fov }] }.
+                                        animTracks, or a JSON { frameRate, frames: [{ position, target, fov, up }] }.
                                         Frames are written as <name>.NNNN.webp. Replaces --camera-pos/--camera-target;
-                                        the track's target is the defocus focus point. With --shutter, each frame is
+                                        the track's target is the defocus focus point. A frame's up vector tilts the
+                                        camera; frames without one use --camera-up. With --shutter, each frame is
                                         motion-blurred over that fraction of the frame interval.
     --frames           <a[-b]>          Inclusive frame range of the track to render. Default: all frames.
 ```

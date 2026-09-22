@@ -13,21 +13,27 @@
  *   timeline does, so rendered frames match what the editor shows.
  * - The supersplat viewer's `settings.json`: the first of `animTracks`
  *   (keyframe times in frames, `spline` or `step` interpolation, loop mode).
- * - A plain per-frame list: `{ frameRate?, frames: [{ position, target, fov? }] }`,
+ * - A plain per-frame list: `{ frameRate?, frames: [{ position, target, fov?, up? }] }`,
  *   linearly interpolated between entries for fractional times.
  *
  * All poses are in the PlayCanvas default (viewer/editor) space, like the
  * writer's camera options; the target doubles as the defocus focus point.
+ * Only the frame list can tilt the camera: a frame's `up` sets its up
+ * vector (roll about the view direction); poses without one, and the editor
+ * and viewer formats, which carry none, use the caller's default up.
  */
 
 type Vec3Like = { x: number; y: number; z: number };
 
-/** A camera pose on a track: position, look-at target and vertical fov in degrees. */
+/** A camera pose on a track: position, look-at target, up vector and vertical fov in degrees. */
 type TrackPose = {
     position: Vec3Like;
     target: Vec3Like;
+    up: Vec3Like;
     fov: number;
 };
+
+const DEFAULT_UP: Vec3Like = { x: 0, y: 1, z: 0 };
 
 /** A camera animation track evaluated in frame time. */
 interface CameraTrack {
@@ -175,18 +181,20 @@ const finiteNumber = (v: unknown, what: string, dflt?: number): number => {
  * @param smoothness - Spline tangent scale (0 linear, 1 smooth).
  * @param loopLength - Period in frames for a looping spline, or null to hold the end poses.
  * @param step - Hold each key until the next instead of interpolating.
+ * @param up - Up vector shared by every pose (the formats have no per-key up).
  * @returns The track.
  */
-const splineTrack = (keys: Keyframes, frameRate: number, frameCount: number, smoothness: number, loopLength: number | null, step: boolean): CameraTrack => {
+const splineTrack = (keys: Keyframes, frameRate: number, frameCount: number, smoothness: number, loopLength: number | null, step: boolean, up: Vec3Like): CameraTrack => {
     const { times, points } = keys;
     const result = new Array<number>(7);
     const toPose = (): TrackPose => ({
         position: { x: result[0], y: result[1], z: result[2] },
         target: { x: result[3], y: result[4], z: result[5] },
+        up,
         fov: result[6]
     });
     if (times.length === 1) {
-        const p: TrackPose = { position: { x: points[0], y: points[1], z: points[2] }, target: { x: points[3], y: points[4], z: points[5] }, fov: points[6] };
+        const p: TrackPose = { position: { x: points[0], y: points[1], z: points[2] }, target: { x: points[3], y: points[4], z: points[5] }, up, fov: points[6] };
         return { frameRate, frameCount, poseAt: () => p };
     }
     if (step) {
@@ -222,9 +230,10 @@ const splineTrack = (keys: Keyframes, frameRate: number, frameCount: number, smo
  *
  * @param doc - Parsed `document.json`.
  * @param defaultFov - Fallback vertical fov in degrees when neither a pose nor the document carries one.
+ * @param up - Up vector for every pose.
  * @returns The track.
  */
-const fromEditorDocument = (doc: any, defaultFov: number): CameraTrack => {
+const fromEditorDocument = (doc: any, defaultFov: number, up: Vec3Like): CameraTrack => {
     const timeline = doc.timeline ?? {};
     const frameCount = Math.floor(finiteNumber(timeline.frames, 'timeline.frames'));
     const frameRate = finiteNumber(timeline.frameRate, 'timeline.frameRate', 30);
@@ -250,7 +259,7 @@ const fromEditorDocument = (doc: any, defaultFov: number): CameraTrack => {
         times.push(frame);
         points.push(position.x, position.y, position.z, target.x, target.y, target.z, finiteNumber(p.fov, 'pose fov', docFov));
     }
-    return splineTrack({ times, points }, frameRate, frameCount, smoothness, loop ? frameCount : null, false);
+    return splineTrack({ times, points }, frameRate, frameCount, smoothness, loop ? frameCount : null, false, up);
 };
 
 /**
@@ -260,9 +269,10 @@ const fromEditorDocument = (doc: any, defaultFov: number): CameraTrack => {
  * at the end; `none` and `pingpong` hold the end poses).
  *
  * @param settings - Parsed viewer `settings.json`.
+ * @param up - Up vector for every pose.
  * @returns The track.
  */
-const fromViewerSettings = (settings: any): CameraTrack => {
+const fromViewerSettings = (settings: any, up: Vec3Like): CameraTrack => {
     const track = settings.animTracks?.[0];
     if (!track) {
         throw new Error('camera track: the settings have no animation tracks');
@@ -284,18 +294,20 @@ const fromViewerSettings = (settings: any): CameraTrack => {
     const extra = duration === times[times.length - 1] / frameRate ? 1 : 0;
     const loopLength = track.loopMode === 'repeat' ? (duration + extra) * frameRate : null;
     const frameCount = Math.round(duration * frameRate);
-    return splineTrack({ times, points }, frameRate, frameCount, smoothness, loopLength, track.interpolation === 'step');
+    return splineTrack({ times, points }, frameRate, frameCount, smoothness, loopLength, track.interpolation === 'step', up);
 };
 
 /**
  * Plain per-frame list, linearly interpolated between entries so shutter
- * slices can fall between frames.
+ * slices can fall between frames (the up vector by normalized lerp, so it
+ * stays unit-length when neighbouring frames differ in direction).
  *
  * @param json - Parsed `{ frameRate?, frames[] }` object.
  * @param defaultFov - Fallback vertical fov in degrees for frames without one.
+ * @param defaultUp - Fallback up vector for frames without one.
  * @returns The track.
  */
-const fromFrameList = (json: any, defaultFov: number): CameraTrack => {
+const fromFrameList = (json: any, defaultFov: number, defaultUp: Vec3Like): CameraTrack => {
     const frames: any[] = json.frames;
     if (!Array.isArray(frames) || frames.length === 0) {
         throw new Error('camera track: `frames` must be a non-empty array');
@@ -304,6 +316,7 @@ const fromFrameList = (json: any, defaultFov: number): CameraTrack => {
     const poses: TrackPose[] = frames.map((f, i) => ({
         position: vec3Of(f.position, `frames[${i}].position`),
         target: vec3Of(f.target, `frames[${i}].target`),
+        up: f.up === undefined ? defaultUp : vec3Of(f.up, `frames[${i}].up`),
         fov: finiteNumber(f.fov, `frames[${i}].fov`, defaultFov)
     }));
     const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
@@ -316,9 +329,12 @@ const fromFrameList = (json: any, defaultFov: number): CameraTrack => {
             const i1 = Math.min(i0 + 1, poses.length - 1);
             const t = f - i0;
             const a = poses[i0], b = poses[i1];
+            const ux = lerp(a.up.x, b.up.x, t), uy = lerp(a.up.y, b.up.y, t), uz = lerp(a.up.z, b.up.z, t);
+            const ulen = Math.hypot(ux, uy, uz) || 1;
             return {
                 position: { x: lerp(a.position.x, b.position.x, t), y: lerp(a.position.y, b.position.y, t), z: lerp(a.position.z, b.position.z, t) },
                 target: { x: lerp(a.target.x, b.target.x, t), y: lerp(a.target.y, b.target.y, t), z: lerp(a.target.z, b.target.z, t) },
+                up: { x: ux / ulen, y: uy / ulen, z: uz / ulen },
                 fov: lerp(a.fov, b.fov, t)
             };
         }
@@ -331,16 +347,18 @@ const fromFrameList = (json: any, defaultFov: number): CameraTrack => {
  * @param json - Parsed contents of an editor `document.json`, a viewer
  * `settings.json`, or a plain `{ frameRate?, frames[] }` list.
  * @param defaultFov - Vertical fov in degrees for poses that carry none.
+ * @param defaultUp - Up vector for poses that carry none (only frame-list
+ * entries can carry their own). Default: world +Y.
  * @returns The track.
  */
-const loadCameraTrack = (json: unknown, defaultFov: number): CameraTrack => {
+const loadCameraTrack = (json: unknown, defaultFov: number, defaultUp: Vec3Like = DEFAULT_UP): CameraTrack => {
     if (!json || typeof json !== 'object') {
         throw new Error('camera track: expected a JSON object');
     }
     const j = json as any;
-    if (Array.isArray(j.poseSets) && j.timeline) return fromEditorDocument(j, defaultFov);
-    if (Array.isArray(j.animTracks)) return fromViewerSettings(j);
-    if (Array.isArray(j.frames)) return fromFrameList(j, defaultFov);
+    if (Array.isArray(j.poseSets) && j.timeline) return fromEditorDocument(j, defaultFov, defaultUp);
+    if (Array.isArray(j.animTracks)) return fromViewerSettings(j, defaultUp);
+    if (Array.isArray(j.frames)) return fromFrameList(j, defaultFov, defaultUp);
     throw new Error('camera track: unrecognised format (expected an editor document with poseSets/timeline, viewer settings with animTracks, or a frames list)');
 };
 

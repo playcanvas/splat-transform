@@ -519,7 +519,8 @@ const parseArguments = async () => {
         throw new Error(`Invalid --webp-effort value: ${v['webp-effort']}. Must be in [0, 9].`);
     }
     // Camera animation: an editor project (.ssproj directory or its document.json),
-    // viewer settings.json, or a plain frames list. Poses without a fov use --camera-fov.
+    // viewer settings.json, or a plain frames list. Poses without a fov use --camera-fov,
+    // poses without an up vector use --camera-up.
     let renderCameraTrack: CameraTrack | undefined;
     if (v['camera-track'] !== undefined) {
         let trackPath = v['camera-track'];
@@ -532,7 +533,7 @@ const parseArguments = async () => {
         } catch (e) {
             throw new Error(`Failed to read camera track JSON: ${trackPath} (${(e as Error).message})`);
         }
-        renderCameraTrack = loadCameraTrack(trackJson, renderFov ?? 60);
+        renderCameraTrack = loadCameraTrack(trackJson, renderFov ?? 60, renderUp);
     }
     let renderFrames: [number, number] | undefined;
     if (v.frames !== undefined) {
@@ -952,9 +953,10 @@ IMAGE OUTPUT (.webp) — lossless WebP rendered via GPU rasterizer
                                             where the motion between instants exceeds a couple of pixels. Default: 16.
         --camera-track     <path>           Render a camera animation as a frame sequence: a supersplat editor project
                                             (.ssproj directory or its document.json), a viewer settings.json with
-                                            animTracks, or a JSON { frameRate, frames: [{ position, target, fov }] }.
+                                            animTracks, or a JSON { frameRate, frames: [{ position, target, fov, up }] }.
                                             Frames are written as <name>.NNNN.webp. Replaces --camera-pos/--camera-target;
-                                            the track's target is the defocus focus point. With --shutter, each frame is
+                                            the track's target is the defocus focus point. A frame's up vector tilts the
+                                            camera; frames without one use --camera-up. With --shutter, each frame is
                                             motion-blurred over that fraction of the frame interval.
         --frames           <a[-b]>          Inclusive frame range of the track to render. Default: all frames.
 
