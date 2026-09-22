@@ -1,14 +1,13 @@
-import { readBlockPlanPrefix, type PlanScratch, type StoredBlockPlan } from './block-allocation';
-import { replayBlockPlan } from './block-plan';
+import { blockPlanPrefix } from './block-allocation';
+import { replayBlockPlan, type BlockPlan } from './block-plan';
 import { type DestBuffers } from './block-producer';
 import { type ResidentPositions } from './partition';
 import { gatherBlockView, type PriorityContext } from './priority';
 import { WorkerQueue } from '../workers';
 
 type BlockMergeStreamContext = Pick<PriorityContext, 'source' | 'pool' | 'pos' | 'order' | 'blocks'> & {
-    plans: StoredBlockPlan[];
+    plans: BlockPlan[];
     prefixes: Uint32Array;
-    scratch: PlanScratch;
     nextPositions?: ResidentPositions;
 };
 
@@ -26,7 +25,7 @@ async function *blockPlanMergeStream(
     chunkSize: number,
     tick?: (n: number) => void
 ): AsyncGenerator<number, void, DestBuffers> {
-    const { source, pos, order, blocks, plans, prefixes, scratch, nextPositions } = ctx;
+    const { source, pos, order, blocks, plans, prefixes, nextPositions } = ctx;
     const { layouts, availableLayers } = source.meta;
     const colorDim = layouts.color!.stride >> 2;
     const hasOther = availableLayers.has('other') && (layouts.other?.stride ?? 0) > 0;
@@ -38,7 +37,7 @@ async function *blockPlanMergeStream(
 
     for (let bi = 0; bi < blocks.length; bi++) {
         const owned = order.subarray(blocks[bi].start, blocks[bi].end);
-        const prefix = await readBlockPlanPrefix(plans[bi], scratch, prefixes[bi]);
+        const prefix = blockPlanPrefix(plans[bi], prefixes[bi]);
         const selection = replayBlockPlan(owned.length, prefix);
         const { memberGroup, groupMin, groupOffsets, groupMembers } = selection;
         const { view, other } = await gatherBlockView(ctx, bi, new Uint32Array(0), hasOther);

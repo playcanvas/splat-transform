@@ -3,41 +3,14 @@ import { describe, it } from 'node:test';
 
 import { makeSyntheticSource } from './helpers/synthetic-source.mjs';
 
-import {
-    allocatePlanPrefixes,
-    readBlockPlanPrefix,
-    storeBlockPlan
-} from '../src/lib/decimate/block-allocation.js';
+import { allocatePlanPrefixes, blockPlanPrefix } from '../src/lib/decimate/block-allocation.js';
 import { blockPlanMergeStream } from '../src/lib/decimate/block-merge-stream.js';
 import { planBlockMerges, replayBlockPlan } from '../src/lib/decimate/block-plan.js';
 import { createBlockProducerSource } from '../src/lib/decimate/block-producer.js';
 import { buildSplatCache, CACHE_STRIDE } from '../src/lib/decimate/edge-cost-cpu.js';
 import { kdPartition } from '../src/lib/decimate/partition.js';
-import { MemoryReadSource } from '../src/lib/io/read/memory-file-system.js';
-import { MemoryFileSystem } from '../src/lib/io/write/memory-file-system.js';
 
 const NIL = 0xFFFFFFFF;
-
-const makeScratch = () => {
-    const writeFs = new MemoryFileSystem();
-    const removed = [];
-    return {
-        writeFs,
-        readFs: {
-            async createSource(path) {
-                const bytes = writeFs.results.get(path);
-                if (!bytes) throw new Error(`missing ${path}`);
-                return new MemoryReadSource(bytes);
-            }
-        },
-        scratchDir: 'scratch',
-        async remove(path) {
-            removed.push(path);
-            writeFs.results.delete(path);
-        },
-        removed
-    };
-};
 
 const manualPlan = (costs, pairs) => ({
     costs: Float32Array.from(costs),
@@ -157,13 +130,10 @@ describe('block-local merge planning', () => {
 
 describe('block-plan prefix allocation', () => {
     it('matches restricted global greedy for non-monotonic independent block sequences and groups', async () => {
-        const scratch = makeScratch();
         const local = [
             manualPlan([1, 100, 2], [0, 1, 0, 2, 0, 3]),
             manualPlan([3, 4], [0, 1, 2, 3])
         ];
-        const stored = [];
-        for (let i = 0; i < local.length; i++) stored.push(await storeBlockPlan(scratch, 1, i, local[i]));
 
         // Single restricted-global reference: only each independent block's
         // next local commit is exposed, including its prefix dependency.
@@ -179,71 +149,41 @@ describe('block-plan prefix allocation', () => {
         }
 
         const actual = [];
-        const result = await allocatePlanPrefixes(stored, scratch, 4, (block, index) => actual.push([block, index]));
+        const result = allocatePlanPrefixes(local, 4, (block, index) => actual.push([block, index]));
         assert.deepStrictEqual(actual, expected, 'merge sequence matches restricted global greedy');
         assert.deepStrictEqual(Array.from(result.prefixes), cursor);
 
         for (let b = 0; b < local.length; b++) {
-            const prefix = await readBlockPlanPrefix(stored[b], scratch, result.prefixes[b]);
+            const prefix = blockPlanPrefix(local[b], result.prefixes[b]);
             const replay = replayBlockPlan(4, prefix);
             assert.strictEqual(replay.removed, result.prefixes[b]);
             assert.ok(replay.groupMembers.every(member => member < 4));
         }
     });
 
-    it('selects every productive prefix on capacity shortfall while retaining the exact available count', async () => {
-        const scratch = makeScratch();
+    it('selects every productive prefix on capacity shortfall while retaining the exact available count', () => {
         const plans = [
-            await storeBlockPlan(scratch, 1, 0, manualPlan([5, 1], [0, 1, 0, 2])),
-            await storeBlockPlan(scratch, 1, 1, manualPlan([2], [0, 1]))
+            manualPlan([5, 1], [0, 1, 0, 2]),
+            manualPlan([2], [0, 1])
         ];
-        const result = await allocatePlanPrefixes(plans, scratch, 99);
+        const result = allocatePlanPrefixes(plans, 99);
         assert.strictEqual(result.removed, 3);
         assert.deepStrictEqual(Array.from(result.prefixes), [2, 1]);
-    });
-
-    it('aborts a failed plan write without publishing a partial plan', async () => {
-        let aborted = false;
-        const scratch = {
-            writeFs: {
-                createWriter() {
-                    return {
-                        bytesWritten: 0,
-                        write() {
-                            throw new Error('write failed');
-                        },
-                        close() {},
-                        abort() {
-                            aborted = true;
-                        }
-                    };
-                },
-                async mkdir() {}
-            },
-            readFs: { async createSource() { throw new Error('not published'); } },
-            scratchDir: 'scratch'
-        };
-        await assert.rejects(
-            storeBlockPlan(scratch, 1, 0, manualPlan([1], [0, 1])),
-            /write failed/
-        );
-        assert.ok(aborted);
     });
 });
 
 describe('block-plan output replay', () => {
-    it('moment-matches selected prefixes one core at a time and cleans plan scratch', async () => {
+    it('moment-matches selected prefixes one core at a time', async () => {
         const n = 24;
         const { source, pool, pos } = await makeSyntheticSource(n, 1, 29, {
             chunkSize: 5,
             extraColumns: [{ name: 'tag', type: 'uint32' }]
         });
         const partition = kdPartition(pos, 8, 1);
-        const scratch = makeScratch();
         const plans = [];
         const prefixes = new Uint32Array(partition.blocks.length).fill(1);
         for (let bi = 0; bi < partition.blocks.length; bi++) {
-            plans.push(await storeBlockPlan(scratch, 1, bi, manualPlan([bi + 1], [0, 1])));
+            plans.push(manualPlan([bi + 1], [0, 1]));
         }
         const outCount = n - partition.blocks.length;
         const meta = {
@@ -259,8 +199,7 @@ describe('block-plan output replay', () => {
             order: partition.order,
             blocks: partition.blocks,
             plans,
-            prefixes,
-            scratch
+            prefixes
         }, source.meta.chunkSize));
 
         let rows = 0;
@@ -282,8 +221,5 @@ describe('block-plan output replay', () => {
         assert.strictEqual(rows, outCount);
         await producer.close();
         await source.close();
-        for (const plan of plans) await scratch.remove(plan.path);
-        assert.strictEqual(scratch.writeFs.results.size, 0);
-        assert.strictEqual(scratch.removed.length, plans.length);
     });
 });
