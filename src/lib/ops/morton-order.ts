@@ -124,11 +124,16 @@ const sortMortonStrided = (
  * Sort `indices` in place into morton (Z-order) using interleaved positions
  * `[x, y, z, x, y, z, ...]` — the natural packing of the `position` layer.
  *
- * @param positions - Interleaved xyz; gaussian `g` is at `positions[g*3 + {0,1,2}]`.
+ * `stride` lets the same call sort a wider record whose first three words are
+ * xyz, e.g. a packed `[x, y, z, w]` GPU texture row viewed as floats, without
+ * copying the positions out first.
+ *
+ * @param positions - Interleaved xyz; gaussian `g` is at `positions[g*stride + {0,1,2}]`.
  * @param indices - Indices to sort in place.
+ * @param stride - Words per gaussian in `positions` (default 3).
  */
-const sortMortonInterleaved = (positions: ArrayLike<number>, indices: Uint32Array): void => {
-    sortMortonStrided(indices, positions, positions, positions, 3, 0, 1, 2);
+const sortMortonInterleaved = (positions: ArrayLike<number>, indices: Uint32Array, stride = 3): void => {
+    sortMortonStrided(indices, positions, positions, positions, stride, 0, 1, 2);
 };
 
 /**
