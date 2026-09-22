@@ -161,7 +161,7 @@ type Options = {
 
     /**
      * Camera animation to render as a frame sequence (see `loadCameraTrack`).
-     * Replaces `renderCameraPosition` / `renderLookAt` / `renderFov`; the
+     * Replaces `renderCameraPosition` / `renderLookAt` / `renderUp` / `renderFov`; the
      * output filename gains a zero-padded frame index before its extension.
      * With `renderShutter` set, each frame is motion-blurred over that
      * fraction of the frame interval.

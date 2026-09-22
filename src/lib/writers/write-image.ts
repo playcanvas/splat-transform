@@ -357,7 +357,7 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
     const poseAt: (t: number) => Pose = cameraTrack ?
         (t) => {
             const p = cameraTrack.poseAt(t);
-            return { pos: toDataPoint(p.position), tgt: toDataPoint(p.target), up: upStart, fov: projection === 'equirect' ? 0 : p.fov };
+            return { pos: toDataPoint(p.position), tgt: toDataPoint(p.target), up: p.up ? toDataDir(p.up) : upStart, fov: projection === 'equirect' ? 0 : p.fov };
         } :
         (t) => {
             const pos = {
