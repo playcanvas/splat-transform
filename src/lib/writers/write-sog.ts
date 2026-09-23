@@ -405,7 +405,8 @@ const writeSogSource = async (
             scales: { codebook: scalesCodebook, files: ['scales.webp'] },
             quats: { files: ['quats.webp'] },
             sh0: { codebook: colorsCodebook, files: ['sh0.webp'] },
-            ...(shN ? { shN } : {})
+            ...(shN ? { shN } : {}),
+            ...(meta.camera ? { camera: meta.camera } : {})
         };
         const metaJson = (new TextEncoder()).encode(JSON.stringify(metaObj));
         const metaFilename = zipFs ? 'meta.json' : outputFilename;

@@ -8,7 +8,8 @@ import { type ChunkDataPool, type ChunkLayer, type ChunkSource, type ReadRequest
 import { materializeToDataTable } from '../compat/data-table';
 import { Column, DataTable } from '../data-table';
 import { type FileSystem } from '../io/write';
-import { bakeTransform, permuteSource, sortMortonColumns } from '../ops';
+import { bakeTransform, permuteSource, sortMortonColumns, withCamera } from '../ops';
+import { type SogCamera } from '../sog-camera';
 import { BTreeNode, BTree } from '../spatial';
 import type { DeviceCreator } from '../types';
 import { logger, Transform } from '../utils';
@@ -49,6 +50,8 @@ type LodMeta = {
          */
         chunkMinGaussians: number;
     };
+    /** The scene's camera block, when the source carried one (see SOG `meta.json`). */
+    camera?: SogCamera;
     count: number;
     counts: number[];
     lodLevels: number;
@@ -620,6 +623,10 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     // bakes it itself.
     const mainSource = bakeTransform(options.mainSource, Transform.PLY);
 
+    // The camera goes once, into lod-meta.json; the per-unit and env meta.json
+    // files don't repeat it.
+    const unitParent = mainSource.meta.camera ? withCamera(mainSource, undefined) : mainSource;
+
     // Pool for slim extraction read buffers and the chunk-native SOG encodes.
     const pool = createChunkDataPool();
 
@@ -788,6 +795,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
             chunkExtent: binDim,
             chunkMinGaussians: binMin
         },
+        ...(mainSource.meta.camera ? { camera: mainSource.meta.camera } : {}),
         count: counts.reduce((acc, curr) => acc + curr, 0),
         counts,
         lodLevels,
@@ -831,7 +839,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
             await fs.mkdir(dirname(envPathname));
 
             await writeSogSource(
-                envSource!,
+                envSource!.meta.camera ? withCamera(envSource!, undefined) : envSource!,
                 pool,
                 { filename: envPathname, bundle: false, iterations, webpEffort, createDevice, logging: 'flat' },
                 fs
@@ -887,7 +895,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
                 // already in write order, so pass an identity ordering to skip the
                 // writer's own Morton pass.
                 const unitSource = positionsFromSlim(
-                    permuteSource(mainSource, orderedLocal, { lod: lodValue }),
+                    permuteSource(unitParent, orderedLocal, { lod: lodValue }),
                     slim, orderedIndices
                 );
                 const identity = new Uint32Array(totalIndices);

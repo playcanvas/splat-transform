@@ -12,12 +12,17 @@ export type {
 } from './chunk';
 
 // Structural combinators (lazy views over sources)
-export { bakeTransform, concatSource, selectLod, stackLods, sortMortonColumns, sortMortonInterleaved } from './ops';
+export { bakeTransform, concatSource, selectLod, stackLods, sortMortonColumns, sortMortonInterleaved, withCamera } from './ops';
 
 // How a scene was trained (carried on `ChunkSourceMetadata.model`). The per-format
 // spellings of the tag live with their reader/writer.
 export { isSplatModel, resolveSplatModel } from './splat-model';
 export type { SplatModel } from './splat-model';
+
+// The optional camera block of SOG meta.json / lod-meta.json (carried on
+// `ChunkSourceMetadata.camera`).
+export { sogCameraFromCamerasJson, transformSogCamera } from './sog-camera';
+export type { SogCamera } from './sog-camera';
 
 // Action processing over a source: `processSource` streams and throws on
 // actions that need the DataTable bridge; `processSourceBridged` handles every

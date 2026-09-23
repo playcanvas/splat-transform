@@ -1,3 +1,4 @@
+import { type SogCamera } from '../sog-camera';
 import { type SplatModel } from '../splat-model';
 import { type Transform } from '../utils';
 import { type ChunkData } from './data';
@@ -38,6 +39,11 @@ type ChunkSourceMetadata = {
     readonly availableLayers: ReadonlySet<ChunkLayer>;
     /** Per-layer stride + field map. Keyed by layer; only present for available layers. */
     readonly layouts: Readonly<Partial<Record<ChunkLayer, LayerLayout>>>;
+    /**
+     * Optional capture / rest camera (SOG `meta.json` `camera`). Like the data,
+     * it is stored raw: `transform` gives its meaning, and baking moves it along.
+     */
+    readonly camera?: SogCamera;
 };
 
 /**
