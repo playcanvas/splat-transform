@@ -29,6 +29,7 @@ import {
     resolveSplatModel,
     revision,
     selectLod,
+    sogCameraFromCamerasJson,
     stackLods,
     TextRenderer,
     Transform,
@@ -37,6 +38,7 @@ import {
     WorkerQueue,
     writeLodSource,
     writeSource,
+    withCamera,
     type ChunkSource,
     type ChunkSourceMetadata,
     type ProcessAction,
@@ -45,6 +47,7 @@ import {
     type Options as LibOptions,
     type CollisionMeshShape,
     type ReadFileSystem,
+    type SogCamera,
     logger
 } from '../lib';
 // CLI-only internals (deliberately off the public lib surface): the LOD-path
@@ -144,6 +147,8 @@ const stripLodTags = (actions: CliAction[]): ProcessAction[] => {
 type File = {
     filename: string;
     processActions: CliAction[];
+    /** Camera block from `--camera-from`, in this input's own coordinates. */
+    camera?: SogCamera;
 };
 
 const cliOptionsConfig = {
@@ -214,7 +219,8 @@ const cliOptionsConfig = {
     'tag-lod': { type: 'string', short: 'l', multiple: true },
     stats: { type: 'string', multiple: true },
     info: { type: 'string', multiple: true },
-    'morton-order': { type: 'boolean', short: 'm', multiple: true }
+    'morton-order': { type: 'boolean', short: 'm', multiple: true },
+    'camera-from': { type: 'string', multiple: true }
 } as const;
 
 const stringOptionNames = new Set(Object.entries(cliOptionsConfig)
@@ -822,6 +828,19 @@ const parseArguments = async () => {
                     current.processActions.push(ffAction);
                     break;
                 }
+                case 'camera-from': {
+                    // <cameras.json>[:index], index defaulting to the first camera
+                    const match = /^(.*):(\d+)$/.exec(t.value);
+                    const path = match ? match[1] : t.value;
+                    let cameras;
+                    try {
+                        cameras = JSON.parse(await pathReadFile(path, 'utf-8'));
+                    } catch (e) {
+                        throw new Error(`Failed to read cameras JSON file: ${path}`);
+                    }
+                    current.camera = sogCameraFromCamerasJson(cameras, match ? parseInteger(match[2]) : 0);
+                    break;
+                }
             }
         }
     }
@@ -874,6 +893,8 @@ ACTIONS (executed in order; can be repeated)
         --stats            [text|json]      Print file info, per-column statistics and the fill/overdraw ratio to stdout. Default: text
         --info             [text|json]      Print structural metadata (format, per-LOD counts, extra columns) to stdout. Default: text
     -m, --morton-order                      Reorder Gaussians by Morton code (Z-order curve)
+        --camera-from      <file[:n]>       Record training camera n (default 0) of a 3DGS cameras.json as the
+                                              input's camera; written to .sog / meta.json / lod-meta.json
 
 GENERAL
     -h, --help                              Show this help and exit
@@ -1137,6 +1158,10 @@ const main = async () => {
 
     const outputFilename = resolve(outputArg.filename);
 
+    if (outputArg.camera) {
+        failExit('--camera-from applies to an input file: place it after the input whose poses it holds.');
+    }
+
     // Check for null output (discard file writing)
     const isNullOutput = outputArg.filename.toLowerCase() === 'null';
 
@@ -1289,7 +1314,8 @@ const main = async () => {
                 });
                 const readFilename = fmt === 'mjs' ? `file://${inFile}` : inFile;
                 const srcs = await readFile({ filename: readFilename, inputFormat: fmt, options: { ...options, lodSelect: [] }, params, fileSystem });
-                return srcs.length === 1 ? srcs[0] : concatSource(srcs, pool);
+                const src = srcs.length === 1 ? srcs[0] : concatSource(srcs, pool);
+                return inputArg.camera ? withCamera(src, inputArg.camera) : src;
             };
 
             // Stitch inputs: uniform layout -> concatSource (transforms unified as
@@ -1312,12 +1338,14 @@ const main = async () => {
                     const seen = [...new Set(sources.map(s => s.meta.model))].join(', ');
                     logger.warn(`mixed splat models (${seen}); writing the result as '${model}'`);
                 }
+                const withCam = sources.find(s => s.meta.camera);
                 const dts: DataTable[] = [];
                 for (const s of sources) {
                     dts.push(await materializeToDataTable(s, pool));
                     await s.close();
                 }
-                return dataTableToChunkSource(combine(dts), pool.chunkSize, undefined, model);
+                const combinedSource = dataTableToChunkSource(combine(dts), pool.chunkSize, undefined, model);
+                return withCam ? withCamera(combinedSource, withCam.meta.camera, withCam.meta.transform) : combinedSource;
             };
 
             const phase = logger.group(`Output ${outputArg.filename}`, { index: phaseTotal, total: phaseTotal });
@@ -1416,11 +1444,12 @@ const main = async () => {
                 // Intrinsic multi-LOD: view each level with selectLod (shared parent);
                 // env fetched separately. The input's own actions apply per level.
                 const { filename: inFile, fileSystem } = resolveInput(inputArgs[0].filename);
-                const multi = single === 'lcc2' ?
+                const lodSource = single === 'lcc2' ?
                     await readLcc2Source(fileSystem, inFile, { ...options, lodSelect: [] }, pool) :
                     single === 'lod' ?
                         await readLodSource(fileSystem, inFile, { ...options, lodSelect: [] }, pool) :
                         await readLccSource(fileSystem, inFile, { ...options, lodSelect: [] }, pool);
+                const multi = inputArgs[0].camera ? withCamera(lodSource, inputArgs[0].camera) : lodSource;
                 container = multi;
                 envSource = single === 'lcc2' ?
                     await readLcc2EnvironmentSource(fileSystem, inFile, pool) :
@@ -1445,8 +1474,9 @@ const main = async () => {
                 }
                 const opened = await Promise.all(tagged.map(async (t) => {
                     const { filename: inFile, fileSystem } = resolveInput(t.arg.filename);
+                    const ply = await readPly(await fileSystem.createSource(inFile), pool);
                     const src = await processSourceBridged(
-                        await readPly(await fileSystem.createSource(inFile), pool),
+                        t.arg.camera ? withCamera(ply, t.arg.camera) : ply,
                         t.rest, pool, processOptions
                     );
                     return { src, tag: t.tag };

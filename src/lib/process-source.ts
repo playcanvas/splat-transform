@@ -10,7 +10,8 @@ import {
     mapSource,
     mortonOrder,
     permuteSource,
-    reduceBandsSource
+    reduceBandsSource,
+    withCamera
 } from './ops';
 import { processDataTable, type ProcessAction, type ProcessOptions } from './process';
 import { formatSourceInfo, formatSourceStats } from './source-info';
@@ -151,9 +152,11 @@ const processSourceBridged = async (
         } else {
             // DataTable island: materialize the current (streaming) source, apply
             // the run on the table, and re-bridge back to a source to keep going.
+            const { camera, transform } = src.meta;
             const dt = await materializeToDataTable(src, pool);
             await src.close();
             src = dataTableToChunkSource(await processDataTable(dt, run, options), pool.chunkSize);
+            if (camera) src = withCamera(src, camera, transform);
         }
         i = j;
     }

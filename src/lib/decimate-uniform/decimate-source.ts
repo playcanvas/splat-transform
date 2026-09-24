@@ -250,6 +250,7 @@ const decimateSource = async (
             numChunks: [Math.ceil(outCount / src.meta.chunkSize)],
             shBands: src.meta.shBands,
             model: src.meta.model,
+            camera: src.meta.camera,
             extraColumns: src.meta.extraColumns,
             transform: src.meta.transform,
             availableLayers: src.meta.availableLayers,

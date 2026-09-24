@@ -7,6 +7,7 @@ import {
     type ChunkSourceMetadata,
     SH_REST_COUNTS
 } from '../chunk';
+import { transformSogCamera } from '../sog-camera';
 import { RotateSH, Transform } from '../utils';
 
 const SH_PER_CHANNEL = [0, 3, 8, 15];
@@ -33,12 +34,18 @@ const SH_PER_CHANNEL = [0, 3, 8, 15];
  * @returns A derived source whose reads yield data in `targetSpace`.
  */
 const bakeTransform = (src: ChunkSource, targetSpace: Transform): ChunkSource => {
-    const meta: ChunkSourceMetadata = { ...src.meta, transform: targetSpace.clone() };
     const delta = targetSpace.clone().invert().mul(src.meta.transform);
 
     if (delta.isIdentity()) {
+        const meta: ChunkSourceMetadata = { ...src.meta, transform: targetSpace.clone() };
         return { meta, read: req => src.read(req), close: () => src.close() };
     }
+
+    const meta: ChunkSourceMetadata = {
+        ...src.meta,
+        transform: targetSpace.clone(),
+        ...(src.meta.camera ? { camera: transformSogCamera(src.meta.camera, delta) } : {})
+    };
 
     const r = delta.rotation;
     const s = delta.scale;

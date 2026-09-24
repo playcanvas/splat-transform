@@ -12,9 +12,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = dirname(__dirname);
 const cliArgsEnvName = 'SPLAT_TRANSFORM_CLI_TEST_ARGS';
 
+// From source the WebP codec can't find its wasm next to the module, so point
+// it at lib/ (as the in-process tests do) for runs that write SOG.
 const cliBootstrap = `
 const cliArgs = JSON.parse(process.env.${cliArgsEnvName});
 process.argv = ['node', 'src/cli/index.ts', ...cliArgs];
+const { WebPCodec } = await import('./src/lib/index.ts');
+WebPCodec.wasmUrl = new URL('./lib/webp.wasm', 'file://' + process.cwd() + '/').href;
 const { main } = await import('./src/cli/index.ts');
 await main();
 `;
@@ -253,6 +257,48 @@ describe('CLI image sequences', () => {
             ]);
             assert.notStrictEqual(result.code, 0, 'the CLI should refuse to overwrite a frame');
             assert.match(result.stderr + result.stdout, /seq\.0001\.webp' already exists/);
+        } finally {
+            await rm(dir, { recursive: true, force: true });
+        }
+    });
+});
+
+describe('CLI --camera-from', () => {
+    it('records --camera-from in SOG and streamed SOG output', async () => {
+        const { mkdtemp, readFile: readFileFs, rm, writeFile } = await import('node:fs/promises');
+        const { tmpdir } = await import('node:os');
+        const { join } = await import('node:path');
+        const { createTestDataTable, encodePlyBinary } = await import('./helpers/test-utils.mjs');
+        const dir = await mkdtemp(join(tmpdir(), 'st-camera-from-cli-'));
+        try {
+            const cameraEntry = (id, position) => ({
+                id, img_name: `${id}`, width: 800, height: 600, position,
+                rotation: [[1, 0, 0], [0, 1, 0], [0, 0, 1]], fx: 700, fy: 700
+            });
+            await writeFile(join(dir, 'in.ply'), encodePlyBinary(createTestDataTable(16)));
+            await writeFile(join(dir, 'cameras.json'), JSON.stringify([cameraEntry(0, [0, 0, 0]), cameraEntry(1, [1, 2, 3])]));
+            const expected = {
+                convention: 'opencv',
+                rest: { position: [1, 2, 3], rotation: [0, 0, 0, 1] },
+                intrinsics: { fx: 700, fy: 700, cx: 400, cy: 300, width: 800, height: 600 }
+            };
+            const readJson = async path => JSON.parse(await readFileFs(path, 'utf-8'));
+
+            for (const out of ['sog/meta.json', 'lod/lod-meta.json']) {
+                const result = await runCli([
+                    '--gpu', 'cpu', '-w', '-i', '1',
+                    join(dir, 'in.ply'), '--camera-from', `${join(dir, 'cameras.json')}:1`,
+                    join(dir, out)
+                ]);
+                assert.strictEqual(result.code, 0, `CLI failed:\n${result.stderr}\n${result.stdout}`);
+                assert.deepStrictEqual((await readJson(join(dir, out))).camera, expected, out);
+            }
+
+            const rejected = await runCli([
+                '--gpu', 'cpu', join(dir, 'in.ply'), join(dir, 'x.sog'), '--camera-from', join(dir, 'cameras.json')
+            ]);
+            assert.notStrictEqual(rejected.code, 0);
+            assert.match(rejected.stderr + rejected.stdout, /--camera-from applies to an input file/);
         } finally {
             await rm(dir, { recursive: true, force: true });
         }
