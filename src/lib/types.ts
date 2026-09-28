@@ -38,7 +38,7 @@ type Options = {
     /** Gaussians (in thousands) below which an LOD chunk is not split for exceeding the extent. Default: 1 */
     lodChunkMin?: number;
 
-    /** Target number of LOD chunks; the chunk extent is raised until the tree fits. 0 disables. Default: 5000 */
+    /** Target number of LOD chunks; the chunk extent is raised until the tree fits, where `lodChunkCount` allows. 0 disables. Default: 5000 */
     lodMaxChunks?: number;
 
     /** Whether to render and write per-leaf LOD error tables (needs a GPU). Default: false */

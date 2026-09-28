@@ -218,13 +218,13 @@ Apply when writing `lod-meta.json` (multi-LOD streaming SOG bundle).
     --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
     --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
     --lod-chunk-min    <n>              Gaussians in K below which a chunk is not split for extent. Default: 1
-    --lod-max-chunks   <n>              Raise the chunk extent until the scene has at most this many chunks. 0: off. Default: 5000
+    --lod-max-chunks   <n>              Target number of LOD chunks; the chunk extent is raised to fit. 0: off. Default: 5000
     --lod-errors                        Render per-chunk LOD error tables (needs a GPU). Default: off
 ```
 
 A chunk is split when it holds more than `--lod-chunk-count` Gaussians, or when it is wider than the chunk extent and holds more than `--lod-chunk-min`. The minimum keeps sparse regions such as sky or distant background from being cut into near-empty chunks. It is kept low so that sparse regions still split into reasonably sized chunks, which a viewer can cull and choose detail for more precisely.
 
-The chunk extent starts at `--lod-chunk-extent`. A viewer evaluates every chunk on each LOD update, so when a large scene would hold more than `--lod-max-chunks` chunks at that extent, the extent is raised until it fits. Small scenes keep the requested extent. The extent used is recorded in `lod-meta.json` as `asset.chunkExtent`.
+The chunk extent starts at `--lod-chunk-extent`. A viewer evaluates every chunk on each LOD update, so when a large scene would hold more than `--lod-max-chunks` chunks at that extent, the extent is raised until it fits. Small scenes keep the requested extent. `--lod-max-chunks` is a target: `--lod-chunk-count` takes precedence, so a scene whose Gaussian count alone requires more chunks keeps them. The extent used is recorded in `lod-meta.json` as `asset.chunkExtent`.
 
 See [Generating Streamed SOG](https://developer.playcanvas.com/user-manual/splat-transform/streamed-sog/) for an end-to-end walkthrough.
 

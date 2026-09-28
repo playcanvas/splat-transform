@@ -316,6 +316,14 @@ const parseArguments = async () => {
         return result;
     };
 
+    const parseNonNegativeInteger = (value: string, name: string): number => {
+        const result = parseInteger(value);
+        if (result < 0) {
+            throw new Error(`Invalid ${name} value: ${value}. Must be 0 or greater.`);
+        }
+        return result;
+    };
+
     const parseVec = (value: string, count: number): number[] => {
         const parts = value.split(',').map(p => parseNumber(p));
         if (parts.length !== count) {
@@ -594,9 +602,9 @@ const parseArguments = async () => {
         viewerSettingsJson: viewerSettingsPath && await readJsonFile(viewerSettingsPath),
         unbundled: v.unbundled,
         lodChunkCount: parseInteger(v['lod-chunk-count']),
-        lodChunkExtent: parseInteger(v['lod-chunk-extent']),
+        lodChunkExtent: parseNonNegativeInteger(v['lod-chunk-extent'], '--lod-chunk-extent'),
         lodChunkMin: parseInteger(v['lod-chunk-min']),
-        lodMaxChunks: parseInteger(v['lod-max-chunks']),
+        lodMaxChunks: parseNonNegativeInteger(v['lod-max-chunks'], '--lod-max-chunks'),
         lodErrors: v['lod-errors'],
         spzVersion: spzVersion as 3 | 4,
         voxelResolution,
@@ -921,7 +929,7 @@ LOD OUTPUT (lod-meta.json)
         --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
         --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
         --lod-chunk-min    <n>              Gaussians in K below which a chunk is not split for extent. Default: 1
-        --lod-max-chunks   <n>              Raise the chunk extent until the scene has at most this many chunks. 0: off. Default: 5000
+        --lod-max-chunks   <n>              Target number of LOD chunks; the chunk extent is raised to fit. 0: off. Default: 5000
         --lod-errors                        Render per-chunk LOD error tables (needs a GPU). Default: off
 
 VOXEL OUTPUT (.voxel.json)

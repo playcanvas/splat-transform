@@ -354,6 +354,21 @@ describe('writeLodSource: lod-meta.json contract', function () {
             }
         });
 
+        it('terminates and meets the target from a requested extent of 0', function () {
+            // an extent of 0 splits down to the spatial tree's leaves; the fit must still converge
+            const root = lineTree(4096, 0.5);
+            const extent = chooseChunkExtent(root, 1 << 30, 0, 0, 4);
+            assert.ok(extent > 0);
+            assert.ok(countLeaves(root, 1 << 30, extent, 0) <= 4);
+            assert.ok(countLeaves(root, 1 << 30, extent / 1.02, 0) > 4, 'a smaller extent would not fit');
+        });
+
+        it('treats a negative requested extent as 0', function () {
+            const root = lineTree(4096, 0.5);
+            assert.strictEqual(chooseChunkExtent(root, 1 << 30, 0, -5, 4), chooseChunkExtent(root, 1 << 30, 0, 0, 4));
+            assert.strictEqual(chooseChunkExtent(root, 1 << 30, 0, -5, 0), 0);
+        });
+
         it('never goes below the requested extent', function () {
             const root = lineTree(1024, 0.01);
             assert.strictEqual(chooseChunkExtent(root, 1 << 30, 0, 16, 1), 16);
