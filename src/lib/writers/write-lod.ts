@@ -110,9 +110,11 @@ const countLeaves = (node: BTreeNode, binSize: number, extent: number, binMin: n
  * a small scene already under the target keeps the requested limit.
  *
  * The leaf count only falls as the limit grows, so the smallest fitting limit is found by
- * bisection, to within 1%, over limits from `minExtent` to the tree's full width. When not even
- * that fits - file-unit splits alone produce more leaves - the full width is returned. A negative
- * `minExtent` is treated as 0.
+ * bisection, to within 1%, over limits from `minExtent` to the tree's full width. File-unit
+ * splits take precedence, so when even the full width holds more leaves than `maxChunks`, the
+ * fewest leaves the tree can reach becomes the target instead: the result is then the smallest
+ * limit reaching that count, rather than the full width, which would produce the same partition
+ * but report a meaningless extent. A negative `minExtent` is treated as 0.
  *
  * @param root - Root of the spatial tree.
  * @param binSize - Gaussians per file unit.
@@ -128,9 +130,11 @@ const chooseChunkExtent = (root: BTreeNode, binSize: number, binMin: number, min
         return minExtent;
     }
 
+    // at the full width nothing splits for extent, so this is the fewest leaves the tree can reach
     let hi = Math.max(minExtent, root.aabb.largestDim());
-    if (countLeaves(root, binSize, hi, binMin) > maxChunks) {
-        return hi;
+    const target = Math.max(maxChunks, countLeaves(root, binSize, hi, binMin));
+    if (countLeaves(root, binSize, minExtent, binMin) <= target) {
+        return minExtent;
     }
 
     // Bisects geometrically, which covers the wide range of possible extents in few steps. A
@@ -139,13 +143,35 @@ const chooseChunkExtent = (root: BTreeNode, binSize: number, binMin: number, min
     let lo = minExtent;
     for (let i = 0; i < 64 && hi > lo * 1.01; i++) {
         const mid = lo > 0 ? Math.sqrt(lo * hi) : hi * 0.5;
-        if (countLeaves(root, binSize, mid, binMin) <= maxChunks) {
+        if (countLeaves(root, binSize, mid, binMin) <= target) {
             hi = mid;
         } else {
             lo = mid;
         }
     }
     return hi;
+};
+
+/**
+ * Reports how the partition relates to the chunk target: whether it holds more chunks than the
+ * target - which file-unit splits can require whatever the extent - and whether the extent limit
+ * was raised to fit. Silent when there is no target, or the requested extent already fits it.
+ *
+ * @param leaves - Leaves in the partition.
+ * @param extent - Extent limit the partition used.
+ * @param requested - Extent limit that was requested, clamped to 0 or more.
+ * @param maxChunks - Target leaf count, 0 or less for none.
+ * @ignore
+ */
+const logChunkFit = (leaves: number, extent: number, requested: number, maxChunks: number) => {
+    if (!(maxChunks > 0)) return;
+    const chunks = (n: number) => `${n} ${n === 1 ? 'chunk' : 'chunks'}`;
+    const raised = extent > requested ? `LOD chunk extent raised to ${extent.toFixed(1)}m` : '';
+    if (leaves > maxChunks) {
+        logger.info(`${raised || 'LOD chunks'}: ${chunks(leaves)}, above the --lod-max-chunks target of ${maxChunks} (--lod-chunk-count splits require more)`);
+    } else if (raised) {
+        logger.info(`${raised} to fit the --lod-max-chunks target of ${maxChunks}: ${chunks(leaves)}`);
+    }
 };
 
 const boundUnion = (result: Aabb, a: Aabb, b: Aabb) => {
@@ -770,14 +796,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     const binSize = chunkCount * 1024;
     const binMin = chunkMin * 1024;
     const binDim = chooseChunkExtent(bTree.root, binSize, binMin, chunkExtent, maxChunks);
-    if (binDim > chunkExtent) {
-        const leaves = countLeaves(bTree.root, binSize, binDim, binMin);
-        if (leaves <= maxChunks) {
-            logger.info(`LOD chunk extent raised to ${binDim.toFixed(1)}m to fit ${maxChunks} chunks (${leaves} leaves)`);
-        } else {
-            logger.info(`LOD chunk extent raised to ${binDim.toFixed(1)}m: ${leaves} chunks, above the --lod-max-chunks target of ${maxChunks} (--lod-chunk-count splits require more)`);
-        }
-    }
+    logChunkFit(countLeaves(bTree.root, binSize, binDim, binMin), binDim, Math.max(0, chunkExtent), maxChunks);
 
     // map of lod -> file units -> subunits (each subunit a tight Uint32Array of
     // gaussian indices). This is the bulk retained bookkeeping; Uint32Array keeps
