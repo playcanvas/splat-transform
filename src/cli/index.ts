@@ -70,6 +70,7 @@ interface CliOptions extends LibOptions {
     noTty: boolean | undefined;
     listGpus: boolean;
     deviceIdx: number;  // -1 = auto, -2 = CPU, 0+ = GPU index
+    gpuBackend: string | undefined;  // forced Dawn backend; undefined = platform default
     scratchDir: string | undefined;  // decimation intermediate location (explicit only, never defaulted)
     memoryBudgetBytes: number;  // decimation residency policy ceiling (not an allocation, not user-facing)
 }
@@ -160,6 +161,7 @@ const cliOptionsConfig = {
     'webp-effort': { type: 'string' },
     'list-gpus': { type: 'boolean', default: false },
     gpu: { type: 'string', short: 'g', default: '-1' },
+    'gpu-backend': { type: 'string' },
     'select-lod': { type: 'string', short: 'L', default: '' },
     'viewer-settings': { type: 'string', default: '' },
     'lod-chunk-count': { type: 'string', default: '512' },
@@ -362,6 +364,11 @@ const parseArguments = async () => {
         if (deviceIdx < -1) {
             throw new Error(`Invalid GPU index: ${deviceIdx}. Must be >= 0 or 'cpu'.`);
         }
+    }
+
+    const gpuBackend = v['gpu-backend']?.toLowerCase();
+    if (gpuBackend !== undefined && !['vulkan', 'd3d12', 'metal'].includes(gpuBackend)) {
+        throw new Error(`Invalid GPU backend: ${v['gpu-backend']}. Must be 'vulkan', 'd3d12' or 'metal'.`);
     }
 
     // Cap the SOG worker pool (0 = inline/serial). Lower trades speed for peak
@@ -573,6 +580,7 @@ const parseArguments = async () => {
         webpEffort,
         listGpus: v['list-gpus'],
         deviceIdx,
+        gpuBackend,
         scratchDir: v['scratch-dir'],
         // Residency policy ceiling for decimation (not an upfront allocation).
         // Half the machine's RAM, capped at 48 GiB — derived here because the
@@ -890,6 +898,8 @@ GPU (used by SOG compression and GPU voxelization: --filter-cluster, --filter-fl
         --list-gpus                         List available GPU adapters and exit
     -g, --gpu              <n|cpu>          Device for GPU operations: GPU adapter index | 'cpu'
                                               ('cpu' disables GPU and is incompatible with GPU-only features)
+        --gpu-backend      <name>           Force the WebGPU backend: vulkan | d3d12 | metal. Default: platform default
+                                              (e.g. vulkan works around Dawn D3D12 bugs on Windows)
 
 SOG COMPRESSION (.sog, meta.json, lod-meta.json, .html outputs)
     -i, --sh-iterations    <n>              SH compression iterations (more=better). Default: 10
@@ -1095,7 +1105,7 @@ const main = async () => {
     if (options.listGpus) {
         logger.info('Enumerating available GPU adapters...');
         try {
-            const adapters = await enumerateAdapters();
+            const adapters = await enumerateAdapters(options.gpuBackend);
             if (adapters.length === 0) {
                 logger.info('No GPU adapters found.');
                 logger.info('This could mean:');
@@ -1198,7 +1208,7 @@ const main = async () => {
 
             let adapterName: string | undefined;
             if (options.deviceIdx >= 0) {
-                const adapters = await enumerateAdapters();
+                const adapters = await enumerateAdapters(options.gpuBackend);
                 const adapter = adapters[options.deviceIdx];
                 if (adapter) {
                     adapterName = adapter.name;
@@ -1207,7 +1217,7 @@ const main = async () => {
                 }
             }
 
-            cachedDevice = await createDevice(adapterName);
+            cachedDevice = await createDevice(adapterName, options.gpuBackend);
             return cachedDevice;
         };
 

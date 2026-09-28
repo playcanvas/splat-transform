@@ -39,13 +39,21 @@ const initializeGlobals = () => {
 
 initializeGlobals();
 
+// Dawn option forcing a specific backend (e.g. 'vulkan'); none = Dawn's platform default.
+const backendOptions = (backend?: string) => (backend ? [`backend=${backend}`] : []);
+
 // Get Dawn's actual adapter names by triggering its error message.
 // This is the official documented method for enumerating adapters:
 // https://github.com/dawn-gpu/node-webgpu?tab=readme-ov-file#usage
-const getDawnAdapterNames = async (): Promise<string[]> => {
+const getDawnAdapterNames = async (backend?: string): Promise<string[]> => {
     try {
-        const gpu = create(['adapter=__list_adapters__']);
-        await gpu.requestAdapter();
+        const gpu = create([...backendOptions(backend), 'adapter=__list_adapters__']);
+        const adapter = await gpu.requestAdapter();
+
+        // A forced backend with no adapters resolves null instead of throwing
+        if (!adapter && backend) {
+            return [];
+        }
     } catch (e) {
         // Parse Dawn's error message to extract adapter names
         const message = e instanceof Error ? e.message : String(e);
@@ -54,9 +62,9 @@ const getDawnAdapterNames = async (): Promise<string[]> => {
 
         for (const line of lines) {
             // Look for lines like: " * backend: 'd3d12', name: 'NVIDIA RTX A2000 8GB Laptop GPU'"
-            const match = line.match(/name:\s*'([^']+)'/);
-            if (match) {
-                names.push(match[1]);
+            const match = line.match(/backend:\s*'([^']+)',\s*name:\s*'([^']+)'/);
+            if (match && (!backend || match[1] === backend)) {
+                names.push(match[2]);
             }
         }
 
@@ -78,7 +86,7 @@ const getPeakGpuMemory = (): number => peakGpuBytes;
 // Cache enumerated adapters so we don't query Dawn multiple times
 let cachedAdapters: Array<{ index: number; name: string }> | null = null;
 
-const enumerateAdapters = async () => {
+const enumerateAdapters = async (backend?: string) => {
     if (cachedAdapters) {
         return cachedAdapters;
     }
@@ -87,7 +95,7 @@ const enumerateAdapters = async () => {
         logger.info('Detecting GPU adapters...');
 
         // Get the actual adapter names directly from Dawn
-        const dawnAdapterNames = await getDawnAdapterNames();
+        const dawnAdapterNames = await getDawnAdapterNames(backend);
 
         // Cache and return the list
         cachedAdapters = dawnAdapterNames.map((name, index) => ({
@@ -105,12 +113,19 @@ const enumerateAdapters = async () => {
     }
 };
 
-const createDevice = async (adapterName?: string): Promise<GraphicsDevice> => {
+const createDevice = async (adapterName?: string, backend?: string): Promise<GraphicsDevice> => {
     // Use Dawn's adapter selection if a specific adapter name is provided
-    const dawnOptions = adapterName ? [`adapter=${adapterName}`] : [];
+    const dawnOptions = [...backendOptions(backend), ...(adapterName ? [`adapter=${adapterName}`] : [])];
 
     // @ts-ignore
     window.navigator.gpu = create(dawnOptions);
+
+    // A forced backend the machine lacks resolves a null adapter, which
+    // PlayCanvas would dereference with an opaque TypeError
+    // @ts-ignore
+    if (backend && !(await window.navigator.gpu.requestAdapter())) {
+        throw new Error(`No GPU adapter found for backend '${backend}'`);
+    }
 
     const canvas = document.createElement('canvas');
 
