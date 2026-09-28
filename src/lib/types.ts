@@ -32,11 +32,14 @@ type Options = {
     /** Approximate number of Gaussians per LOD chunk (in thousands). Default: 512 */
     lodChunkCount?: number;
 
-    /** Approximate size of an LOD chunk in world units (meters). Default: 16 */
+    /** Approximate size of an LOD chunk in world units (meters), raised to fit `lodMaxChunks`. Default: 16 */
     lodChunkExtent?: number;
 
-    /** Gaussians (in thousands) below which an LOD chunk is not split for exceeding the extent. Default: 8 */
+    /** Gaussians (in thousands) below which an LOD chunk is not split for exceeding the extent. Default: 1 */
     lodChunkMin?: number;
+
+    /** Target number of LOD chunks; the chunk extent is raised until the tree fits. 0 disables. Default: 5000 */
+    lodMaxChunks?: number;
 
     /** Whether to render and write per-leaf LOD error tables (needs a GPU). Default: false */
     lodErrors?: boolean;

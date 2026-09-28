@@ -48,6 +48,12 @@ type LodMeta = {
          * Sparser regions form leaves as wide as they need to be to hold this many.
          */
         chunkMinGaussians: number;
+        /**
+         * Leaf count the extent limit was fitted to (`--lod-max-chunks`), 0 when it was not.
+         * `chunkExtent` is then the fitted limit: the requested extent, raised until the tree
+         * holds no more leaves than this.
+         */
+        maxChunks: number;
     };
     count: number;
     counts: number[];
@@ -61,6 +67,79 @@ type LodMeta = {
     environment?: string;
     filenames: string[];
     tree: MetaNode;
+};
+
+/**
+ * Whether the partition splits a node of the spatial tree: when it holds more than a file unit,
+ * or when it is wider than the extent limit and holds more than the minimum.
+ *
+ * @param node - The spatial tree node.
+ * @param binSize - Gaussians per file unit.
+ * @param extent - Extent limit, in world units.
+ * @param binMin - Gaussians below which a node is not split for extent.
+ * @returns True when the node is split into its two children.
+ * @ignore
+ */
+const shouldSplit = (node: BTreeNode, binSize: number, extent: number, binMin: number): boolean => {
+    return !node.indices && (node.count > binSize || (node.aabb && node.aabb.largestDim() > extent && node.count > binMin));
+};
+
+/**
+ * Number of leaves the partition produces with a given extent limit. Walks only the spatial
+ * tree's counts and bounds, so it touches no gaussian data.
+ *
+ * @param node - The spatial tree node to count from.
+ * @param binSize - Gaussians per file unit.
+ * @param extent - Extent limit, in world units.
+ * @param binMin - Gaussians below which a node is not split for extent.
+ * @returns The number of leaves under `node`.
+ * @ignore
+ */
+const countLeaves = (node: BTreeNode, binSize: number, extent: number, binMin: number): number => {
+    if (!shouldSplit(node, binSize, extent, binMin)) return 1;
+    return countLeaves(node.left, binSize, extent, binMin) + countLeaves(node.right, binSize, extent, binMin);
+};
+
+/**
+ * Picks the extent limit: the requested `minExtent`, or when the partition would then hold more
+ * than `maxChunks` leaves, the smallest larger limit that fits. A leaf is the unit of streaming,
+ * culling and LOD choice, and a runtime evaluates every leaf on each LOD update, so the leaf count
+ * is what bounds that cost - a large scene cut at a small extent easily reaches tens of thousands.
+ * Raising the limit keeps leaves as uniform in size as the extent rule makes them, only larger;
+ * a small scene already under the target keeps the requested limit.
+ *
+ * The leaf count only falls as the limit grows, so the smallest fitting limit is found by
+ * bisection, to within 1%, over limits from `minExtent` to the tree's full width. When not even
+ * that fits - file-unit splits alone produce more leaves - the full width is returned.
+ *
+ * @param root - Root of the spatial tree.
+ * @param binSize - Gaussians per file unit.
+ * @param binMin - Gaussians below which a node is not split for extent.
+ * @param minExtent - The requested extent limit, never lowered.
+ * @param maxChunks - Target leaf count. 0 or less keeps `minExtent`.
+ * @returns The extent limit to partition with.
+ * @ignore
+ */
+const chooseChunkExtent = (root: BTreeNode, binSize: number, binMin: number, minExtent: number, maxChunks: number): number => {
+    if (!(maxChunks > 0) || countLeaves(root, binSize, minExtent, binMin) <= maxChunks) {
+        return minExtent;
+    }
+
+    let hi = Math.max(minExtent, root.aabb.largestDim());
+    if (countLeaves(root, binSize, hi, binMin) > maxChunks) {
+        return hi;
+    }
+
+    let lo = minExtent;
+    while (hi > lo * 1.01) {
+        const mid = Math.sqrt(lo * hi);
+        if (countLeaves(root, binSize, mid, binMin) <= maxChunks) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    return hi;
 };
 
 const boundUnion = (result: Aabb, a: Aabb, b: Aabb) => {
@@ -578,19 +657,29 @@ type WriteLodSourceOptions = {
      */
     lodErrors?: boolean;
     chunkCount: number;
+    /**
+     * Extent limit, in world units: a node wider than this is split, subject to
+     * `chunkMin`. The smallest limit used - it is raised when needed to fit
+     * `maxChunks`.
+     */
     chunkExtent: number;
     /**
-     * Gaussians, in thousands, below which a node is not split for exceeding
-     * `chunkExtent`. Default 8. A leaf is the unit of streaming, culling and LOD
+     * Gaussians, in thousands, below which a node is not split for exceeding the
+     * extent limit. Default 1. A leaf is the unit of streaming, culling and LOD
      * choice, and costs the same to stream, evaluate and describe whether it holds
      * eighty gaussians or eight thousand; without a floor a wide sparse region —
      * sky, floaters, distant background — is cut down to the extent limit
-     * regardless of content, into tens of thousands of near-empty leaves that
-     * inflate the manifest and the runtime's per-node work while carrying nothing
-     * the allocator would not buy whole anyway. Dense regions never reach the
-     * floor, so their leaves are unchanged.
+     * regardless of content, into near-empty leaves. The floor is kept low so sparse
+     * regions still split into reasonably sized leaves, which a viewer can cull and
+     * choose LOD for more precisely than one wide leaf. Counted across all LOD levels.
      */
     chunkMin?: number;
+    /**
+     * Target leaf count. When the partition at `chunkExtent` would hold more leaves,
+     * the extent limit is raised until it fits - see {@link chooseChunkExtent}.
+     * Default 5000. 0 disables the fit.
+     */
+    maxChunks?: number;
 };
 
 /**
@@ -609,7 +698,7 @@ type WriteLodSourceOptions = {
  * @ignore
  */
 const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) => {
-    const { filename, envSource, iterations, webpEffort, createDevice, chunkCount, chunkExtent, chunkMin = 8, lodErrors = false } = options;
+    const { filename, envSource, iterations, webpEffort, createDevice, chunkCount, chunkExtent, chunkMin = 1, maxChunks = 5000, lodErrors = false } = options;
 
     // Bake the pending coordinate-space transform to PLY once, up front, so the
     // partition/bounds passes (extractSlim, calcBound, morton) and the per-unit
@@ -672,8 +761,11 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
 
     // approximate number of gaussians we'll place into file units
     const binSize = chunkCount * 1024;
-    const binDim = chunkExtent;
     const binMin = chunkMin * 1024;
+    const binDim = chooseChunkExtent(bTree.root, binSize, binMin, chunkExtent, maxChunks);
+    if (binDim > chunkExtent) {
+        logger.info(`LOD chunk extent raised to ${binDim.toFixed(1)}m to fit ${maxChunks} chunks (${countLeaves(bTree.root, binSize, binDim, binMin)} leaves)`);
+    }
 
     // map of lod -> file units -> subunits (each subunit a tight Uint32Array of
     // gaussian indices). This is the bulk retained bookkeeping; Uint32Array keeps
@@ -689,7 +781,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     const build = async (node: BTreeNode): Promise<MetaNode> => {
         // Split when the node holds more than a unit, or when it is wider than the
         // extent limit and holds enough gaussians to be worth two leaves.
-        if (!node.indices && (node.count > binSize || (node.aabb && node.aabb.largestDim() > binDim && node.count > binMin))) {
+        if (shouldSplit(node, binSize, binDim, binMin)) {
             const children = [
                 await build(node.left),
                 await build(node.right)
@@ -786,7 +878,8 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
             generator: `splat-transform v${version}`,
             chunkGaussians: binSize,
             chunkExtent: binDim,
-            chunkMinGaussians: binMin
+            chunkMinGaussians: binMin,
+            maxChunks: maxChunks > 0 ? maxChunks : 0
         },
         count: counts.reduce((acc, curr) => acc + curr, 0),
         counts,
@@ -911,4 +1004,4 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     writingGroup.end();
 };
 
-export { positionsFromSlim, writeLodSource, type WriteLodSourceOptions };
+export { chooseChunkExtent, countLeaves, positionsFromSlim, shouldSplit, writeLodSource, type WriteLodSourceOptions };

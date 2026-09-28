@@ -21,7 +21,8 @@ import { bakeTransform, mapSource, stackLods } from '../src/lib/ops/index.js';
 import { readPly } from '../src/lib/readers/read-ply.js';
 import { collectFilesByLod, readLodEnvironmentSource } from '../src/lib/readers/read-lod.js';
 import { createChunkDataPool } from '../src/lib/chunk/index.js';
-import { positionsFromSlim, writeLodSource } from '../src/lib/writers/write-lod.js';
+import { chooseChunkExtent, countLeaves, positionsFromSlim, writeLodSource } from '../src/lib/writers/write-lod.js';
+import { BTree } from '../src/lib/spatial/index.js';
 import { version } from '../src/lib/version.js';
 
 import { encodePlyBinary } from './helpers/test-utils.mjs';
@@ -213,6 +214,7 @@ describe('writeLodSource: lod-meta.json contract', function () {
         // 1024 gaussians, chunkExtent in world units
         assert.strictEqual(meta.asset.chunkGaussians, 1024);
         assert.strictEqual(meta.asset.chunkExtent, 16);
+        assert.strictEqual(meta.asset.maxChunks, 5000, 'the default leaf target is recorded');
         assert.strictEqual(meta.count, 5);
         assert.deepStrictEqual(meta.counts, [3, 2]);
         assert.strictEqual(meta.lodLevels, 2);
@@ -247,8 +249,8 @@ describe('writeLodSource: lod-meta.json contract', function () {
 
     it('records the chunk minimum and does not split a sparse node for extent below it', async function () {
         // 300 splats over 150 m: wider than the 16 m extent limit (and enough for the
-        // spatial tree to have interior nodes), but far below the default minimum of
-        // 8K gaussians, so the region stays one leaf
+        // spatial tree to have interior nodes), but below the default minimum of 1K
+        // gaussians, so the region stays one leaf
         const source = dataTableToChunkSource(makeSplatTable(wideSplats), 1 << 20);
         const fs = new MemoryFileSystem();
         await writeLodSource({
@@ -260,7 +262,7 @@ describe('writeLodSource: lod-meta.json contract', function () {
             chunkExtent: 16
         }, fs);
         const meta = JSON.parse(new TextDecoder().decode(fs.results.get('/scene/lod-meta.json')));
-        assert.strictEqual(meta.asset.chunkMinGaussians, 8192);
+        assert.strictEqual(meta.asset.chunkMinGaussians, 1024);
         assert.ok(!('children' in meta.tree), 'a sparse wide node is one leaf');
         assert.strictEqual(meta.tree.lods['0'].count, wideSplats.length);
     });
@@ -285,6 +287,84 @@ describe('writeLodSource: lod-meta.json contract', function () {
         walk(meta.tree);
         assert.ok(leaves.length >= 2, `expected the extent limit to split the node, got ${leaves.length} leaf`);
         assert.strictEqual(leaves.reduce((sum, l) => sum + l.lods['0'].count, 0), wideSplats.length);
+    });
+
+    // 4096 splats along 2 km: at a 16 m extent with no minimum the tree splits down to its
+    // 256-gaussian leaves
+    const lineSplats = Array.from({ length: 4096 }, (_, i) => ({ x: i * 0.5 }));
+
+    it('raises the chunk extent until the tree fits the chunk target', async function () {
+        const source = dataTableToChunkSource(makeSplatTable(lineSplats), 1 << 20);
+        const fs = new MemoryFileSystem();
+        await writeLodSource({
+            filename: '/scene/lod-meta.json',
+            mainSource: source,
+            envSource: null,
+            iterations: 1,
+            chunkCount: 1024,
+            chunkExtent: 16,
+            chunkMin: 0,
+            maxChunks: 4
+        }, fs);
+        const meta = JSON.parse(new TextDecoder().decode(fs.results.get('/scene/lod-meta.json')));
+        const leaves = [];
+        const walk = (n) => { if (n.children) n.children.forEach(walk); else leaves.push(n); };
+        walk(meta.tree);
+        assert.ok(leaves.length <= 4, `expected at most 4 leaves, got ${leaves.length}`);
+        assert.ok(leaves.length > 1, 'the fitted extent still splits the line');
+        assert.ok(meta.asset.chunkExtent > 16, `the extent limit is raised, got ${meta.asset.chunkExtent}`);
+        assert.strictEqual(meta.asset.maxChunks, 4);
+        assert.strictEqual(leaves.reduce((sum, l) => sum + l.lods['0'].count, 0), lineSplats.length);
+    });
+
+    it('keeps the requested chunk extent when the chunk target is off or already met', async function () {
+        for (const maxChunks of [0, 100000]) {
+            const source = dataTableToChunkSource(makeSplatTable(lineSplats), 1 << 20);
+            const fs = new MemoryFileSystem();
+            await writeLodSource({
+                filename: '/scene/lod-meta.json',
+                mainSource: source,
+                envSource: null,
+                iterations: 1,
+                chunkCount: 1024,
+                chunkExtent: 16,
+                chunkMin: 0,
+                maxChunks
+            }, fs);
+            const meta = JSON.parse(new TextDecoder().decode(fs.results.get('/scene/lod-meta.json')));
+            assert.strictEqual(meta.asset.chunkExtent, 16);
+            assert.strictEqual(meta.asset.maxChunks, maxChunks);
+        }
+    });
+
+    describe('chooseChunkExtent', function () {
+        const lineTree = (count, spacing) => {
+            const x = new Float32Array(count).map((_, i) => i * spacing);
+            return new BTree(new DataTable([
+                new Column('x', x), new Column('y', new Float32Array(count)), new Column('z', new Float32Array(count))
+            ])).root;
+        };
+
+        it('picks the smallest extent at which the leaf count fits', function () {
+            const root = lineTree(1 << 16, 0.25);
+            for (const target of [8, 32, 100]) {
+                const extent = chooseChunkExtent(root, 1 << 30, 0, 16, target);
+                assert.ok(countLeaves(root, 1 << 30, extent, 0) <= target, `target ${target} is met`);
+                assert.ok(countLeaves(root, 1 << 30, extent / 1.02, 0) > target, `target ${target}: a smaller extent would not fit`);
+            }
+        });
+
+        it('never goes below the requested extent', function () {
+            const root = lineTree(1024, 0.01);
+            assert.strictEqual(chooseChunkExtent(root, 1 << 30, 0, 16, 1), 16);
+        });
+
+        it('returns the full width when file units alone exceed the target', function () {
+            const root = lineTree(4096, 1);
+            const extent = chooseChunkExtent(root, 512, 0, 16, 2);
+            assert.ok(extent >= root.aabb.largestDim());
+            assert.strictEqual(countLeaves(root, 512, extent, 0), 8);
+        });
     });
 
     it('matches errors to lodLevels when trailing structural LODs are empty', async function () {
