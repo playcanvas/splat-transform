@@ -166,7 +166,8 @@ const cliOptionsConfig = {
     'viewer-settings': { type: 'string', default: '' },
     'lod-chunk-count': { type: 'string', default: '512' },
     'lod-chunk-extent': { type: 'string', default: '16' },
-    'lod-chunk-min': { type: 'string', default: '8' },
+    'lod-chunk-min': { type: 'string', default: '1' },
+    'lod-max-chunks': { type: 'string', default: '5000' },
     'lod-errors': { type: 'boolean', default: false },
     'spz-version': { type: 'string', default: '4' },
     unbundled: { type: 'boolean', default: false },
@@ -311,6 +312,14 @@ const parseArguments = async () => {
         const result = parseNumber(value);
         if (!Number.isInteger(result)) {
             throw new Error(`Invalid integer value: ${value}`);
+        }
+        return result;
+    };
+
+    const parseNonNegativeInteger = (value: string, name: string): number => {
+        const result = parseInteger(value);
+        if (result < 0) {
+            throw new Error(`Invalid ${name} value: ${value}. Must be 0 or greater.`);
         }
         return result;
     };
@@ -593,8 +602,9 @@ const parseArguments = async () => {
         viewerSettingsJson: viewerSettingsPath && await readJsonFile(viewerSettingsPath),
         unbundled: v.unbundled,
         lodChunkCount: parseInteger(v['lod-chunk-count']),
-        lodChunkExtent: parseInteger(v['lod-chunk-extent']),
+        lodChunkExtent: parseNonNegativeInteger(v['lod-chunk-extent'], '--lod-chunk-extent'),
         lodChunkMin: parseInteger(v['lod-chunk-min']),
+        lodMaxChunks: parseNonNegativeInteger(v['lod-max-chunks'], '--lod-max-chunks'),
         lodErrors: v['lod-errors'],
         spzVersion: spzVersion as 3 | 4,
         voxelResolution,
@@ -918,7 +928,8 @@ LOD INPUT (lod-meta.json, .lcc, .lcc2)
 LOD OUTPUT (lod-meta.json)
         --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
         --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
-        --lod-chunk-min    <n>              Gaussians in K below which a chunk is not split for extent. Default: 8
+        --lod-chunk-min    <n>              Gaussians in K below which a chunk is not split for extent. Default: 1
+        --lod-max-chunks   <n>              Target number of LOD chunks; the chunk extent is raised to fit. 0: off. Default: 5000
         --lod-errors                        Render per-chunk LOD error tables (needs a GPU). Default: off
 
 VOXEL OUTPUT (.voxel.json)
@@ -1509,6 +1520,7 @@ const main = async () => {
                 chunkCount: options.lodChunkCount,
                 chunkExtent: options.lodChunkExtent,
                 chunkMin: options.lodChunkMin,
+                maxChunks: options.lodMaxChunks,
                 lodErrors: options.lodErrors
             }, new NodeFileSystem());
 
