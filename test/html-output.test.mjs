@@ -87,8 +87,11 @@ describe('HTML Format (Output Only)', () => {
         assert(htmlText.includes('"contentUrl":"viewer.sog"'),
             'Bootstrap should point at the sibling .sog file');
         assert(htmlText.includes('href="./index.css"'), 'Should link the sibling stylesheet');
-        assert(htmlText.includes("import { main } from './index.js';"),
-            'Should import the sibling module bundle');
+        const imported = htmlText.match(/import \{ (\w+) \} from '\.\/index\.js';/);
+        assert(imported, 'Should import the sibling module bundle');
+        const jsText = new TextDecoder().decode(writeFs.results.get('output/index.js'));
+        assert(new RegExp(`export\\s*\\{[^}]*\\b${imported[1]}\\b`).test(jsText),
+            `The sibling module bundle should export ${imported[1]}`);
         assert(htmlText.includes('./settings.json'), 'Should fetch the sibling settings file');
 
         // For unbundled, should have additional files

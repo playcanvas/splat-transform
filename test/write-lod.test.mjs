@@ -8,7 +8,7 @@
 
 import assert from 'node:assert';
 import { dirname, join } from 'node:path';
-import { after, before, describe, it } from 'node:test';
+import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -28,26 +28,6 @@ import { encodePlyBinary } from './helpers/test-utils.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 WebPCodec.wasmUrl = join(__dirname, '..', 'lib', 'webp.wasm');
-
-// The per-leaf error tables are opt-in and rendered on the GPU; tests that read
-// them request them and skip when no adapter is available, and the header tests
-// assert the declaration matches whether a device was supplied.
-let device = null;
-
-before(async () => {
-    try {
-        const { createDevice } = await import('../src/cli/node-device.js');
-        device = await createDevice();
-    } catch {
-        device = null;
-    }
-});
-
-after(() => {
-    device?.destroy?.();
-});
-
-const deviceOptions = () => (device ? { createDevice: async () => device, lodErrors: true } : { lodErrors: true });
 
 // Minimal seekable ReadSource over a buffer, for the disk-PLY writeLodSource path.
 class BufferReadSource {
@@ -99,8 +79,7 @@ const makeTable = (n) => {
     ], Transform.PLY);
 };
 
-// A table from explicit per-splat values, for exercising the LOD error metric.
-// Defaults put every splat at the origin with log-scale -3 (sigma ~0.0498) and
+// A table from explicit per-splat values. Defaults put every splat at the origin with log-scale -3 (sigma ~0.0498) and
 // opacity logit 0 (alpha 0.5).
 const makeSplatTable = (splats) => {
     const col = (key, fallback) => new Float32Array(splats.map(s => s[key] ?? fallback));
@@ -122,8 +101,8 @@ const makeSplatTable = (splats) => {
     ], Transform.PLY);
 };
 
-// The error table of a scene whose levels are given splat-by-splat.
-const writeErrors = async (levels) => {
+// The manifest of a scene whose levels are given splat-by-splat.
+const writeLevels = async (levels) => {
     const fs = new MemoryFileSystem();
     const sources = levels.map(splats => dataTableToChunkSource(makeSplatTable(splats), 1 << 20));
     await writeLodSource({
@@ -132,37 +111,9 @@ const writeErrors = async (levels) => {
         envSource: null,
         iterations: 1,
         chunkCount: 1,
-        chunkExtent: 16,
-        ...deviceOptions()
+        chunkExtent: 16
     }, fs);
-    const meta = JSON.parse(new TextDecoder().decode(fs.results.get('/scene/lod-meta.json')));
-    return meta.tree.errors;
-};
-
-// A one-splat table with `count` SH coefficients (9, 24 or 45 for bands 1 to 3),
-// all `restValue` except those in `overrides`.
-const makeShTable = (restValue, count = 9, overrides = {}) => {
-    const table = makeTable(1);
-    for (let i = 0; i < count; i++) {
-        table.addColumn(new Column(`f_rest_${i}`, new Float32Array([overrides[i] ?? restValue])));
-    }
-    return table;
-};
-
-// The error table of a two-level scene whose levels are the given one-splat tables.
-const writeTableErrors = async (tables) => {
-    const fs = new MemoryFileSystem();
-    await writeLodSource({
-        filename: '/scene/lod-meta.json',
-        mainSource: stackLods(tables.map(table => dataTableToChunkSource(table, 1 << 20))),
-        envSource: null,
-        iterations: 1,
-        chunkCount: 1,
-        chunkExtent: 16,
-        createDevice: async () => device,
-        lodErrors: true
-    }, fs);
-    return JSON.parse(new TextDecoder().decode(fs.results.get('/scene/lod-meta.json'))).tree.errors;
+    return JSON.parse(new TextDecoder().decode(fs.results.get('/scene/lod-meta.json')));
 };
 
 // Build a structural multi-LOD source from per-level row counts (each level a
@@ -190,8 +141,7 @@ const writeScene = async (levelCounts, envRows) => {
         envSource: envRows > 0 ? dataTableToChunkSource(makeTable(envRows), 1 << 20) : null,
         iterations: 1,
         chunkCount: 1,
-        chunkExtent: 16,
-        ...deviceOptions()
+        chunkExtent: 16
     }, fs);
     const meta = JSON.parse(new TextDecoder().decode(fs.results.get('/scene/lod-meta.json')));
     return { fs, meta };
@@ -216,7 +166,6 @@ describe('writeLodSource: lod-meta.json contract', function () {
         assert.strictEqual(meta.count, 5);
         assert.deepStrictEqual(meta.counts, [3, 2]);
         assert.strictEqual(meta.lodLevels, 2);
-        assert.strictEqual(meta.lodErrors, device !== null, 'error tables are declared exactly when a GPU rendered them');
         assert.ok(!('environment' in meta), 'environment omitted when there are no environment splats');
         assert.deepStrictEqual([...meta.filenames].sort(), ['0_0/meta.json', '1_0/meta.json']);
 
@@ -231,13 +180,6 @@ describe('writeLodSource: lod-meta.json contract', function () {
             { offset: meta.tree.lods['1'].offset, count: meta.tree.lods['1'].count },
             { offset: 0, count: 2 }
         );
-        if (device) {
-            assert.strictEqual(meta.tree.errors.length, 2);
-            assert.strictEqual(meta.tree.errors[0], 0);
-            assert.ok(Number.isFinite(meta.tree.errors[1]) && meta.tree.errors[1] >= 0);
-        } else {
-            assert.ok(!('errors' in meta.tree), 'no per-leaf error table without a GPU');
-        }
 
         assert.ok(fs.results.has('/scene/0_0/meta.json'));
         assert.ok(fs.results.has('/scene/1_0/meta.json'));
@@ -287,97 +229,14 @@ describe('writeLodSource: lod-meta.json contract', function () {
         assert.strictEqual(leaves.reduce((sum, l) => sum + l.lods['0'].count, 0), wideSplats.length);
     });
 
-    it('matches errors to lodLevels when trailing structural LODs are empty', async function () {
+    it('trims lodLevels when trailing structural LODs are empty', async function () {
         const { meta } = await writeScene([1, 0], 0);
         assert.strictEqual(meta.lodLevels, 1);
-        if (device) assert.deepStrictEqual(meta.tree.errors, [0]);
         assert.doesNotThrow(() => collectFilesByLod(meta, '/scene/lod-meta.json'));
     });
 
-    it('omits error tables when no GPU device is supplied', async function () {
-        const fs = new MemoryFileSystem();
-        await writeLodSource({
-            filename: '/scene/lod-meta.json',
-            mainSource: makeSource([3, 2]),
-            envSource: null,
-            iterations: 1,
-            chunkCount: 1,
-            chunkExtent: 16,
-            lodErrors: true
-        }, fs);
-        const meta = JSON.parse(new TextDecoder().decode(fs.results.get('/scene/lod-meta.json')));
-        assert.strictEqual(meta.lodErrors, false);
-        assert.ok(!('errors' in meta.tree), 'no per-leaf error table without a GPU');
-    });
-
-    it('omits error tables by default', async function () {
-        const fs = new MemoryFileSystem();
-        await writeLodSource({
-            filename: '/scene/lod-meta.json',
-            mainSource: makeSource([3, 2]),
-            envSource: null,
-            iterations: 1,
-            chunkCount: 1,
-            chunkExtent: 16,
-            ...(device ? { createDevice: async () => device } : {})
-        }, fs);
-        const meta = JSON.parse(new TextDecoder().decode(fs.results.get('/scene/lod-meta.json')));
-        assert.strictEqual(meta.lodErrors, false);
-        assert.ok(!('errors' in meta.tree), 'no per-leaf error table unless requested');
-    });
-
-    it('includes stored spherical harmonics in the LOD error', async function (t) {
-        if (!device) return t.skip('no WebGPU adapter available');
-        const errors = await writeTableErrors([makeShTable(0), makeShTable(2)]);
-        assert.ok(errors[1] > 0);
-    });
-
-    it('sees colour held in SH coefficients that vanish on the coordinate axes', async function (t) {
-        if (!device) return t.skip('no WebGPU adapter available');
-        // f_rest_3 is the red channel's xy term, zero in any view along an axis
-        const errors = await writeTableErrors([makeShTable(0, 45), makeShTable(0, 45, { 3: 2 })]);
-        assert.ok(errors[1] > 0, `expected a non-zero error, got ${errors[1]}`);
-    });
-
-    it('reports no error for a level identical to the finest', async function (t) {
-        if (!device) return t.skip('no WebGPU adapter available');
-        assert.deepStrictEqual(await writeErrors([[{}], [{}]]), [0, 0]);
-    });
-
-    it('grows with displacement', async function (t) {
-        if (!device) return t.skip('no WebGPU adapter available');
-        const sigma = Math.exp(-3);
-        const small = (await writeErrors([[{}], [{ x: 0.5 * sigma }]]))[1];
-        const large = (await writeErrors([[{}], [{ x: 4 * sigma }]]))[1];
-        assert.ok(small > 0, `expected a non-zero error for a half-sigma shift, got ${small}`);
-        assert.ok(large > small, `expected a larger error for a larger shift, got ${small} then ${large}`);
-    });
-
-    it('penalises an opacity drop at identical geometry', async function (t) {
-        if (!device) return t.skip('no WebGPU adapter available');
-        const errors = await writeErrors([[{ opacity: 2 }], [{ opacity: -2 }]]);
-        assert.ok(errors[1] > 0, `expected a non-zero error, got ${errors[1]}`);
-    });
-
-    it('scores a level that draws where the reference renders nothing', async function (t) {
-        if (!device) return t.skip('no WebGPU adapter available');
-        // opacity logit -10 is under the rasterizer's alpha floor, so the reference is transparent
-        const errors = await writeErrors([[{ opacity: -10 }], [{ opacity: 5 }]]);
-        assert.ok(errors[1] > 0 && Number.isFinite(errors[1]), `expected a positive finite error, got ${errors[1]}`);
-    });
-
-    it('penalises thinning even when the survivors are identical', async function (t) {
-        if (!device) return t.skip('no WebGPU adapter available');
-        // two coincident splats decimated to one: the survivor is exact, but the
-        // level paints less coverage
-        const errors = await writeErrors([[{}, {}], [{}]]);
-        assert.ok(errors[1] > 0, `expected a non-zero error, got ${errors[1]}`);
-    });
-
-    // Non-finite input is rejected up front rather than tolerated: a NaN anywhere
-    // in a gaussian would paint NaN into the error renders, and the comparison
-    // would quietly absorb it. The check runs on the bounds pass, so it holds with
-    // or without a GPU.
+    // Non-finite input is rejected up front rather than tolerated. The check runs
+    // on the bounds pass, so it covers every gaussian of every level.
     const rejects = [
         ['a NaN scale', { scale: NaN }, /non-finite scale/],
         ['a NaN opacity', { opacity: NaN }, /non-finite opacity/],
@@ -389,7 +248,7 @@ describe('writeLodSource: lod-meta.json contract', function () {
 
     for (const [label, splat, expected] of rejects) {
         it(`refuses to write LODs for input with ${label}`, async function () {
-            await assert.rejects(() => writeErrors([[{}, splat], [{}]]), (err) => {
+            await assert.rejects(() => writeLevels([[{}, splat], [{}]]), (err) => {
                 assert.match(err.message, expected);
                 assert.match(err.message, /--filter-nan/);
                 return true;
@@ -400,33 +259,8 @@ describe('writeLodSource: lod-meta.json contract', function () {
     it('accepts the non-finite values --filter-nan deliberately keeps', async function () {
         // a flat splat (scale -Inf) and a fully opaque one (opacity +Inf) survive
         // filterNaN, so the writer must not reject them
-        const errors = await writeErrors([[{}, { scale: -Infinity }, { opacity: Infinity }], [{}]]);
-        if (device) {
-            assert.ok(
-                errors.every(error => Number.isFinite(error) && error >= 0),
-                `expected finite non-negative errors, got ${errors}`
-            );
-        }
-    });
-
-    it('measures small leaves through the atlas', async function (t) {
-        if (!device) return t.skip('no WebGPU adapter available');
-        // a grid of small splats: every splat is far below half the leaf's bounding
-        // radius, so the leaf is batched into an atlas rather than rendered alone.
-        // Three levels, so the atlas renderer's second slot is reused within a view.
-        const grid = Array.from({ length: 64 }, (_, i) => ({ x: (i % 8) * 0.25, y: Math.floor(i / 8) * 0.25 }));
-        const errors = await writeErrors([grid, grid, grid.filter((_, i) => i % 2 === 0)]);
-        assert.strictEqual(errors[1], 0, `expected no error for an identical level, got ${errors[1]}`);
-        assert.ok(errors[2] > 0 && Number.isFinite(errors[2]), `expected a positive finite error for thinning, got ${errors[2]}`);
-    });
-
-    it('keeps the error table monotone across levels', async function (t) {
-        if (!device) return t.skip('no WebGPU adapter available');
-        // level 2 matches a level-0 splat exactly while level 1 sits between
-        // both, so the raw errors would rank the coarser level as the better one
-        const errors = await writeErrors([[{ x: 0 }, { x: 1 }], [{ x: 0.5 }], [{ x: 0 }]]);
-        assert.ok(errors[1] > 0, `expected a non-zero error, got ${errors[1]}`);
-        assert.ok(errors[2] >= errors[1], `expected monotone errors, got ${errors}`);
+        const meta = await writeLevels([[{}, { scale: -Infinity }, { opacity: Infinity }], [{}]]);
+        assert.deepStrictEqual(meta.counts, [3, 1]);
     });
 
     it('references the environment SOG when environment splats are present', async function () {

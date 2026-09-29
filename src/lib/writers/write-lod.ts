@@ -1,11 +1,9 @@
 import { basename, dirname, resolve } from 'pathe';
-import { BoundingBox, type GraphicsDevice, Mat4, Quat, Vec3 } from 'playcanvas';
+import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
-import { ATLAS_MAX_BATCH_GAUSSIANS, ErrorRenderer, type LeafLevels, leafViewSize } from './lod-error';
 import { logWrittenFile } from './utils';
 import { writeSogSource } from './write-sog.js';
-import { type ChunkDataPool, type ChunkLayer, type ChunkSource, type ReadRequest, createChunkDataPool } from '../chunk';
-import { materializeToDataTable } from '../compat/data-table';
+import { type ChunkDataPool, type ChunkSource, type ReadRequest, createChunkDataPool } from '../chunk';
 import { Column, DataTable } from '../data-table';
 import { type FileSystem } from '../io/write';
 import { bakeTransform, permuteSource, sortMortonColumns } from '../ops';
@@ -29,7 +27,6 @@ type MetaNode = {
     bound: Aabb;
     children?: MetaNode[];
     lods?: { [key: number]: MetaLod };
-    errors?: number[];
 };
 
 type LodMeta = {
@@ -52,12 +49,6 @@ type LodMeta = {
     count: number;
     counts: number[];
     lodLevels: number;
-    /**
-     * Whether every leaf carries an `errors` table. Declared here so a consumer
-     * can pick its LOD allocation strategy up front instead of searching the tree
-     * for the field (the engine's budget balancer needs exactly this answer).
-     */
-    lodErrors: boolean;
     environment?: string;
     filenames: string[];
     tree: MetaNode;
@@ -180,9 +171,8 @@ const invalidGaussian = (lod: number, row: number, what: string): Error => new E
 /**
  * Reject a batch of gaussians whose geometry is not finite. The bounds pass reads
  * every gaussian's record once, so this covers the whole scene: everything
- * downstream — the error pass above all, which renders every gaussian — may then
- * assume finite input rather than each stage carrying its own opinion about
- * invalid data. {@link assertFiniteColor} does the same for the colour layer.
+ * downstream may then assume finite input rather than each stage carrying its own
+ * opinion about invalid data. {@link assertFiniteColor} does the same for the colour layer.
  *
  * The rules mirror `filterNaNRows`, including its two deliberate exceptions
  * (`scale_*` may be `-Infinity`, `opacity` may be `+Infinity`, both harmless
@@ -228,10 +218,8 @@ const assertFiniteGeometry = (
 /**
  * Reject a batch of gaussians whose color or stored SH is not finite — the
  * companion to {@link assertFiniteGeometry}, run on the same bounds-pass read so
- * the whole scene is covered with or without a GPU. A non-finite coefficient would
- * paint NaN into the error renders, which the comparison would silently absorb,
- * and would corrupt the SOG colour codebooks, so it is refused up front like
- * invalid geometry.
+ * the whole scene is covered. A non-finite coefficient would corrupt the SOG
+ * colour codebooks, so it is refused up front like invalid geometry.
  *
  * @param color - Packed color/SH records for the batch.
  * @param count - Gaussians in the batch.
@@ -353,162 +341,6 @@ const binIndices = (parent: BTreeNode, lodOf: (index: number) => number): Map<nu
     return result;
 };
 
-/** The layers a leaf's render needs from the source; positions are resident. */
-const LEAF_TABLE_LAYERS = new Set<ChunkLayer>(['geometric', 'color']);
-
-/**
- * Gather one structural level of a leaf into a resident {@link DataTable} for the
- * rasterizer. Positions come from the resident slim columns; rotation, scale,
- * opacity and color/SH are read from the source by index, chunk by chunk, through
- * the same permuted view the unit writes use.
- *
- * The table stays in PLY space, tagged as such. The error pass renders scene and
- * camera in one space and only ever compares renders against each other, so the
- * space is immaterial as long as it is shared; PLY-space SH is evaluated against
- * PLY-space view directions, which is self-consistent.
- *
- * @param source - The PLY-space scene source.
- * @param pool - Pool for the temporary per-batch read buffers.
- * @param slim - Resident position columns.
- * @param indices - Flat analysis indices of the level's gaussians in this leaf.
- * @param lod - The structural LOD the indices belong to.
- * @param base - Flat base of `lod`, converting a flat index to a row local to it.
- * @returns The level's gaussians as a table in PLY space.
- */
-const gatherLeafTable = async (
-    source: ChunkSource, pool: ChunkDataPool, slim: SlimColumns,
-    indices: Uint32Array, lod: number, base: number
-): Promise<DataTable> => {
-    const n = indices.length;
-    const local = new Uint32Array(n);
-    const x = new Float32Array(n);
-    const y = new Float32Array(n);
-    const z = new Float32Array(n);
-    for (let i = 0; i < n; i++) {
-        const g = indices[i];
-        local[i] = g - base;
-        x[i] = slim.x[g];
-        y[i] = slim.y[g];
-        z[i] = slim.z[g];
-    }
-
-    const table = await materializeToDataTable(permuteSource(source, local, { lod }), pool, LEAF_TABLE_LAYERS);
-    table.addColumn(new Column('x', x));
-    table.addColumn(new Column('y', y));
-    table.addColumn(new Column('z', z));
-    return table;
-};
-
-/** A leaf awaiting its error table: the node it fills in and the indices to gather. */
-type LeafJob = {
-    node: MetaNode;
-    bins: Map<number, Uint32Array>;
-};
-
-/**
- * Make a leaf's raw error table monotone non-decreasing across its levels. The
- * engine ranks upgrades by error reduction per splat *across* leaves, so a coarser
- * level must never advertise less error than the finer one it stands in for.
- *
- * @param raw - Raw error per LOD.
- * @param levels - The leaf's levels, ascending.
- * @returns The clamped table, zero for levels absent from the leaf.
- */
-const monotoneErrors = (raw: number[], levels: number[]): number[] => {
-    const errors = new Array(raw.length).fill(0);
-    let previous = 0;
-    for (const lod of levels) previous = errors[lod] = Math.max(raw[lod], previous);
-    return errors;
-};
-
-/**
- * Fill in every leaf's error table: gather its levels, then measure them with the
- * {@link ErrorRenderer} — small leaves batched into atlases, the rest alone.
- *
- * Comparing composited images rather than the gaussians themselves is what makes
- * the number track what the viewer will show: a merge of overlapping splats into
- * one that paints the same pixels costs nothing, while thinning, blur and colour
- * drift all register in proportion to how visible they are at the judged size
- * (see {@link leafViewSize}). Any per-splat comparison saturates once a splat no
- * longer overlaps its nearest match, which compresses a 128x decimation and a 2x
- * one into the same narrow band and leaves the engine's allocator ranking on
- * splat count alone.
- *
- * Each leaf is self-contained, so the pass needs no scene-wide search structure
- * and its cost is a fixed price per render times the number of leaves, levels
- * and views, with batching dividing the render count for small leaves.
- *
- * Leaves are visited in partition order so each atlas holds neighbours and the
- * source gathers stay local. An atlas is flushed when it fills, and every
- * partially filled one at the end.
- *
- * @param renderer - The renderer for the pass.
- * @param source - The PLY-space scene source.
- * @param pool - Pool for the per-batch read buffers.
- * @param slim - Resident position columns.
- * @param cum - Flat base of each structural LOD.
- * @param numLods - Number of structural LODs in the source.
- * @param jobs - The leaves, in partition order.
- */
-const runErrorPass = async (
-    renderer: ErrorRenderer, source: ChunkSource, pool: ChunkDataPool, slim: SlimColumns,
-    cum: number[], numLods: number, jobs: LeafJob[]
-): Promise<void> => {
-    const bar = logger.bar('lod errors', jobs.length);
-    const atlases = new Map<number, { leaf: LeafLevels; job: LeafJob }[]>();
-    const atlasGaussians = new Map<number, number>();
-
-    const assign = (job: LeafJob, levels: number[], raw: number[]) => {
-        job.node.errors = monotoneErrors(raw, levels);
-        bar.tick(1);
-    };
-
-    const flush = async (frame: number) => {
-        const batch = atlases.get(frame);
-        if (!batch?.length) return;
-        atlases.set(frame, []);
-        atlasGaussians.set(frame, 0);
-        const raws = await renderer.atlasErrors(batch.map(b => b.leaf), frame, numLods);
-        batch.forEach((b, i) => assign(b.job, [...b.leaf.levels.keys()].sort((x, y) => x - y), raws[i]));
-    };
-
-    try {
-        for (const job of jobs) {
-            const levels = [...job.bins.keys()].sort((a, b) => a - b);
-            if (levels.length < 2) {
-                assign(job, levels, new Array(numLods).fill(0));
-                continue;
-            }
-
-            const tables = new Map<number, DataTable>();
-            for (const lod of levels) {
-                tables.set(lod, await gatherLeafTable(source, pool, slim, job.bins.get(lod)!, lod, cum[lod]));
-            }
-            const leaf: LeafLevels = { bound: job.node.bound, levels: tables };
-            const reference = tables.get(levels[0])!;
-            const frame = leafViewSize(leaf.bound, reference);
-
-            if (renderer.fitsAtlas(frame, leaf)) {
-                // Batches are keyed by the frame rounded up to a power of two, so a
-                // scene's leaves fall into a few well-filled batches rather than one
-                // per frame size; a leaf is only ever judged at a frame at least its own.
-                const key = 1 << Math.ceil(Math.log2(frame));
-                const batch = atlases.get(key) ?? [];
-                atlases.set(key, batch);
-                batch.push({ leaf, job });
-                const gaussians = (atlasGaussians.get(key) ?? 0) + reference.numRows;
-                atlasGaussians.set(key, gaussians);
-                if (batch.length === renderer.atlasCapacity(key) || gaussians >= ATLAS_MAX_BATCH_GAUSSIANS) await flush(key);
-            } else {
-                assign(job, levels, await renderer.leafErrors(leaf, numLods));
-            }
-        }
-        for (const frame of atlases.keys()) await flush(frame);
-    } finally {
-        bar.end();
-    }
-};
-
 /**
  * Read positions out of a multi-LOD source into flat per-gaussian arrays — one
  * sequential pass across every structural LOD (LOD 0 first, then 1, …, laid out
@@ -566,17 +398,8 @@ type WriteLodSourceOptions = {
     iterations: number;
     /** Lossless WebP compression effort, 0–9. Omit to use the default WebP encoder. */
     webpEffort?: number;
-    /**
-     * Supplies the GPU that SOG encoding uses and, with `lodErrors`, that the
-     * per-leaf error tables are rendered on.
-     */
+    /** Supplies the GPU that SOG encoding uses. */
     createDevice?: DeviceCreator;
-    /**
-     * Render and write the per-leaf error tables. Default false: the manifest then
-     * declares `lodErrors: false` and a consumer derives errors from splat counts.
-     * Needs `createDevice`.
-     */
-    lodErrors?: boolean;
     chunkCount: number;
     chunkExtent: number;
     /**
@@ -609,7 +432,7 @@ type WriteLodSourceOptions = {
  * @ignore
  */
 const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) => {
-    const { filename, envSource, iterations, webpEffort, createDevice, chunkCount, chunkExtent, chunkMin = 8, lodErrors = false } = options;
+    const { filename, envSource, iterations, webpEffort, createDevice, chunkCount, chunkExtent, chunkMin = 8 } = options;
 
     // Bake the pending coordinate-space transform to PLY once, up front, so the
     // partition/bounds passes (extractSlim, calcBound, morton) and the per-unit
@@ -622,23 +445,6 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
 
     // Pool for slim extraction read buffers and the chunk-native SOG encodes.
     const pool = createChunkDataPool();
-
-    // The error tables are opt-in and rendered, so they need the GPU. One renderer
-    // serves the whole pass; the partition below queues the leaves for it. A host
-    // without a usable adapter still gets its LODs, without the tables.
-    let device: GraphicsDevice | null = null;
-    if (lodErrors && createDevice) {
-        try {
-            device = await createDevice();
-        } catch (err) {
-            logger.warn(`GPU device unavailable: ${err instanceof Error ? err.message : String(err)}`);
-        }
-    }
-    const renderer = device ? new ErrorRenderer(device, mainSource.meta.shBands) : null;
-    if (lodErrors && !renderer) {
-        logger.warn('No GPU device: LOD error tables are not written; the viewer will derive them from splat counts.');
-    }
-    const leafJobs: LeafJob[] = [];
 
     const slim = await extractSlim(mainSource, pool);
     const hasEnv = !!envSource && envSource.meta.numGaussians > 0;
@@ -736,12 +542,9 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
             lodLevels = Math.max(lodLevels, lodValue + 1);
         }
 
-        // Bound over the leaf's full structural LOD data; the error table is filled
-        // in by the pass after the partition, which batches leaves.
+        // Bound over the leaf's full structural LOD data.
         const bound = await calcBound(mainSource, pool, bins, cum, n => chunkingBar.tick(n));
-        const leaf: MetaNode = { bound, lods };
-        if (renderer) leafJobs.push({ node: leaf, bins });
-        return leaf;
+        return { bound, lods };
     };
 
     let tree: MetaNode;
@@ -751,26 +554,10 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
         chunkingBar.end();
     }
 
-    // The kd-tree is dead once the partition is built (lodFiles and the leaf jobs
-    // hold their own index copies): release its N×4B index buffer and node AABBs
-    // before the error pass and the unit writes, where peak memory lives.
+    // The kd-tree is dead once the partition is built (lodFiles holds its own
+    // index copies): release its N×4B index buffer and node AABBs before the unit
+    // writes, where peak memory lives.
     bTree = null;
-
-    if (renderer) {
-        const errorStart = performance.now();
-        try {
-            await runErrorPass(renderer, mainSource, pool, slim, cum, numLods, leafJobs);
-        } finally {
-            renderer.destroy();
-        }
-        logger.info(`LOD error pass: ${((performance.now() - errorStart) / 1000).toFixed(1)}s over ${leafJobs.length} leaves`);
-    }
-
-    const trimErrors = (node: MetaNode): void => {
-        if (node.errors) node.errors.length = lodLevels;
-        for (const child of node.children ?? []) trimErrors(child);
-    };
-    trimErrors(tree);
 
     // count splats per lod level
     const counts = new Array(lodLevels).fill(0);
@@ -791,7 +578,6 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
         count: counts.reduce((acc, curr) => acc + curr, 0),
         counts,
         lodLevels,
-        lodErrors: renderer !== null,
         ...(hasEnv ? { environment: 'env/meta.json' } : {}),
         filenames,
         tree

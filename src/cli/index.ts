@@ -167,7 +167,6 @@ const cliOptionsConfig = {
     'lod-chunk-count': { type: 'string', default: '512' },
     'lod-chunk-extent': { type: 'string', default: '16' },
     'lod-chunk-min': { type: 'string', default: '8' },
-    'lod-errors': { type: 'boolean', default: false },
     'spz-version': { type: 'string', default: '4' },
     unbundled: { type: 'boolean', default: false },
     'voxel-size': { type: 'string' },
@@ -595,7 +594,6 @@ const parseArguments = async () => {
         lodChunkCount: parseInteger(v['lod-chunk-count']),
         lodChunkExtent: parseInteger(v['lod-chunk-extent']),
         lodChunkMin: parseInteger(v['lod-chunk-min']),
-        lodErrors: v['lod-errors'],
         spzVersion: spzVersion as 3 | 4,
         voxelResolution,
         opacityCutoff,
@@ -919,7 +917,6 @@ LOD OUTPUT (lod-meta.json)
         --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
         --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
         --lod-chunk-min    <n>              Gaussians in K below which a chunk is not split for extent. Default: 8
-        --lod-errors                        Render per-chunk LOD error tables (needs a GPU). Default: off
 
 VOXEL OUTPUT (.voxel.json)
         --voxel-size       <n>              Voxel size for .voxel.json. Default: 0.05
@@ -1508,8 +1505,7 @@ const main = async () => {
                 createDevice: deviceCreator,
                 chunkCount: options.lodChunkCount,
                 chunkExtent: options.lodChunkExtent,
-                chunkMin: options.lodChunkMin,
-                lodErrors: options.lodErrors
+                chunkMin: options.lodChunkMin
             }, new NodeFileSystem());
 
             await mainSource.close();
