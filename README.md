@@ -99,6 +99,31 @@ On read: a PLY header comment — Brush's `comment SplatRenderMode: default | mi
 
 On write: `.ply` and `.compressed.ply` carry `comment SplatRenderMode: mip | 2dgs` (Brush's spelling, whichever form was read); `.sog` and `meta.json` carry `"model": "antialiased" | "2dgs"`; `.spz` sets its antialiased bit, and warns that it cannot represent 2DGS. A 2DGS PLY output drops the `scale_2` column again. Other output formats have nowhere to record it and drop the tag silently. Combining inputs whose models disagree warns and writes the result untagged.
 
+### Scene camera
+
+A SOG can carry one optional camera in `meta.json` — a rest pose, the pinhole intrinsics and a few viewing hints — so a viewer can open the scene where it was meant to be seen without a sidecar file. It matters most for splats lifted from a single photo or stereo pair, which only look right from near the camera that took it. The block is advisory and readers that don't use it ignore it:
+
+```json
+"camera": {
+  "convention": "opencv",
+  "rig": "camera",
+  "rest": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1] },
+  "intrinsics": { "fx": 1194.67, "fy": 1194.67, "cx": 1024, "cy": 576, "width": 2048, "height": 1152 },
+  "stereo": { "baseline_m": 0.063 },
+  "focus": { "point": [0, 0, 1.68], "subject_m": 2.14, "near_m": 0.73, "far_m": 66.2 }
+}
+```
+
+`rest.position` and `rest.rotation` (camera-to-world, `[x, y, z, w]`) are in the same coordinates as the gaussians; `convention` names the camera axes (`opencv`: +x right, +y down, +z forward); `intrinsics` are in pixels of a `width` × `height` image. Everything is optional.
+
+On read, a `.sog`, `meta.json` or `lod-meta.json` camera is kept; on write, `.sog` and `meta.json` carry it in `meta.json`, and `lod-meta.json` carries it once at its top level. Translate, rotate and scale actions move the rest pose with the scene (and scale the `focus` and `stereo` distances); other keys in the block are passed through unchanged. Other output formats have nowhere to record it and drop it. When several inputs carry a camera, the first is kept.
+
+`--camera-from cameras.json[:n]` sets it from a training camera in the `cameras.json` that 3DGS trainers write next to the PLY (`position`, `rotation`, `fx`, `fy`, `width`, `height`, OpenCV axes; the principal point is taken as the image centre):
+
+```bash
+splat-transform scene.ply --camera-from cameras.json:12 scene.sog
+```
+
 ## Actions
 
 Actions execute in the order specified and can be repeated. Any action may appear after any input or output file:
@@ -142,6 +167,9 @@ Actions execute in the order specified and can be repeated. Any action may appea
     --stats            [text|json]      Print file info, per-column statistics and the fill/overdraw ratio to stdout. Default: text
     --info             [text|json]      Print structural metadata (format, per-LOD counts, extra columns) to stdout. Default: text
 -m, --morton-order                      Reorder Gaussians by Morton code (Z-order curve)
+    --camera-from      <file[:n]>       Record training camera n (default 0) of a 3DGS cameras.json
+                                          as the input's camera (see Scene camera). Place it after
+                                          the input the poses belong to.
 ```
 
 ## CLI Options

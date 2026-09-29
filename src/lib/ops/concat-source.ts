@@ -87,6 +87,14 @@ const concatSource = (allSources: ChunkSource[], pool: ChunkDataPool): ChunkSour
         logger.warn(`mixed splat models (${seen}); writing the result as '${model}'`);
     }
 
+    // One output holds one camera: keep the first input's (the inputs share a
+    // transform, so it needs no re-expressing), and say so if another disagreed.
+    const cameras = allSources.map(s => s.meta.camera).filter(c => c !== undefined);
+    const camera = cameras[0];
+    if (cameras.some(c => JSON.stringify(c) !== JSON.stringify(camera))) {
+        logger.warn('inputs carry different cameras; keeping the first');
+    }
+
     const S = ref.chunkSize;
     // Per-source gaussian counts and the output-row offset each source begins at.
     const counts = sources.map(s => s.meta.numGaussians);
@@ -100,6 +108,7 @@ const concatSource = (allSources: ChunkSource[], pool: ChunkDataPool): ChunkSour
     const meta: ChunkSourceMetadata = {
         ...ref,
         model,
+        camera,
         numGaussians: total,
         numLods: 1,
         lodCounts: [total],

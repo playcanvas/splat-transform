@@ -17,6 +17,7 @@ import {
 import { dataTableToChunkSource, materializeToDataTable } from '../compat/data-table';
 import { type DataTable } from '../data-table';
 import { basename, dirname, join, type ReadFileSystem, readFile } from '../io/read';
+import { readSogCamera, type SogCamera } from '../sog-camera';
 import { isSplatModel, type SplatModel } from '../splat-model';
 import { logger, Transform, WebPCodec } from '../utils';
 import { readSogV1, type MetaV1 } from './read-sog-v1';
@@ -33,6 +34,7 @@ type MetaV2 = {
     quats: { files: string[] };
     sh0: { codebook: number[]; files: string[] };
     shN?: { count: number; bands: number; codebook: number[]; files: string[] };
+    camera?: SogCamera;
 };
 
 type ReadSogOptions = {
@@ -190,6 +192,7 @@ const readSogSourceV2 = async (
         color: { stride: colorStride(shBands), fields: colorFields(shBands) }
     };
 
+    const camera = readSogCamera(meta.camera);
     const meta_: ChunkSourceMetadata = {
         numGaussians: count,
         numLods: 1,
@@ -201,7 +204,8 @@ const readSogSourceV2 = async (
         extraColumns: [],
         transform: Transform.PLY.clone(),
         availableLayers: new Set<ChunkLayer>(['position', 'geometric', 'color']),
-        layouts
+        layouts,
+        ...(camera ? { camera } : {})
     };
 
     // Expand source gaussian `g` into output row `r` of the requested layers.

@@ -2,6 +2,8 @@ import { containerSource, type ContainerSegment } from './container-source';
 import { readSogSource } from './read-sog';
 import { type ChunkDataPool, type ChunkSource } from '../chunk';
 import { dirname, join, readFile, type ReadFileSystem } from '../io/read';
+import { withCamera } from '../ops';
+import { readSogCamera, type SogCamera } from '../sog-camera';
 import { type Options } from '../types';
 
 type LodReference = {
@@ -22,6 +24,7 @@ type LodMeta = {
     counts?: number[];
     lodLevels: number;
     environment?: string;
+    camera?: SogCamera;
     filenames: string[];
     tree: LodNode;
 };
@@ -155,7 +158,9 @@ const readLodSource = async (
         });
     });
 
-    return containerSource(segmentsByLod, pool);
+    const source = await containerSource(segmentsByLod, pool);
+    const camera = readSogCamera(meta.camera);
+    return camera ? withCamera(source, camera) : source;
 };
 
 /**
