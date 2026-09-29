@@ -81,10 +81,15 @@ const writeSplatStreaming = async (
                 dv.setUint8(off + 26, clamp((0.5 + C[i * 3 + 2] * SH_C0) * 255));
                 dv.setUint8(off + 27, clamp((1 / (1 + Math.exp(-O[i]))) * 255));
 
-                dv.setUint8(off + 28, clamp(R[i * 4 + 0] * 128 + 128));
-                dv.setUint8(off + 29, clamp(R[i * 4 + 1] * 128 + 128));
-                dv.setUint8(off + 30, clamp(R[i * 4 + 2] * 128 + 128));
-                dv.setUint8(off + 31, clamp(R[i * 4 + 3] * 128 + 128));
+                // rot_* are not necessarily unit length; normalize before
+                // quantizing so components beyond +-1 are not clamped
+                const r0 = R[i * 4 + 0], r1 = R[i * 4 + 1], r2 = R[i * 4 + 2], r3 = R[i * 4 + 3];
+                const len = Math.sqrt(r0 * r0 + r1 * r1 + r2 * r2 + r3 * r3);
+                const rs = len > 0 ? 128 / len : 0;
+                dv.setUint8(off + 28, clamp(r0 * rs + 128));
+                dv.setUint8(off + 29, clamp(r1 * rs + 128));
+                dv.setUint8(off + 30, clamp(r2 * rs + 128));
+                dv.setUint8(off + 31, clamp(r3 * rs + 128));
             }
 
             await writer.write(record.subarray(0, count * 32));

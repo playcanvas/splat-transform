@@ -35,6 +35,7 @@ import { dataTableToChunkSource, materializeToDataTable } from '../src/lib/compa
 import { decodePlyToDataTable } from '../src/lib/readers/read-ply.js';
 import { decodeSplatToDataTable } from '../src/lib/readers/read-splat.js';
 import { writeCompressedPlySource } from '../src/lib/writers/write-compressed-ply.js';
+import { writeSplatStreaming } from '../src/lib/writers/write-splat-streaming.js';
 import { gaussianCloudToDataTable, getSpzModule } from '../src/lib/spz-module.js';
 import { createChunkDataPool } from '../src/lib/chunk/index.js';
 
@@ -686,6 +687,35 @@ describe('SPLAT Format (Input Only)', () => {
                 assert.strictEqual(a[i], b[i], `column '${name}' row ${i}`);
             }
         }
+    });
+});
+
+describe('SPLAT Format (Output)', () => {
+    it('normalizes rotations before quantizing them', async () => {
+        // the same rotation stored at unit length and scaled by 2
+        const rots = [[0.8, 0.6, 0, 0], [1.6, 1.2, 0, 0], [-0.4, 0, -0.3, 0]];
+        const n = rots.length;
+        const col = (name, values) => new Column(name, new Float32Array(values));
+        const zeros = new Array(n).fill(0);
+        const dt = new DataTable([
+            col('x', zeros), col('y', zeros), col('z', zeros),
+            col('scale_0', zeros), col('scale_1', zeros), col('scale_2', zeros),
+            col('f_dc_0', zeros), col('f_dc_1', zeros), col('f_dc_2', zeros),
+            col('opacity', zeros),
+            ...[0, 1, 2, 3].map(j => col(`rot_${j}`, rots.map(r => r[j])))
+        ]);
+        dt.transform = Transform.PLY.clone();
+
+        const pool = createChunkDataPool();
+        const writeFs = new MemoryFileSystem();
+        await writeSplatStreaming(dataTableToChunkSource(dt, pool.chunkSize), pool, { filename: 'out.splat' }, writeFs);
+        const bytes = writeFs.results.get('out.splat');
+        assert.strictEqual(bytes.byteLength, n * 32);
+
+        const quat = i => [...bytes.subarray(i * 32 + 28, i * 32 + 32)];
+        assert.deepStrictEqual(quat(0), [230, 204, 128, 128]);
+        assert.deepStrictEqual(quat(1), quat(0), 'a non-unit quaternion must encode like its unit equivalent');
+        assert.deepStrictEqual(quat(2), [25, 128, 51, 128]);
     });
 });
 
