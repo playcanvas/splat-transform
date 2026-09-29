@@ -16,7 +16,7 @@ import {
     UniformFormat
 } from 'playcanvas';
 
-import { type CameraBasis, type Projection } from '../render/camera';
+import { type Projection } from '../render/camera';
 import { TILE_SIZE } from '../render/config';
 import { constantsChunk } from './shaders/chunks/constants';
 import { covariance3D } from './shaders/chunks/covariance-3d';
@@ -85,14 +85,6 @@ interface SplatRasterizerOptions {
     /** Max gaussians per chunk; sizes the input + projection + pair buffers. */
     chunkCap: number;
     /**
-     * Number of independent running-state/output buffer pairs, default 1. With
-     * more, a caller can have that many groups in flight — encode the next
-     * group while an earlier one's readback is still pending — since every
-     * other buffer is transient per chunk and the queue executes in order.
-     * `beginGroup` picks the slot.
-     */
-    slots?: number;
-    /**
      * Clamp splats whose projected radius exceeds the shorter image edge, default
      * true; see `SIZE_CLAMP_FRAC`. Off for measurement renders, where a splat that
      * legitimately fills the frame must render at its true size.
@@ -151,10 +143,8 @@ const numSHCoeffsPerChannel = (bands: number): number => {
 interface PipelineBuffers {
     inputBuffer: StorageBuffer;
     projBuffer: StorageBuffer;
-    /** One running-state buffer per slot. */
-    runningStateBuffers: StorageBuffer[];
-    /** One RGBA8 output buffer per slot. */
-    outputBuffers: StorageBuffer[];
+    runningStateBuffer: StorageBuffer;
+    outputBuffer: StorageBuffer;
     /** Per-tile offset table for binned rasterize: `(numTiles + 1) × u32`. */
     tileOffsetsBuffer: StorageBuffer;
     /**
@@ -253,7 +243,6 @@ class GpuSplatRasterizer {
     private sortKeyBits: number;
     /** Active group's tile dimensions, set by `beginGroup`. */
     private activeTilesX: number = 0;
-    private activeSlot: number = 0;
     private activeTilesY: number = 0;
 
     /** Floats per gaussian in the input buffer (depends on SH band count). */
@@ -464,9 +453,8 @@ class GpuSplatRasterizer {
 
         const inputBuffer = new StorageBuffer(device, inputBytes, BUFFERUSAGE_COPY_DST);
         const projBuffer = new StorageBuffer(device, projBytes, 0);
-        const slots = Math.max(1, options.slots ?? 1);
-        const runningStateBuffers = Array.from({ length: slots }, () => new StorageBuffer(device, stateBytes, BUFFERUSAGE_COPY_DST));
-        const outputBuffers = Array.from({ length: slots }, () => new StorageBuffer(device, outputBytes, BUFFERUSAGE_COPY_SRC));
+        const runningStateBuffer = new StorageBuffer(device, stateBytes, BUFFERUSAGE_COPY_DST);
+        const outputBuffer = new StorageBuffer(device, outputBytes, BUFFERUSAGE_COPY_SRC);
         const tileOffsetsBuffer = new StorageBuffer(device, tileOffsetsBytes, 0);
         const coverageBuffer = new StorageBuffer(device, coverageBytes, 0);
         const emitOffsetBuffer = new StorageBuffer(device, emitOffsetBytes, 0);
@@ -507,23 +495,23 @@ class GpuSplatRasterizer {
 
         const rasterizeBinnedCompute = new Compute(device, this.rasterizeBinnedShader, 'splat-rasterize-binned');
         rasterizeBinnedCompute.setParameter('projected', projBuffer);
-        rasterizeBinnedCompute.setParameter('runningState', runningStateBuffers[0]);
+        rasterizeBinnedCompute.setParameter('runningState', runningStateBuffer);
         rasterizeBinnedCompute.setParameter('tileOffsets', tileOffsetsBuffer);
         // `sortedSplatIndices` is bound per-chunk inside `dispatchChunk`,
         // pointing at the radix sort's `sortedIndices` output buffer.
 
         const finalizeCompute = new Compute(device, this.finalizeShader, 'splat-finalize');
-        finalizeCompute.setParameter('runningState', runningStateBuffers[0]);
-        finalizeCompute.setParameter('output', outputBuffers[0]);
+        finalizeCompute.setParameter('runningState', runningStateBuffer);
+        finalizeCompute.setParameter('output', outputBuffer);
 
         const clearStateCompute = new Compute(device, this.clearStateShader, 'splat-clear-state');
-        clearStateCompute.setParameter('runningState', runningStateBuffers[0]);
+        clearStateCompute.setParameter('runningState', runningStateBuffer);
 
         this.buffers = {
             inputBuffer,
             projBuffer,
-            runningStateBuffers,
-            outputBuffers,
+            runningStateBuffer,
+            outputBuffer,
             tileOffsetsBuffer,
             coverageBuffer,
             emitOffsetBuffer,
@@ -631,58 +619,23 @@ class GpuSplatRasterizer {
     }
 
     /**
-     * Point the rasterizer at another view. Takes effect at the next `beginGroup`,
-     * which uploads the uniforms; the projection stays as constructed and the
-     * image must fit the constructed group. Lets one instance, with its compiled
-     * pipelines and sized buffers, serve many renders that differ only in view.
-     *
-     * @param basis - The camera basis and focal lengths.
-     * @param near - Near plane distance in world units.
-     * @param imageWidth - Image width in pixels, at most the constructed width.
-     * @param imageHeight - Image height in pixels, at most the constructed height.
-     */
-    setView(basis: CameraBasis, near: number, imageWidth: number, imageHeight: number): void {
-        const o = this.options;
-        o.rightX = basis.right.x; o.rightY = basis.right.y; o.rightZ = basis.right.z;
-        o.downX = basis.down.x; o.downY = basis.down.y; o.downZ = basis.down.z;
-        o.forwardX = basis.forward.x; o.forwardY = basis.forward.y; o.forwardZ = basis.forward.z;
-        o.eyeX = basis.eye.x; o.eyeY = basis.eye.y; o.eyeZ = basis.eye.z;
-        o.focalX = basis.focalX; o.focalY = basis.focalY;
-        o.offsetX = basis.offsetX; o.offsetY = basis.offsetY;
-        o.near = near;
-        o.imageWidth = imageWidth;
-        o.imageHeight = imageHeight;
-    }
-
-    /**
      * Begin processing a group. Clears running state and sets uniforms.
      *
      * @param groupX - Group index along X.
      * @param groupY - Group index along Y.
      * @param groupTilesX - Number of tiles in this group along X.
      * @param groupTilesY - Number of tiles in this group along Y.
-     * @param slot - Which running-state/output pair to render into; see `slots`.
      */
     beginGroup(
         groupX: number,
         groupY: number,
         groupTilesX: number,
-        groupTilesY: number,
-        slot: number = 0
+        groupTilesY: number
     ): void {
         this.setUniforms(groupX, groupY, groupTilesX, groupTilesY);
         this.activeTilesX = groupTilesX;
         this.activeTilesY = groupTilesY;
 
-        const b = this.buffers;
-        if (slot !== this.activeSlot) {
-            this.activeSlot = slot;
-            const state = b.runningStateBuffers[slot];
-            b.clearStateCompute.setParameter('runningState', state);
-            b.rasterizeBinnedCompute.setParameter('runningState', state);
-            b.finalizeCompute.setParameter('runningState', state);
-            b.finalizeCompute.setParameter('output', b.outputBuffers[slot]);
-        }
         // Clear the running state on the GPU: colour 0, transmittance 1. Four pixels
         // per thread, 256 threads per workgroup.
         const groupPixels = groupTilesX * groupTilesY * TILE_SIZE * TILE_SIZE;
@@ -848,7 +801,7 @@ class GpuSplatRasterizer {
         const activePixelW = this.activeTilesX * TILE_SIZE;
         const activePixelH = this.activeTilesY * TILE_SIZE;
         const groupOutputBytes = activePixelW * activePixelH * 4;
-        return b.outputBuffers[this.activeSlot].read(0, groupOutputBytes, null, true) as Promise<Uint8Array>;
+        return b.outputBuffer.read(0, groupOutputBytes, null, true) as Promise<Uint8Array>;
     }
 
     /**
@@ -859,8 +812,8 @@ class GpuSplatRasterizer {
         const b = this.buffers;
         b.inputBuffer.destroy();
         b.projBuffer.destroy();
-        for (const buffer of b.runningStateBuffers) buffer.destroy();
-        for (const buffer of b.outputBuffers) buffer.destroy();
+        b.runningStateBuffer.destroy();
+        b.outputBuffer.destroy();
         b.tileOffsetsBuffer.destroy();
         b.coverageBuffer.destroy();
         b.emitOffsetBuffer.destroy();
