@@ -1,12 +1,14 @@
-import { taskHandlers, type TaskName, type TaskArgs, type TaskResult, type WorkerMessage } from './tasks';
-import { workerBundled } from './worker-bundled';
 import { WebPCodec } from '../utils/webp-codec';
+
+import { taskHandlers } from './tasks';
+import type { TaskName, TaskArgs, TaskResult, HostMessage, WorkerMessage } from './tasks';
+import { workerBundled } from './worker-bundled';
 
 type PendingTask = {
     task: TaskName;
-    args: any;
+    args: unknown;
     transfer: ArrayBuffer[];
-    resolve: (result: any) => void;
+    resolve: (result: unknown) => void;
     reject: (err: Error) => void;
 };
 
@@ -16,18 +18,21 @@ type Slot = {
     state: 'starting' | 'idle' | 'busy';
     current: PendingTask | null;
     dead: boolean;
-    post: (message: any, transfer: ArrayBuffer[]) => void;
+    post: (message: HostMessage, transfer: ArrayBuffer[]) => void;
     terminate: () => void;
     ref: () => void;
     unref: () => void;
 };
 
 // same runtime check as the emscripten glue in lib/webp.mjs
-const isNode = typeof process !== 'undefined' && !!process.versions?.node && (process as any).type !== 'renderer';
+const isNode =
+    typeof process !== 'undefined' &&
+    !!process.versions?.node &&
+    (process as NodeJS.Process & { type?: string }).type !== 'renderer';
 
 let slots: Slot[] = [];
 const queue: PendingTask[] = [];
-const outstanding = new Set<Promise<any>>();
+const outstanding = new Set<Promise<unknown>>();
 
 // user-configurable: max worker threads (null = auto), 0 forces inline
 let maxWorkers: number | null = null;
@@ -50,7 +55,7 @@ const inlineMode = () => !workerBundled || unavailable || maxWorkers === 0;
 
 const runTaskInline = async (task: PendingTask) => {
     try {
-        const { result } = await taskHandlers[task.task](task.args);
+        const { result } = await taskHandlers[task.task](task.args as never);
         task.resolve(result);
     } catch (err) {
         task.reject(err instanceof Error ? err : new Error(String(err)));
@@ -151,7 +156,7 @@ async function spawnSlot(slot: Slot) {
             slot.post = (message, transfer) => worker.postMessage(message, transfer);
             slot.terminate = () => worker.terminate();
             worker.onmessage = (event: MessageEvent) => onSlotMessage(slot, event.data);
-            worker.onerror = event => onSlotDeath(slot, new Error(event.message || 'worker load failed'));
+            worker.onerror = (event) => onSlotDeath(slot, new Error(event.message || 'worker load failed'));
         }
 
         if (slot.dead) {
@@ -178,24 +183,24 @@ async function ensureSpawned() {
     spawnLoopActive = true;
     try {
         if (resolvedMaxWorkers === null) {
-            const cores = isNode ?
-                (await import('node:os')).availableParallelism() :
-                (navigator.hardwareConcurrency || 2);
+            const cores = isNode
+                ? (await import('node:os')).availableParallelism()
+                : navigator.hardwareConcurrency || 2;
             resolvedMaxWorkers = Math.max(1, Math.min(4, cores - 1));
         }
 
         const max = maxWorkers ?? resolvedMaxWorkers;
-        let available = slots.filter(s => s.state !== 'busy').length;
+        let available = slots.filter((s) => s.state !== 'busy').length;
 
         while (slots.length < max && available < queue.length) {
             const slot: Slot = {
                 state: 'starting',
                 current: null,
                 dead: false,
-                post: () => {},
-                terminate: () => {},
-                ref: () => {},
-                unref: () => {}
+                post: () => undefined,
+                terminate: () => undefined,
+                ref: () => undefined,
+                unref: () => undefined
             };
             slots.push(slot);
             spawnSlot(slot);
@@ -213,7 +218,7 @@ async function ensureSpawned() {
 
 function dispatch() {
     while (queue.length > 0) {
-        const slot = slots.find(s => s.state === 'idle');
+        const slot = slots.find((s) => s.state === 'idle');
         if (!slot) {
             ensureSpawned();
             break;
@@ -247,7 +252,13 @@ function dispatch() {
 
 const enqueue = <T extends TaskName>(task: T, args: TaskArgs<T>, transfer: ArrayBuffer[]): Promise<TaskResult<T>> => {
     const promise = new Promise<TaskResult<T>>((resolve, reject) => {
-        const pending: PendingTask = { task, args, transfer, resolve, reject };
+        const pending: PendingTask = {
+            task,
+            args,
+            transfer,
+            resolve: (result) => resolve(result as TaskResult<T>),
+            reject
+        };
         if (inlineMode()) {
             runTaskInline(pending);
         } else {
@@ -257,7 +268,7 @@ const enqueue = <T extends TaskName>(task: T, args: TaskArgs<T>, transfer: Array
     });
 
     outstanding.add(promise);
-    promise.catch(() => {}).then(() => outstanding.delete(promise));
+    promise.catch<undefined>(() => undefined).then(() => outstanding.delete(promise));
 
     return promise;
 };
@@ -286,6 +297,7 @@ const destroyPool = async () => {
  * every task runs inline on the calling thread instead - same code, same
  * results, just serial.
  */
+// eslint-disable-next-line @typescript-eslint/no-extraneous-class
 class WorkerQueue {
     /**
      * Sets the URL of the worker script (the shipped dist/worker.mjs). Set

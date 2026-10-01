@@ -1,13 +1,16 @@
 import { css, js, renderViewerHtml } from '@playcanvas/supersplat-viewer';
-import { defaultSettings, validateSettings, type ExperienceSettings } from '@playcanvas/supersplat-viewer/settings';
+import { defaultSettings, validateSettings } from '@playcanvas/supersplat-viewer/settings';
+import type { ExperienceSettings } from '@playcanvas/supersplat-viewer/settings';
 import { basename, dirname, join } from 'pathe';
+
+import type { DataTable } from '../data-table';
+import { MemoryFileSystem, writeFile } from '../io/write';
+import type { FileSystem } from '../io/write';
+import type { DeviceCreator } from '../types';
+import { logger, toBase64 } from '../utils';
 
 import { logWrittenFile } from './utils';
 import { writeSog } from './write-sog';
-import { DataTable } from '../data-table';
-import { type FileSystem, MemoryFileSystem, writeFile } from '../io/write';
-import type { DeviceCreator } from '../types';
-import { logger, toBase64 } from '../utils';
 
 type WriteHtmlOptions = {
     filename: string;
@@ -47,15 +50,18 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
         const memoryFs = new MemoryFileSystem();
 
         const sogFilename = 'temp.sog';
-        await writeSog({
-            filename: sogFilename,
-            dataTable,
-            bundle: true,
-            iterations,
-            webpEffort,
-            createDevice,
-            logging: 'silent'
-        }, memoryFs);
+        await writeSog(
+            {
+                filename: sogFilename,
+                dataTable,
+                bundle: true,
+                iterations,
+                webpEffort,
+                createDevice,
+                logging: 'silent'
+            },
+            memoryFs
+        );
 
         // get the memory buffer
         const sogData = toBase64(memoryFs.results.get(sogFilename));
@@ -87,15 +93,18 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
         const writingGroup = logger.group('Writing');
 
         // Write .sog file (its files are emitted flat into our Writing group)
-        await writeSog({
-            filename: sogPath,
-            dataTable,
-            bundle: true,
-            iterations,
-            webpEffort,
-            createDevice,
-            logging: 'flat'
-        }, fs);
+        await writeSog(
+            {
+                filename: sogPath,
+                dataTable,
+                bundle: true,
+                iterations,
+                webpEffort,
+                createDevice,
+                logging: 'flat'
+            },
+            fs
+        );
 
         // Write CSS file
         const cssPath = join(outputDir, 'index.css');

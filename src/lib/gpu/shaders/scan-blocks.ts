@@ -17,7 +17,7 @@ const SCAN_PER_THREAD = 8;
 /** Splats per scan block; must match the `>> 11u` in the emit shader's `pairBase`. */
 const SCAN_BLOCK = SCAN_THREADS * SCAN_PER_THREAD;
 
-const scanBlocksWgsl = () => /* wgsl */`
+const scanBlocksWgsl = () => /* wgsl */ `
 #include "uniformsStruct"
 #include "constants"
 
@@ -85,7 +85,7 @@ fn main(
  *
  * @returns WGSL source for the block-sum scan compute shader.
  */
-const scanSumsWgsl = () => /* wgsl */`
+const scanSumsWgsl = () => /* wgsl */ `
 #include "uniformsStruct"
 #include "constants"
 

@@ -1,7 +1,8 @@
-import { GraphicsDevice } from 'playcanvas';
+import type { GraphicsDevice } from 'playcanvas';
+
+import { GpuKmeans } from '../gpu';
 
 import { KdTree } from './kd-tree';
-import { GpuKmeans } from '../gpu';
 
 // use floyd's algorithm to pick m unique random indices from 0..n-1
 const pickRandomIndices = (n: number, m: number) => {
@@ -37,7 +38,14 @@ const initCentroids1D = (points: Float32Array, numRows: number, centroids: Float
 
 // CPU assignment fallback (no GPU): build a kd-tree over the centroids and find
 // each point's nearest. points/centroids are row-major interleaved.
-const assignCpu = (points: Float32Array, numRows: number, nc: number, centroids: Float32Array, k: number, labels: Uint32Array) => {
+const assignCpu = (
+    points: Float32Array,
+    numRows: number,
+    nc: number,
+    centroids: Float32Array,
+    k: number,
+    labels: Uint32Array
+) => {
     // de-interleave centroids into columns for the KdTree (k is small)
     const cols: Float32Array[] = [];
     for (let j = 0; j < nc; ++j) {
@@ -78,7 +86,7 @@ const kmeansInterleaved = async (
     iterations: number,
     device?: GraphicsDevice,
     onIteration?: () => void
-): Promise<{ centroids: Float32Array, labels: Uint32Array }> => {
+): Promise<{ centroids: Float32Array; labels: Uint32Array }> => {
     const nc = numColumns;
 
     // too few data points: each point is its own centroid

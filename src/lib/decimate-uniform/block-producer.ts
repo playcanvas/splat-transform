@@ -1,4 +1,4 @@
-import { type ChunkData, type ChunkLayer, type ChunkSource, type ChunkSourceMetadata, type ReadRequest } from '../chunk';
+import type { ChunkData, ChunkLayer, ChunkSource, ChunkSourceMetadata, ReadRequest } from '../chunk';
 
 /**
  * One output chunk of the merge stream. The views hold exactly `count`
@@ -61,7 +61,9 @@ const createBlockProducerSource = (
         const payload = value;
         const expected = Math.min(meta.chunkSize, meta.numGaussians - request.chunkIndex * meta.chunkSize);
         if (payload.count !== expected) {
-            throw new Error(`decimate output chunk ${request.chunkIndex}: expected ${expected} rows, produced ${payload.count}`);
+            throw new Error(
+                `decimate output chunk ${request.chunkIndex}: expected ${expected} rows, produced ${payload.count}`
+            );
         }
 
         const fill = (cd: ChunkData | undefined, layer: ChunkLayer): void => {

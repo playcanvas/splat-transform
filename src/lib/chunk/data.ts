@@ -1,4 +1,4 @@
-import { type ChunkFieldMap, type ChunkLayer } from './layout';
+import type { ChunkFieldMap, ChunkLayer } from './layout';
 
 /**
  * A CPU-resident buffer holding one layer's data for one chunk of gaussians.
@@ -19,6 +19,7 @@ import { type ChunkFieldMap, type ChunkLayer } from './layout';
  * `stride` is the bytes per gaussian, dictated by the layer (and, for `color`
  * and `other`, by the SH band count or extras schema).
  */
+// eslint-disable-next-line @typescript-eslint/consistent-type-definitions -- preserve public declaration merging
 interface ChunkData {
     /** Which layer this buffer holds. */
     readonly layer: ChunkLayer;

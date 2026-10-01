@@ -11,10 +11,17 @@ function sortKeyMaskPairs(keys: Float64Array, values: Uint32Array, length: numbe
     if (length < 2) return;
 
     const swap = (a: number, b: number): void => {
-        const key = keys[a]; keys[a] = keys[b]; keys[b] = key;
-        const a2 = a * 2, b2 = b * 2;
-        const lo = values[a2]; values[a2] = values[b2]; values[b2] = lo;
-        const hi = values[a2 + 1]; values[a2 + 1] = values[b2 + 1]; values[b2 + 1] = hi;
+        const key = keys[a];
+        keys[a] = keys[b];
+        keys[b] = key;
+        const a2 = a * 2,
+            b2 = b * 2;
+        const lo = values[a2];
+        values[a2] = values[b2];
+        values[b2] = lo;
+        const hi = values[a2 + 1];
+        values[a2 + 1] = values[b2 + 1];
+        values[b2 + 1] = hi;
     };
 
     const stack = new Int32Array(64);
@@ -55,8 +62,12 @@ function sortKeyMaskPairs(keys: Float64Array, values: Uint32Array, length: numbe
         let i = lo;
         let j = hi - 1;
         while (true) {
-            while (keys[++i] < pivot) { /* sentinel at hi */ }
-            while (keys[--j] > pivot) { /* sentinel at lo */ }
+            while (keys[++i] < pivot) {
+                /* sentinel at hi */
+            }
+            while (keys[--j] > pivot) {
+                /* sentinel at lo */
+            }
             if (i >= j) break;
             swap(i, j);
         }

@@ -1,6 +1,11 @@
-import { GraphicsDevice } from 'playcanvas';
+import type { GraphicsDevice } from 'playcanvas';
 
-import { type Projection, type RenderCamera, buildCameraBasis } from './camera';
+import type { DataTable } from '../data-table';
+import { GpuSplatRasterizer } from '../gpu';
+import { logger } from '../utils';
+
+import { buildCameraBasis } from './camera';
+import type { Projection, RenderCamera } from './camera';
 import {
     AA_DILATION_COV,
     DISCRIMINANT_FLOOR,
@@ -17,9 +22,6 @@ import {
     sortCandidatesByDepth,
     splatInputStride
 } from './preprocess';
-import { DataTable } from '../data-table';
-import { GpuSplatRasterizer } from '../gpu';
-import { logger } from '../utils';
 
 /**
  * Max gaussians per GPU dispatch. Bounds per-render input/projection
@@ -49,15 +51,15 @@ const CHUNK_CAP = 200_000;
  * sub-frame, and the global CPU depth sort is shared across sub-frames
  * (no seam artifacts at sub-frame boundaries).
  */
-const MAX_SUB_FRAME_TILES_X = Math.ceil(1920 / TILE_SIZE);  // 120
-const MAX_SUB_FRAME_TILES_Y = Math.ceil(1080 / TILE_SIZE);  // 68
+const MAX_SUB_FRAME_TILES_X = Math.ceil(1920 / TILE_SIZE); // 120
+const MAX_SUB_FRAME_TILES_Y = Math.ceil(1080 / TILE_SIZE); // 68
 
-interface BackgroundRGBA {
+type BackgroundRGBA = {
     r: number;
     g: number;
     b: number;
     a: number;
-}
+};
 
 /**
  * Render a splat scene to an RGBA byte buffer.
@@ -94,8 +96,12 @@ const renderRasterPass = async (
     camera: RenderCamera,
     background: BackgroundRGBA
 ): Promise<Uint8Array> => {
-    if (!Number.isInteger(camera.width) || !Number.isInteger(camera.height) ||
-        camera.width <= 0 || camera.height <= 0) {
+    if (
+        !Number.isInteger(camera.width) ||
+        !Number.isInteger(camera.height) ||
+        camera.width <= 0 ||
+        camera.height <= 0
+    ) {
         throw new Error(`Invalid resolution: ${camera.width}x${camera.height}`);
     }
 
@@ -128,8 +134,12 @@ const renderRasterPass = async (
     const zCol = dataTable.getColumnByName('z')!.data as Float32Array;
     const numRows = dataTable.numRows;
 
-    const ex = basis.eye.x, ey = basis.eye.y, ez = basis.eye.z;
-    const fx = basis.forward.x, fy = basis.forward.y, fz = basis.forward.z;
+    const ex = basis.eye.x,
+        ey = basis.eye.y,
+        ez = basis.eye.z;
+    const fx = basis.forward.x,
+        fy = basis.forward.y,
+        fz = basis.forward.z;
     const near = camera.near;
 
     // Worst-case visible-count allocation. Right-sized at the end via subarray.
@@ -162,12 +172,8 @@ const renderRasterPass = async (
     // max(W/(2π), H/π · 1/POLE_EPS)) for >4K equirect renders.
     const imageTilesX = Math.ceil(width / TILE_SIZE);
     const imageTilesY = Math.ceil(height / TILE_SIZE);
-    const subFrameTilesX = projection === 'equirect' ?
-        imageTilesX :
-        Math.min(imageTilesX, MAX_SUB_FRAME_TILES_X);
-    const subFrameTilesY = projection === 'equirect' ?
-        imageTilesY :
-        Math.min(imageTilesY, MAX_SUB_FRAME_TILES_Y);
+    const subFrameTilesX = projection === 'equirect' ? imageTilesX : Math.min(imageTilesX, MAX_SUB_FRAME_TILES_X);
+    const subFrameTilesY = projection === 'equirect' ? imageTilesY : Math.min(imageTilesY, MAX_SUB_FRAME_TILES_Y);
     const numSubFramesX = Math.ceil(imageTilesX / subFrameTilesX);
     const numSubFramesY = Math.ceil(imageTilesY / subFrameTilesY);
     const numSubFrames = numSubFramesX * numSubFramesY;
@@ -215,11 +221,19 @@ const renderRasterPass = async (
     } else {
         const subFramePixelsX = subFrameTilesX * TILE_SIZE;
         const subFramePixelsY = subFrameTilesY * TILE_SIZE;
-        const rx2 = basis.right.x, ry2 = basis.right.y, rz2 = basis.right.z;
-        const dx2 = basis.down.x, dy2 = basis.down.y, dz2 = basis.down.z;
-        const focalX = basis.focalX, focalY = basis.focalY;
-        const halfW = width * 0.5, halfH = height * 0.5;
-        const sxColRef = cols.scaleX, syColRef = cols.scaleY, szColRef = cols.scaleZ;
+        const rx2 = basis.right.x,
+            ry2 = basis.right.y,
+            rz2 = basis.right.z;
+        const dx2 = basis.down.x,
+            dy2 = basis.down.y,
+            dz2 = basis.down.z;
+        const focalX = basis.focalX,
+            focalY = basis.focalY;
+        const halfW = width * 0.5,
+            halfH = height * 0.5;
+        const sxColRef = cols.scaleX,
+            syColRef = cols.scaleY,
+            szColRef = cols.scaleZ;
         // Additive squared-radius safety: AA dilation + disc-floor bump.
         const lambdaSafety = AA_DILATION_COV + Math.sqrt(DISCRIMINANT_FLOOR);
 
@@ -227,7 +241,7 @@ const renderRasterPass = async (
         // sx0 = 0xFFFF sentinel marks "off-screen, skip in pass 2".
         // Uint16 (not Uint8) so sub-frame counts per axis aren't capped
         // at 254 by the storage width / sentinel collision.
-        const SF_OFFSCREEN = 0xFFFF;
+        const SF_OFFSCREEN = 0xffff;
         const ranges = new Uint16Array(candidateCount * 4);
         const subFrameCounts = new Uint32Array(numSubFrames);
 
@@ -237,8 +251,8 @@ const renderRasterPass = async (
         const aperture = camera.apertureScale ?? 0;
         const focus = camera.focusDistance ?? 0;
         // Tan-of-half-FOV cap; matches the project shader's Jacobian clamp.
-        const limX = JACOBIAN_LIMIT_FACTOR * halfW / focalX;
-        const limY = JACOBIAN_LIMIT_FACTOR * halfH / focalY;
+        const limX = (JACOBIAN_LIMIT_FACTOR * halfW) / focalX;
+        const limY = (JACOBIAN_LIMIT_FACTOR * halfH) / focalY;
         // The larger focal keeps the bound valid against either axis.
         const focalMax = Math.max(focalX, focalY);
 
@@ -249,9 +263,10 @@ const renderRasterPass = async (
         const lambdaGeom = (cx: number, cy: number, invZ: number, maxScale: number): number => {
             const tx = cx * invZ;
             const ty = cy * invZ;
-            const txClamped = tx > limX ? limX : (tx < -limX ? -limX : tx);
-            const tyClamped = ty > limY ? limY : (ty < -limY ? -limY : ty);
+            const txClamped = tx > limX ? limX : tx < -limX ? -limX : tx;
+            const tyClamped = ty > limY ? limY : ty < -limY ? -limY : ty;
             const jFactorSq = 1 + txClamped * txClamped + tyClamped * tyClamped;
+            // prettier-ignore
             return (focalMax * invZ) * (focalMax * invZ) * jFactorSq * maxScale * maxScale;
         };
 
@@ -269,11 +284,7 @@ const renderRasterPass = async (
             const invZ = 1.0 / cz;
             const screenX = focalX * cx * invZ + halfW + (basis.offsetX ?? 0);
             const screenY = focalY * cy * invZ + halfH + (basis.offsetY ?? 0);
-            const maxScale = Math.max(
-                Math.exp(sxColRef[idx]),
-                Math.exp(syColRef[idx]),
-                Math.exp(szColRef[idx])
-            );
+            const maxScale = Math.max(Math.exp(sxColRef[idx]), Math.exp(syColRef[idx]), Math.exp(szColRef[idx]));
             let lambdaMaxBound = lambdaGeom(cx, cy, invZ, maxScale) + lambdaSafety;
             if (aperture > 0) {
                 const coc = aperture * Math.abs(1 - focus / cz);
@@ -437,10 +448,7 @@ const renderRasterPass = async (
             for (let row = 0; row < copyH; row++) {
                 const srcOffset = row * subPixelW * 4;
                 const dstOffset = ((subPixelOriginY + row) * width + subPixelOriginX) * 4;
-                finalImage.set(
-                    subFrameBytes.subarray(srcOffset, srcOffset + copyW * 4),
-                    dstOffset
-                );
+                finalImage.set(subFrameBytes.subarray(srcOffset, srcOffset + copyW * 4), dstOffset);
             }
         }
     }

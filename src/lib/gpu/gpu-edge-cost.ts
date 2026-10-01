@@ -1,3 +1,4 @@
+import type { GraphicsDevice } from 'playcanvas';
 import {
     BUFFERUSAGE_COPY_DST,
     BUFFERUSAGE_COPY_SRC,
@@ -8,7 +9,6 @@ import {
     BindStorageBufferFormat,
     BindUniformBufferFormat,
     Compute,
-    GraphicsDevice,
     Shader,
     StorageBuffer,
     UniformBufferFormat,
@@ -16,6 +16,7 @@ import {
 } from 'playcanvas';
 
 import { CACHE_STRIDE } from '../decimate/edge-cost-cpu';
+
 import { gaussianL2Wgsl } from './shaders/chunks/gaussian-l2';
 
 /** Per-splat interleaved stride in the `splat` storage buffer (= the CPU cost-cache layout). */
@@ -39,7 +40,7 @@ export const SPLAT_STRIDE = CACHE_STRIDE;
  * @param k - Compile-time K, neighbour slots per owned row.
  * @returns WGSL source.
  */
-const edgeCostWgsl = (k: number) => /* wgsl */`
+const edgeCostWgsl = (k: number) => /* wgsl */ `
 struct Uniforms {
     slotBase: u32,
     slotCount: u32,
@@ -179,12 +180,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
  * cost +Inf. Output is `costs[s] = cost for slot s`.
  */
 class GpuEdgeCost {
-    execute: (
-        splatData: Float32Array,
-        numSplats: number,
-        nbRows: Uint32Array,
-        outCosts: Float32Array
-    ) => Promise<void>;
+    execute: (splatData: Float32Array, numSplats: number, nbRows: Uint32Array, outCosts: Float32Array) => Promise<void>;
     destroy: () => void;
 
     /**
@@ -197,7 +193,7 @@ class GpuEdgeCost {
         // Slots per dispatch: bounded by the 65,535 workgroups-per-dimension
         // limit. One blocking readback per ~4.2M slots (a 2M-row block costs
         // 8 round trips, not 512 as with 65,536-edge batches).
-        const slotsPerBatch = 65535 * workgroupSize;  // 4,194,240
+        const slotsPerBatch = 65535 * workgroupSize; // 4,194,240
 
         const bindGroupFormat = new BindGroupFormat(device, [
             new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
@@ -223,13 +219,14 @@ class GpuEdgeCost {
 
         // Pre-flight the per-N splat buffer against the device's storage limit
         // so we fail with a clear message instead of a driver-side error.
-        const maxStorage = (device as any).limits?.maxStorageBufferBindingSize;
+        const maxStorage = (device as GraphicsDevice & { limits?: { maxStorageBufferBindingSize?: number } }).limits
+            ?.maxStorageBufferBindingSize;
         if (typeof maxStorage === 'number') {
             const bytes = maxN * SPLAT_STRIDE * 4;
             if (bytes > maxStorage) {
                 throw new Error(
                     `GpuEdgeCost: splat buffer (${maxN} splats × ${SPLAT_STRIDE} floats = ${bytes} bytes) ` +
-                    `exceeds device maxStorageBufferBindingSize (${maxStorage})`
+                        `exceeds device maxStorageBufferBindingSize (${maxStorage})`
                 );
             }
         }
@@ -241,11 +238,7 @@ class GpuEdgeCost {
         // dispatch, keeping it off the ~2 GB per-binding limit.
         const nbRowBuf = new StorageBuffer(device, slotsPerBatch * 4, BUFFERUSAGE_COPY_DST);
 
-        const outBuf = new StorageBuffer(
-            device,
-            slotsPerBatch * 4,
-            BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST
-        );
+        const outBuf = new StorageBuffer(device, slotsPerBatch * 4, BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST);
         const outScratch = new Float32Array(slotsPerBatch);
 
         const compute = new Compute(device, shader, 'compute-edge-cost');

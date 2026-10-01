@@ -1,7 +1,8 @@
-import { type SplatModel } from '../splat-model';
-import { type Transform } from '../utils';
-import { type ChunkData } from './data';
-import { type ExtraColumn, type ChunkLayer, type SHBands, type LayerLayout } from './layout';
+import type { SplatModel } from '../splat-model';
+import type { Transform } from '../utils';
+
+import type { ChunkData } from './data';
+import type { ExtraColumn, ChunkLayer, SHBands, LayerLayout } from './layout';
 
 /**
  * Static description of a {@link ChunkSource}'s contents — what's in it and
@@ -21,17 +22,17 @@ type ChunkSourceMetadata = {
     readonly numGaussians: number;
     readonly numLods: number;
     /** Gaussian counts per LOD. `lodCounts[0]` matches `numGaussians`. */
-    readonly lodCounts: ReadonlyArray<number>;
+    readonly lodCounts: readonly number[];
     /** Gaussians per chunk (all chunks are this size except the last per LOD). */
     readonly chunkSize: number;
     /** Number of chunks per LOD: `Math.ceil(lodCounts[lod] / chunkSize)`. */
-    readonly numChunks: ReadonlyArray<number>;
+    readonly numChunks: readonly number[];
     /** SH band count present in the source. */
     readonly shBands: SHBands;
     /** How the scene was trained, and so how it must be evaluated. */
     readonly model: SplatModel;
     /** Extra non-standard columns mapped to the `other` layer. */
-    readonly extraColumns: ReadonlyArray<ExtraColumn>;
+    readonly extraColumns: readonly ExtraColumn[];
     /** Coordinate-space transform; applied lazily when consumed. */
     readonly transform: Transform;
     /** Which layers the source can serve. */
@@ -92,6 +93,7 @@ type ReadRequest =
  * `ChunkDataPool`, filled by `read`, used, and released back to the pool. The
  * source itself never holds long-lived buffer memory on the caller's behalf.
  */
+// eslint-disable-next-line @typescript-eslint/consistent-type-definitions -- preserve public declaration merging
 interface ChunkSource {
     readonly meta: ChunkSourceMetadata;
 

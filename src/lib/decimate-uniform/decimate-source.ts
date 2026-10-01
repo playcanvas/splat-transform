@@ -1,25 +1,24 @@
 import { join } from 'pathe';
-import { type GraphicsDevice } from 'playcanvas';
+import type { GraphicsDevice } from 'playcanvas';
 
-import { createBlockProducerSource } from './block-producer';
-import { mergeStream } from './merge-stream';
-import { kdPartition, coherenceRuns, type ResidentPositions } from './partition';
-import { runPriorityPass, HALO_CAP, type CandidateArrays } from './priority';
-import { selectMerges } from './select';
-import {
-    compact,
-    type ChunkDataPool,
-    type ChunkSource,
-    type ChunkSourceMetadata
-} from '../chunk';
-import { APP_CHUNK } from './gpu-edge-cost';
-import { type ReadFileSystem } from '../io/read';
-import { type FileSystem } from '../io/write';
+import { compact } from '../chunk';
+import type { ChunkDataPool, ChunkSource, ChunkSourceMetadata } from '../chunk';
+import type { ReadFileSystem } from '../io/read';
+import type { FileSystem } from '../io/write';
 import { bakeTransform } from '../ops';
 import { readPly } from '../readers/read-ply';
-import { type DeviceCreator } from '../types';
+import type { DeviceCreator } from '../types';
 import { fmtBytes, fmtCount, logger, Transform } from '../utils';
 import { writePlyStreaming } from '../writers/write-ply-streaming';
+
+import { createBlockProducerSource } from './block-producer';
+import { APP_CHUNK } from './gpu-edge-cost';
+import { mergeStream } from './merge-stream';
+import { kdPartition, coherenceRuns } from './partition';
+import type { ResidentPositions } from './partition';
+import { runPriorityPass, HALO_CAP } from './priority';
+import type { CandidateArrays } from './priority';
+import { selectMerges } from './select';
 
 /** Neighbours per query — unchanged from legacy. */
 const KNN_K = 16;
@@ -175,14 +174,17 @@ const decimateSource = async (
         // fits the adapter's storage-binding limit.
         let blockSize = BLOCK_SIZE;
         const bindingLimit = (device as unknown as { limits?: { maxStorageBufferBindingSize?: number } } | undefined)
-        ?.limits?.maxStorageBufferBindingSize;
+            ?.limits?.maxStorageBufferBindingSize;
         if (typeof bindingLimit === 'number') {
-            const largestBinding = (bs: number) => bs * (1 + HALO_CAP) * Math.max(Math.min(APP_CHUNK, colorDim) * 4, 36);
-            while (blockSize > (1 << 16) && largestBinding(blockSize) > bindingLimit) {
+            const largestBinding = (bs: number) =>
+                bs * (1 + HALO_CAP) * Math.max(Math.min(APP_CHUNK, colorDim) * 4, 36);
+            while (blockSize > 1 << 16 && largestBinding(blockSize) > bindingLimit) {
                 blockSize >>= 1;
             }
             if (blockSize !== BLOCK_SIZE) {
-                logger.warn(`reducing decimate block size to ${fmtCount(blockSize)} to fit GPU binding limit ${fmtBytes(bindingLimit)}`);
+                logger.warn(
+                    `reducing decimate block size to ${fmtCount(blockSize)} to fit GPU binding limit ${fmtBytes(bindingLimit)}`
+                );
             }
         }
 
@@ -191,7 +193,9 @@ const decimateSource = async (
         partSub.end();
 
         if (generation === 1 && N >= COHERENCE_MIN_N) {
-            const runs = blocks.map(b => coherenceRuns(order, b.start, b.end, COHERENCE_GAP_ROWS)).sort((a, b) => a - b);
+            const runs = blocks
+                .map((b) => coherenceRuns(order, b.start, b.end, COHERENCE_GAP_ROWS))
+                .sort((a, b) => a - b);
             const median = runs[runs.length >> 1] ?? 0;
             if (median > INCOHERENT_RUNS_PER_BLOCK) {
                 logger.warn(
@@ -202,7 +206,7 @@ const decimateSource = async (
 
         const K = chooseK(N, budget);
         const cand: CandidateArrays = {
-            idx: new Uint32Array(N * K).fill(0xFFFFFFFF),
+            idx: new Uint32Array(N * K).fill(0xffffffff),
             cost: new Float32Array(N * K).fill(Infinity)
         };
 
@@ -210,7 +214,7 @@ const decimateSource = async (
         await runPriorityPass(
             { source: src, pool, pos: positions, order, blocks, device, K, k: Math.min(KNN_K, Math.max(1, N - 1)) },
             cand,
-            n => priorityBar.tick(n)
+            (n) => priorityBar.tick(n)
         );
         priorityBar.end();
 
@@ -222,12 +226,12 @@ const decimateSource = async (
 
         if (selection.removed === 0) {
             gen.end();
-            const cause = device ?
-                'the GPU step likely failed (e.g. out-of-memory) or produced non-finite costs' :
-                'cost computation produced no finite merge candidates (e.g. non-finite inputs)';
+            const cause = device
+                ? 'the GPU step likely failed (e.g. out-of-memory) or produced non-finite costs'
+                : 'cost computation produced no finite merge candidates (e.g. non-finite inputs)';
             throw new Error(
                 `decimation found no valid merges at ${N} splats (target ${targetCount}) — ${cause}. ` +
-                'Refusing to return an incompletely-decimated scene.'
+                    'Refusing to return an incompletely-decimated scene.'
             );
         }
         const removedFraction = selection.removed / N;
@@ -235,9 +239,9 @@ const decimateSource = async (
             gen.end();
             throw new Error(
                 `decimation stalled at ${N} splats (target ${targetCount}): a generation removed only ` +
-                `${selection.removed} splat${selection.removed === 1 ? '' : 's'} (${(removedFraction * 100).toFixed(3)}% of ${N}) — ` +
-                'the nearest-neighbour graph is too degenerate to merge further (e.g. many coincident splats). ' +
-                'Refusing to grind toward the target.'
+                    `${selection.removed} splat${selection.removed === 1 ? '' : 's'} (${(removedFraction * 100).toFixed(3)}% of ${N}) — ` +
+                    'the nearest-neighbour graph is too degenerate to merge further (e.g. many coincident splats). ' +
+                    'Refusing to grind toward the target.'
             );
         }
 
@@ -257,11 +261,13 @@ const decimateSource = async (
         };
 
         const isFinal = outCount <= targetCount;
-        const nextPositions: ResidentPositions | undefined = isFinal ? undefined : {
-            x: new Float32Array(outCount),
-            y: new Float32Array(outCount),
-            z: new Float32Array(outCount)
-        };
+        const nextPositions: ResidentPositions | undefined = isFinal
+            ? undefined
+            : {
+                  x: new Float32Array(outCount),
+                  y: new Float32Array(outCount),
+                  z: new Float32Array(outCount)
+              };
 
         // `src` is reassigned each generation; capture this generation's
         // values for the deferred producer closures.
@@ -276,12 +282,14 @@ const decimateSource = async (
             // streaming happens after this function returns.
             gen.end();
             const mergeBar = logger.bar('merging', N);
-            const producer = createBlockProducerSource(outMeta, () => mergeStream(streamCtx, genChunkSize, n => mergeBar.tick(n)));
+            const producer = createBlockProducerSource(outMeta, () =>
+                mergeStream(streamCtx, genChunkSize, (n) => mergeBar.tick(n))
+            );
             const disposeSpill = disposeCurrentInput;
             let closed = false;
             return {
                 meta: producer.meta,
-                read: request => producer.read(request),
+                read: (request) => producer.read(request),
                 close: async () => {
                     if (closed) return;
                     closed = true;
@@ -294,7 +302,9 @@ const decimateSource = async (
         }
 
         const mergeBar = logger.bar('merging', N);
-        const producer = createBlockProducerSource(outMeta, () => mergeStream(streamCtx, genChunkSize, n => mergeBar.tick(n)));
+        const producer = createBlockProducerSource(outMeta, () =>
+            mergeStream(streamCtx, genChunkSize, (n) => mergeBar.tick(n))
+        );
 
         // Intermediate generation: materialize (RAM when comfortably within
         // budget, else temp PLY spill), then advance the loop.
@@ -308,7 +318,7 @@ const decimateSource = async (
             if (!opts.spill) {
                 throw new Error(
                     `decimation intermediate generation needs ${fmtBytes(estBytes)}, over the in-memory budget — ` +
-                    'a spill location is required (opts.spill / --scratch-dir)'
+                        'a spill location is required (opts.spill / --scratch-dir)'
                 );
             }
             const spill = opts.spill;

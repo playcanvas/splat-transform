@@ -1,10 +1,12 @@
 import { Vec3 } from 'playcanvas';
 
+import type { Bounds } from '../data-table';
+import type { GpuDilation } from '../gpu';
+import { logger } from '../utils';
+
 import { gpuDilate3 } from './dilation';
 import { twoLevelBFS } from './flood-fill';
 import { sparseOrGrids } from './grid-ops';
-import type { Bounds } from '../data-table';
-import type { GpuDilation } from '../gpu';
 import {
     BLOCK_MIXED,
     BLOCK_SOLID,
@@ -14,7 +16,6 @@ import {
     SOLID_LO,
     SparseVoxelGrid
 } from './sparse-voxel-grid';
-import { logger } from '../utils';
 
 type NavSeed = {
     x: number;
@@ -92,7 +93,7 @@ const fillExterior = async (
 
     for (let bz = 0; bz < nbz; bz++) {
         for (let by = 0; by < nby; by++) {
-            seedBoundaryBlock((nbx - 1) + by * nbx + bz * bStride, nbx - 1, by, bz, 1);
+            seedBoundaryBlock(nbx - 1 + by * nbx + bz * bStride, nbx - 1, by, bz, 1);
         }
     }
 
@@ -140,8 +141,12 @@ const fillExterior = async (
 
     const combined = sparseOrGrids(gridOriginal, dilatedVisited);
 
-    let minIx = nx, minIy = ny, minIz = nz;
-    let maxIx = 0, maxIy = 0, maxIz = 0;
+    let minIx = nx,
+        minIy = ny,
+        minIz = nz;
+    let maxIx = 0,
+        maxIy = 0,
+        maxIz = 0;
 
     for (let bz = 0; bz < nbz; bz++) {
         for (let by = 0; by < nby; by++) {
@@ -198,10 +203,7 @@ const fillExterior = async (
     };
 
     return {
-        grid: combined.cropTo(
-            cropMinBx, cropMinBy, cropMinBz,
-            cropMaxBx, cropMaxBy, cropMaxBz
-        ),
+        grid: combined.cropTo(cropMinBx, cropMinBy, cropMinBz, cropMaxBx, cropMaxBy, cropMaxBz),
         gridBounds: croppedBounds
     };
 };

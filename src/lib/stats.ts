@@ -1,7 +1,9 @@
-import { type ChunkDataPool, type ChunkSource, createChunkDataPool } from './chunk';
+import { createChunkDataPool } from './chunk';
+import type { ChunkDataPool, ChunkSource } from './chunk';
 import { dataTableToChunkSource } from './compat/data-table';
 import { DataTable } from './data-table';
-import { computeSourceStats, type SourceStats } from './ops';
+import { computeSourceStats } from './ops';
+import type { SourceStats } from './ops';
 
 /**
  * Compute per-LOD, per-column statistics for splat data in a single streaming

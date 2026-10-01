@@ -13,7 +13,7 @@
  * wrapping its per-pixel dx into [-W/2, W/2], so a wrapped tile pulls
  * the splat's footprint from the correct copy across the seam.
  */
-const tileWalkEquirect = /* wgsl */`
+const tileWalkEquirect = /* wgsl */ `
     let minTXraw = i32(floor((sX - radius - gox) / tsz));
     let maxTXraw = i32(floor((sX + radius - gox) / tsz));
     let txCountRaw = maxTXraw - minTXraw + 1;

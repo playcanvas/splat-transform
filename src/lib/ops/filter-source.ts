@@ -1,15 +1,8 @@
-import {
-    type ChunkData,
-    type ChunkDataPool,
-    type ChunkLayer,
-    type ReadRequest,
-    type ChunkSource,
-    type ChunkSourceMetadata
-} from '../chunk';
+import type { ChunkData, ChunkDataPool, ChunkLayer, ReadRequest, ChunkSource, ChunkSourceMetadata } from '../chunk';
 
 // Mutable form of a chunk read request, for building one layer-by-layer before
 // passing it to a parent's `read` (whose `ReadRequest` fields are readonly).
-type MutableReadRequest = { chunkIndex: number; lod: number } & { [L in ChunkLayer]?: ChunkData };
+type MutableReadRequest = { chunkIndex: number; lod: number } & Partial<Record<ChunkLayer, ChunkData>>;
 
 /**
  * Select a subset of a source's gaussians by index, as a lazy view.

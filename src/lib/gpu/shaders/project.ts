@@ -16,7 +16,7 @@
  * @param coeffsPerChannel - Per-channel SH coefficient count (0/3/8/15).
  * @returns WGSL source for the project compute shader.
  */
-const projectWgsl = (coeffsPerChannel: number) => /* wgsl */`
+const projectWgsl = (coeffsPerChannel: number) => /* wgsl */ `
 #include "uniformsStruct"
 #include "constants"
 

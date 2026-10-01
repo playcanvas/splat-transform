@@ -1,8 +1,11 @@
-import { containerSource, type ContainerSegment } from './container-source';
+import type { ChunkDataPool, ChunkSource } from '../chunk';
+import { dirname, join, readFile } from '../io/read';
+import type { ReadFileSystem } from '../io/read';
+import type { Options } from '../types';
+
+import { containerSource } from './container-source';
+import type { ContainerSegment } from './container-source';
 import { readSogSource } from './read-sog';
-import { type ChunkDataPool, type ChunkSource } from '../chunk';
-import { dirname, join, readFile, type ReadFileSystem } from '../io/read';
-import { type Options } from '../types';
 
 type LodReference = {
     file: number;
@@ -43,12 +46,15 @@ const parseLodMeta = (text: string, filename: string): LodMeta => {
     if (!Number.isInteger(meta.lodLevels) || meta.lodLevels <= 0) {
         throw new Error(`Invalid lod-meta.json lodLevels: ${filename}`);
     }
-    if (meta.counts !== undefined &&
-        (!Array.isArray(meta.counts) || meta.counts.length !== meta.lodLevels ||
-        meta.counts.some(count => !Number.isInteger(count) || count < 0))) {
+    if (
+        meta.counts !== undefined &&
+        (!Array.isArray(meta.counts) ||
+            meta.counts.length !== meta.lodLevels ||
+            meta.counts.some((count) => !Number.isInteger(count) || count < 0))
+    ) {
         throw new Error(`Invalid lod-meta.json counts: ${filename}`);
     }
-    if (!Array.isArray(meta.filenames) || meta.filenames.some(name => typeof name !== 'string')) {
+    if (!Array.isArray(meta.filenames) || meta.filenames.some((name) => typeof name !== 'string')) {
         throw new Error(`Invalid lod-meta.json filenames: ${filename}`);
     }
     if (!meta.tree || typeof meta.tree !== 'object') {
@@ -61,16 +67,29 @@ const parseLodMeta = (text: string, filename: string): LodMeta => {
 const collectFilesByLod = (meta: LodMeta, filename: string): Map<number, Map<number, number>> => {
     const result = new Map<number, Map<number, number>>();
     const traverse = (node: LodNode): void => {
-        if (!node || typeof node !== 'object' || Array.isArray(node) ||
-            (node.children !== undefined && !Array.isArray(node.children))) {
+        if (
+            !node ||
+            typeof node !== 'object' ||
+            Array.isArray(node) ||
+            (node.children !== undefined && !Array.isArray(node.children))
+        ) {
             throw new Error(`Invalid lod-meta.json tree: ${filename}`);
         }
         for (const [key, ref] of Object.entries(node.lods ?? {})) {
             const lod = Number(key);
-            if (!Number.isInteger(lod) || lod < 0 || lod >= meta.lodLevels ||
-                !ref || !Number.isInteger(ref.file) || ref.file < 0 || ref.file >= meta.filenames.length ||
-                !Number.isInteger(ref.offset) || ref.offset < 0 ||
-                !Number.isInteger(ref.count) || ref.count < 0) {
+            if (
+                !Number.isInteger(lod) ||
+                lod < 0 ||
+                lod >= meta.lodLevels ||
+                !ref ||
+                !Number.isInteger(ref.file) ||
+                ref.file < 0 ||
+                ref.file >= meta.filenames.length ||
+                !Number.isInteger(ref.offset) ||
+                ref.offset < 0 ||
+                !Number.isInteger(ref.count) ||
+                ref.count < 0
+            ) {
                 throw new Error(`Invalid lod-meta.json LOD reference: ${filename}`);
             }
             let files = result.get(lod);
@@ -102,9 +121,7 @@ const collectFilesByLod = (meta: LodMeta, filename: string): Map<number, Map<num
 
 const resolveLodSelection = (lodSelect: number[], numLods: number): number[] => {
     if (lodSelect.length === 0) return Array.from({ length: numLods }, (_, i) => i);
-    return lodSelect
-    .map(lod => (lod < 0 ? numLods + lod : lod))
-    .filter(lod => lod >= 0 && lod < numLods);
+    return lodSelect.map((lod) => (lod < 0 ? numLods + lod : lod)).filter((lod) => lod >= 0 && lod < numLods);
 };
 
 /**
@@ -139,14 +156,14 @@ const readLodSource = async (
     const segmentsByLod = inputLods.map((lod): ContainerSegment[] => {
         const files = filesByLod.get(lod);
         return [...(files?.entries() ?? [])]
-        .sort(([a], [b]) => a - b)
-        .map(([file, count]) => {
-            const path = related(meta.filenames[file]);
-            return {
-                count,
-                decode: () => readSogSource(fileSystem, path, pool, { logging: 'silent' })
-            };
-        });
+            .sort(([a], [b]) => a - b)
+            .map(([file, count]) => {
+                const path = related(meta.filenames[file]);
+                return {
+                    count,
+                    decode: () => readSogSource(fileSystem, path, pool, { logging: 'silent' })
+                };
+            });
     });
 
     return containerSource(segmentsByLod, pool);

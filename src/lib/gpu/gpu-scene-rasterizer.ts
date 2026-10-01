@@ -1,3 +1,4 @@
+import type { GraphicsDevice } from 'playcanvas';
 import {
     BUFFERUSAGE_COPY_DST,
     BUFFERUSAGE_COPY_SRC,
@@ -8,16 +9,22 @@ import {
     BindUniformBufferFormat,
     Compute,
     ComputeRadixSort,
-    GraphicsDevice,
     Shader,
     StorageBuffer,
     UniformBufferFormat,
     Vec2
 } from 'playcanvas';
 
-import { type ChunkData, type ChunkDataPool, type ChunkLayer, type ChunkSource, type ReadRequest, colorStride } from '../chunk';
-import { type CameraBasis, type Projection } from '../render/camera';
-import { PAIR_BUFFER_BUDGET_BYTES, PAIR_BUFFER_TOTAL_BYTES_PER_ELEMENT, TILE_SIZE, storageBindingLimit } from '../render/config';
+import { colorStride } from '../chunk';
+import type { ChunkData, ChunkDataPool, ChunkLayer, ChunkSource, ReadRequest } from '../chunk';
+import type { CameraBasis, Projection } from '../render/camera';
+import {
+    PAIR_BUFFER_BUDGET_BYTES,
+    PAIR_BUFFER_TOTAL_BYTES_PER_ELEMENT,
+    TILE_SIZE,
+    storageBindingLimit
+} from '../render/config';
+
 import { accumulateWgsl } from './shaders/accumulate';
 import { constantsChunk } from './shaders/chunks/constants';
 import { covariance3D } from './shaders/chunks/covariance-3d';
@@ -75,7 +82,7 @@ class ResidentUploadError extends Error {
 /**
  * Fixed per-scene configuration of a {@link GpuSceneRasterizer}.
  */
-interface SceneRasterizerOptions {
+type SceneRasterizerOptions = {
     /** Number of SH bands above DC (0–3). Selects the SH shader variant and sizes the colour layer. */
     numSHBands: 0 | 1 | 2 | 3;
     /** Camera projection; fixed per instance (specialises the shaders). */
@@ -93,37 +100,40 @@ interface SceneRasterizerOptions {
     /** Clamp frame-filling splats to the image (see `SIZE_CLAMP_FRAC`); default true. */
     sizeClamp?: boolean;
     /** RGBA background, each channel in [0, 1]. */
-    bgR: number; bgG: number; bgB: number; bgA: number;
-}
+    bgR: number;
+    bgG: number;
+    bgB: number;
+    bgA: number;
+};
 
 /**
  * Camera for one render. The basis rows are (right, down, forward) of the
  * world→camera rotation.
  */
-interface SceneView {
+type SceneView = {
     basis: CameraBasis;
     near: number;
     focusDistance: number;
     apertureScale: number;
-}
+};
 
 /**
  * One range of the streamed path: `count` gaussians' layer records in
  * compositing order, as read from the source. The rasterizer releases the
  * buffers once uploaded.
  */
-interface StreamedRange {
+type StreamedRange = {
     count: number;
     position: ChunkData;
     geometric: ChunkData;
     color: ChunkData;
-}
+};
 
 /** The scene's order for one view: `order[0..visible)` are the visible gaussians, front to back. */
-interface SortedOrder {
+type SortedOrder = {
     order: Uint32Array;
     visible: number;
-}
+};
 
 /** Layers the rasterizer reads. */
 type SceneLayer = Extract<ChunkLayer, 'position' | 'geometric' | 'color'>;
@@ -265,7 +275,9 @@ class GpuSceneRasterizer {
         this.groupPixelW = options.groupTilesX * TILE_SIZE;
         this.groupPixelH = options.groupTilesY * TILE_SIZE;
         // @ts-ignore - limits is a WebGPU-device property not on the public type.
-        this.maxDispatchDim = (device as { limits?: { maxComputeWorkgroupsPerDimension?: number } }).limits?.maxComputeWorkgroupsPerDimension ?? 65535;
+        this.maxDispatchDim =
+            (device as { limits?: { maxComputeWorkgroupsPerDimension?: number } }).limits
+                ?.maxComputeWorkgroupsPerDimension ?? 65535;
         this.pairCap = Math.min(PAIR_BUDGET, Math.floor(storageBindingLimit(device) / 4));
 
         // Direct-dispatch radix sort: the pair count is known on the CPU by
@@ -333,17 +345,55 @@ class GpuSceneRasterizer {
             return new Compute(device, shader, name);
         };
 
-        this.depthKeysCompute = mk('scene-depth-keys', depthKeysWgsl(), [ro('position'), rw('sortKeys'), rw('visibleCount')]);
-        this.projectCompute = mk('scene-project', projectWgsl(coeffs), [ro('position'), rw('projected'), rw('coverage'), ro('geometric'), ro('color'), ro('order')]);
-        this.scanBlocksCompute = mk('scene-scan-blocks', scanBlocksWgsl(), [ro('coverage'), rw('emitOffset'), rw('blockSums')]);
+        this.depthKeysCompute = mk('scene-depth-keys', depthKeysWgsl(), [
+            ro('position'),
+            rw('sortKeys'),
+            rw('visibleCount')
+        ]);
+        this.projectCompute = mk('scene-project', projectWgsl(coeffs), [
+            ro('position'),
+            rw('projected'),
+            rw('coverage'),
+            ro('geometric'),
+            ro('color'),
+            ro('order')
+        ]);
+        this.scanBlocksCompute = mk('scene-scan-blocks', scanBlocksWgsl(), [
+            ro('coverage'),
+            rw('emitOffset'),
+            rw('blockSums')
+        ]);
         this.scanSumsCompute = mk('scene-scan-sums', scanSumsWgsl(), [rw('blockSums'), rw('totalPairs')]);
-        this.emitCompute = mk('scene-emit-pairs', tileBinEmitPairsWgsl(), [ro('projected'), ro('emitOffset'), ro('coverage'), rw('tileKeys'), rw('splatValues'), ro('blockPrefix')]);
-        this.initTileOffsetsCompute = mk('scene-init-tile-offsets', initTileOffsetsWgsl(), [ro('totalPairs'), rw('tileOffsets')]);
+        this.emitCompute = mk('scene-emit-pairs', tileBinEmitPairsWgsl(), [
+            ro('projected'),
+            ro('emitOffset'),
+            ro('coverage'),
+            rw('tileKeys'),
+            rw('splatValues'),
+            ro('blockPrefix')
+        ]);
+        this.initTileOffsetsCompute = mk('scene-init-tile-offsets', initTileOffsetsWgsl(), [
+            ro('totalPairs'),
+            rw('tileOffsets')
+        ]);
         this.clearStateCompute = mk('scene-clear-state', clearStateWgsl(), [rw('runningState')]);
-        this.findBoundariesCompute = mk('scene-find-boundaries', findBoundariesWgsl(), [ro('totalPairs'), ro('sortedTileKeys'), rw('tileOffsets')]);
-        this.rasterizeCompute = mk('scene-rasterize', rasterizeBinnedWgsl(), [ro('projected'), rw('runningState'), ro('tileOffsets'), ro('sortedSplatIndices')]);
+        this.findBoundariesCompute = mk('scene-find-boundaries', findBoundariesWgsl(), [
+            ro('totalPairs'),
+            ro('sortedTileKeys'),
+            rw('tileOffsets')
+        ]);
+        this.rasterizeCompute = mk('scene-rasterize', rasterizeBinnedWgsl(), [
+            ro('projected'),
+            rw('runningState'),
+            ro('tileOffsets'),
+            ro('sortedSplatIndices')
+        ]);
         this.finalizeCompute = mk('scene-finalize', finalizeWgsl(), [ro('runningState'), rw('output')]);
-        this.accumulateCompute = mk('scene-accumulate', accumulateWgsl(), [ro('runningState'), rw('accum'), rw('output')]);
+        this.accumulateCompute = mk('scene-accumulate', accumulateWgsl(), [
+            ro('runningState'),
+            rw('accum'),
+            rw('output')
+        ]);
 
         const groupPixels = this.groupPixelW * this.groupPixelH;
         this.visibleCountBuffer = new StorageBuffer(device, 4, BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST);
@@ -394,9 +444,24 @@ class GpuSceneRasterizer {
         this.streamed = false;
 
         await this.readChunks(source, pool, ['position', 'geometric', 'color'], (rowStart, count, data) => {
-            this.positionBuffer!.write(rowStart * POSITION_F32 * 4, new Float32Array(data.position!.data, 0, count * POSITION_F32), 0, count * POSITION_F32);
-            this.geometricBuffer!.write(rowStart * GEOMETRIC_F32 * 4, new Float32Array(data.geometric!.data, 0, count * GEOMETRIC_F32), 0, count * GEOMETRIC_F32);
-            this.colorBuffer!.write(rowStart * cs, new Float32Array(data.color!.data, 0, count * this.colorF32), 0, count * this.colorF32);
+            this.positionBuffer!.write(
+                rowStart * POSITION_F32 * 4,
+                new Float32Array(data.position!.data, 0, count * POSITION_F32),
+                0,
+                count * POSITION_F32
+            );
+            this.geometricBuffer!.write(
+                rowStart * GEOMETRIC_F32 * 4,
+                new Float32Array(data.geometric!.data, 0, count * GEOMETRIC_F32),
+                0,
+                count * GEOMETRIC_F32
+            );
+            this.colorBuffer!.write(
+                rowStart * cs,
+                new Float32Array(data.color!.data, 0, count * this.colorF32),
+                0,
+                count * this.colorF32
+            );
         });
 
         this.depthKeysCompute.setParameter('position', this.positionBuffer);
@@ -418,7 +483,11 @@ class GpuSceneRasterizer {
         const device = this.device;
         const n = source.meta.lodCounts[0];
         await this.guardAllocation(() => {
-            this.scenePositionBuffer = new StorageBuffer(device, Math.max(4, n * POSITION_F32 * 4), BUFFERUSAGE_COPY_DST);
+            this.scenePositionBuffer = new StorageBuffer(
+                device,
+                Math.max(4, n * POSITION_F32 * 4),
+                BUFFERUSAGE_COPY_DST
+            );
             this.allocateSort(n);
             this.allocateRange(rangeRows, source.meta.shBands);
         });
@@ -428,7 +497,12 @@ class GpuSceneRasterizer {
         this.orderReadback = new Uint32Array(n);
 
         await this.readChunks(source, pool, ['position'], (rowStart, count, data) => {
-            this.scenePositionBuffer!.write(rowStart * POSITION_F32 * 4, new Float32Array(data.position!.data, 0, count * POSITION_F32), 0, count * POSITION_F32);
+            this.scenePositionBuffer!.write(
+                rowStart * POSITION_F32 * 4,
+                new Float32Array(data.position!.data, 0, count * POSITION_F32),
+                0,
+                count * POSITION_F32
+            );
         });
 
         this.depthKeysCompute.setParameter('position', this.scenePositionBuffer);
@@ -542,7 +616,10 @@ class GpuSceneRasterizer {
      * @param slice - Rasterizes one slice into the running state.
      * @returns RGBA bytes of the whole image.
      */
-    private async renderGroups(views: SceneView[], slice: (view: SceneView, tilesX: number, tilesY: number) => Promise<void>): Promise<Uint8Array> {
+    private async renderGroups(
+        views: SceneView[],
+        slice: (view: SceneView, tilesX: number, tilesY: number) => Promise<void>
+    ): Promise<Uint8Array> {
         const o = this.options;
         const { imageWidth: width, imageHeight: height } = o;
         const imageTilesX = Math.ceil(width / TILE_SIZE);
@@ -574,7 +651,12 @@ class GpuSceneRasterizer {
                     this.device.computeDispatch([pack], packName);
                     this.submit();
                 }
-                const bytes = await this.outputBuffer.read(0, tilesX * TILE_SIZE * tilesY * TILE_SIZE * 4, null, true) as Uint8Array;
+                const bytes = (await this.outputBuffer.read(
+                    0,
+                    tilesX * TILE_SIZE * tilesY * TILE_SIZE * 4,
+                    null,
+                    true
+                )) as Uint8Array;
 
                 const originX = gx * this.groupPixelW;
                 const originY = gy * this.groupPixelH;
@@ -684,10 +766,22 @@ class GpuSceneRasterizer {
      * @param tilesX - Active group width in tiles.
      * @param tilesY - Active group height in tiles.
      */
-    private async rasterBlock(block: number, count: number, blockBase: number, blockEnd: number, tilesX: number, tilesY: number): Promise<void> {
+    private async rasterBlock(
+        block: number,
+        count: number,
+        blockBase: number,
+        blockEnd: number,
+        tilesX: number,
+        tilesY: number
+    ): Promise<void> {
         const splatStart = block * SCAN_BLOCK;
         const splatCount = Math.min(count, splatStart + SCAN_BLOCK) - splatStart;
-        const offsets = await this.emitOffsetBuffer!.read(splatStart * 4, splatCount * 4, this.blockOffsets, true) as Uint32Array;
+        const offsets = (await this.emitOffsetBuffer!.read(
+            splatStart * 4,
+            splatCount * 4,
+            this.blockOffsets,
+            true
+        )) as Uint32Array;
         // Block-local pairs before a splat; past the last splat, the block's total.
         const localBefore = (j: number): number => (j < splatCount ? offsets[j] : blockEnd - blockBase);
         let start = 0;
@@ -715,7 +809,14 @@ class GpuSceneRasterizer {
      * @param tilesX - Active group width in tiles.
      * @param tilesY - Active group height in tiles.
      */
-    private rasterizeCut(splatStart: number, splatCount: number, rangeBase: number, rangePairs: number, tilesX: number, tilesY: number): void {
+    private rasterizeCut(
+        splatStart: number,
+        splatCount: number,
+        rangeBase: number,
+        rangePairs: number,
+        tilesX: number,
+        tilesY: number
+    ): void {
         const device = this.device;
         this.ensurePairCapacity(rangePairs);
 
@@ -773,7 +874,12 @@ class GpuSceneRasterizer {
             throw new Error(`GpuSceneRasterizer: streamed range of ${n} exceeds the prepared ${this.capacity} rows`);
         }
         this.positionBuffer!.write(0, new Float32Array(range.position.data, 0, n * POSITION_F32), 0, n * POSITION_F32);
-        this.geometricBuffer!.write(0, new Float32Array(range.geometric.data, 0, n * GEOMETRIC_F32), 0, n * GEOMETRIC_F32);
+        this.geometricBuffer!.write(
+            0,
+            new Float32Array(range.geometric.data, 0, n * GEOMETRIC_F32),
+            0,
+            n * GEOMETRIC_F32
+        );
         this.colorBuffer!.write(0, new Float32Array(range.color.data, 0, n * this.colorF32), 0, n * this.colorF32);
         range.position.release();
         range.geometric.release();
@@ -822,7 +928,14 @@ class GpuSceneRasterizer {
      */
     private async guardAllocation(allocate: () => void): Promise<void> {
         // @ts-ignore - wgpu is the underlying GPUDevice on WebgpuGraphicsDevice.
-        const wgpu = (this.device as { wgpu?: { pushErrorScope?: (f: string) => void; popErrorScope?: () => Promise<{ message: string } | null> } }).wgpu;
+        const wgpu = (
+            this.device as {
+                wgpu?: {
+                    pushErrorScope?: (f: string) => void;
+                    popErrorScope?: () => Promise<{ message: string } | null>;
+                };
+            }
+        ).wgpu;
         wgpu?.pushErrorScope?.('out-of-memory');
         let oom: { message: string } | null | undefined;
         try {
@@ -846,7 +959,11 @@ class GpuSceneRasterizer {
     private allocateSort(n: number): void {
         // The depth sort borrows this as one of its ping-pong buffers
         // (destructive keys), so it needs the sorter's copy usages.
-        this.depthKeysBuffer = new StorageBuffer(this.device, Math.max(4, n * 4), BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST);
+        this.depthKeysBuffer = new StorageBuffer(
+            this.device,
+            Math.max(4, n * 4),
+            BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST
+        );
         if (n > 0) {
             this.depthSort.sort(this.depthKeysBuffer, n, 32, undefined, true, true);
             this.submit();
@@ -924,7 +1041,15 @@ class GpuSceneRasterizer {
         this.device.computeDispatch([compute], name);
     }
 
-    private setUniforms(view: SceneView, gx: number, gy: number, tilesX: number, tilesY: number, sliceIndex: number, sliceCount: number): void {
+    private setUniforms(
+        view: SceneView,
+        gx: number,
+        gy: number,
+        tilesX: number,
+        tilesY: number,
+        sliceIndex: number,
+        sliceCount: number
+    ): void {
         const o = this.options;
         const b = view.basis;
         const originX = gx * this.groupPixelW;
@@ -933,26 +1058,44 @@ class GpuSceneRasterizer {
         const maxY = originY + tilesY * TILE_SIZE;
         const computes = [
             this.depthKeysCompute,
-            this.clearStateCompute, this.projectCompute, this.scanBlocksCompute, this.scanSumsCompute,
-            this.emitCompute, this.initTileOffsetsCompute, this.findBoundariesCompute,
-            this.rasterizeCompute, this.finalizeCompute
+            this.clearStateCompute,
+            this.projectCompute,
+            this.scanBlocksCompute,
+            this.scanSumsCompute,
+            this.emitCompute,
+            this.initTileOffsetsCompute,
+            this.findBoundariesCompute,
+            this.rasterizeCompute,
+            this.finalizeCompute
         ];
         if (this.accumulateCompute) computes.push(this.accumulateCompute);
         for (const c of computes) {
-            c.setParameter('rightX', b.right.x); c.setParameter('rightY', b.right.y); c.setParameter('rightZ', b.right.z);
+            c.setParameter('rightX', b.right.x);
+            c.setParameter('rightY', b.right.y);
+            c.setParameter('rightZ', b.right.z);
             c.setParameter('_p0', 0);
-            c.setParameter('downX', b.down.x); c.setParameter('downY', b.down.y); c.setParameter('downZ', b.down.z);
+            c.setParameter('downX', b.down.x);
+            c.setParameter('downY', b.down.y);
+            c.setParameter('downZ', b.down.z);
             c.setParameter('_p1', 0);
-            c.setParameter('forwardX', b.forward.x); c.setParameter('forwardY', b.forward.y); c.setParameter('forwardZ', b.forward.z);
+            c.setParameter('forwardX', b.forward.x);
+            c.setParameter('forwardY', b.forward.y);
+            c.setParameter('forwardZ', b.forward.z);
             c.setParameter('_p2', 0);
-            c.setParameter('eyeX', b.eye.x); c.setParameter('eyeY', b.eye.y); c.setParameter('eyeZ', b.eye.z);
+            c.setParameter('eyeX', b.eye.x);
+            c.setParameter('eyeY', b.eye.y);
+            c.setParameter('eyeZ', b.eye.z);
             c.setParameter('_p3', 0);
-            c.setParameter('focalX', b.focalX); c.setParameter('focalY', b.focalY);
-            c.setParameter('near', view.near); c.setParameter('_p4', 0);
+            c.setParameter('focalX', b.focalX);
+            c.setParameter('focalY', b.focalY);
+            c.setParameter('near', view.near);
+            c.setParameter('_p4', 0);
             c.setParameter('focusDistance', view.focusDistance);
             c.setParameter('apertureScale', view.apertureScale);
-            c.setParameter('offsetX', b.offsetX ?? 0); c.setParameter('offsetY', b.offsetY ?? 0);
-            c.setParameter('imageWidth', o.imageWidth); c.setParameter('imageHeight', o.imageHeight);
+            c.setParameter('offsetX', b.offsetX ?? 0);
+            c.setParameter('offsetY', b.offsetY ?? 0);
+            c.setParameter('imageWidth', o.imageWidth);
+            c.setParameter('imageHeight', o.imageHeight);
             c.setParameter('splatStride', 0);
             c.setParameter('chunkSize', this.capacity);
             c.setParameter('groupPixelMinX', originX);
@@ -963,14 +1106,18 @@ class GpuSceneRasterizer {
             c.setParameter('groupTilesY', tilesY);
             c.setParameter('groupPixelOriginX', originX);
             c.setParameter('groupPixelOriginY', originY);
-            c.setParameter('bgR', o.bgR); c.setParameter('bgG', o.bgG);
-            c.setParameter('bgB', o.bgB); c.setParameter('bgA', o.bgA);
+            c.setParameter('bgR', o.bgR);
+            c.setParameter('bgG', o.bgG);
+            c.setParameter('bgB', o.bgB);
+            c.setParameter('bgA', o.bgA);
             c.setParameter('numSplats', this.numSplats);
             c.setParameter('rangeStart', 0);
             c.setParameter('emitBase', 0);
             c.setParameter('sliceIndex', sliceIndex);
             c.setParameter('sliceCount', sliceCount);
-            c.setParameter('_p7', 0); c.setParameter('_p8', 0); c.setParameter('_p9', 0);
+            c.setParameter('_p7', 0);
+            c.setParameter('_p8', 0);
+            c.setParameter('_p9', 0);
         }
     }
 
@@ -1026,4 +1173,12 @@ class GpuSceneRasterizer {
     }
 }
 
-export { GpuSceneRasterizer, ResidentUploadError, unwrapPrefixes, type SceneRasterizerOptions, type SceneView, type StreamedRange, type SortedOrder };
+export {
+    GpuSceneRasterizer,
+    ResidentUploadError,
+    unwrapPrefixes,
+    type SceneRasterizerOptions,
+    type SceneView,
+    type StreamedRange,
+    type SortedOrder
+};

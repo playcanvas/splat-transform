@@ -1,21 +1,30 @@
 import { basename } from 'pathe';
 
-import { logWrittenFile } from './utils';
 import { convertToSpace } from '../data-table';
-import { type FileSystem } from '../io/write';
-import { PlyData } from '../readers';
+import type { FileSystem } from '../io/write';
+import type { PlyData } from '../readers';
 import { logger, Transform } from '../utils';
+
+import { logWrittenFile } from './utils';
 
 const columnTypeToPlyType = (type: string): string => {
     switch (type) {
-        case 'float32': return 'float';
-        case 'float64': return 'double';
-        case 'int8': return 'char';
-        case 'uint8': return 'uchar';
-        case 'int16': return 'short';
-        case 'uint16': return 'ushort';
-        case 'int32': return 'int';
-        case 'uint32': return 'uint';
+        case 'float32':
+            return 'float';
+        case 'float64':
+            return 'double';
+        case 'int8':
+            return 'char';
+        case 'uint8':
+            return 'uchar';
+        case 'int16':
+            return 'short';
+        case 'uint16':
+            return 'ushort';
+        case 'int32':
+            return 'int';
+        case 'uint32':
+            return 'uint';
     }
 };
 
@@ -38,7 +47,7 @@ const writePly = async (options: WritePlyOptions, fs: FileSystem) => {
     const { filename } = options;
     const plyData: PlyData = {
         ...options.plyData,
-        elements: options.plyData.elements.map(e => ({
+        elements: options.plyData.elements.map((e) => ({
             ...e,
             dataTable: convertToSpace(e.dataTable, Transform.PLY)
         }))
@@ -47,7 +56,7 @@ const writePly = async (options: WritePlyOptions, fs: FileSystem) => {
     const header = [
         'ply',
         'format binary_little_endian 1.0',
-        plyData.comments.map(c => `comment ${c}`),
+        plyData.comments.map((c) => `comment ${c}`),
         plyData.elements.map((element) => {
             return [
                 `element ${element.name} ${element.dataTable.numRows}`,
@@ -63,13 +72,13 @@ const writePly = async (options: WritePlyOptions, fs: FileSystem) => {
 
     // write the header
     const writer = await fs.createWriter(filename);
-    await writer.write((new TextEncoder()).encode(`${header.flat(3).join('\n')}\n`));
+    await writer.write(new TextEncoder().encode(`${header.flat(3).join('\n')}\n`));
 
     for (let i = 0; i < plyData.elements.length; ++i) {
         const table = plyData.elements[i].dataTable;
         const columns = table.columns;
-        const buffers = columns.map(c => new Uint8Array(c.data.buffer, c.data.byteOffset, c.data.byteLength));
-        const sizes = columns.map(c => c.data.BYTES_PER_ELEMENT);
+        const buffers = columns.map((c) => new Uint8Array(c.data.buffer, c.data.byteOffset, c.data.byteLength));
+        const sizes = columns.map((c) => c.data.BYTES_PER_ELEMENT);
         const rowSize = sizes.reduce((total, size) => total + size, 0);
 
         // write to file in chunks of 1024 rows

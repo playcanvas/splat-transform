@@ -1,11 +1,5 @@
-import {
-    type ChunkData,
-    type ChunkDataPool,
-    type ChunkLayer,
-    type ChunkSource,
-    type ChunkSourceMetadata,
-    SH_REST_COUNTS
-} from '../chunk';
+import { SH_REST_COUNTS } from '../chunk';
+import type { ChunkData, ChunkDataPool, ChunkLayer, ChunkSource, ChunkSourceMetadata } from '../chunk';
 
 /**
  * One-pass streaming statistics over a {@link ChunkSource}: exact
@@ -173,7 +167,7 @@ class StatsAccumulator {
     }
 
     private insert(v: number, count: number): void {
-        const bin = Math.min(FINE_BINS - 1, Math.floor((v - this.lo) * FINE_BINS / (this.hi - this.lo)));
+        const bin = Math.min(FINE_BINS - 1, Math.floor(((v - this.lo) * FINE_BINS) / (this.hi - this.lo)));
         this.bins![bin] += count;
     }
 
@@ -227,13 +221,22 @@ class StatsAccumulator {
             const c = this.bins[b];
             if (c === 0) continue;
             const mid = this.lo + (b + 0.5) * width;
-            const idx = Math.min(NUM_BINS - 1, Math.max(0, Math.floor((mid - this.min) / range * NUM_BINS)));
+            const idx = Math.min(NUM_BINS - 1, Math.max(0, Math.floor(((mid - this.min) / range) * NUM_BINS)));
             out[idx] += c;
         }
         return out;
     }
 
-    finalize(): { min: number; max: number; median: number; mean: number; stdDev: number; nanCount: number; infCount: number; histogram: number[] } {
+    finalize(): {
+        min: number;
+        max: number;
+        median: number;
+        mean: number;
+        stdDev: number;
+        nanCount: number;
+        infCount: number;
+        histogram: number[];
+    } {
         const empty = this.n === 0;
         return {
             min: empty ? NaN : round(this.min),
@@ -260,8 +263,9 @@ const buildColumnPlans = (meta: ChunkSourceMetadata): ColumnPlan[] => {
         ['x', 'y', 'z'].forEach((name, elem) => plans.push({ name, layer: 'position', elem, uint: false }));
     }
     if (meta.availableLayers.has('geometric')) {
-        ['rot_0', 'rot_1', 'rot_2', 'rot_3', 'scale_0', 'scale_1', 'scale_2', 'opacity']
-        .forEach((name, elem) => plans.push({ name, layer: 'geometric', elem, uint: false }));
+        ['rot_0', 'rot_1', 'rot_2', 'rot_3', 'scale_0', 'scale_1', 'scale_2', 'opacity'].forEach((name, elem) =>
+            plans.push({ name, layer: 'geometric', elem, uint: false })
+        );
     }
     if (meta.availableLayers.has('color')) {
         ['f_dc_0', 'f_dc_1', 'f_dc_2'].forEach((name, elem) => plans.push({ name, layer: 'color', elem, uint: false }));
@@ -270,12 +274,14 @@ const buildColumnPlans = (meta: ChunkSourceMetadata): ColumnPlan[] => {
         }
     }
     if (meta.availableLayers.has('other')) {
-        meta.extraColumns.forEach((e, elem) => plans.push({ name: e.name, layer: 'other', elem, uint: e.type === 'uint32' }));
+        meta.extraColumns.forEach((e, elem) =>
+            plans.push({ name: e.name, layer: 'other', elem, uint: e.type === 'uint32' })
+        );
     }
     return plans;
 };
 
-type MutableReadRequest = { chunkIndex: number; lod: number } & { [L in ChunkLayer]?: ChunkData };
+type MutableReadRequest = { chunkIndex: number; lod: number } & Partial<Record<ChunkLayer, ChunkData>>;
 
 /**
  * Compute per-LOD, per-column statistics for a source in a single streaming
@@ -290,7 +296,7 @@ type MutableReadRequest = { chunkIndex: number; lod: number } & { [L in ChunkLay
 const computeSourceStats = async (src: ChunkSource, pool: ChunkDataPool): Promise<SourceStats> => {
     const { meta } = src;
     const plans = buildColumnPlans(meta);
-    const layers = [...new Set(plans.map(p => p.layer))];
+    const layers = [...new Set(plans.map((p) => p.layer))];
     const lods: LodStats[] = [];
 
     const hasFill = meta.availableLayers.has('position') && meta.availableLayers.has('geometric');
@@ -342,7 +348,7 @@ const computeSourceStats = async (src: ChunkSource, pool: ChunkDataPool): Promis
                     // The smallest may be 0 (a -Infinity flat-splat scale), so
                     // pick the top two explicitly rather than dividing it out.
                     const lo = Math.min(s0, Math.min(s1, s2));
-                    const top2 = s0 === lo ? s1 * s2 : (s1 === lo ? s0 * s2 : s0 * s1);
+                    const top2 = s0 === lo ? s1 * s2 : s1 === lo ? s0 * s2 : s0 * s1;
                     const area = Math.PI * top2;
                     areaAcc.add(area);
                     if (!Number.isNaN(area)) totalArea += area;
@@ -352,13 +358,13 @@ const computeSourceStats = async (src: ChunkSource, pool: ChunkDataPool): Promis
             for (const cd of acquired) cd.release();
         }
 
-        const results = accs.map(a => a.finalize());
+        const results = accs.map((a) => a.finalize());
 
         let fillRatio: number | undefined;
         if (hasFill) {
             // Robust extents (p1-p99 per axis) so flyaway splats can't inflate
             // the cross-section and mask the fill.
-            const axis = (name: string): StatsAccumulator => accs[plans.findIndex(p => p.name === name)];
+            const axis = (name: string): StatsAccumulator => accs[plans.findIndex((p) => p.name === name)];
             const [dx, dy, dz] = ['x', 'y', 'z'].map((name) => {
                 const acc = axis(name);
                 return Math.max(0, acc.quantile(0.99) - acc.quantile(0.01));
@@ -371,22 +377,22 @@ const computeSourceStats = async (src: ChunkSource, pool: ChunkDataPool): Promis
                 const medianArea = areaAcc.quantile(0.5);
                 crossSection = Number.isFinite(medianArea) ? medianArea : 0;
             }
-            fillRatio = round(crossSection > 0 ? totalArea / crossSection : (totalArea > 0 ? Infinity : 0));
+            fillRatio = round(crossSection > 0 ? totalArea / crossSection : totalArea > 0 ? Infinity : 0);
         }
 
         lods.push({
             lod,
             numGaussians: lodCount,
-            columns: plans.map(p => p.name),
+            columns: plans.map((p) => p.name),
             data: {
-                min: results.map(r => r.min),
-                max: results.map(r => r.max),
-                median: results.map(r => r.median),
-                mean: results.map(r => r.mean),
-                stdDev: results.map(r => r.stdDev),
-                nanCount: results.map(r => r.nanCount),
-                infCount: results.map(r => r.infCount),
-                histogram: results.map(r => r.histogram)
+                min: results.map((r) => r.min),
+                max: results.map((r) => r.max),
+                median: results.map((r) => r.median),
+                mean: results.map((r) => r.mean),
+                stdDev: results.map((r) => r.stdDev),
+                nanCount: results.map((r) => r.nanCount),
+                infCount: results.map((r) => r.infCount),
+                histogram: results.map((r) => r.histogram)
             },
             ...(fillRatio !== undefined ? { fillRatio } : {})
         });

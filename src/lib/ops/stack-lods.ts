@@ -1,9 +1,4 @@
-import {
-    type ChunkLayer,
-    type ChunkSource,
-    type ChunkSourceMetadata,
-    type ReadRequest
-} from '../chunk';
+import type { ChunkLayer, ChunkSource, ChunkSourceMetadata, ReadRequest } from '../chunk';
 
 const LAYERS: ChunkLayer[] = ['position', 'geometric', 'color', 'other'];
 
@@ -29,8 +24,8 @@ const stackLods = (sources: ChunkSource[]): ChunkSource => {
         throw new Error('stackLods: at least one source is required');
     }
     const ref = sources[0].meta;
-    const layerKey = (m: ChunkSourceMetadata) => LAYERS.filter(l => m.availableLayers.has(l)).join(',');
-    const extraKey = (m: ChunkSourceMetadata) => m.extraColumns.map(e => `${e.name}:${e.type}`).join(',');
+    const layerKey = (m: ChunkSourceMetadata) => LAYERS.filter((l) => m.availableLayers.has(l)).join(',');
+    const extraKey = (m: ChunkSourceMetadata) => m.extraColumns.map((e) => `${e.name}:${e.type}`).join(',');
     for (const s of sources) {
         if (s.meta.numLods !== 1) {
             throw new Error('stackLods: every input must be single-LOD');
@@ -39,7 +34,9 @@ const stackLods = (sources: ChunkSource[]): ChunkSource => {
             throw new Error('stackLods: inputs must share chunk size and SH band count');
         }
         if (layerKey(s.meta) !== layerKey(ref)) {
-            throw new Error(`stackLods: available-layer mismatch between LOD levels ([${layerKey(s.meta)}] vs [${layerKey(ref)}])`);
+            throw new Error(
+                `stackLods: available-layer mismatch between LOD levels ([${layerKey(s.meta)}] vs [${layerKey(ref)}])`
+            );
         }
         if (extraKey(s.meta) !== extraKey(ref)) {
             throw new Error('stackLods: extra-column mismatch between LOD levels');
@@ -60,13 +57,13 @@ const stackLods = (sources: ChunkSource[]): ChunkSource => {
         }
     }
 
-    const lodCounts = sources.map(s => s.meta.numGaussians);
+    const lodCounts = sources.map((s) => s.meta.numGaussians);
     const meta: ChunkSourceMetadata = {
         ...ref,
         numGaussians: lodCounts[0],
         numLods: sources.length,
         lodCounts,
-        numChunks: sources.map(s => s.meta.numChunks[0])
+        numChunks: sources.map((s) => s.meta.numChunks[0])
     };
 
     const pick = (lod: number): ChunkSource => {
@@ -87,7 +84,7 @@ const stackLods = (sources: ChunkSource[]): ChunkSource => {
         meta,
         read,
         close: async () => {
-            await Promise.all(sources.map(s => s.close()));
+            await Promise.all(sources.map((s) => s.close()));
         }
     };
 };

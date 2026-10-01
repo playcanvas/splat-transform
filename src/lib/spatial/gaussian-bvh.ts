@@ -1,24 +1,24 @@
-import { Vec3 } from 'playcanvas';
+import type { Vec3 } from 'playcanvas';
 
-import { DataTable, type TypedArray } from '../data-table';
+import type { DataTable, TypedArray } from '../data-table';
 import { quickselect } from '../utils';
 
 /**
  * Axis-aligned bounding box for BVH nodes.
  */
-interface BVHBounds {
+type BVHBounds = {
     minX: number;
     minY: number;
     minZ: number;
     maxX: number;
     maxY: number;
     maxZ: number;
-}
+};
 
 /**
  * BVH node for Gaussian AABBs.
  */
-interface GaussianBVHNode {
+type GaussianBVHNode = {
     /** Number of Gaussians in this subtree */
     count: number;
 
@@ -33,7 +33,7 @@ interface GaussianBVHNode {
 
     /** Right child (only for interior nodes) */
     right?: GaussianBVHNode;
-}
+};
 
 /**
  * Check if two AABBs overlap.
@@ -47,10 +47,16 @@ interface GaussianBVHNode {
  * @param bMaxZ - Second AABB maximum Z
  * @returns True if the AABBs overlap
  */
-const boundsOverlap = (a: BVHBounds, bMinX: number, bMinY: number, bMinZ: number, bMaxX: number, bMaxY: number, bMaxZ: number): boolean => {
-    return !(a.maxX < bMinX || a.minX > bMaxX ||
-             a.maxY < bMinY || a.minY > bMaxY ||
-             a.maxZ < bMinZ || a.minZ > bMaxZ);
+const boundsOverlap = (
+    a: BVHBounds,
+    bMinX: number,
+    bMinY: number,
+    bMinZ: number,
+    bMaxX: number,
+    bMaxY: number,
+    bMaxZ: number
+): boolean => {
+    return !(a.maxX < bMinX || a.minX > bMaxX || a.maxY < bMinY || a.minY > bMaxY || a.maxZ < bMinZ || a.minZ > bMaxZ);
 };
 
 /**
@@ -156,9 +162,12 @@ class GaussianBVH {
 
         // Find the largest axis to split on (based on centroid positions for better balance)
         const { x, y, z } = this;
-        let centroidMinX = Infinity, centroidMaxX = -Infinity;
-        let centroidMinY = Infinity, centroidMaxY = -Infinity;
-        let centroidMinZ = Infinity, centroidMaxZ = -Infinity;
+        let centroidMinX = Infinity,
+            centroidMaxX = -Infinity;
+        let centroidMinY = Infinity,
+            centroidMaxY = -Infinity;
+        let centroidMinZ = Infinity,
+            centroidMaxZ = -Infinity;
 
         for (let i = 0; i < indices.length; i++) {
             const idx = indices[i];
@@ -251,11 +260,7 @@ class GaussianBVH {
      * @param offset - Starting element offset in `result`.
      * @returns Number of matching Gaussian indices.
      */
-    queryFrustumRawInto(
-        planes: Float32Array,
-        result: Uint32Array,
-        offset: number
-    ): number {
+    queryFrustumRawInto(planes: Float32Array, result: Uint32Array, offset: number): number {
         return this.queryFrustumNode(this.root, planes, result, offset, 0);
     }
 
@@ -411,9 +416,7 @@ class GaussianBVH {
                 const gMaxZ = z[idx] + extentZ[idx];
 
                 // Check overlap
-                if (!(gMaxX < minX || gMinX > maxX ||
-                      gMaxY < minY || gMinY > maxY ||
-                      gMaxZ < minZ || gMinZ > maxZ)) {
+                if (!(gMaxX < minX || gMinX > maxX || gMaxY < minY || gMinY > maxY || gMaxZ < minZ || gMinZ > maxZ)) {
                     result.push(idx);
                 }
             }
@@ -472,9 +475,7 @@ class GaussianBVH {
                 const gMaxY = y[idx] + extentY[idx];
                 const gMaxZ = z[idx] + extentZ[idx];
 
-                if (!(gMaxX < minX || gMinX > maxX ||
-                      gMaxY < minY || gMinY > maxY ||
-                      gMaxZ < minZ || gMinZ > maxZ)) {
+                if (!(gMaxX < minX || gMinX > maxX || gMaxY < minY || gMinY > maxY || gMaxZ < minZ || gMinZ > maxZ)) {
                     const writeIdx = offset + count;
                     if (writeIdx < result.length) {
                         result[writeIdx] = idx;

@@ -1,11 +1,4 @@
 import {
-    type ReadRequest,
-    type ChunkSource,
-    type ChunkSourceMetadata,
-    type ChunkDataPool,
-    type ChunkLayer,
-    type LayerLayout,
-    type SHBands,
     POSITION_STRIDE,
     GEOMETRIC_STRIDE,
     colorStride,
@@ -14,12 +7,25 @@ import {
     colorFields,
     createChunkDataPool
 } from '../chunk';
+import type {
+    ReadRequest,
+    ChunkSource,
+    ChunkSourceMetadata,
+    ChunkDataPool,
+    ChunkLayer,
+    LayerLayout,
+    SHBands
+} from '../chunk';
 import { dataTableToChunkSource, materializeToDataTable } from '../compat/data-table';
-import { type DataTable } from '../data-table';
-import { basename, dirname, join, type ReadFileSystem, readFile } from '../io/read';
-import { isSplatModel, type SplatModel } from '../splat-model';
+import type { DataTable } from '../data-table';
+import { basename, dirname, join, readFile } from '../io/read';
+import type { ReadFileSystem } from '../io/read';
+import { isSplatModel } from '../splat-model';
+import type { SplatModel } from '../splat-model';
 import { logger, Transform, WebPCodec } from '../utils';
-import { readSogV1, type MetaV1 } from './read-sog-v1';
+
+import { readSogV1 } from './read-sog-v1';
+import type { MetaV1 } from './read-sog-v1';
 
 // V2 (current) SOG meta layout - codebook-based quantization for scales /
 // sh0 / shN. Legacy V1 uses a different per-channel mins/maxs scheme and is
@@ -72,9 +78,9 @@ const tmpQuat = new Float32Array(4);
 // Decode a smallest-three packed quaternion into `tmpQuat` as [w, x, y, z].
 const unpackQuat = (px: number, py: number, pz: number, tag: number): void => {
     const maxComp = tag - 252;
-    const a = (px / 255 * 2 - 1) / SQRT2;
-    const b = (py / 255 * 2 - 1) / SQRT2;
-    const c = (pz / 255 * 2 - 1) / SQRT2;
+    const a = ((px / 255) * 2 - 1) / SQRT2;
+    const b = ((py / 255) * 2 - 1) / SQRT2;
+    const c = ((pz / 255) * 2 - 1) / SQRT2;
     tmpQuat[0] = 0;
     tmpQuat[1] = 0;
     tmpQuat[2] = 0;
@@ -135,9 +141,12 @@ const readSogSourceV2 = async (
     const hi = decoder.decodeRGBA(await load(meta.means.files[1])).rgba;
     if (meansLo.width * meansLo.height < count) throw new Error('SOG means texture too small for count');
     const { mins, maxs } = meta.means;
-    const xMin = mins[0], xScale = (maxs[0] - mins[0]) || 1;
-    const yMin = mins[1], yScale = (maxs[1] - mins[1]) || 1;
-    const zMin = mins[2], zScale = (maxs[2] - mins[2]) || 1;
+    const xMin = mins[0],
+        xScale = maxs[0] - mins[0] || 1;
+    const yMin = mins[1],
+        yScale = maxs[1] - mins[1] || 1;
+    const zMin = mins[2],
+        zScale = maxs[2] - mins[2] || 1;
 
     // quats: 4 bytes/splat, last byte is the largest-component tag (252-255).
     const quats = decoder.decodeRGBA(await load(meta.quats.files[0]));
@@ -172,17 +181,20 @@ const readSogSourceV2 = async (
         restCount = shCoeffs * 3;
         shCodebook = new Float32Array(meta.shN.codebook);
         const cen = decoder.decodeRGBA(await load(meta.shN.files[0]));
-        centroidsRGBA = cen.rgba; cW = cen.width; cH = cen.height;
+        centroidsRGBA = cen.rgba;
+        cW = cen.width;
+        cH = cen.height;
         const lab = decoder.decodeRGBA(await load(meta.shN.files[1]));
         labelsRGBA = lab.rgba;
         if (lab.width * lab.height < count) throw new Error('SOG shN labels texture too small for count');
         if (cW !== 64 * shCoeffs) {
-            throw new Error(`SOG shN centroids texture width ${cW} does not match expected ${64 * shCoeffs} for ${shBands}-band palette`);
+            throw new Error(
+                `SOG shN centroids texture width ${cW} does not match expected ${64 * shCoeffs} for ${shBands}-band palette`
+            );
         }
         paletteCount = meta.shN.count;
     }
     const colorSw = 3 + restCount;
-
 
     const layouts: Partial<Record<ChunkLayer, LayerLayout>> = {
         position: { stride: POSITION_STRIDE, fields: positionFields() },
@@ -222,7 +234,7 @@ const readSogSourceV2 = async (
             const xv = lo[o4] | (hi[o4] << 8);
             const yv = lo[o4 + 1] | (hi[o4 + 1] << 8);
             const zv = lo[o4 + 2] | (hi[o4 + 2] << 8);
-            posOut[o]     = invLogTransform(xMin + xScale * (xv / 65535));
+            posOut[o] = invLogTransform(xMin + xScale * (xv / 65535));
             posOut[o + 1] = invLogTransform(yMin + yScale * (yv / 65535));
             posOut[o + 2] = invLogTransform(zMin + zScale * (zv / 65535));
         }
@@ -231,10 +243,16 @@ const readSogSourceV2 = async (
             const o = r * 8; // [rot0..3, scale0..2, opacity]
             const tag = qr[o4 + 3];
             if (tag < 252 || tag > 255) {
-                geoOut[o] = 1; geoOut[o + 1] = 0; geoOut[o + 2] = 0; geoOut[o + 3] = 0;
+                geoOut[o] = 1;
+                geoOut[o + 1] = 0;
+                geoOut[o + 2] = 0;
+                geoOut[o + 3] = 0;
             } else {
                 unpackQuat(qr[o4], qr[o4 + 1], qr[o4 + 2], tag);
-                geoOut[o] = tmpQuat[0]; geoOut[o + 1] = tmpQuat[1]; geoOut[o + 2] = tmpQuat[2]; geoOut[o + 3] = tmpQuat[3];
+                geoOut[o] = tmpQuat[0];
+                geoOut[o + 1] = tmpQuat[1];
+                geoOut[o + 2] = tmpQuat[2];
+                geoOut[o + 3] = tmpQuat[3];
             }
             geoOut[o + 4] = sCode[sl[o4]];
             geoOut[o + 5] = sCode[sl[o4 + 1]];
@@ -244,7 +262,7 @@ const readSogSourceV2 = async (
 
         if (colOut) {
             const o = r * colorSw; // [dc0..2, f_rest_0..N]
-            colOut[o]     = cCode[c0[o4]];
+            colOut[o] = cCode[c0[o4]];
             colOut[o + 1] = cCode[c0[o4 + 1]];
             colOut[o + 2] = cCode[c0[o4 + 2]];
             if (restCount > 0) {
@@ -263,8 +281,8 @@ const readSogSourceV2 = async (
                         const lr = ok ? centroidsRGBA![idx] : 0;
                         const lg = ok ? centroidsRGBA![idx + 1] : 0;
                         const lb = ok ? centroidsRGBA![idx + 2] : 0;
-                        colOut[o + 3 + j]                = shCodebook![lr] ?? 0;
-                        colOut[o + 3 + j + shCoeffs]     = shCodebook![lg] ?? 0;
+                        colOut[o + 3 + j] = shCodebook![lr] ?? 0;
+                        colOut[o + 3 + j + shCoeffs] = shCodebook![lg] ?? 0;
                         colOut[o + 3 + j + shCoeffs * 2] = shCodebook![lb] ?? 0;
                     }
                 } else {
@@ -327,13 +345,16 @@ const fetchSogMeta = async (fileSystem: ReadFileSystem, filename: string) => {
 const statSogSource = async (
     fileSystem: ReadFileSystem,
     filename: string
-): Promise<Pick<ChunkSourceMetadata, 'numGaussians' | 'numLods' | 'lodCounts' | 'shBands' | 'availableLayers' | 'extraColumns'> | null> => {
+): Promise<Pick<
+    ChunkSourceMetadata,
+    'numGaussians' | 'numLods' | 'lodCounts' | 'shBands' | 'availableLayers' | 'extraColumns'
+> | null> => {
     const { rawMeta } = await fetchSogMeta(fileSystem, filename);
     if (rawMeta.version !== 2) return null;
     const meta = rawMeta as MetaV2;
     const count = meta.count;
     const rawBands = meta.shN?.bands ?? 0;
-    const shBands = ((rawBands === 1 || rawBands === 2 || rawBands === 3) ? rawBands : 0) as SHBands;
+    const shBands = (rawBands === 1 || rawBands === 2 || rawBands === 3 ? rawBands : 0) as SHBands;
     return {
         numGaussians: count,
         numLods: 1,
@@ -391,7 +412,11 @@ const readSogSource = async (
  * @returns DataTable with Gaussian splat data.
  * @ignore
  */
-const readSog = async (fileSystem: ReadFileSystem, filename: string, options: ReadSogOptions = {}): Promise<DataTable> => {
+const readSog = async (
+    fileSystem: ReadFileSystem,
+    filename: string,
+    options: ReadSogOptions = {}
+): Promise<DataTable> => {
     const { baseDir, resolve, rawMeta } = await fetchSogMeta(fileSystem, filename);
     const version = rawMeta.version;
     if (version === undefined) {

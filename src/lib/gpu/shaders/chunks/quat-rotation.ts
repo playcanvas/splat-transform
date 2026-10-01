@@ -10,7 +10,7 @@
  * Normalises the quaternion first so the rotation matrix is orthonormal
  * even if the upstream data stored an unnormalised quat.
  */
-const quatRotation = /* wgsl */`
+const quatRotation = /* wgsl */ `
     let qlen2 = rotW * rotW + rotX * rotX + rotY * rotY + rotZ * rotZ;
     if (qlen2 == 0.0) { writeInvalid(i); return; }
     let invQ = inverseSqrt(qlen2);

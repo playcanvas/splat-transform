@@ -1,13 +1,5 @@
-import {
-    type ChunkDataPool,
-    type ChunkSource,
-    type ChunkSourceMetadata,
-    type ReadRequest,
-    type SHBands,
-    SH_REST_COUNTS,
-    colorStride,
-    colorFields
-} from '../chunk';
+import { SH_REST_COUNTS, colorStride, colorFields } from '../chunk';
+import type { ChunkDataPool, ChunkSource, ChunkSourceMetadata, ReadRequest, SHBands } from '../chunk';
 
 /**
  * Reduce a source's SH band count (drop the higher-order coefficients), as a
@@ -44,10 +36,10 @@ const reduceBandsSource = (src: ChunkSource, outputBands: SHBands, pool: ChunkDa
         layouts: { ...src.meta.layouts, color: outColorLayout }
     };
 
-    const ic = SH_REST_COUNTS[inBands] / 3;      // input coefficients per channel
-    const oc = SH_REST_COUNTS[outputBands] / 3;  // output coefficients per channel
-    const inSw = inColorLayout.stride >>> 2;     // input color floats per record
-    const outSw = outColorLayout.stride >>> 2;   // output color floats per record
+    const ic = SH_REST_COUNTS[inBands] / 3; // input coefficients per channel
+    const oc = SH_REST_COUNTS[outputBands] / 3; // output coefficients per channel
+    const inSw = inColorLayout.stride >>> 2; // input color floats per record
+    const outSw = outColorLayout.stride >>> 2; // output color floats per record
 
     const read = async (request: ReadRequest): Promise<void> => {
         const outColor = request.color;
@@ -68,10 +60,11 @@ const reduceBandsSource = (src: ChunkSource, outputBands: SHBands, pool: ChunkDa
         for (let i = 0; i < count; i++) {
             const so = i * inSw;
             const dof = i * outSw;
-            dstF[dof] = srcF[so];         // DC
+            dstF[dof] = srcF[so]; // DC
             dstF[dof + 1] = srcF[so + 1];
             dstF[dof + 2] = srcF[so + 2];
-            for (let c = 0; c < 3; c++) { // kept rest: first `oc` coeffs per channel (channel-major)
+            for (let c = 0; c < 3; c++) {
+                // kept rest: first `oc` coeffs per channel (channel-major)
                 for (let k = 0; k < oc; k++) {
                     dstF[dof + 3 + c * oc + k] = srcF[so + 3 + c * ic + k];
                 }

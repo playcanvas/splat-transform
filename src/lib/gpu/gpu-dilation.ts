@@ -1,3 +1,4 @@
+import type { GraphicsDevice } from 'playcanvas';
 import {
     BUFFERUSAGE_COPY_DST,
     BUFFERUSAGE_COPY_SRC,
@@ -8,21 +9,15 @@ import {
     BindStorageBufferFormat,
     BindUniformBufferFormat,
     Compute,
-    GraphicsDevice,
     Shader,
     StorageBuffer,
     UniformBufferFormat,
     UniformFormat
 } from 'playcanvas';
 
-import {
-    clearWgsl,
-    compactWgsl,
-    dilateXWgsl,
-    dilateYZWgsl,
-    extractWgsl
-} from './shaders/dilation';
 import type { SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
+
+import { clearWgsl, compactWgsl, dilateXWgsl, dilateYZWgsl, extractWgsl } from './shaders/dilation';
 
 /**
  * One double-buffered slot — the four `Compute` instances (X, Y, Z, clear)
@@ -30,7 +25,7 @@ import type { SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
  * dispatch on the same submit, plus the ping-pong storage buffers. Two
  * slots let the CPU prepare chunk N+1 while the GPU is busy with chunk N.
  */
-interface DilationSlot {
+type DilationSlot = {
     bufferA: StorageBuffer;
     bufferB: StorageBuffer;
     capacity: number;
@@ -45,7 +40,7 @@ interface DilationSlot {
     masksOutBuffer: StorageBuffer;
     typesOutCapacity: number;
     masksOutCapacity: number;
-}
+};
 
 /**
  * Separable 3D dilation on the GPU using a row-aligned dense bit grid
@@ -176,7 +171,7 @@ class GpuDilation {
             // @ts-ignore
             computeUniformBufferFormats: {
                 uniforms: new UniformBufferFormat(device, [
-                    new UniformFormat('minBx', UNIFORMTYPE_UINT),  // signed reinterpret
+                    new UniformFormat('minBx', UNIFORMTYPE_UINT), // signed reinterpret
                     new UniformFormat('minBy', UNIFORMTYPE_UINT),
                     new UniformFormat('minBz', UNIFORMTYPE_UINT),
                     new UniformFormat('outerBx', UNIFORMTYPE_UINT),
@@ -218,8 +213,8 @@ class GpuDilation {
         this.slots = [];
         for (let i = 0; i < GpuDilation.NUM_SLOTS; i++) {
             const initialCapacity = 1024 * 1024 * 4;
-            const initialTypesOut = 64 * 1024;       // 16K blocks worth packed
-            const initialMasksOut = 1024 * 1024;     // 128K blocks worth (lo, hi)
+            const initialTypesOut = 64 * 1024; // 16K blocks worth packed
+            const initialMasksOut = 1024 * 1024; // 128K blocks worth (lo, hi)
             this.slots.push({
                 bufferA: new StorageBuffer(device, initialCapacity, BUFFERUSAGE_COPY_DST | BUFFERUSAGE_COPY_SRC),
                 bufferB: new StorageBuffer(device, initialCapacity, BUFFERUSAGE_COPY_DST | BUFFERUSAGE_COPY_SRC),
@@ -339,17 +334,25 @@ class GpuDilation {
 
     private ensureSlotOutputBuffers(slot: DilationSlot, innerBlocks: number): void {
         // typesOut: 2 bits per inner block, packed into u32 words.
-        const typesBytes = (((innerBlocks + 15) >>> 4) * 4);
+        const typesBytes = ((innerBlocks + 15) >>> 4) * 4;
         if (slot.typesOutCapacity < typesBytes) {
             slot.typesOutBuffer.destroy();
-            slot.typesOutBuffer = new StorageBuffer(this.device, typesBytes, BUFFERUSAGE_COPY_DST | BUFFERUSAGE_COPY_SRC);
+            slot.typesOutBuffer = new StorageBuffer(
+                this.device,
+                typesBytes,
+                BUFFERUSAGE_COPY_DST | BUFFERUSAGE_COPY_SRC
+            );
             slot.typesOutCapacity = typesBytes;
         }
         // masksOut: (lo, hi) per inner block.
         const masksBytes = innerBlocks * 8;
         if (slot.masksOutCapacity < masksBytes) {
             slot.masksOutBuffer.destroy();
-            slot.masksOutBuffer = new StorageBuffer(this.device, masksBytes, BUFFERUSAGE_COPY_DST | BUFFERUSAGE_COPY_SRC);
+            slot.masksOutBuffer = new StorageBuffer(
+                this.device,
+                masksBytes,
+                BUFFERUSAGE_COPY_DST | BUFFERUSAGE_COPY_SRC
+            );
             slot.masksOutCapacity = masksBytes;
         }
     }
@@ -379,15 +382,23 @@ class GpuDilation {
     submitChunkSparse(
         slotIdx: number,
         // outer chunk in block coords (each is voxel/4)
-        minBx: number, minBy: number, minBz: number,
-        outerBx: number, outerBy: number, outerBz: number,
+        minBx: number,
+        minBy: number,
+        minBz: number,
+        outerBx: number,
+        outerBy: number,
+        outerBz: number,
         // halo in blocks
-        haloBx: number, haloBy: number, haloBz: number,
+        haloBx: number,
+        haloBy: number,
+        haloBz: number,
         // inner chunk in block coords
-        innerBx: number, innerBy: number, innerBz: number,
+        innerBx: number,
+        innerBy: number,
+        innerBz: number,
         halfExtentXZ: number,
         halfExtentY: number
-    ): { types: Promise<Uint32Array>, masks: Promise<Uint32Array> } {
+    ): { types: Promise<Uint32Array>; masks: Promise<Uint32Array> } {
         if (this.srcTypesBuffer === null) {
             throw new Error('GpuDilation: must call uploadSrc() before submitChunkSparse()');
         }
@@ -425,30 +436,54 @@ class GpuDilation {
         this.dispatchX(slot, slot.bufferA, slot.bufferB, numXWords, outerNy, outerNz, halfExtentXZ);
 
         // Z-pass: B → A
-        this.dispatchYZ(slot.dilateZCompute, slot.bufferB, slot.bufferA,
-            numXWords, outerNy, outerNz, halfExtentXZ, numXWords * outerNy, outerNz);
+        this.dispatchYZ(
+            slot.dilateZCompute,
+            slot.bufferB,
+            slot.bufferA,
+            numXWords,
+            outerNy,
+            outerNz,
+            halfExtentXZ,
+            numXWords * outerNy,
+            outerNz
+        );
 
         // Y-pass: A → B
-        this.dispatchYZ(slot.dilateYCompute, slot.bufferA, slot.bufferB,
-            numXWords, outerNy, outerNz, halfExtentY, numXWords, outerNy);
+        this.dispatchYZ(
+            slot.dilateYCompute,
+            slot.bufferA,
+            slot.bufferB,
+            numXWords,
+            outerNy,
+            outerNz,
+            halfExtentY,
+            numXWords,
+            outerNy
+        );
 
         // Compact: clear typesOut (atomicOr accumulates), dispatch compact.
         // masksOut is written non-atomically — no clear needed.
         this.dispatchClear(slot, slot.typesOutBuffer, typesOutWords);
         this.dispatchCompact(slot, haloBx, haloBy, haloBz, innerBx, innerBy, innerBz, numXWords, outerBy);
 
-        const typesPromise = slot.typesOutBuffer.read(0, typesOutWords * 4, null, true)
-        .then((readData: Uint8Array) => new Uint32Array(readData.buffer, readData.byteOffset, typesOutWords));
-        const masksPromise = slot.masksOutBuffer.read(0, innerBlocks * 8, null, true)
-        .then((readData: Uint8Array) => new Uint32Array(readData.buffer, readData.byteOffset, innerBlocks * 2));
+        const typesPromise = slot.typesOutBuffer
+            .read(0, typesOutWords * 4, null, true)
+            .then((readData: Uint8Array) => new Uint32Array(readData.buffer, readData.byteOffset, typesOutWords));
+        const masksPromise = slot.masksOutBuffer
+            .read(0, innerBlocks * 8, null, true)
+            .then((readData: Uint8Array) => new Uint32Array(readData.buffer, readData.byteOffset, innerBlocks * 2));
 
         return { types: typesPromise, masks: masksPromise };
     }
 
     private dispatchExtract(
         slot: DilationSlot,
-        minBx: number, minBy: number, minBz: number,
-        outerBx: number, outerBy: number, outerBz: number,
+        minBx: number,
+        minBy: number,
+        minBz: number,
+        outerBx: number,
+        outerBy: number,
+        outerBz: number,
         numXWords: number
     ): void {
         const c = slot.extractCompute;
@@ -460,9 +495,9 @@ class GpuDilation {
         // Reinterpret signed minB* as u32 bits via the i32 parameter slot —
         // PlayCanvas treats UNIFORMTYPE_UINT as raw u32, and the WGSL struct
         // declares these as i32 so they read back signed.
-        c.setParameter('minBx', (minBx >>> 0));
-        c.setParameter('minBy', (minBy >>> 0));
-        c.setParameter('minBz', (minBz >>> 0));
+        c.setParameter('minBx', minBx >>> 0);
+        c.setParameter('minBy', minBy >>> 0);
+        c.setParameter('minBz', minBz >>> 0);
         c.setParameter('outerBx', outerBx);
         c.setParameter('outerBy', outerBy);
         c.setParameter('outerBz', outerBz);
@@ -482,8 +517,12 @@ class GpuDilation {
 
     private dispatchCompact(
         slot: DilationSlot,
-        haloBx: number, haloBy: number, haloBz: number,
-        innerBx: number, innerBy: number, innerBz: number,
+        haloBx: number,
+        haloBy: number,
+        haloBz: number,
+        innerBx: number,
+        innerBy: number,
+        innerBz: number,
         numXWords: number,
         outerBy: number
     ): void {
@@ -509,8 +548,11 @@ class GpuDilation {
 
     private dispatchX(
         slot: DilationSlot,
-        src: StorageBuffer, dst: StorageBuffer,
-        numXWords: number, ny: number, nz: number,
+        src: StorageBuffer,
+        dst: StorageBuffer,
+        numXWords: number,
+        ny: number,
+        nz: number,
         halfExtent: number
     ): void {
         const c = slot.dilateXCompute;
@@ -530,10 +572,14 @@ class GpuDilation {
 
     private dispatchYZ(
         compute: Compute,
-        src: StorageBuffer, dst: StorageBuffer,
-        numXWords: number, ny: number, nz: number,
+        src: StorageBuffer,
+        dst: StorageBuffer,
+        numXWords: number,
+        ny: number,
+        nz: number,
         halfExtent: number,
-        stride: number, axisLen: number
+        stride: number,
+        axisLen: number
     ): void {
         compute.setParameter('src', src);
         compute.setParameter('dst', dst);

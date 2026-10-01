@@ -39,13 +39,16 @@
  * {@link selectMerges} when over.
  */
 
-import { type GraphicsDevice } from 'playcanvas';
+import type { GraphicsDevice } from 'playcanvas';
 
-import { bestEdgeFor, bestOut, CACHE_STRIDE, type RecostState } from './recost-core';
-import { MAX_GROUP, type SelectionResult } from './select';
 import { GpuRecost, COMMIT_LOG_STRIDE } from '../gpu/gpu-recost';
 
-const NIL = 0xFFFFFFFF;
+import { bestEdgeFor, bestOut, CACHE_STRIDE } from './recost-core';
+import type { RecostState } from './recost-core';
+import { MAX_GROUP } from './select';
+import type { SelectionResult } from './select';
+
+const NIL = 0xffffffff;
 
 /** Inputs for {@link selectMergesRecosted}. */
 type RecostInputs = {
@@ -111,7 +114,9 @@ const selectMergesRecosted = async (inputs: RecostInputs): Promise<SelectionResu
     version.fill(1);
     mNext.fill(NIL);
     for (let i = 0; i < N; i++) {
-        parent[i] = i; mHead[i] = i; mTail[i] = i;
+        parent[i] = i;
+        mHead[i] = i;
+        mTail[i] = i;
     }
 
     const find = (x: number): number => {
@@ -127,58 +132,91 @@ const selectMergesRecosted = async (inputs: RecostInputs): Promise<SelectionResu
     // arbitrarily by design), nothing accumulates.
     let heapCap = Math.ceil(N * 1.25) + 16;
     let hCost = new Float32Array(heapCap);
-    let hA = new Uint32Array(heapCap), hB = new Uint32Array(heapCap);
-    let hSeq = new Uint32Array(heapCap), hVb = new Uint32Array(heapCap);
+    let hA = new Uint32Array(heapCap),
+        hB = new Uint32Array(heapCap);
+    let hSeq = new Uint32Array(heapCap),
+        hVb = new Uint32Array(heapCap);
     let heapSize = 0;
     let seqCounter = 0;
 
     const swap = (i: number, j: number): void => {
         let t;
-        t = hCost[i]; hCost[i] = hCost[j]; hCost[j] = t;
-        t = hA[i]; hA[i] = hA[j]; hA[j] = t;
-        t = hB[i]; hB[i] = hB[j]; hB[j] = t;
-        t = hSeq[i]; hSeq[i] = hSeq[j]; hSeq[j] = t;
-        t = hVb[i]; hVb[i] = hVb[j]; hVb[j] = t;
+        t = hCost[i];
+        hCost[i] = hCost[j];
+        hCost[j] = t;
+        t = hA[i];
+        hA[i] = hA[j];
+        hA[j] = t;
+        t = hB[i];
+        hB[i] = hB[j];
+        hB[j] = t;
+        t = hSeq[i];
+        hSeq[i] = hSeq[j];
+        hSeq[j] = t;
+        t = hVb[i];
+        hVb[i] = hVb[j];
+        hVb[j] = t;
     };
 
     const heapPush = (cost: number, a: number, b: number, seq: number, vb: number): void => {
         if (heapSize === heapCap) {
             const nc = heapCap * 2;
             const gf = (old: Float32Array) => {
-                const x = new Float32Array(nc); x.set(old); return x;
+                const x = new Float32Array(nc);
+                x.set(old);
+                return x;
             };
             const g = (old: Uint32Array) => {
-                const x = new Uint32Array(nc); x.set(old); return x;
+                const x = new Uint32Array(nc);
+                x.set(old);
+                return x;
             };
             hCost = gf(hCost);
-            hA = g(hA); hB = g(hB); hSeq = g(hSeq); hVb = g(hVb);
+            hA = g(hA);
+            hB = g(hB);
+            hSeq = g(hSeq);
+            hVb = g(hVb);
             heapCap = nc;
         }
         let i = heapSize++;
-        hCost[i] = cost; hA[i] = a; hB[i] = b; hSeq[i] = seq; hVb[i] = vb;
+        hCost[i] = cost;
+        hA[i] = a;
+        hB[i] = b;
+        hSeq[i] = seq;
+        hVb[i] = vb;
         while (i > 0) {
             const p = (i - 1) >> 1;
             if (hCost[p] <= hCost[i]) break;
-            swap(i, p); i = p;
+            swap(i, p);
+            i = p;
         }
     };
 
     const popOut = { cost: 0, a: 0, b: 0, seq: 0, vb: 0 };
     const heapPop = (): boolean => {
         if (heapSize === 0) return false;
-        popOut.cost = hCost[0]; popOut.a = hA[0]; popOut.b = hB[0]; popOut.seq = hSeq[0]; popOut.vb = hVb[0];
+        popOut.cost = hCost[0];
+        popOut.a = hA[0];
+        popOut.b = hB[0];
+        popOut.seq = hSeq[0];
+        popOut.vb = hVb[0];
         heapSize--;
         if (heapSize > 0) {
-            hCost[0] = hCost[heapSize]; hA[0] = hA[heapSize]; hB[0] = hB[heapSize];
-            hSeq[0] = hSeq[heapSize]; hVb[0] = hVb[heapSize];
+            hCost[0] = hCost[heapSize];
+            hA[0] = hA[heapSize];
+            hB[0] = hB[heapSize];
+            hSeq[0] = hSeq[heapSize];
+            hVb[0] = hVb[heapSize];
             let i = 0;
             for (;;) {
-                const l = 2 * i + 1, r = l + 1;
+                const l = 2 * i + 1,
+                    r = l + 1;
                 let m = i;
                 if (l < heapSize && hCost[l] < hCost[m]) m = l;
                 if (r < heapSize && hCost[r] < hCost[m]) m = r;
                 if (m === i) break;
-                swap(i, m); i = m;
+                swap(i, m);
+                i = m;
             }
         }
         return true;
@@ -211,9 +249,10 @@ const selectMergesRecosted = async (inputs: RecostInputs): Promise<SelectionResu
 
     // ---- GPU wave engine when the buffers fit (its workgroup shape needs
     // the production k·MAX_GROUP); inline refresh otherwise.
-    const gpu = device && D * MAX_GROUP === 64 && GpuRecost.fits(device, N, D, WAVE) ?
-        new GpuRecost(device, N, D, MAX_GROUP, WAVE) :
-        undefined;
+    const gpu =
+        device && D * MAX_GROUP === 64 && GpuRecost.fits(device, N, D, WAVE)
+            ? new GpuRecost(device, N, D, MAX_GROUP, WAVE)
+            : undefined;
     const commitLog = gpu ? new Uint32Array(WAVE * COMMIT_LOG_STRIDE) : undefined;
     const outBest = gpu ? new Uint32Array(N * 2) : undefined;
     const outCost = gpu ? new Float32Array(outBest!.buffer) : undefined;

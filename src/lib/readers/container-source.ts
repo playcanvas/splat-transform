@@ -1,11 +1,6 @@
-import {
-    type ChunkDataPool,
-    type ReadRequest,
-    type ChunkSource,
-    type ChunkSourceMetadata
-} from '../chunk';
+import type { ChunkDataPool, ReadRequest, ChunkSource, ChunkSourceMetadata } from '../chunk';
 import { concatSource } from '../ops';
-import { type Transform } from '../utils';
+import type { Transform } from '../utils';
 
 /**
  * One contiguous run of gaussians within a LOD, backed by a sub-file that is
@@ -61,12 +56,12 @@ const containerSource = async (
             const evicted = order.shift()!;
             const ep = cache.get(evicted)!;
             cache.delete(evicted);
-            ep.then(s => s.close()).catch(() => {});
+            ep.then((s) => s.close()).catch<undefined>(() => undefined);
         }
         return p;
     };
 
-    const firstSeg = segmentsByLod.find(segs => segs.length > 0)?.[0];
+    const firstSeg = segmentsByLod.find((segs) => segs.length > 0)?.[0];
     if (!firstSeg) {
         throw new Error('containerSource: no segments');
     }
@@ -76,7 +71,7 @@ const containerSource = async (
     const layout = firstSrc.meta;
     const { chunkSize } = layout;
 
-    const lodCounts = segmentsByLod.map(segs => segs.reduce((acc, s) => acc + s.count, 0));
+    const lodCounts = segmentsByLod.map((segs) => segs.reduce((acc, s) => acc + s.count, 0));
 
     // Static-meta proxy: concatSource reads its `meta` to lay out the LOD up
     // front; the actual sub-source is decoded (and cached) only on `read`, then
@@ -108,7 +103,7 @@ const containerSource = async (
         close: () => Promise.resolve()
     });
 
-    const perLod = segmentsByLod.map(segs => (segs.length > 0 ? concatSource(segs.map(proxy), pool) : null));
+    const perLod = segmentsByLod.map((segs) => (segs.length > 0 ? concatSource(segs.map(proxy), pool) : null));
 
     const meta: ChunkSourceMetadata = {
         ...layout,
@@ -116,7 +111,7 @@ const containerSource = async (
         numGaussians: lodCounts[0] ?? 0,
         numLods: segmentsByLod.length,
         lodCounts,
-        numChunks: lodCounts.map(c => Math.ceil(c / chunkSize))
+        numChunks: lodCounts.map((c) => Math.ceil(c / chunkSize))
     };
 
     // Dispatch to the requested LOD's concatSource (which buckets by sub-file and
@@ -131,7 +126,7 @@ const containerSource = async (
     };
 
     const close = async (): Promise<void> => {
-        await Promise.all([...cache.values()].map(p => p.then(s => s.close()).catch(() => {})));
+        await Promise.all([...cache.values()].map((p) => p.then((s) => s.close()).catch<undefined>(() => undefined)));
         cache.clear();
         order.length = 0;
     };

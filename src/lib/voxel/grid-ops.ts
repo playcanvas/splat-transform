@@ -85,7 +85,7 @@ function computeEmptyGrid(visited: SparseVoxelGrid, blocked: SparseVoxelGrid): S
 function sparseOrGrids(
     a: SparseVoxelGrid,
     b: SparseVoxelGrid,
-    consumeA: boolean = false,
+    consumeA = false,
     onProgress?: (done: number, total: number) => void
 ): SparseVoxelGrid {
     const result = consumeA ? a : a.clone();

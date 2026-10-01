@@ -1,14 +1,17 @@
 import { basename } from 'pathe';
 
-import { logWrittenFile } from './utils';
-import { type FileSystem, writeFile } from '../io/write';
-import { type SplatModel } from '../splat-model';
+import type { DataTable } from '../data-table';
+import { writeFile } from '../io/write';
+import type { FileSystem } from '../io/write';
+import type { SplatModel } from '../splat-model';
 import { dataTableToGaussianCloud, getSpzModule, makeSpzPackOptions } from '../spz-module';
 import { logger } from '../utils';
 
+import { logWrittenFile } from './utils';
+
 type WriteSpzOptions = {
     filename: string;
-    dataTable: import('../data-table').DataTable;
+    dataTable: DataTable;
     model?: SplatModel;
     version?: 3 | 4;
 };

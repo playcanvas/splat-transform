@@ -13,7 +13,7 @@
  * @param scanPerThread - Per-thread element budget; must satisfy `256 * scanPerThread >= chunkCap`.
  * @returns WGSL source for the prefix-sum compute shader.
  */
-const prefixSumWgsl = (scanPerThread: number) => /* wgsl */`
+const prefixSumWgsl = (scanPerThread: number) => /* wgsl */ `
 #include "uniformsStruct"
 #include "constants"
 

@@ -9,7 +9,7 @@
  *
  * @returns WGSL source for the clear-state compute shader.
  */
-const clearStateWgsl = () => /* wgsl */`
+const clearStateWgsl = () => /* wgsl */ `
 #include "uniformsStruct"
 #include "constants"
 

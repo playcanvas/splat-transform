@@ -149,8 +149,12 @@ const coplanarMerge = (mesh: Mesh, voxelResolution: number): Mesh => {
         const cy = positions[ic * 3 + 1];
         const cz = positions[ic * 3 + 2];
 
-        const ex = bx - ax, ey = by - ay, ez = bz - az;
-        const fx = cx - ax, fy = cy - ay, fz = cz - az;
+        const ex = bx - ax,
+            ey = by - ay,
+            ez = bz - az;
+        const fx = cx - ax,
+            fy = cy - ay,
+            fz = cz - az;
         let nx = ey * fz - ez * fy;
         let ny = ez * fx - ex * fz;
         let nz = ex * fy - ey * fx;
@@ -161,7 +165,9 @@ const coplanarMerge = (mesh: Mesh, voxelResolution: number): Mesh => {
             continue;
         }
         const inv = 1 / nLen;
-        nx *= inv; ny *= inv; nz *= inv;
+        nx *= inv;
+        ny *= inv;
+        nz *= inv;
         triNxArr[t] = nx;
         triNyArr[t] = ny;
         triNzArr[t] = nz;
@@ -244,26 +250,32 @@ const coplanarMerge = (mesh: Mesh, voxelResolution: number): Mesh => {
     // avoid precision loss in the cross product. By construction
     // t x b = n, so a polygon traced CCW around +n in 3D projects to a
     // CCW polygon in (t, b) coordinates (positive 2D signed area).
-    const buildBasis = (nx: number, ny: number, nz: number): [
-        number, number, number, number, number, number
-    ] => {
+    const buildBasis = (nx: number, ny: number, nz: number): [number, number, number, number, number, number] => {
         const ax = Math.abs(nx);
         const ay = Math.abs(ny);
         const az = Math.abs(nz);
         let tx: number, ty: number, tz: number;
         if (ax <= ay && ax <= az) {
             // X axis least aligned: t = (1, 0, 0) x n
-            tx = 0; ty = -nz; tz = ny;
+            tx = 0;
+            ty = -nz;
+            tz = ny;
         } else if (ay <= az) {
             // Y axis least aligned: t = (0, 1, 0) x n
-            tx = nz; ty = 0; tz = -nx;
+            tx = nz;
+            ty = 0;
+            tz = -nx;
         } else {
             // Z axis least aligned: t = (0, 0, 1) x n
-            tx = -ny; ty = nx; tz = 0;
+            tx = -ny;
+            ty = nx;
+            tz = 0;
         }
         const tlen = Math.sqrt(tx * tx + ty * ty + tz * tz);
         const inv = 1 / tlen;
-        tx *= inv; ty *= inv; tz *= inv;
+        tx *= inv;
+        ty *= inv;
+        tz *= inv;
         // bitangent = n x t (unit length because n and t are unit and
         // perpendicular).
         const bx = ny * tz - nz * ty;
@@ -323,11 +335,14 @@ const coplanarMerge = (mesh: Mesh, voxelResolution: number): Mesh => {
             const c = triVertsArr[t * 3 + 2];
             let from: number, to: number;
             if (a === v) {
-                from = b; to = c;
+                from = b;
+                to = c;
             } else if (b === v) {
-                from = c; to = a;
+                from = c;
+                to = a;
             } else {
-                from = a; to = b;
+                from = a;
+                to = b;
             }
             for (let j = 0; j < i; j++) {
                 if (fanFromScratch[j] === from) return -1;
@@ -390,13 +405,7 @@ const coplanarMerge = (mesh: Mesh, voxelResolution: number): Mesh => {
     // drops the vertex from this polygon would create a T-junction
     // with the vertex's other incident tris (which still reference it),
     // so we leave the cleanup to the worklist.
-    const earClip = (
-        px: Float64Array,
-        py: Float64Array,
-        n: number,
-        out: Int32Array,
-        outOffset: number
-    ): number => {
+    const earClip = (px: Float64Array, py: Float64Array, n: number, out: Int32Array, outOffset: number): number => {
         if (n < 3) return -1;
         if (n === 3) {
             out[outOffset] = 0;
@@ -423,12 +432,12 @@ const coplanarMerge = (mesh: Mesh, voxelResolution: number): Mesh => {
         }
 
         const isConvex = (a: number, b: number, c: number): boolean => {
-            return (px[b] - px[a]) * (py[c] - py[a]) -
-                   (py[b] - py[a]) * (px[c] - px[a]) > 0;
+            return (px[b] - px[a]) * (py[c] - py[a]) - (py[b] - py[a]) * (px[c] - px[a]) > 0;
         };
 
         const inTri = (p: number, a: number, b: number, c: number): boolean => {
-            const x = px[p], y = py[p];
+            const x = px[p],
+                y = py[p];
             const d1 = (x - px[b]) * (py[a] - py[b]) - (px[a] - px[b]) * (y - py[b]);
             const d2 = (x - px[c]) * (py[b] - py[c]) - (px[b] - px[c]) * (y - py[c]);
             const d3 = (x - px[a]) * (py[c] - py[a]) - (px[c] - px[a]) * (y - py[a]);
@@ -637,8 +646,12 @@ const coplanarMerge = (mesh: Mesh, voxelResolution: number): Mesh => {
             // (mB tris, mB+1 polygon verts).
             const mA = i2 - i1;
             const mB = k - mA;
-            arcStartIdx[0] = i1; arcPolySize[0] = mA + 1; arcPlaneT[0] = fanTris[i1];
-            arcStartIdx[1] = i2; arcPolySize[1] = mB + 1; arcPlaneT[1] = fanTris[i2];
+            arcStartIdx[0] = i1;
+            arcPolySize[0] = mA + 1;
+            arcPlaneT[0] = fanTris[i1];
+            arcStartIdx[1] = i2;
+            arcPolySize[1] = mB + 1;
+            arcPlaneT[1] = fanTris[i2];
             arcCount = 2;
         }
 

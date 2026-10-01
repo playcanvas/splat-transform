@@ -1,13 +1,9 @@
 import { Mat3 } from 'playcanvas';
 
-import {
-    type ChunkData,
-    type ReadRequest,
-    type ChunkSource,
-    type ChunkSourceMetadata,
-    SH_REST_COUNTS
-} from '../chunk';
-import { RotateSH, Transform } from '../utils';
+import { SH_REST_COUNTS } from '../chunk';
+import type { ChunkData, ReadRequest, ChunkSource, ChunkSourceMetadata } from '../chunk';
+import type { Transform } from '../utils';
+import { RotateSH } from '../utils';
 
 const SH_PER_CHANNEL = [0, 3, 8, 15];
 
@@ -37,19 +33,24 @@ const bakeTransform = (src: ChunkSource, targetSpace: Transform): ChunkSource =>
     const delta = targetSpace.clone().invert().mul(src.meta.transform);
 
     if (delta.isIdentity()) {
-        return { meta, read: req => src.read(req), close: () => src.close() };
+        return { meta, read: (req) => src.read(req), close: () => src.close() };
     }
 
     const r = delta.rotation;
     const s = delta.scale;
-    const rx = r.x, ry = r.y, rz = r.z, rw = r.w;
-    const tx = delta.translation.x, ty = delta.translation.y, tz = delta.translation.z;
+    const rx = r.x,
+        ry = r.y,
+        rz = r.z,
+        rw = r.w;
+    const tx = delta.translation.x,
+        ty = delta.translation.y,
+        tz = delta.translation.z;
     const shBands = src.meta.shBands;
     const shPerCh = SH_PER_CHANNEL[shBands];
     const rotIdentity = Math.abs(Math.abs(rw) - 1) < 1e-6;
     const logS = Math.log(s);
 
-    const rotateSH = (!rotIdentity && shPerCh > 0) ? new RotateSH(new Mat3().setFromQuat(r)) : null;
+    const rotateSH = !rotIdentity && shPerCh > 0 ? new RotateSH(new Mat3().setFromQuat(r)) : null;
     const shScratch = rotateSH ? new Float32Array(shPerCh) : null;
 
     // Inlined per-element kernels (no Vec3/Quat objects). The float-op order
@@ -60,14 +61,16 @@ const bakeTransform = (src: ChunkSource, targetSpace: Transform): ChunkSource =>
         const p = new Float32Array(cd.data);
         for (let i = 0; i < cd.count; i++) {
             const o = i * 3;
-            const x = p[o] * s, y = p[o + 1] * s, z = p[o + 2] * s;     // point * scale
-            const ix = rw * x + ry * z - rz * y;                        // rotation.transformVector
+            const x = p[o] * s,
+                y = p[o + 1] * s,
+                z = p[o + 2] * s; // point * scale
+            const ix = rw * x + ry * z - rz * y; // rotation.transformVector
             const iy = rw * y + rz * x - rx * z;
             const iz = rw * z + rx * y - ry * x;
             const iw = -rx * x - ry * y - rz * z;
-            p[o]     = (ix * rw + iw * -rx + iy * -rz - iz * -ry) + tx;  // + translation
-            p[o + 1] = (iy * rw + iw * -ry + iz * -rx - ix * -rz) + ty;
-            p[o + 2] = (iz * rw + iw * -rz + ix * -ry - iy * -rx) + tz;
+            p[o] = ix * rw + iw * -rx + iy * -rz - iz * -ry + tx; // + translation
+            p[o + 1] = iy * rw + iw * -ry + iz * -rx - ix * -rz + ty;
+            p[o + 2] = iz * rw + iw * -rz + ix * -ry - iy * -rx + tz;
         }
     };
 
@@ -77,8 +80,11 @@ const bakeTransform = (src: ChunkSource, targetSpace: Transform): ChunkSource =>
             const o = i * 8;
             if (!rotIdentity) {
                 // rot_0 = w, rot_1..3 = x,y,z; q' = r * q  (Quat.mul2, lhs = r)
-                const qx = g[o + 1], qy = g[o + 2], qz = g[o + 3], qw = g[o];
-                g[o]     = rw * qw - rx * qx - ry * qy - rz * qz;
+                const qx = g[o + 1],
+                    qy = g[o + 2],
+                    qz = g[o + 3],
+                    qw = g[o];
+                g[o] = rw * qw - rx * qx - ry * qy - rz * qz;
                 g[o + 1] = rw * qx + rx * qw + ry * qz - rz * qy;
                 g[o + 2] = rw * qy + ry * qw + rz * qx - rx * qz;
                 g[o + 3] = rw * qz + rz * qw + rx * qy - ry * qx;

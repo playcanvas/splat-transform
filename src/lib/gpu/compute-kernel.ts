@@ -1,3 +1,4 @@
+import type { GraphicsDevice } from 'playcanvas';
 import {
     SHADERLANGUAGE_WGSL,
     SHADERSTAGE_COMPUTE,
@@ -6,7 +7,6 @@ import {
     BindStorageBufferFormat,
     BindUniformBufferFormat,
     Compute,
-    GraphicsDevice,
     Shader,
     UniformBufferFormat,
     UniformFormat
@@ -48,7 +48,10 @@ const makeKernel = (
         cshader: source,
         // @ts-ignore
         computeUniformBufferFormats: {
-            uniforms: new UniformBufferFormat(device, uniformNames.map(u => new UniformFormat(u, UNIFORMTYPE_UINT)))
+            uniforms: new UniformBufferFormat(
+                device,
+                uniformNames.map((u) => new UniformFormat(u, UNIFORMTYPE_UINT))
+            )
         },
         // @ts-ignore
         computeBindGroupFormat: bindGroupFormat

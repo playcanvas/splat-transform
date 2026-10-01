@@ -6,7 +6,7 @@
  *
  * @returns WGSL source for the accumulate compute shader.
  */
-const accumulateWgsl = () => /* wgsl */`
+const accumulateWgsl = () => /* wgsl */ `
 #include "uniformsStruct"
 #include "constants"
 #include "packRGBA8"

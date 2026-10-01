@@ -1,3 +1,4 @@
+import type { GraphicsDevice } from 'playcanvas';
 import {
     BUFFERUSAGE_COPY_DST,
     BUFFERUSAGE_COPY_SRC,
@@ -9,7 +10,6 @@ import {
     BindStorageBufferFormat,
     BindUniformBufferFormat,
     Compute,
-    GraphicsDevice,
     Shader,
     StorageBuffer,
     UniformBufferFormat,
@@ -40,7 +40,7 @@ export const APP_CHUNK = 16;
  * @param strideC - Live column count of appearance chunk C (0 if unused).
  * @returns WGSL source.
  */
-const edgeCostWgsl = (strideA: number, strideB: number, strideC: number) => /* wgsl */`
+const edgeCostWgsl = (strideA: number, strideB: number, strideC: number) => /* wgsl */ `
 struct Uniforms {
     edgeCount: u32,
     z0: f32,
@@ -257,7 +257,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
  * WebGPU per-stage storage-buffer count limit (8) and the per-binding size
  * limit (~2 GB) — appearance is split into 16-column chunks for the latter.
  */
-interface EdgeCostCache {
+type EdgeCostCache = {
     /** Per-splat geometry interleaved 8-wide: (x, y, z, mass, logdet, vx, vy, vz). */
     posScalars: Float32Array;
     /** Row-major 3×3 rotation per splat (length 9N). */
@@ -271,7 +271,7 @@ interface EdgeCostCache {
     numAppCols: number;
     /** Number of splats. */
     numSplats: number;
-}
+};
 
 /**
  * GPU edge-cost evaluator.
@@ -309,7 +309,7 @@ class GpuEdgeCost {
      */
     constructor(device: GraphicsDevice, maxN: number, maxE: number, maxAppCols: number) {
         const workgroupSize = 64;
-        const edgesPerBatch = 1024 * workgroupSize;  // 65,536
+        const edgesPerBatch = 1024 * workgroupSize; // 65,536
         // Appearance is split at fixed APP_CHUNK-column boundaries, but each
         // chunk's *stride* is its live column count — only the last non-empty
         // chunk is ever partial, so partial chunks neither allocate nor upload
@@ -324,7 +324,7 @@ class GpuEdgeCost {
         // supplies exactly this many: a short count would leave a hoisted (reused
         // across iterations) appearance buffer holding the previous iteration's
         // data, which the kernel would then read as this iteration's appearance.
-        const numAppChunks = appStrides.filter(stride => stride > 0).length;
+        const numAppChunks = appStrides.filter((stride) => stride > 0).length;
 
         const bindGroupFormat = new BindGroupFormat(device, [
             new BindUniformBufferFormat('uniforms', SHADERSTAGE_COMPUTE),
@@ -361,13 +361,14 @@ class GpuEdgeCost {
         // the limit; the widest appearance chunk and rotR are the candidates.
         // posScalars (8 floats/splat) is strictly smaller than rotR (9), so the
         // rotR check already bounds it — no separate check needed.
-        const maxStorage = (device as any).limits?.maxStorageBufferBindingSize;
+        const maxStorage = (device as GraphicsDevice & { limits?: { maxStorageBufferBindingSize?: number } }).limits
+            ?.maxStorageBufferBindingSize;
         if (typeof maxStorage === 'number') {
             const checkLimit = (label: string, bytes: number) => {
                 if (bytes > maxStorage) {
                     throw new Error(
                         `GpuEdgeCost: ${label} buffer (${bytes} bytes) exceeds device ` +
-                        `maxStorageBufferBindingSize (${maxStorage})`
+                            `maxStorageBufferBindingSize (${maxStorage})`
                     );
                 }
             };
@@ -385,9 +386,7 @@ class GpuEdgeCost {
         // stays fixed regardless of band count.
         const appDummy = new StorageBuffer(device, 16, BUFFERUSAGE_COPY_DST);
         const appBufs: StorageBuffer[] = appStrides.map((width) => {
-            return width > 0 ?
-                new StorageBuffer(device, maxN * width * 4, BUFFERUSAGE_COPY_DST) :
-                appDummy;
+            return width > 0 ? new StorageBuffer(device, maxN * width * 4, BUFFERUSAGE_COPY_DST) : appDummy;
         });
 
         // Two parallel u32 buffers, sized to a single dispatch batch (not the
@@ -398,11 +397,7 @@ class GpuEdgeCost {
         const edgesIBuf = new StorageBuffer(device, edgesPerBatch * 4, BUFFERUSAGE_COPY_DST);
         const edgesJBuf = new StorageBuffer(device, edgesPerBatch * 4, BUFFERUSAGE_COPY_DST);
 
-        const outBuf = new StorageBuffer(
-            device,
-            edgesPerBatch * 4,
-            BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST
-        );
+        const outBuf = new StorageBuffer(device, edgesPerBatch * 4, BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST);
         const outScratch = new Float32Array(edgesPerBatch);
 
         const compute = new Compute(device, shader, 'compute-edge-cost');
@@ -428,10 +423,14 @@ class GpuEdgeCost {
             if (n > maxN) throw new Error(`GpuEdgeCost: N=${n} exceeds maxN=${maxN}`);
             if (e > maxE) throw new Error(`GpuEdgeCost: E=${e} exceeds maxE=${maxE}`);
             if (cache.numAppCols !== maxAppCols) {
-                throw new Error(`GpuEdgeCost: numAppCols=${cache.numAppCols} must equal maxAppCols=${maxAppCols} (baked into the kernel)`);
+                throw new Error(
+                    `GpuEdgeCost: numAppCols=${cache.numAppCols} must equal maxAppCols=${maxAppCols} (baked into the kernel)`
+                );
             }
             if (cache.appChunks.length !== numAppChunks) {
-                throw new Error(`GpuEdgeCost: cache supplies ${cache.appChunks.length} appearance chunks but the kernel layout expects ${numAppChunks}`);
+                throw new Error(
+                    `GpuEdgeCost: cache supplies ${cache.appChunks.length} appearance chunks but the kernel layout expects ${numAppChunks}`
+                );
             }
             if (edgeJ.length !== e || outCosts.length !== e) {
                 throw new Error('GpuEdgeCost: edgeI / edgeJ / outCosts must have same length');

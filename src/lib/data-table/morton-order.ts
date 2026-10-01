@@ -1,6 +1,7 @@
-import { DataTable } from './data-table';
 import { sortMortonColumns } from '../ops/morton-order';
 import { logger } from '../utils';
+
+import type { DataTable } from './data-table';
 
 // Sort the provided indices into morton order using the table's x/y/z columns.
 // A thin DataTable adapter over the shared columnar core in ops/morton-order.

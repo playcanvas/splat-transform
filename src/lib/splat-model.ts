@@ -11,7 +11,7 @@
 type SplatModel = 'default' | 'antialiased' | '2dgs';
 
 /** Every model value, for validating externally-supplied strings. */
-const SPLAT_MODELS: ReadonlyArray<SplatModel> = ['default', 'antialiased', '2dgs'];
+const SPLAT_MODELS: readonly SplatModel[] = ['default', 'antialiased', '2dgs'];
 
 /**
  * Narrow an externally-supplied string to a {@link SplatModel}. Per-format
@@ -34,7 +34,7 @@ const isSplatModel = (value: unknown): value is SplatModel => {
  */
 const resolveSplatModel = (models: SplatModel[]): SplatModel => {
     const first = models[0] ?? 'default';
-    return models.every(m => m === first) ? first : 'default';
+    return models.every((m) => m === first) ? first : 'default';
 };
 
 export { type SplatModel, isSplatModel, resolveSplatModel };

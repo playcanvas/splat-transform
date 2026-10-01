@@ -23,7 +23,7 @@ class BufferedReadStream extends ReadStream {
      * @param inner - The underlying stream to read from
      * @param chunkSize - Minimum bytes to read at once from inner stream (default 64KB)
      */
-    constructor(inner: ReadStream, chunkSize: number = 65536) {
+    constructor(inner: ReadStream, chunkSize = 65536) {
         super(inner.expectedSize);
         this.inner = inner;
         this.chunkSize = chunkSize;

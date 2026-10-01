@@ -1,6 +1,8 @@
-import { Column, DataTable, TypedArray } from './data-table';
-import { convertToSpace } from './transform';
 import { logger, Transform } from '../utils';
+
+import type { TypedArray } from './data-table';
+import { Column, DataTable } from './data-table';
+import { convertToSpace } from './transform';
 
 /**
  * Combines multiple DataTables into a single DataTable.
@@ -21,28 +23,27 @@ import { logger, Transform } from '../utils';
  * console.log(combined.numRows); // tableA.numRows + tableB.numRows + tableC.numRows
  * ```
  */
-const combine = (dataTables: DataTable[]) : DataTable => {
+const combine = (dataTables: DataTable[]): DataTable => {
     if (dataTables.length === 1) {
         return dataTables[0];
     }
 
     // Check if all transforms match the first table's transform
     const refTransform = dataTables[0].transform;
-    const allMatch = dataTables.every(dt => dt.transform.equals(refTransform));
+    const allMatch = dataTables.every((dt) => dt.transform.equals(refTransform));
 
     let tables = dataTables;
     let resultTransform = refTransform;
 
     if (!allMatch) {
         logger.warn('Combining DataTables with different source transforms; converting to engine space.');
-        tables = dataTables.map(dt => convertToSpace(dt, Transform.IDENTITY));
+        tables = dataTables.map((dt) => convertToSpace(dt, Transform.IDENTITY));
         resultTransform = Transform.IDENTITY;
     }
 
     const findMatchingColumn = (columns: Column[], column: Column) => {
         for (let i = 0; i < columns.length; ++i) {
-            if (columns[i].name === column.name &&
-                columns[i].dataType === column.dataType) {
+            if (columns[i].name === column.name && columns[i].dataType === column.dataType) {
                 return columns[i];
             }
         }
