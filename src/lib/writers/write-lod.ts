@@ -614,6 +614,13 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
 
     let sogIndex = 0;
 
+    // Unit writes overlap (see below), so every write shares one in-flight
+    // device request: a creator that only caches its resolved device would
+    // otherwise be called again before the first call resolves, creating a
+    // second device.
+    let devicePromise: ReturnType<DeviceCreator> | undefined;
+    const sharedCreateDevice = createDevice && (() => (devicePromise ??= createDevice()));
+
     // write the environment sog
     if (hasEnv) {
         sogIndex++;
@@ -627,7 +634,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
             await writeSogSource(
                 envSource!,
                 pool,
-                { filename: envPathname, bundle: false, iterations, webpEffort, createDevice, logging: 'flat' },
+                { filename: envPathname, bundle: false, iterations, webpEffort, createDevice: sharedCreateDevice, logging: 'flat' },
                 fs
             );
         } finally {
@@ -681,7 +688,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
         const identity = new Uint32Array(totalIndices);
         for (let j = 0; j < totalIndices; ++j) identity[j] = j;
 
-        return { identity, state: startSogWrite(unitSource, pool, { iterations, createDevice, indices: identity }) };
+        return { identity, state: startSogWrite(unitSource, pool, { iterations, createDevice: sharedCreateDevice, indices: identity }) };
     };
 
     // Units are pipelined one deep: once a unit is gathered and its k-means

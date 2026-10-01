@@ -141,7 +141,10 @@ fn main(
 // zero-padded vec4 in registers and shared memory (4-wide shared loads), and
 // the distance is expanded as |c|² - 2x·c — |x|² is constant per point, so the
 // argmin is unchanged — one FMA per element instead of a subtract and an FMA.
-// Each tile row's |c|² is summed while the tile is staged.
+// Each tile row's |c|² is summed while the tile is staged. The expanded form's
+// rounding error scales with |x|² rather than with the distance, so points and
+// centroids are taken relative to a reference near the data (`center`): the
+// error then follows the data's spread, not its offset from the origin.
 const assignVec4Wgsl = (numColumns: number, tileSize: number, ppt: number, workgroupSize: number) => /* wgsl */`
 struct Uniforms {
     localOffset: u32,       // first point of this dispatch, chunk-relative
@@ -154,6 +157,7 @@ struct Uniforms {
 @group(0) @binding(1) var<storage, read> points: array<f32>;
 @group(0) @binding(2) var<storage, read> centroids: array<f32>;
 @group(0) @binding(3) var<storage, read_write> labels: array<u32>;
+@group(0) @binding(4) var<storage, read> center: array<vec4f>;  // zero-padded reference row
 
 const numColumns = ${numColumns}u;
 const quads = ${Math.ceil(numColumns / 4)}u;    // vec4s per padded row
@@ -165,12 +169,15 @@ const F32_MAX: f32 = 3.4028234663852886e+38;
 var<workgroup> tile: array<vec4f, ${Math.ceil(numColumns / 4) * tileSize}>;
 var<workgroup> tileNorm: array<f32, ${tileSize}>;
 
-// quad q of the row starting at base, zero past the end of the row
+// quad q of the row starting at base, relative to the reference row and zero
+// past the end of the row. The centering stays inside the bounds test so the
+// padding lanes remain compile-time zero (their FMAs fold away; centering
+// them at runtime measured 7% slower at d=45).
 fn pointQuad(base: u32, q: u32) -> vec4f {
     var v = vec4f(0.0);
     for (var e = 0u; e < 4u; e++) {
         if (q * 4u + e < numColumns) {
-            v[e] = points[base + q * 4u + e];
+            v[e] = points[base + q * 4u + e] - center[q][e];
         }
     }
     return v;
@@ -180,7 +187,7 @@ fn centroidQuad(base: u32, q: u32) -> vec4f {
     var v = vec4f(0.0);
     for (var e = 0u; e < 4u; e++) {
         if (q * 4u + e < numColumns) {
-            v[e] = centroids[base + q * 4u + e];
+            v[e] = centroids[base + q * 4u + e] - center[q][e];
         }
     }
     return v;
@@ -560,7 +567,7 @@ class GpuKmeans {
             assign: makeKernel(device, 'kmeans-assign',
                 useF16 ? assignWgsl(floatType, numColumns, tileSize, ppt) : assignVec4Wgsl(numColumns, tileSize, ppt, assignWorkgroupSize),
                 ['localOffset', 'globalOffset', 'count', 'numCentroids'],
-                [['points', true], ['centroids', true], ['labels', false]]),
+                [['points', true], ['centroids', true], ['labels', false], ...(useF16 ? [] : [['center', true] as [string, boolean]])]),
             histogram: makeKernel(device, 'kmeans-histogram', histogramWgsl(),
                 ['globalOffset', 'count'],
                 [['labels', true], ['counts', false]]),
@@ -632,6 +639,7 @@ class GpuKmeans {
             const offsetsBuf = new StorageBuffer(device, numCentroids * 4, 0);
             const cursorsBuf = new StorageBuffer(device, numCentroids * 4, 0);
             const sumsBuf = new StorageBuffer(device, numCentroids * numColumns * 4, BUFFERUSAGE_COPY_DST);
+            const centerBuf = useF16 ? null : new StorageBuffer(device, roundUp(numColumns, 4) * 4, BUFFERUSAGE_COPY_DST);
 
             try {
                 // ---- static parameters
@@ -639,6 +647,18 @@ class GpuKmeans {
                 assign.compute.setParameter('centroids', useF16 ? centroidsF16Buf! : centroidsBuf);
                 assign.compute.setParameter('labels', labelsBuf);
                 assign.compute.setParameter('numCentroids', numCentroids);
+                if (centerBuf) {
+                    // the f32 assign's reference row: the seeds' mean (the
+                    // seeds are data points), zero-padded to whole vec4s
+                    const center = new Float32Array(roundUp(numColumns, 4));
+                    for (let j = 0; j < numColumns; j++) {
+                        let sum = 0;
+                        for (let i = 0; i < numCentroids; i++) sum += centroids[i * numColumns + j];
+                        center[j] = sum / numCentroids;
+                    }
+                    centerBuf.write(0, center, 0, center.length);
+                    assign.compute.setParameter('center', centerBuf);
+                }
                 histogram.compute.setParameter('labels', labelsBuf);
                 histogram.compute.setParameter('counts', countsBuf);
                 scan.compute.setParameter('counts', countsBuf);
@@ -803,6 +823,7 @@ class GpuKmeans {
                 offsetsBuf.destroy();
                 cursorsBuf.destroy();
                 sumsBuf.destroy();
+                centerBuf?.destroy();
             }
         };
 

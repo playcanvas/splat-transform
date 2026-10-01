@@ -221,6 +221,34 @@ for (const precision of ['default', 'f32']) describe(`GpuKmeans (GPU path, ${pre
         }
     });
 
+    it('separates nearby centroids far from the origin', async (t) => {
+        if (!device) return t.skip('no WebGPU adapter available');
+        if (precision !== 'f32') return t.skip('f16 cannot represent these coordinates exactly');
+
+        // |x|² ≈ 3e8, where f32 resolves steps of 32: an uncentered |c|² - 2x·c
+        // cannot tell a centroid at distance 0 from its neighbors at distance 1.
+        // Centroids sit 1 apart along x; every point sits exactly on one.
+        const numColumns = 3;
+        const k = 16;
+        const centroids = new Float32Array(k * numColumns);
+        for (let c = 0; c < k; c++) centroids.set([8979 + c, 11021, 10003], c * numColumns);
+        const numRows = 1024;
+        const points = new Float32Array(numRows * numColumns);
+        for (let i = 0; i < numRows; i++) {
+            points.set([8979 + (i % k), 11021, 10003], i * numColumns);
+        }
+        const expected = bruteForceLabels(points, numRows, numColumns, centroids, k);
+
+        const gpu = new GpuKmeans(device, numColumns, k);
+        try {
+            const labels = new Uint32Array(numRows);
+            await gpu.run(points, numRows, centroids.slice(), labels, 1);
+            assert.deepStrictEqual([...labels], [...expected]);
+        } finally {
+            gpu.destroy();
+        }
+    });
+
     it('matches a reference Lloyd loop within 1% inertia from identical seeds', async (t) => {
         if (!device) return t.skip('no WebGPU adapter available');
 
