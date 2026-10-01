@@ -168,3 +168,59 @@ describe('readPly index gather', () => {
         await source.close();
     });
 });
+
+// Re-encode an all-float little-endian PLY as binary_big_endian.
+const toBigEndian = (ply) => {
+    const text = new TextDecoder().decode(ply.subarray(0, 4096));
+    const headerBytes = text.indexOf('end_header\n') + 'end_header\n'.length;
+    const header = new TextEncoder().encode(text.slice(0, headerBytes).replace('binary_little_endian', 'binary_big_endian'));
+    const body = ply.slice(headerBytes);
+    for (let o = 0; o < body.length; o += 4) body.subarray(o, o + 4).reverse();
+    const out = new Uint8Array(header.length + body.length);
+    out.set(header, 0);
+    out.set(body, header.length);
+    return out;
+};
+
+describe('readPly format line', () => {
+    it('reads binary_big_endian with the same values as binary_little_endian', async () => {
+        const n = 100;
+        const table = createTestDataTable(n, { includeSH: true, shBands: 1 });
+        const le = encodePlyBinary(table);
+        const x = table.getColumnByName('x').data;
+        const pool = createChunkDataPool();
+        const leSource = await readPly(new BufferReadSource(le), pool);
+        const beSource = await readPly(new BufferReadSource(toBigEndian(le)), pool);
+
+        const indices = new Uint32Array([97, 3, 50, 4, 0]);
+        for (const request of [{ chunkIndex: 0 }, { indices, indexOffset: 0, count: indices.length }]) {
+            const count = request.count ?? n;
+            const got = {};
+            for (const [name, source] of [['le', leSource], ['be', beSource]]) {
+                const { layouts } = source.meta;
+                const pos = pool.acquire('position', layouts.position, count);
+                const geo = pool.acquire('geometric', layouts.geometric, count);
+                const col = pool.acquire('color', layouts.color, count);
+                await source.read({ ...request, position: pos, geometric: geo, color: col });
+                got[name] = [pos, geo, col].map(cd => Array.from(new Float32Array(cd.data, 0, count * (cd.stride >> 2))));
+                pos.release(); geo.release(); col.release();
+            }
+            assert.deepStrictEqual(got.be, got.le);
+            // anchor the reference to the source table, so both sides can't be wrong together
+            for (let j = 0; j < count; j++) {
+                assert.strictEqual(got.le[0][j * 3], x[request.indices ? request.indices[j] : j]);
+            }
+        }
+        await leSource.close();
+        await beSource.close();
+    });
+
+    it('rejects an ascii PLY instead of decoding it as binary', async () => {
+        const ply = new TextEncoder().encode([
+            'ply', 'format ascii 1.0', 'element vertex 1',
+            'property float x', 'property float y', 'property float z',
+            'end_header', '1 2 3', ''
+        ].join('\n'));
+        await assert.rejects(readPly(new BufferReadSource(ply), createChunkDataPool()), /unsupported PLY format 'ascii'/);
+    });
+});
