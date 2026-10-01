@@ -136,6 +136,132 @@ fn main(
 }
 `;
 
+// f32 FlashAssign. Two changes over the scalar form, measured 1.85× on an
+// A10G (1M points, d=45, K=65536, labels identical): rows are widened to
+// zero-padded vec4 in registers and shared memory (4-wide shared loads), and
+// the distance is expanded as |c|² - 2x·c — |x|² is constant per point, so the
+// argmin is unchanged — one FMA per element instead of a subtract and an FMA.
+// Each tile row's |c|² is summed while the tile is staged.
+const assignVec4Wgsl = (numColumns: number, tileSize: number, ppt: number, workgroupSize: number) => /* wgsl */`
+struct Uniforms {
+    localOffset: u32,       // first point of this dispatch, chunk-relative
+    globalOffset: u32,      // first point of this dispatch, global (labels index)
+    count: u32,             // points in this dispatch
+    numCentroids: u32
+};
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(0) @binding(1) var<storage, read> points: array<f32>;
+@group(0) @binding(2) var<storage, read> centroids: array<f32>;
+@group(0) @binding(3) var<storage, read_write> labels: array<u32>;
+
+const numColumns = ${numColumns}u;
+const quads = ${Math.ceil(numColumns / 4)}u;    // vec4s per padded row
+const tileSize = ${tileSize}u;
+const ppt = ${ppt}u;
+const workgroupSize = ${workgroupSize}u;
+const F32_MAX: f32 = 3.4028234663852886e+38;
+
+var<workgroup> tile: array<vec4f, ${Math.ceil(numColumns / 4) * tileSize}>;
+var<workgroup> tileNorm: array<f32, ${tileSize}>;
+
+// quad q of the row starting at base, zero past the end of the row
+fn pointQuad(base: u32, q: u32) -> vec4f {
+    var v = vec4f(0.0);
+    for (var e = 0u; e < 4u; e++) {
+        if (q * 4u + e < numColumns) {
+            v[e] = points[base + q * 4u + e];
+        }
+    }
+    return v;
+}
+
+fn centroidQuad(base: u32, q: u32) -> vec4f {
+    var v = vec4f(0.0);
+    for (var e = 0u; e < 4u; e++) {
+        if (q * 4u + e < numColumns) {
+            v[e] = centroids[base + q * 4u + e];
+        }
+    }
+    return v;
+}
+
+@compute @workgroup_size(${workgroupSize})
+fn main(
+    @builtin(local_invocation_index) local_id: u32,
+    @builtin(workgroup_id) workgroup_id: vec3u
+) {
+    let blockBase = workgroup_id.x * (workgroupSize * ppt);
+
+    // copy this thread's points into registers (strided: point p of this
+    // thread is blockBase + p*workgroupSize + local_id)
+    var pts: array<vec4f, ${Math.ceil(numColumns / 4) * ppt}>;
+    for (var p = 0u; p < ppt; p++) {
+        let pi = blockBase + p * workgroupSize + local_id;
+        if (pi < uniforms.count) {
+            let src = (uniforms.localOffset + pi) * numColumns;
+            for (var q = 0u; q < quads; q++) {
+                pts[p * quads + q] = pointQuad(src, q);
+            }
+        }
+    }
+
+    var mind: array<f32, ${ppt}>;
+    var mini: array<u32, ${ppt}>;
+    for (var p = 0u; p < ppt; p++) {
+        mind[p] = F32_MAX;
+        mini[p] = 0u;
+    }
+
+    let numTiles = (uniforms.numCentroids + tileSize - 1u) / tileSize;
+    for (var t = 0u; t < numTiles; t++) {
+        let tileBase = t * tileSize;
+
+        // stage the tile one row per thread, summing |c|² on the way
+        for (var r = local_id; r < tileSize; r += workgroupSize) {
+            let row = tileBase + r;
+            var norm = 0.0;
+            if (row < uniforms.numCentroids) {
+                let src = row * numColumns;
+                for (var q = 0u; q < quads; q++) {
+                    let c = centroidQuad(src, q);
+                    tile[r * quads + q] = c;
+                    norm += dot(c, c);
+                }
+            }
+            tileNorm[r] = norm;
+        }
+        workgroupBarrier();
+
+        let cnt = min(tileSize, uniforms.numCentroids - tileBase);
+        for (var c = 0u; c < cnt; c++) {
+            let cb = c * quads;
+            let norm = tileNorm[c];
+            for (var p = 0u; p < ppt; p++) {
+                var s = 0.0;
+                let pb = p * quads;
+                for (var q = 0u; q < quads; q++) {
+                    s += dot(pts[pb + q], tile[cb + q]);
+                }
+                let d = norm - 2.0 * s;
+                if (d < mind[p]) {
+                    mind[p] = d;
+                    mini[p] = tileBase + c;
+                }
+            }
+        }
+        workgroupBarrier();
+    }
+
+    for (var p = 0u; p < ppt; p++) {
+        let pi = blockBase + p * workgroupSize + local_id;
+        if (pi < uniforms.count) {
+            labels[uniforms.globalOffset + pi] = mini[p];
+        }
+    }
+}
+`;
+
 // per-cluster population count. Plain u32 atomics — the paper's contention
 // concern applies to d-wide float scatters, not a 1-word histogram.
 const histogramWgsl = () => /* wgsl */`
@@ -420,14 +546,19 @@ class GpuKmeans {
         // hiding (measured 2× slower at d=45). Budget ~12KB (128 rows at
         // 45 columns f16, like the previous fixed tile) and shrink when a
         // row is too wide (the previous fixed 128 needed >16KB at 45
-        // columns f32 — over the WebGPU minimum).
+        // columns f32 — over the WebGPU minimum). f32 rows are padded to
+        // whole vec4s.
         const wgStorage: number = wgpuLimits?.maxComputeWorkgroupStorageSize ?? 16384;
         const tileBudget = Math.min(wgStorage, 12 * 1024);
-        const tileSize = Math.max(64, Math.min(128, Math.floor(tileBudget / (numColumns * bytesPerElem * 64)) * 64));
+        const tileRowBytes = useF16 ? numColumns * 2 : roundUp(numColumns, 4) * 4;
+        const tileSize = Math.max(64, Math.min(128, Math.floor(tileBudget / (tileRowBytes * 64)) * 64));
         const ppt = pptForColumns(numColumns);
+        // the f32 assign benched fastest at 128 threads on an A10G (vs 64)
+        const assignWorkgroupSize = useF16 ? 64 : 128;
 
         const kernels = {
-            assign: makeKernel(device, 'kmeans-assign', assignWgsl(floatType, numColumns, tileSize, ppt),
+            assign: makeKernel(device, 'kmeans-assign',
+                useF16 ? assignWgsl(floatType, numColumns, tileSize, ppt) : assignVec4Wgsl(numColumns, tileSize, ppt, assignWorkgroupSize),
                 ['localOffset', 'globalOffset', 'count', 'numCentroids'],
                 [['points', true], ['centroids', true], ['labels', false]]),
             histogram: makeKernel(device, 'kmeans-histogram', histogramWgsl(),
@@ -581,7 +712,7 @@ class GpuKmeans {
                             assign.compute.setParameter('localOffset', s);
                             assign.compute.setParameter('globalOffset', c * chunkCap + s);
                             assign.compute.setParameter('count', count);
-                            assign.compute.setupDispatch(Math.ceil(count / (64 * ppt)));
+                            assign.compute.setupDispatch(Math.ceil(count / (assignWorkgroupSize * ppt)));
                             device.computeDispatch([assign.compute], 'kmeans-assign');
                             submit();
                         }
@@ -654,9 +785,14 @@ class GpuKmeans {
                     onIteration?.();
                 }
 
-                // ---- single blocking readback after the final iteration
-                await labelsBuf.read(0, numPoints * 4, labels, true);
-                await centroidsBuf.read(0, numCentroids * numColumns * 4, centroids, true);
+                // ---- single blocking readback after the final iteration. Both
+                // copies are queued before awaiting, so neither waits on GPU
+                // work submitted after this point (the LOD writer queues the
+                // next unit's k-means behind this one).
+                await Promise.all([
+                    labelsBuf.read(0, numPoints * 4, labels, true),
+                    centroidsBuf.read(0, numCentroids * numColumns * 4, centroids, true)
+                ]);
             } finally {
                 pointBufs.forEach(b => b.destroy());
                 centroidsBuf.destroy();

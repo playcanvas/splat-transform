@@ -163,7 +163,9 @@ describe('kmeansInterleaved (CPU path)', () => {
     });
 });
 
-describe('GpuKmeans (GPU path)', () => {
+// 'f32' hides shader-f16 so the f32 kernels run (the path taken on devices
+// without it, e.g. NVIDIA under Vulkan) even where f16 is available
+for (const precision of ['default', 'f32']) describe(`GpuKmeans (GPU path, ${precision})`, () => {
     // created in before() so registration never blocks; tests skip when the
     // environment has no usable WebGPU adapter
     let device = null;
@@ -171,6 +173,7 @@ describe('GpuKmeans (GPU path)', () => {
         try {
             const { createDevice } = await import('../src/cli/node-device.js');
             device = await createDevice();
+            if (precision === 'f32') device.supportsShaderF16 = false;
         } catch {
             device = null;
         }

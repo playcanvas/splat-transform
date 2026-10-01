@@ -123,44 +123,45 @@ type WriteSogSourceOptions = {
 
 type ShNMeta = { count: number; bands: number; codebook: number[]; files: string[] };
 
+type Clustering = { centroids: Float32Array, labels: Uint32Array };
+
+// One SOG write between its two phases: the gathered layers plus the worker
+// and GPU jobs already running on them.
+type SogWriteState = {
+    numRows: number;
+    shBands: number;
+    model: SplatModel;
+    width: number;
+    height: number;
+    layers: SogLayers;
+    iterations: number;
+    restCount: number;
+    paletteSize: number;
+    scalesQuant: ReturnType<typeof runQuantize1dColumns>;
+    colorsQuant: ReturnType<typeof runQuantize1dColumns>;
+    shCluster: Promise<Clustering> | null;
+    // k-means iterations completed so far, and where to report further ones
+    progress: { done: number; report: ((done: number) => void) | null };
+};
+
 /**
- * Native SOG writer: encodes a {@link ChunkSource} to the PlayCanvas SOG format.
- *
- * The source is gathered once, every layer in one read per chunk, so an
- * interleaved file input is scanned a single time. The gathered scene stays
- * resident for the duration of the write — position, geometric and color
- * together — which is the right trade for single SOG output (bounded by the
- * ~1-2M gaussian practical ceiling below; larger scenes go through the LOD
- * writer as many small units).
- *
- * The texture pipelines are independent, so the worker-side jobs (scale and
- * color quantization, then SH k-means) are started before the main thread does
- * its own Morton sort and texel packing, and WebP encodes are queued as each
- * texture is ready. The pool is busy from the outset and the wall-clock is the
- * longest pipeline rather than the sum.
- *
- * Output is equivalent to the legacy DataTable `writeSog` (same Morton order,
- * quantization/clustering, texel encoding), and byte-identical for the per-file
- * (non-bundled) outputs. Everything works on raw typed-array columns / interleaved
- * buffers (no DataTable): `runQuantize1dColumns` / `kmeansInterleaved` /
- * `runEncodeWebp` consume the gathered layers directly.
+ * First phase of a SOG write: validate, gather the source and start the
+ * worker-side and GPU jobs (scale and color quantization, SH k-means). Emits
+ * no log output and opens no output files, so a caller can start the next
+ * write while a previous one is still finishing (see the LOD writer).
  *
  * @param source - The source to encode (its pending transform is baked to PLY space).
  * @param pool - Pool for the temporary per-chunk read buffers.
  * @param options - Output options.
- * @param fs - File system to write through.
+ * @returns The state to hand to {@link finishSogWrite}.
  * @ignore
  */
-const writeSogSource = async (
+const startSogWrite = async (
     source: ChunkSource,
     pool: ChunkDataPool,
-    options: WriteSogSourceOptions,
-    fs: FileSystem
-): Promise<void> => {
-    const { filename: outputFilename, bundle, iterations, webpEffort, createDevice } = options;
-    const logging = options.logging ?? 'own';
-    const emitInfo = logging !== 'silent';
-    const openGroup = logging === 'own';
+    options: Pick<WriteSogSourceOptions, 'iterations' | 'createDevice' | 'indices'>
+): Promise<SogWriteState> => {
+    const { iterations, createDevice } = options;
 
     const baked = bakeTransform(source, Transform.PLY);
     const { meta } = baked;
@@ -181,7 +182,6 @@ const writeSogSource = async (
 
     const width = Math.ceil(Math.sqrt(numRows) / 4) * 4;
     const height = Math.ceil(numRows / width / 4) * 4;
-    const channels = 4;
 
     // Hard failure point only: WebP's 16383-texel dimension ceiling. The
     // practical threshold is far lower — beyond ~1-2M gaussians a scene should
@@ -196,6 +196,73 @@ const writeSogSource = async (
     }
 
     const layers = await gatherSogLayers(baked, pool);
+
+    // ---- Worker-side jobs first, so the pool is busy while the main thread
+    // runs its own passes in the finish phase. Quantize-bearing textures go
+    // first (each is a full-column pass); SH k-means mostly waits on the GPU.
+    const [, , , , s0, s1, s2] = layers.geometric;
+    const [fdc0, fdc1, fdc2] = layers.colorDc;
+    const scalesQuant = runQuantize1dColumns([
+        { name: 'scale_0', data: s0 }, { name: 'scale_1', data: s1 }, { name: 'scale_2', data: s2 }
+    ]);
+    const colorsQuant = runQuantize1dColumns([
+        { name: 'f_dc_0', data: fdc0 }, { name: 'f_dc_1', data: fdc1 }, { name: 'f_dc_2', data: fdc2 }
+    ]);
+    const restCount = [0, 9, 24, 45][shBands];
+    const paletteSize = Math.min(64, 2 ** Math.floor(Math.log2(numRows / 1024))) * 1024;
+    const progress: SogWriteState['progress'] = { done: 0, report: null };
+    const shCluster = shBands > 0 ? (async () => {
+        const gpuDevice = createDevice ? await createDevice() : undefined;
+        return kmeansInterleaved(layers.shRest, numRows, restCount, paletteSize, iterations, gpuDevice, () => {
+            progress.done++;
+            progress.report?.(progress.done);
+        });
+    })() : null;
+    // If the finish phase throws (or never runs), these settle later; mark
+    // their rejections handled so the original error propagates instead of an
+    // unhandled rejection.
+    [scalesQuant, colorsQuant, shCluster].forEach(p => p?.catch(() => {}));
+
+    return {
+        numRows,
+        shBands,
+        model: meta.model,
+        width,
+        height,
+        layers,
+        iterations,
+        restCount,
+        paletteSize,
+        scalesQuant,
+        colorsQuant,
+        shCluster,
+        progress
+    };
+};
+
+/**
+ * Second phase of a SOG write: pack and encode the textures, await the jobs
+ * started by {@link startSogWrite} and write the output files and meta.json.
+ * All of the write's log output happens here.
+ *
+ * @param state - The state returned by {@link startSogWrite}.
+ * @param options - Output options (the same `indices` passed to the start phase).
+ * @param fs - File system to write through.
+ * @ignore
+ */
+const finishSogWrite = async (
+    state: SogWriteState,
+    options: Pick<WriteSogSourceOptions, 'filename' | 'bundle' | 'webpEffort' | 'logging' | 'indices'>,
+    fs: FileSystem
+): Promise<void> => {
+    const { filename: outputFilename, bundle, webpEffort } = options;
+    const logging = options.logging ?? 'own';
+    const emitInfo = logging !== 'silent';
+    const openGroup = logging === 'own';
+
+    const { numRows, shBands, width, height, layers, iterations, restCount, paletteSize, progress } = state;
+    const { scalesQuant, colorsQuant, shCluster } = state;
+    const channels = 4;
 
     const bundleWriter = bundle ? await fs.createWriter(outputFilename) : null;
     const zipFs = bundleWriter ? new ZipFileSystem(bundleWriter) : null;
@@ -242,28 +309,18 @@ const writeSogSource = async (
     if (!externalOrder) for (let i = 0; i < numRows; i++) indices[i] = i;
 
     try {
-        // ---- Worker-side jobs first, so the pool is busy while the main thread
-        // runs its own passes below. Quantize-bearing textures go first (each
-        // is a full-column pass); SH k-means mostly waits on the GPU.
-        const [r0, r1, r2, r3, s0, s1, s2, op] = layers.geometric;
-        const [fdc0, fdc1, fdc2] = layers.colorDc;
-        const scalesQuant = runQuantize1dColumns([
-            { name: 'scale_0', data: s0 }, { name: 'scale_1', data: s1 }, { name: 'scale_2', data: s2 }
-        ]);
-        const colorsQuant = runQuantize1dColumns([
-            { name: 'f_dc_0', data: fdc0 }, { name: 'f_dc_1', data: fdc1 }, { name: 'f_dc_2', data: fdc2 }
-        ]);
-        const restCount = [0, 9, 24, 45][shBands];
-        const paletteSize = Math.min(64, 2 ** Math.floor(Math.log2(numRows / 1024))) * 1024;
-        const shCluster = shBands > 0 ? (async () => {
-            const gpuDevice = createDevice ? await createDevice() : undefined;
-            return kmeansInterleaved(layers.shRest, numRows, restCount, paletteSize, iterations, gpuDevice);
-        })() : null;
-        // If the main thread throws below, these settle later; mark their
-        // rejections handled so the original error propagates instead of an
-        // unhandled rejection.
-        [scalesQuant, colorsQuant, shCluster].forEach(p => p?.catch(() => {}));
+        // ---- k-means progress. The clustering was started with the gather;
+        // its bar opens here so it nests under this write's scope. For a write
+        // started ahead of time (LOD units) the bar times the remaining wait.
+        if (shCluster) {
+            logger.debug(`running k-means clustering: dims=${restCount} points=${numRows} clusters=${paletteSize} iterations=${iterations}`);
+            const bar = logger.bar('k-means', iterations);
+            bar.update(progress.done);
+            progress.report = done => bar.update(done);
+            shCluster.then(() => bar.end(), () => {});
+        }
 
+        const [r0, r1, r2, r3, , , , op] = layers.geometric;
         // ---- means: Morton order (unless a caller-supplied order is used) +
         // log-encoded positions split into low/high bytes.
         const meansMeta = (() => {
@@ -400,7 +457,7 @@ const writeSogSource = async (
             asset: { generator: `splat-transform v${version}` },
             count: numRows,
             // untagged scenes stay byte-identical to pre-3.2 output
-            ...(meta.model === 'default' ? {} : { model: meta.model }),
+            ...(state.model === 'default' ? {} : { model: state.model }),
             means: { mins: meansMeta.mins, maxs: meansMeta.maxs, files: ['means_l.webp', 'means_u.webp'] },
             scales: { codebook: scalesCodebook, files: ['scales.webp'] },
             quats: { files: ['quats.webp'] },
@@ -435,6 +492,43 @@ const writeSogSource = async (
     }
 };
 
+/**
+ * Native SOG writer: encodes a {@link ChunkSource} to the PlayCanvas SOG format.
+ *
+ * The source is gathered once, every layer in one read per chunk, so an
+ * interleaved file input is scanned a single time. The gathered scene stays
+ * resident for the duration of the write — position, geometric and color
+ * together — which is the right trade for single SOG output (bounded by the
+ * ~1-2M gaussian practical ceiling below; larger scenes go through the LOD
+ * writer as many small units).
+ *
+ * The texture pipelines are independent, so the worker-side jobs (scale and
+ * color quantization, then SH k-means) are started before the main thread does
+ * its own Morton sort and texel packing, and WebP encodes are queued as each
+ * texture is ready. The pool is busy from the outset and the wall-clock is the
+ * longest pipeline rather than the sum.
+ *
+ * Output is equivalent to the legacy DataTable `writeSog` (same Morton order,
+ * quantization/clustering, texel encoding), and byte-identical for the per-file
+ * (non-bundled) outputs. Everything works on raw typed-array columns / interleaved
+ * buffers (no DataTable): `runQuantize1dColumns` / `kmeansInterleaved` /
+ * `runEncodeWebp` consume the gathered layers directly.
+ *
+ * @param source - The source to encode (its pending transform is baked to PLY space).
+ * @param pool - Pool for the temporary per-chunk read buffers.
+ * @param options - Output options.
+ * @param fs - File system to write through.
+ * @ignore
+ */
+const writeSogSource = async (
+    source: ChunkSource,
+    pool: ChunkDataPool,
+    options: WriteSogSourceOptions,
+    fs: FileSystem
+): Promise<void> => {
+    await finishSogWrite(await startSogWrite(source, pool, options), options, fs);
+};
+
 type WriteSogOptions = WriteSogSourceOptions & { dataTable: DataTable; model?: SplatModel };
 
 /**
@@ -454,4 +548,4 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem): Promise<void>
     await writeSogSource(source, pool, rest, fs);
 };
 
-export { writeSog, writeSogSource };
+export { finishSogWrite, startSogWrite, writeSog, writeSogSource };
