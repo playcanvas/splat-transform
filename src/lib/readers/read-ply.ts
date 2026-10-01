@@ -111,19 +111,19 @@ const getDataType = (type: string) => {
     }
 };
 
-// Reads one numeric value from a DataView at a byte offset (little-endian).
+// Reads one numeric value from a DataView at a byte offset.
 type ValueReader = (view: DataView, offset: number) => number;
 
-const getReader = (type: string): ValueReader => {
+const getReader = (type: string, le = true): ValueReader => {
     switch (type) {
         case 'char':   return (v, o) => v.getInt8(o);
         case 'uchar':  return (v, o) => v.getUint8(o);
-        case 'short':  return (v, o) => v.getInt16(o, true);
-        case 'ushort': return (v, o) => v.getUint16(o, true);
-        case 'int':    return (v, o) => v.getInt32(o, true);
-        case 'uint':   return (v, o) => v.getUint32(o, true);
-        case 'float':  return (v, o) => v.getFloat32(o, true);
-        case 'double': return (v, o) => v.getFloat64(o, true);
+        case 'short':  return (v, o) => v.getInt16(o, le);
+        case 'ushort': return (v, o) => v.getUint16(o, le);
+        case 'int':    return (v, o) => v.getInt32(o, le);
+        case 'uint':   return (v, o) => v.getUint32(o, le);
+        case 'float':  return (v, o) => v.getFloat32(o, le);
+        case 'double': return (v, o) => v.getFloat64(o, le);
         default: throw new Error(`readPly: unsupported ply type '${type}'`);
     }
 };
@@ -637,17 +637,26 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
     const properties = vertex.properties;
     const vertexCount = vertex.count;
 
+    // Records are range-read at a fixed stride, so only binary layouts can be
+    // read. An ascii body would otherwise be decoded as binary garbage.
+    const le = header.format === 'binary_little_endian';
+    if (!le && header.format !== 'binary_big_endian') {
+        throw new Error(`readPly: unsupported PLY format '${header.format}' (only binary_little_endian and binary_big_endian are supported)`);
+    }
+
     // Compressed PLY (packed chunk + vertex elements): lazy dequantizing reader.
     // `packed_position` is the marker.
     if (properties.some(p => p.name === 'packed_position')) {
+        if (!le) {
+            throw new Error('readPly: compressed PLY must be binary_little_endian');
+        }
         return readCompressedChunked(source, header, pool);
     }
 
-    // Integrity guard: an uncompressed binary-little-endian PLY is exactly
+    // Integrity guard: an uncompressed binary PLY is exactly
     // `headerBytes + Σ element.count * rowStride` bytes. A mismatch means the file
-    // is truncated or corrupt — fail fast rather than decode garbage. (ascii /
-    // big-endian / compressed layouts have no such simple relation, so skip them.)
-    if (header.format === 'binary_little_endian' && source.size !== undefined) {
+    // is truncated or corrupt — fail fast rather than decode garbage.
+    if (source.size !== undefined) {
         const expected = headerBytes + header.elements.reduce((sum, e) => sum + e.count * rowSizeOf(e.properties), 0);
         if (source.size !== expected) {
             throw new Error(`readPly: file size ${source.size} does not match header-implied size ${expected} (truncated or corrupt PLY)`);
@@ -660,13 +669,14 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
     const reader = new Map<string, ValueReader>();
     for (const p of properties) {
         recordOffset.set(p.name, recordStride);
-        reader.set(p.name, getReader(p.type));
+        reader.set(p.name, getReader(p.type, le));
         recordStride += typeSize(p.type);
     }
 
     // Whole-record-float enables the typed-array fast path (every field 4-byte
-    // aligned, so a Float32Array view over the record bytes is valid).
-    const recordAllFloat = properties.every(p => p.type === 'float');
+    // aligned, so a Float32Array view over the record bytes is valid). The view
+    // reads in host byte order, so big-endian files take the DataView path.
+    const recordAllFloat = le && properties.every(p => p.type === 'float');
 
     const has = (name: string) => recordOffset.has(name);
     const hasPosition = ['x', 'y', 'z'].every(has);
@@ -791,7 +801,8 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
 
     const fill = (recordBytes: Uint8Array, count: number, chunkData: ChunkData, plan: LayerPlan, dstRow: number): void => {
         // Fast path: whole-float record -> de-interleave via Float32Array views
-        // (no DataView). Little-endian only, matching the binary PLY format.
+        // (no DataView). Restricted to little-endian records (recordAllFloat);
+        // big-endian records take the slower per-field DataView path below.
         if (plan.allFloat) {
             const recF32 = new Float32Array(recordBytes.buffer, recordBytes.byteOffset, recordBytes.byteLength >> 2);
             const dstF32 = new Float32Array(chunkData.data);
