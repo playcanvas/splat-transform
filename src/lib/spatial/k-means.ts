@@ -2,7 +2,6 @@ import { GraphicsDevice } from 'playcanvas';
 
 import { KdTree } from './kd-tree';
 import { GpuKmeans } from '../gpu';
-import { logger } from '../utils';
 
 // use floyd's algorithm to pick m unique random indices from 0..n-1
 const pickRandomIndices = (n: number, m: number) => {
@@ -66,6 +65,8 @@ const assignCpu = (points: Float32Array, numRows: number, nc: number, centroids:
  * @param k - Number of clusters.
  * @param iterations - Lloyd iterations to run.
  * @param device - Optional GPU device; falls back to a CPU kd-tree assign.
+ * @param onIteration - Optional callback fired per iteration (progress). No
+ * logging happens here, so a clustering can run while another scope is open.
  * @returns Interleaved `centroids` (k×numColumns) and `labels`.
  * @ignore
  */
@@ -75,7 +76,8 @@ const kmeansInterleaved = async (
     numColumns: number,
     k: number,
     iterations: number,
-    device?: GraphicsDevice
+    device?: GraphicsDevice,
+    onIteration?: () => void
 ): Promise<{ centroids: Float32Array, labels: Uint32Array }> => {
     const nc = numColumns;
 
@@ -97,9 +99,6 @@ const kmeansInterleaved = async (
 
     const labels = new Uint32Array(numRows);
 
-    logger.debug(`running k-means clustering: dims=${nc} points=${numRows} clusters=${k} iterations=${iterations}`);
-
-    const bar = logger.bar('k-means', iterations);
     if (device) {
         // flash-kmeans: the whole Lloyd loop runs on the GPU with a single
         // readback of labels + centroids after the final iteration. Kernels
@@ -108,7 +107,7 @@ const kmeansInterleaved = async (
         // already absorbs the recompile.
         const gpuKmeans = new GpuKmeans(device, nc, k);
         try {
-            await gpuKmeans.run(points, numRows, centroids, labels, iterations, () => bar.tick());
+            await gpuKmeans.run(points, numRows, centroids, labels, iterations, onIteration);
         } finally {
             gpuKmeans.destroy();
         }
@@ -142,11 +141,9 @@ const kmeansInterleaved = async (
                     for (let j = 0; j < nc; ++j) centroids[cb + j] = sums[cb + j] * inv;
                 }
             }
-            bar.tick();
+            onIteration?.();
         }
     }
-
-    bar.end();
 
     return { centroids, labels };
 };

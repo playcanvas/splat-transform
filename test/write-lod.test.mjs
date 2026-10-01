@@ -229,6 +229,42 @@ describe('writeLodSource: lod-meta.json contract', function () {
         assert.strictEqual(leaves.reduce((sum, l) => sum + l.lods['0'].count, 0), wideSplats.length);
     });
 
+    it('shares one device request across overlapping unit writes', async function () {
+        // like the CLI's creator, this one only caches its device once resolved:
+        // the next unit starting meanwhile must not begin a second initialization
+        let initializations = 0;
+        let ready = false;
+        const createDevice = async () => {
+            if (ready) return undefined;
+            initializations++;
+            await new Promise(resolve => setTimeout(resolve, 50));
+            ready = true;
+            return undefined; // no device: k-means runs on the CPU
+        };
+
+        // 3000 SH1 splats over 150 m: several leaves, packed into several units
+        const n = 3000;
+        const table = makeSplatTable(Array.from({ length: n }, (_, i) => ({ x: i * 0.05 })));
+        for (let j = 0; j < 9; j++) {
+            table.addColumn(new Column(`f_rest_${j}`, new Float32Array(n).map((_, i) => Math.sin(i * (j + 1)))));
+        }
+
+        const fs = new MemoryFileSystem();
+        await writeLodSource({
+            filename: '/scene/lod-meta.json',
+            mainSource: dataTableToChunkSource(table, 1 << 20),
+            envSource: null,
+            iterations: 1,
+            createDevice,
+            chunkCount: 1,
+            chunkExtent: 16,
+            chunkMin: 0
+        }, fs);
+        const meta = JSON.parse(new TextDecoder().decode(fs.results.get('/scene/lod-meta.json')));
+        assert.ok(meta.filenames.length > 1, `expected several units, got ${meta.filenames.length}`);
+        assert.strictEqual(initializations, 1);
+    });
+
     it('trims lodLevels when trailing structural LODs are empty', async function () {
         const { meta } = await writeScene([1, 0], 0);
         assert.strictEqual(meta.lodLevels, 1);

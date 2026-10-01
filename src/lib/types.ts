@@ -38,6 +38,9 @@ type Options = {
     /** Gaussians (in thousands) below which an LOD chunk is not split for exceeding the extent. Default: 8 */
     lodChunkMin?: number;
 
+    /** Gaussians (in thousands) per LOD file, per level from finest; the last value repeats. Default: lodChunkCount */
+    lodFileCount?: number[];
+
     /** SPZ format version to write. Default: 4. */
     spzVersion?: 3 | 4;
 

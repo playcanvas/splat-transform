@@ -2,7 +2,7 @@ import { basename, dirname, resolve } from 'pathe';
 import { BoundingBox, Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { logWrittenFile } from './utils';
-import { writeSogSource } from './write-sog.js';
+import { finishSogWrite, startSogWrite, writeSogSource } from './write-sog.js';
 import { type ChunkDataPool, type ChunkSource, type ReadRequest, createChunkDataPool } from '../chunk';
 import { Column, DataTable } from '../data-table';
 import { type FileSystem } from '../io/write';
@@ -414,6 +414,13 @@ type WriteLodSourceOptions = {
      * floor, so their leaves are unchanged.
      */
     chunkMin?: number;
+    /**
+     * Gaussians, in thousands, per file unit for each structural level, finest first;
+     * the last value repeats for coarser levels. Defaults to `chunkCount` for every
+     * level. Only the packing of leaves into files changes; leaves are split by
+     * `chunkCount` as before.
+     */
+    fileCounts?: number[];
 };
 
 /**
@@ -432,7 +439,7 @@ type WriteLodSourceOptions = {
  * @ignore
  */
 const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) => {
-    const { filename, envSource, iterations, webpEffort, createDevice, chunkCount, chunkExtent, chunkMin = 8 } = options;
+    const { filename, envSource, iterations, webpEffort, createDevice, chunkCount, chunkExtent, chunkMin = 8, fileCounts } = options;
 
     // Bake the pending coordinate-space transform to PLY once, up front, so the
     // partition/bounds passes (extractSlim, calcBound, morton) and the per-unit
@@ -480,6 +487,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     const binSize = chunkCount * 1024;
     const binDim = chunkExtent;
     const binMin = chunkMin * 1024;
+    const unitSize = (lod: number) => (fileCounts?.length ? fileCounts[Math.min(lod, fileCounts.length - 1)] : chunkCount) * 1024;
 
     // map of lod -> file units -> subunits (each subunit a tight Uint32Array of
     // gaussian indices). This is the bulk retained bookkeeping; Uint32Array keeps
@@ -535,7 +543,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
 
             lastFile.push(indices);
 
-            if (fileSize + indices.length > binSize) {
+            if (fileSize + indices.length > unitSize(lodValue)) {
                 fileList.push([]);
             }
 
@@ -606,6 +614,13 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
 
     let sogIndex = 0;
 
+    // Unit writes overlap (see below), so every write shares one in-flight
+    // device request: a creator that only caches its resolved device would
+    // otherwise be called again before the first call resolves, creating a
+    // second device.
+    let devicePromise: ReturnType<DeviceCreator> | undefined;
+    const sharedCreateDevice = createDevice && (() => (devicePromise ??= createDevice()));
+
     // write the environment sog
     if (hasEnv) {
         sogIndex++;
@@ -619,7 +634,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
             await writeSogSource(
                 envSource!,
                 pool,
-                { filename: envPathname, bundle: false, iterations, webpEffort, createDevice, logging: 'flat' },
+                { filename: envPathname, bundle: false, iterations, webpEffort, createDevice: sharedCreateDevice, logging: 'flat' },
                 fs
             );
         } finally {
@@ -635,62 +650,80 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     logWrittenFile(basename(filename), writer.bytesWritten);
 
     // write file units
+    const units: { lodValue: number, index: number, fileUnit: Uint32Array[] }[] = [];
     for (const [lodValue, fileUnits] of lodFiles) {
         for (let i = 0; i < fileUnits.length; ++i) {
-            const fileUnit = fileUnits[i];
-
-            if (fileUnit.length === 0) {
-                continue;
+            if (fileUnits[i].length > 0) {
+                units.push({ lodValue, index: i, fileUnit: fileUnits[i] });
             }
+        }
+    }
 
-            const groupName = `${lodValue}_${i}`;
-            sogIndex++;
-            const unitGroup = logger.group(groupName, { index: sogIndex, total: sogTotal });
+    // Gather a unit and start its SOG write (quantization, GPU k-means).
+    const startUnit = ({ lodValue, fileUnit }: typeof units[number]) => {
+        // Morton-order each subunit and concatenate into the unit's
+        // global (flat) row order.
+        const totalIndices = fileUnit.reduce((acc, curr) => acc + curr.length, 0);
+        const orderedIndices = new Uint32Array(totalIndices);
+        for (let j = 0, offset = 0; j < fileUnit.length; ++j) {
+            orderedIndices.set(fileUnit[j], offset);
+            sortMortonColumns(slim.x, slim.y, slim.z, orderedIndices.subarray(offset, offset + fileUnit[j].length));
+            offset += fileUnit[j].length;
+        }
 
-            try {
-                // ensure output folder exists before any files are written
-                const pathname = resolve(outputDir, `${lodValue}_${i}/meta.json`);
-                await fs.mkdir(dirname(pathname));
+        // This file unit's flat indices all belong to LOD `lodValue`;
+        // convert to rows local to that LOD for the gather.
+        const base = cum[lodValue];
+        const orderedLocal = new Uint32Array(totalIndices);
+        for (let j = 0; j < totalIndices; ++j) orderedLocal[j] = orderedIndices[j] - base;
 
-                // Morton-order each subunit and concatenate into the unit's
-                // global (flat) row order.
-                const totalIndices = fileUnit.reduce((acc, curr) => acc + curr.length, 0);
-                const orderedIndices = new Uint32Array(totalIndices);
-                for (let j = 0, offset = 0; j < fileUnit.length; ++j) {
-                    orderedIndices.set(fileUnit[j], offset);
-                    sortMortonColumns(slim.x, slim.y, slim.z, orderedIndices.subarray(offset, offset + fileUnit[j].length));
-                    offset += fileUnit[j].length;
-                }
+        // Gather the ordered subset lazily from LOD `lodValue` (no per-unit
+        // copy) and encode via the chunk-native SOG writer. The rows are
+        // already in write order, so pass an identity ordering to skip the
+        // writer's own Morton pass.
+        const unitSource = positionsFromSlim(
+            permuteSource(mainSource, orderedLocal, { lod: lodValue }),
+            slim, orderedIndices
+        );
+        const identity = new Uint32Array(totalIndices);
+        for (let j = 0; j < totalIndices; ++j) identity[j] = j;
 
-                // This file unit's flat indices all belong to LOD `lodValue`;
-                // convert to rows local to that LOD for the gather.
-                const base = cum[lodValue];
-                const orderedLocal = new Uint32Array(totalIndices);
-                for (let j = 0; j < totalIndices; ++j) orderedLocal[j] = orderedIndices[j] - base;
+        return { identity, state: startSogWrite(unitSource, pool, { iterations, createDevice: sharedCreateDevice, indices: identity }) };
+    };
 
-                // Gather the ordered subset lazily from LOD `lodValue` (no per-unit
-                // copy) and encode via the chunk-native SOG writer. The rows are
-                // already in write order, so pass an identity ordering to skip the
-                // writer's own Morton pass.
-                const unitSource = positionsFromSlim(
-                    permuteSource(mainSource, orderedLocal, { lod: lodValue }),
-                    slim, orderedIndices
-                );
-                const identity = new Uint32Array(totalIndices);
-                for (let j = 0; j < totalIndices; ++j) identity[j] = j;
+    // Units are pipelined one deep: once a unit is gathered and its k-means
+    // queued, the next unit is gathered and queued behind it, so the GPU stays
+    // busy through each unit's CPU tail (texture packing, codebook
+    // quantization, WebP encodes) — that tail left an A10G idle ~2.5s per
+    // unit. Gathers stay sequential (one source read at a time), the started
+    // unit logs nothing until its turn, and at most two units' layers are
+    // resident.
+    let next = units.length > 0 ? startUnit(units[0]) : null;
+    for (let u = 0; u < units.length; ++u) {
+        const { lodValue, index } = units[u];
+        const current = next!;
+        const state = await current.state;
 
-                await writeSogSource(unitSource, pool, {
-                    filename: pathname,
-                    bundle: false,
-                    iterations,
-                    webpEffort,
-                    createDevice,
-                    indices: identity,
-                    logging: 'flat'
-                }, fs);
-            } finally {
-                unitGroup.end();
-            }
+        next = u + 1 < units.length ? startUnit(units[u + 1]) : null;
+        next?.state.catch(() => {});
+
+        sogIndex++;
+        const unitGroup = logger.group(`${lodValue}_${index}`, { index: sogIndex, total: sogTotal });
+
+        try {
+            // ensure output folder exists before any files are written
+            const pathname = resolve(outputDir, `${lodValue}_${index}/meta.json`);
+            await fs.mkdir(dirname(pathname));
+
+            await finishSogWrite(state, {
+                filename: pathname,
+                bundle: false,
+                webpEffort,
+                indices: current.identity,
+                logging: 'flat'
+            }, fs);
+        } finally {
+            unitGroup.end();
         }
     }
 
