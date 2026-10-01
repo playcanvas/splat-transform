@@ -111,7 +111,7 @@ describe('Render goldens', { skip }, () => {
     }
 });
 
-describe('Render options', { skip: distExists ? false : 'dist/cli.mjs missing — run `npm run build` first' }, () => {
+describe('Render options', { skip }, () => {
     it('defaults to 32 aperture samples and one sample matches a pinhole render', async () => {
         const args = CASES[0].args;
         const render = async (name, extra) => {
