@@ -97,9 +97,18 @@ export {
     writeHtml,
     writeImage,
     writeGlb,
-    writeVoxel
+    writeVoxel,
+    writeVoxelTiles
 } from './writers';
-export type { WriteImageOptions, WriteVoxelOptions, VoxelMetadata } from './writers';
+export type {
+    WriteImageOptions,
+    WriteVoxelOptions,
+    VoxelMetadata,
+    WriteVoxelTilesOptions,
+    VoxelTileManifest,
+    VoxelTile,
+    VoxelTileBounds
+} from './writers';
 
 // Camera animation tracks for multi-frame image output (editor project,
 // viewer settings, or a plain frame list)
