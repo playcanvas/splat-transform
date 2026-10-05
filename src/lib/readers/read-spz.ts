@@ -65,10 +65,14 @@ const FLAG_ANTIALIASED = 0x1; // header flags byte (offset 14): trained with ant
 // header at the start of the decompressed stream.
 const SPZ_HEADER_SIZE = 16;
 
-// Compressed prefix to pull when gunzipping just the SPZ header. 64KB of
-// compressed input always yields >= 16 decompressed bytes for a real gzip
-// stream while keeping remote range reads small.
+// Compressed prefix to pull when gunzipping just the SPZ header. Optional gzip
+// header fields (FEXTRA up to 64KB, FNAME and FCOMMENT unbounded) can push the
+// compressed data past it, so the range grows by GZIP_PREFIX_GROWTH until it
+// reaches the header, ending with the whole file. Past GZIP_PREFIX_MAX_LIMIT
+// (or the file size) the read is open-ended.
 const GZIP_PREFIX_LIMIT = 65536;
+const GZIP_PREFIX_GROWTH = 16;
+const GZIP_PREFIX_MAX_LIMIT = 16 * 1024 * 1024;
 
 /**
  * Read up to `length` bytes from a stream into a buffer. May return fewer
@@ -94,17 +98,20 @@ const readPrefix = async (stream: ReadStream, length: number): Promise<Uint8Arra
  * Stream-gunzip only the first `length` bytes of a gzip stream, then cancel
  * the decompressor without consuming the rest of the input.
  *
- * @param stream - Stream over the (bounded) compressed input. The caller closes it.
+ * @param stream - Stream over the (possibly bounded) compressed input. The caller closes it.
  * @param length - Number of decompressed bytes wanted.
- * @returns The first `length` decompressed bytes.
+ * @returns The first `length` decompressed bytes, or null if the input ran out
+ * before they were produced (a longer prefix may have them).
  * @ignore
  */
-const gunzipPrefix = async (stream: ReadStream, length: number): Promise<Uint8Array> => {
+const gunzipPrefix = async (stream: ReadStream, length: number): Promise<Uint8Array | null> => {
+    let inputEnded = false;
     const inputStream = new ReadableStream<Uint8Array>({
         async pull(controller) {
             const chunk = new Uint8Array(32768);
             const n = await stream.pull(chunk);
             if (n === 0) {
+                inputEnded = true;
                 controller.close();
             } else {
                 controller.enqueue(chunk.subarray(0, n));
@@ -119,12 +126,19 @@ const gunzipPrefix = async (stream: ReadStream, length: number): Promise<Uint8Ar
         const result = new Uint8Array(length);
         let read = 0;
         while (read < length) {
-            const { done, value } = await reader.read();
-            if (done) {
-                throw new Error('Unexpected end of gzip stream');
+            let chunk: ReadableStreamReadResult<Uint8Array>;
+            try {
+                chunk = await reader.read();
+            } catch (err) {
+                // a truncated input fails the decompressor once it ends; corrupt data fails earlier
+                if (inputEnded) return null;
+                throw err;
             }
-            const n = Math.min(value.length, length - read);
-            result.set(value.subarray(0, n), read);
+            if (chunk.done) {
+                return null;
+            }
+            const n = Math.min(chunk.value.length, length - read);
+            result.set(chunk.value.subarray(0, n), read);
             read += n;
         }
         return result;
@@ -138,7 +152,8 @@ const gunzipPrefix = async (stream: ReadStream, length: number): Promise<Uint8Ar
 /**
  * Read an SPZ file's leading 16 header bytes without decoding the file: the v4
  * header is plaintext; for the gzip-wrapped v1-3 container only enough of the
- * compressed prefix is inflated to reach it.
+ * compressed prefix is inflated to reach it (usually the first 64KB, more if
+ * optional gzip header fields come first).
  *
  * @param source - The SPZ file.
  * @returns The header bytes (fewer than 16 if the file is shorter).
@@ -153,11 +168,17 @@ const readSpzHeader = async (source: ReadSource): Promise<Uint8Array> => {
         headStream.close();
     }
     if (header.length >= 2 && header[0] === 0x1f && header[1] === 0x8b) {
-        const zipped = source.read(0, GZIP_PREFIX_LIMIT);
-        try {
-            header = await gunzipPrefix(zipped, SPZ_HEADER_SIZE);
-        } finally {
-            zipped.close();
+        for (let limit = GZIP_PREFIX_LIMIT; ; limit *= GZIP_PREFIX_GROWTH) {
+            const wholeFile = (source.size !== undefined && limit >= source.size) || limit > GZIP_PREFIX_MAX_LIMIT;
+            const zipped = wholeFile ? source.read(0) : source.read(0, limit);
+            let prefix: Uint8Array | null;
+            try {
+                prefix = await gunzipPrefix(zipped, SPZ_HEADER_SIZE);
+            } finally {
+                zipped.close();
+            }
+            if (prefix) return prefix;
+            if (wholeFile) throw new Error('Unexpected end of gzip stream');
         }
     }
     return header;

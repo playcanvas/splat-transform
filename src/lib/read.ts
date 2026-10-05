@@ -255,7 +255,8 @@ const buildFileInfo = (format: InputFormat, meta: MetaSummary): FileInfo => ({
  * across every LOD level.
  *
  * `sog` is peeked from `meta.json` (no WebP decode) and `spz` from its 16-byte
- * header (no decompression); every other format opens via {@link readFile}
+ * header (no payload decode: gzip-wrapped v1-3 files inflate only enough of the
+ * stream to reach the header); every other format opens via {@link readFile}
  * (header-only for the lazy readers; eager for `ksplat`/`mjs`) and reads its
  * `meta`. For those, integrity is enforced by the readers, which throw on a size
  * mismatch, so a returned `FileInfo` implies a structurally sound file; the

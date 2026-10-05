@@ -15,7 +15,7 @@ import { readFile as fsReadFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { gzipSync } from 'node:zlib';
+import { gunzipSync, gzipSync } from 'node:zlib';
 
 import { createTestDataTable, encodePlyBinary } from './helpers/test-utils.mjs';
 import { Column, DataTable, MemoryReadFileSystem, logger, readFile, readFileInfo } from '../src/lib/index.js';
@@ -186,6 +186,33 @@ describe('readFileInfo', () => {
         assert.strictEqual(info.numGaussians, numPoints);
         assert.strictEqual(info.shBands, 0);
         await assert.rejects(() => readFile({ filename: 'big.spz', inputFormat: 'spz', options, params: [], fileSystem }));
+    });
+
+    it('reads a gzip-wrapped .spz whose optional gzip header fields push the data past 64KB', async () => {
+        // re-wrap a v3 fixture with a 65,535-byte FEXTRA and a 70,000-byte FNAME, so the
+        // compressed data starts well past the first prefix read
+        const raw = gunzipSync(await fsReadFile(join(fixturesDir, 'minimal-v3.spz')));
+        const plain = gzipSync(raw);
+        const extra = Buffer.alloc(2 + 65535, 0x41);
+        extra.writeUInt16LE(65535, 0);
+        const name = Buffer.concat([Buffer.alloc(70000, 0x61), Buffer.from([0])]);
+        const header = Buffer.from(plain.subarray(0, 10));
+        header[3] |= 0x04 | 0x08; // FEXTRA | FNAME
+        const bytes = new Uint8Array(Buffer.concat([header, extra, name, plain.subarray(10)]));
+
+        const fileSystem = memFs('padded.spz', bytes);
+        const info = await readFileInfo({ filename: 'padded.spz', inputFormat: 'spz', options, params: [], fileSystem });
+        const [full] = await readFile({ filename: 'padded.spz', inputFormat: 'spz', options, params: [], fileSystem });
+        assert.strictEqual(info.numGaussians, full.meta.numGaussians);
+        assert.strictEqual(info.shBands, full.meta.shBands);
+        await full.close();
+    });
+
+    it('rejects a corrupt gzip-wrapped .spz', async () => {
+        const bytes = new Uint8Array([0x1f, 0x8b, 0x08, 0x00, 0, 0, 0, 0, 0, 0x03, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+        await assert.rejects(() => readFileInfo({
+            filename: 'corrupt.spz', inputFormat: 'spz', options, params: [], fileSystem: memFs('corrupt.spz', bytes)
+        }));
     });
 
     it('rejects a .spz with an invalid header', async () => {
