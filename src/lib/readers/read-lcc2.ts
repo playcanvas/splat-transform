@@ -3,7 +3,7 @@ import type { ChunkDataPool, ChunkSource } from '../chunk';
 import { dataTableToChunkSource, materializeToDataTable } from '../compat/data-table';
 import type { TypedArray } from '../data-table';
 import { Column, DataTable } from '../data-table';
-import type { ReadFileSystem, ReadSource, ReadStream } from '../io/read';
+import type { ReadFileSystem, ReadSource } from '../io/read';
 import { basename, dirname, join, readFile, ZipReadFileSystem } from '../io/read';
 import type { Options } from '../types';
 import { logger, Transform } from '../utils';
@@ -11,7 +11,7 @@ import { logger, Transform } from '../utils';
 import { containerSource } from './container-source';
 import type { ContainerSegment } from './container-source';
 import { readSog, readSogSource } from './read-sog';
-import { readSpz } from './read-spz';
+import { readSpz, readSpzHeader } from './read-spz';
 
 // Bounded concurrency for chunk decoding. SOG/SPZ decoding is heavier than
 // LCC v1's range reads (WebP decode / WASM calls), so we stay conservative.
@@ -433,81 +433,8 @@ const decodeChunk = async (fileSystem: ReadFileSystem, splatType: string, fullPa
     }
 };
 
-// SPZ header: u32 magic 'NGSP', u32 version, u32 numPoints, u8 shDegree,
-// u8 fractionalBits, u8 flags, u8 reserved. v4 files start with this header
-// in plaintext; v1-3 files are gzip-compressed end-to-end with the same
-// header at the start of the decompressed stream.
+// SPZ header size: parseSpzNumPoints needs at least this many bytes.
 const SPZ_HEADER_SIZE = 16;
-
-// Compressed prefix to pull when gunzipping just the SPZ header. 64KB of
-// compressed input always yields >= 16 decompressed bytes for a real gzip
-// stream while keeping remote range reads small.
-const GZIP_PREFIX_LIMIT = 65536;
-
-/**
- * Read up to `length` bytes from a stream into a buffer. May return fewer
- * bytes if the stream ends early. The caller closes the stream.
- *
- * @param stream - The stream to read from.
- * @param length - Maximum number of bytes to read.
- * @returns The bytes read (length <= `length`).
- * @ignore
- */
-const readPrefix = async (stream: ReadStream, length: number): Promise<Uint8Array> => {
-    const result = new Uint8Array(length);
-    let read = 0;
-    while (read < length) {
-        const n = await stream.pull(result.subarray(read));
-        if (n === 0) break;
-        read += n;
-    }
-    return result.subarray(0, read);
-};
-
-/**
- * Stream-gunzip only the first `length` bytes of a gzip stream, then cancel
- * the decompressor without consuming the rest of the input.
- *
- * @param stream - Stream over the (bounded) compressed input. The caller closes it.
- * @param length - Number of decompressed bytes wanted.
- * @returns The first `length` decompressed bytes.
- * @ignore
- */
-const gunzipPrefix = async (stream: ReadStream, length: number): Promise<Uint8Array> => {
-    const inputStream = new ReadableStream<Uint8Array>({
-        async pull(controller) {
-            const chunk = new Uint8Array(32768);
-            const n = await stream.pull(chunk);
-            if (n === 0) {
-                controller.close();
-            } else {
-                controller.enqueue(chunk.subarray(0, n));
-            }
-        }
-    });
-    // Type assertion needed due to TypeScript's strict typing of DecompressionStream
-    const reader = inputStream
-        .pipeThrough(new DecompressionStream('gzip') as unknown as TransformStream<Uint8Array, Uint8Array>)
-        .getReader();
-    try {
-        const result = new Uint8Array(length);
-        let read = 0;
-        while (read < length) {
-            const { done, value } = await reader.read();
-            if (done) {
-                throw new Error('Unexpected end of gzip stream');
-            }
-            const n = Math.min(value.length, length - read);
-            result.set(value.subarray(0, n), read);
-            read += n;
-        }
-        return result;
-    } finally {
-        // Stop decompression early; the bounded input is truncated, so
-        // draining it to EOF would throw.
-        await reader.cancel().catch<undefined>(() => undefined);
-    }
-};
 
 /**
  * Validate the 'NGSP' magic and extract numPoints from an SPZ header.
@@ -570,22 +497,7 @@ const readChunkCount = async (fileSystem: ReadFileSystem, splatType: string, ful
             }
         }
         if (splatType === '.spz') {
-            const headStream = source.read(0, SPZ_HEADER_SIZE);
-            let header: Uint8Array;
-            try {
-                header = await readPrefix(headStream, SPZ_HEADER_SIZE);
-            } finally {
-                headStream.close();
-            }
-            if (header.length >= 2 && header[0] === 0x1f && header[1] === 0x8b) {
-                const zipped = source.read(0, GZIP_PREFIX_LIMIT);
-                try {
-                    header = await gunzipPrefix(zipped, SPZ_HEADER_SIZE);
-                } finally {
-                    zipped.close();
-                }
-            }
-            return parseSpzNumPoints(header, fullPath);
+            return parseSpzNumPoints(await readSpzHeader(source), fullPath);
         }
         throw new Error(`Unsupported LCC2 splatType: ${splatType}`);
     } finally {

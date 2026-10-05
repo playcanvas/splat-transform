@@ -10,10 +10,12 @@
  */
 
 import assert from 'node:assert';
+import { randomBytes } from 'node:crypto';
 import { readFile as fsReadFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { gzipSync } from 'node:zlib';
 
 import { createTestDataTable, encodePlyBinary } from './helpers/test-utils.mjs';
 import { Column, DataTable, MemoryReadFileSystem, logger, readFile, readFileInfo } from '../src/lib/index.js';
@@ -147,6 +149,57 @@ describe('readFileInfo', () => {
         assert.strictEqual(info.format, 'spz');
         assert.ok(info.numGaussians > 0);
         assert.ok(info.layers.includes('position') && info.layers.includes('geometric'));
+    });
+
+    it('reports .spz metadata that agrees with a full read, for every version', async () => {
+        for (const fixture of ['minimal-raw.spz', 'minimal-v2.spz', 'minimal-v3.spz', 'minimal-v4.spz']) {
+            const bytes = await fsReadFile(join(fixturesDir, fixture));
+            const fileSystem = memFs('minimal.spz', bytes);
+            const info = await readFileInfo({ filename: 'minimal.spz', inputFormat: 'spz', options, params: [], fileSystem });
+            const [full] = await readFile({ filename: 'minimal.spz', inputFormat: 'spz', options, params: [], fileSystem });
+            assert.strictEqual(info.gaussian, true, fixture);
+            assert.strictEqual(info.numGaussians, full.meta.numGaussians, fixture);
+            assert.deepStrictEqual(info.lodCounts, [full.meta.numGaussians], fixture);
+            assert.strictEqual(info.shBands, full.meta.shBands, fixture);
+            assert.deepStrictEqual(info.layers, ['position', 'geometric', 'color'], fixture);
+            await full.close();
+        }
+    });
+
+    it('reads a gzip-wrapped .spz from its header without decompressing the scene', async () => {
+        // v3 header (magic, version, numPoints, shDegree 0, fractionalBits 12) plus a
+        // payload large enough that its gzip stream is far longer than the prefix read
+        const numPoints = 100000;
+        const header = new Uint8Array(16);
+        const view = new DataView(header.buffer);
+        view.setUint32(0, 0x5053474e, true);
+        view.setUint32(4, 3, true);
+        view.setUint32(8, numPoints, true);
+        view.setUint8(13, 12);
+        const payload = randomBytes(numPoints * 20); // random, so it doesn't compress
+        const zipped = gzipSync(Buffer.concat([header, payload]));
+        assert.ok(zipped.length > 2 * 65536);
+
+        // only the first 64KB survives: a full read can't decode it, the header peek can
+        const fileSystem = memFs('big.spz', new Uint8Array(zipped.subarray(0, 65536)));
+        const info = await readFileInfo({ filename: 'big.spz', inputFormat: 'spz', options, params: [], fileSystem });
+        assert.strictEqual(info.numGaussians, numPoints);
+        assert.strictEqual(info.shBands, 0);
+        await assert.rejects(() => readFile({ filename: 'big.spz', inputFormat: 'spz', options, params: [], fileSystem }));
+    });
+
+    it('rejects a .spz with an invalid header', async () => {
+        const read = bytes => readFileInfo({
+            filename: 'bad.spz', inputFormat: 'spz', options, params: [], fileSystem: memFs('bad.spz', bytes)
+        });
+        await assert.rejects(() => read(new TextEncoder().encode('not an spz file at all')), /invalid \.spz file header/);
+
+        const wrongVersion = new Uint8Array(16);
+        new DataView(wrongVersion.buffer).setUint32(0, 0x5053474e, true);
+        new DataView(wrongVersion.buffer).setUint32(4, 9, true);
+        await assert.rejects(() => read(wrongVersion), /Unsupported \.spz version 9/);
+
+        await assert.rejects(() => read(new Uint8Array([0x4e, 0x47, 0x53, 0x50])), /File too small/);
     });
 });
 
