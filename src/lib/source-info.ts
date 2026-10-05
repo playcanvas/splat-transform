@@ -1,7 +1,7 @@
 import { hasGaussianLayers, orderedLayers } from './chunk';
 import type { ChunkSourceMetadata } from './chunk';
 import type { LodStats, SourceStats } from './ops';
-import type { InputFormat } from './read';
+import type { FileInfo, InputFormat } from './read';
 import { forwardTransforms } from './value-transforms';
 
 /**
@@ -12,6 +12,13 @@ import { forwardTransforms } from './value-transforms';
  */
 
 type OutputFormat = 'text' | 'json';
+
+// The metadata the info block is built from: a full source's meta, or one
+// rebuilt from a header-only FileInfo (see formatFileInfo).
+type InfoMeta = Pick<
+    ChunkSourceMetadata,
+    'numGaussians' | 'numLods' | 'lodCounts' | 'shBands' | 'model' | 'availableLayers' | 'extraColumns'
+>;
 
 // Pretty-print, but collapse innermost arrays (numbers, strings, null — no
 // nested brackets) onto one line so the columnar stat arrays read as table
@@ -31,7 +38,7 @@ const stringifyCompact = (value: unknown): string => {
  * @param format - Detected input format; included only when provided.
  * @returns The info fields.
  */
-const buildSourceInfo = (meta: ChunkSourceMetadata, format?: InputFormat) => ({
+const buildSourceInfo = (meta: InfoMeta, format?: InputFormat) => ({
     ...(format ? { format } : {}),
     gaussian: hasGaussianLayers(meta.availableLayers),
     numGaussians: meta.numGaussians,
@@ -50,7 +57,7 @@ const buildSourceInfo = (meta: ChunkSourceMetadata, format?: InputFormat) => ({
  * @param format - Detected input format; emitted only when provided.
  * @returns One `key: value` line per field.
  */
-const sourceInfoLines = (meta: ChunkSourceMetadata, format?: InputFormat): string[] => {
+const sourceInfoLines = (meta: InfoMeta, format?: InputFormat): string[] => {
     return [
         ...(format ? [`format: ${format}`] : []),
         `gaussian: ${hasGaussianLayers(meta.availableLayers) ? 'yes' : 'no'}`,
@@ -76,15 +83,31 @@ const sourceInfoLines = (meta: ChunkSourceMetadata, format?: InputFormat): strin
  * @param sourceFormat - Detected input format; reported when provided.
  * @returns A text or JSON block for `logger.output`.
  */
-const formatSourceInfo = (
-    meta: ChunkSourceMetadata,
-    format: OutputFormat = 'text',
-    sourceFormat?: InputFormat
-): string => {
+const formatSourceInfo = (meta: InfoMeta, format: OutputFormat = 'text', sourceFormat?: InputFormat): string => {
     if (format === 'json') {
         return stringifyCompact(buildSourceInfo(meta, sourceFormat));
     }
     return sourceInfoLines(meta, sourceFormat).join('\n');
+};
+
+/**
+ * Render a {@link FileInfo} exactly as the `info` action renders the same file's
+ * source, for reporting from {@link readFileInfo} without opening the source.
+ * @param info - The file info.
+ * @param format - Output format. Default: 'text'
+ * @returns A text or JSON block for `logger.output`.
+ */
+const formatFileInfo = (info: FileInfo, format: OutputFormat = 'text'): string => {
+    const meta: InfoMeta = {
+        numGaussians: info.numGaussians,
+        numLods: info.numLods,
+        lodCounts: info.lodCounts,
+        shBands: info.shBands,
+        model: info.model,
+        availableLayers: new Set(info.layers),
+        extraColumns: info.extraColumns
+    };
+    return formatSourceInfo(meta, format, info.format);
 };
 
 // Display transform: raw values map to user-friendly space for output
@@ -194,4 +217,4 @@ const formatSourceStats = (
     return lines.join('\n');
 };
 
-export { formatSourceInfo, formatSourceStats };
+export { formatFileInfo, formatSourceInfo, formatSourceStats };
