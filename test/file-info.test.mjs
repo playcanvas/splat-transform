@@ -18,13 +18,17 @@ import { fileURLToPath } from 'node:url';
 import { gunzipSync, gzipSync } from 'node:zlib';
 
 import { createTestDataTable, encodePlyBinary } from './helpers/test-utils.mjs';
-import { Column, DataTable, MemoryReadFileSystem, logger, readFile, readFileInfo } from '../src/lib/index.js';
+import {
+    Column, DataTable, MemoryFileSystem, MemoryReadFileSystem, WebPCodec,
+    logger, readFile, readFileInfo, readPly, writeSource
+} from '../src/lib/index.js';
 import { columnNamesFromMeta, dataTableToChunkSource } from '../src/lib/compat/data-table.js';
 import { processSource } from '../src/lib/process-source.js';
 import { createChunkDataPool } from '../src/lib/chunk/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(__dirname, 'fixtures', 'splat');
+WebPCodec.wasmUrl = join(__dirname, '..', 'lib', 'webp.wasm');
 
 // Canonical non-SH columns in the order columnNamesFromMeta emits them.
 const STANDARD = [
@@ -37,6 +41,19 @@ const memFs = (name, bytes) => {
     const fs = new MemoryReadFileSystem();
     fs.set(name, bytes);
     return fs;
+};
+
+// Write an antialiased-tagged PLY as `outputFormat` and return every output file
+// in a read file system, so the result can be peeked and fully read.
+const writeAntialiased = async (filename, outputFormat) => {
+    const pool = createChunkDataPool();
+    const plyFs = memFs('in.ply', encodePlyBinary(createTestDataTable(16), ['SplatRenderMode: mip']));
+    const source = await readPly(await plyFs.createSource('in.ply'), pool);
+    const out = new MemoryFileSystem();
+    await writeSource({ filename, outputFormat, source, pool, options: {} }, out);
+    const fileSystem = new MemoryReadFileSystem();
+    for (const [name, bytes] of out.results) fileSystem.set(name, bytes);
+    return fileSystem;
 };
 
 describe('columnNamesFromMeta', () => {
@@ -208,6 +225,38 @@ describe('readFileInfo', () => {
         assert.strictEqual(info.numGaussians, full.meta.numGaussians);
         assert.strictEqual(info.shBands, full.meta.shBands);
         await full.close();
+    });
+
+    it('reports the model a SOG is tagged with, bundled or not, matching a full read', async () => {
+        // absolute, so the unbundled textures land beside meta.json (the writer
+        // resolves their paths against the current directory)
+        for (const [filename, outputFormat] of [['/out/meta.json', 'sog'], ['/out/scene.sog', 'sog-bundle']]) {
+            const fileSystem = await writeAntialiased(filename, outputFormat);
+            const info = await readFileInfo({ filename, inputFormat: 'sog', options, params: [], fileSystem });
+            const [full] = await readFile({ filename, inputFormat: 'sog', options, params: [], fileSystem });
+            assert.strictEqual(info.model, 'antialiased', filename);
+            assert.strictEqual(full.meta.model, 'antialiased', filename);
+            assert.strictEqual(info.numGaussians, full.meta.numGaussians, filename);
+            await full.close();
+        }
+    });
+
+    it('reports an antialiased .spz from its header flag, matching a full read', async () => {
+        // v4 (plaintext header) written from an antialiased-tagged PLY, and a
+        // gzip-wrapped v3 fixture with the flag set by hand
+        const raw = gunzipSync(await fsReadFile(join(fixturesDir, 'minimal-v3.spz')));
+        raw[14] |= 0x1;
+        const files = [
+            ['out.spz', await writeAntialiased('out.spz', 'spz')],
+            ['v3.spz', memFs('v3.spz', new Uint8Array(gzipSync(raw)))]
+        ];
+        for (const [filename, fileSystem] of files) {
+            const info = await readFileInfo({ filename, inputFormat: 'spz', options, params: [], fileSystem });
+            const [full] = await readFile({ filename, inputFormat: 'spz', options, params: [], fileSystem });
+            assert.strictEqual(info.model, 'antialiased', filename);
+            assert.strictEqual(full.meta.model, 'antialiased', filename);
+            await full.close();
+        }
     });
 
     it('rejects a corrupt gzip-wrapped .spz', async () => {

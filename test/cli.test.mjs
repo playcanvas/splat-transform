@@ -317,6 +317,24 @@ describe('CLI --info (header-only report)', () => {
         }
     });
 
+    it('reports an antialiased .spz from its header flag', async () => {
+        const { mkdtemp, readFile: readFileFs, rm, writeFile } = await import('node:fs/promises');
+        const { tmpdir } = await import('node:os');
+        const { join } = await import('node:path');
+        const { gunzipSync, gzipSync } = await import('node:zlib');
+
+        const raw = gunzipSync(await readFileFs(`${rootDir}/test/fixtures/splat/minimal-v3.spz`));
+        raw[14] |= 0x1; // FLAG_ANTIALIASED
+        const dir = await mkdtemp(join(tmpdir(), 'st-info-cli-'));
+        const file = join(dir, 'antialiased.spz');
+        await writeFile(file, gzipSync(raw));
+        try {
+            assert.strictEqual((await infoJson(file)).model, 'antialiased');
+        } finally {
+            await rm(dir, { recursive: true, force: true });
+        }
+    });
+
     it('prints the text form unchanged', async () => {
         const result = await runCli(['-q', 'test/fixtures/splat/minimal-v4.spz', '--info', 'null']);
         assert.strictEqual(result.code, 0, `CLI failed:\n${result.stderr}\n${result.stdout}`);

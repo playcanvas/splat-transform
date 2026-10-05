@@ -527,8 +527,9 @@ const readSpz = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
 };
 
 /**
- * Header-only SPZ metadata for `readFileInfo`: the splat count and SH bands come
- * from the 16-byte header, without decompressing the scene. The payload itself
+ * Header-only SPZ metadata for `readFileInfo`: the splat count, SH bands and
+ * splat model (the antialiased flag) come from the 16-byte header, without
+ * decompressing the scene. The payload itself
  * isn't verified (like the SOG `meta.json` peek); `readSpz` checks it on a full read.
  *
  * @param source - The SPZ file.

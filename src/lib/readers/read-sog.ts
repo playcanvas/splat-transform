@@ -333,7 +333,7 @@ const fetchSogMeta = async (fileSystem: ReadFileSystem, filename: string) => {
 
 /**
  * Header-only SOG peek: parse `meta.json` and report the metadata a file-info
- * summary needs — gaussian count, SH bands and available layers — **without**
+ * summary needs — gaussian count, SH bands, splat model and available layers — **without**
  * decoding any WebP texture. SOG always carries position/geometric/color and no
  * extra columns. V2 only; legacy V1 (no `version`) returns `null` so the caller
  * can fall back to a full read.
