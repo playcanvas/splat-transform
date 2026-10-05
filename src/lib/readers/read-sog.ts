@@ -347,7 +347,7 @@ const statSogSource = async (
     filename: string
 ): Promise<Pick<
     ChunkSourceMetadata,
-    'numGaussians' | 'numLods' | 'lodCounts' | 'shBands' | 'availableLayers' | 'extraColumns'
+    'numGaussians' | 'numLods' | 'lodCounts' | 'shBands' | 'model' | 'availableLayers' | 'extraColumns'
 > | null> => {
     const { rawMeta } = await fetchSogMeta(fileSystem, filename);
     if (rawMeta.version !== 2) return null;
@@ -360,6 +360,7 @@ const statSogSource = async (
         numLods: 1,
         lodCounts: [count],
         shBands,
+        model: modelFromMeta(meta.model),
         availableLayers: new Set<ChunkLayer>(['position', 'geometric', 'color']),
         extraColumns: []
     };

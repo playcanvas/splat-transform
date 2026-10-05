@@ -93,6 +93,7 @@ describe('readFileInfo', () => {
         assert.strictEqual(info.numLods, 1);
         assert.deepStrictEqual(info.lodCounts, [50]);
         assert.strictEqual(info.shBands, 1);
+        assert.strictEqual(info.model, 'default');
         assert.deepStrictEqual(info.layers, ['position', 'geometric', 'color']);
         assert.deepStrictEqual(info.extraColumns, []); // all standard columns, nothing extra
     });
@@ -161,6 +162,7 @@ describe('readFileInfo', () => {
             assert.strictEqual(info.numGaussians, full.meta.numGaussians, fixture);
             assert.deepStrictEqual(info.lodCounts, [full.meta.numGaussians], fixture);
             assert.strictEqual(info.shBands, full.meta.shBands, fixture);
+            assert.strictEqual(info.model, full.meta.model, fixture);
             assert.deepStrictEqual(info.layers, ['position', 'geometric', 'color'], fixture);
             await full.close();
         }

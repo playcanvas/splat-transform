@@ -191,7 +191,9 @@ const readSpzHeader = async (source: ReadSource): Promise<Uint8Array> => {
  * @returns The version, splat count and SH band count.
  * @ignore
  */
-const parseSpzHeader = (header: DataView): { version: number; numSplats: number; shBands: SHBands } => {
+const parseSpzHeader = (
+    header: DataView
+): { version: number; numSplats: number; shBands: SHBands; antialiased: boolean } => {
     if (header.getUint32(0, true) !== 0x5053474e) {
         // 'NGSP'
         throw new Error('invalid .spz file header');
@@ -211,7 +213,12 @@ const parseSpzHeader = (header: DataView): { version: number; numSplats: number;
         throw new Error('Unsupported .spz SH degree 4 (band 4); splat-transform supports up to band 3');
     }
 
-    return { version, numSplats: header.getUint32(8, true), shBands: shDegree as SHBands };
+    return {
+        version,
+        numSplats: header.getUint32(8, true),
+        shBands: shDegree as SHBands,
+        antialiased: (header.getUint8(14) & FLAG_ANTIALIASED) !== 0
+    };
 };
 
 // The resident, decompressed per-attribute byte views for one scene.
@@ -244,7 +251,7 @@ const parseSpz = async (source: ReadSource): Promise<SpzStreams | null> => {
         throw new Error('File too small to be valid .spz format');
     }
 
-    const { version, numSplats, shBands } = parseSpzHeader(
+    const { version, numSplats, shBands, antialiased } = parseSpzHeader(
         new DataView(fileBuffer.buffer, fileBuffer.byteOffset, SPZ_HEADER_SIZE)
     );
 
@@ -256,7 +263,6 @@ const parseSpz = async (source: ReadSource): Promise<SpzStreams | null> => {
     const header = new DataView(fileBuffer.buffer, fileBuffer.byteOffset, HEADER_SIZE);
     const shDegree = shBands;
     const fractionalBits = header.getUint8(13);
-    const antialiased = (header.getUint8(14) & FLAG_ANTIALIASED) !== 0;
 
     const harmonicsComponentCount = HARMONICS_COMPONENT_COUNT[shDegree];
     const positionsByteSize = numSplats * 9; // 3 × int24
@@ -532,19 +538,25 @@ const readSpz = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
 const statSpzSource = async (
     source: ReadSource
 ): Promise<
-    Pick<ChunkSourceMetadata, 'numGaussians' | 'numLods' | 'lodCounts' | 'shBands' | 'availableLayers' | 'extraColumns'>
+    Pick<
+        ChunkSourceMetadata,
+        'numGaussians' | 'numLods' | 'lodCounts' | 'shBands' | 'model' | 'availableLayers' | 'extraColumns'
+    >
 > => {
     const header = await readSpzHeader(source);
     if (header.length < SPZ_HEADER_SIZE) {
         throw new Error('File too small to be valid .spz format');
     }
 
-    const { numSplats, shBands } = parseSpzHeader(new DataView(header.buffer, header.byteOffset, SPZ_HEADER_SIZE));
+    const { numSplats, shBands, antialiased } = parseSpzHeader(
+        new DataView(header.buffer, header.byteOffset, SPZ_HEADER_SIZE)
+    );
     return {
         numGaussians: numSplats,
         numLods: 1,
         lodCounts: [numSplats],
         shBands,
+        model: antialiased ? 'antialiased' : 'default',
         availableLayers: new Set<ChunkLayer>(['position', 'geometric', 'color']),
         extraColumns: []
     };

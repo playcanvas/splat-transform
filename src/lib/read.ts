@@ -16,6 +16,7 @@ import {
 import { readLccSource } from './readers/read-lcc';
 import { readLcc2Source } from './readers/read-lcc2';
 import { readLodSource } from './readers/read-lod';
+import type { SplatModel } from './splat-model';
 import type { Options, Param } from './types';
 
 /**
@@ -200,8 +201,10 @@ const readFile = async (readFileOptions: ReadFileOptions): Promise<ChunkSource[]
  * to a full read, for validating/inspecting a file (e.g. before upload) without
  * decoding its gaussian data. Reports every LOD level.
  *
- * Integrity (truncation/corruption) is enforced by the readers themselves, which
- * throw on a size mismatch — so a returned `FileInfo` implies a sound file.
+ * For formats opened via {@link readFile}, integrity (truncation/corruption) is
+ * enforced by the readers themselves, which throw on a size mismatch — so a
+ * returned `FileInfo` implies a sound file. The `sog` and `spz` header peeks
+ * validate the header but not the payload.
  */
 type FileInfo = {
     /** Detected input format. */
@@ -221,6 +224,8 @@ type FileInfo = {
     lodCounts: number[];
     /** SH band count present in the file. */
     shBands: SHBands;
+    /** Splat model the file is tagged with (`'default'` when untagged). */
+    model: SplatModel;
     /** Layers the file exposes, in canonical order. */
     layers: ChunkLayer[];
     /**
@@ -235,7 +240,7 @@ type FileInfo = {
 // full ChunkSource.meta as well as the header-only SOG/PLY peeks.
 type MetaSummary = Pick<
     ChunkSourceMetadata,
-    'numGaussians' | 'numLods' | 'lodCounts' | 'shBands' | 'availableLayers' | 'extraColumns'
+    'numGaussians' | 'numLods' | 'lodCounts' | 'shBands' | 'model' | 'availableLayers' | 'extraColumns'
 >;
 
 const buildFileInfo = (format: InputFormat, meta: MetaSummary): FileInfo => ({
@@ -245,6 +250,7 @@ const buildFileInfo = (format: InputFormat, meta: MetaSummary): FileInfo => ({
     numLods: meta.numLods,
     lodCounts: [...meta.lodCounts],
     shBands: meta.shBands,
+    model: meta.model,
     layers: orderedLayers(meta.availableLayers),
     extraColumns: [...meta.extraColumns]
 });

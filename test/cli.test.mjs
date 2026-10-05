@@ -258,3 +258,71 @@ describe('CLI image sequences', () => {
         }
     });
 });
+
+describe('CLI --info (header-only report)', () => {
+    const fixtures = ['minimal-raw.spz', 'minimal-v2.spz', 'minimal-v3.spz', 'minimal-v4.spz', 'minimal.splat'];
+
+    const infoJson = async (file) => {
+        const result = await runCli(['-q', file, '--info', 'json', 'null']);
+        assert.strictEqual(result.code, 0, `CLI failed:\n${result.stderr}\n${result.stdout}`);
+        return JSON.parse(result.stdout.slice(result.stdout.indexOf('{')));
+    };
+
+    it('reports the same info as a full read, model included', async () => {
+        const { readFile, MemoryReadFileSystem, getInputFormat } = await import('../src/lib/index.js');
+        const { readFile: readFileFs } = await import('node:fs/promises');
+        for (const fixture of fixtures) {
+            const file = `test/fixtures/splat/${fixture}`;
+            const fileSystem = new MemoryReadFileSystem();
+            fileSystem.set(fixture, new Uint8Array(await readFileFs(`${rootDir}/${file}`)));
+            const inputFormat = getInputFormat(fixture);
+            const [full] = await readFile({ filename: fixture, inputFormat, options: { lodSelect: [] }, params: [], fileSystem });
+
+            const info = await infoJson(file);
+            assert.strictEqual(info.format, inputFormat, fixture);
+            assert.strictEqual(info.numGaussians, full.meta.numGaussians, fixture);
+            assert.deepStrictEqual(info.lodCounts, [...full.meta.lodCounts], fixture);
+            assert.strictEqual(info.shBands, full.meta.shBands, fixture);
+            assert.strictEqual(info.model, full.meta.model, fixture);
+            await full.close();
+        }
+    });
+
+    it('reads a gzip-wrapped .spz header without decoding the scene', async () => {
+        const { mkdtemp, rm, writeFile } = await import('node:fs/promises');
+        const { tmpdir } = await import('node:os');
+        const { join } = await import('node:path');
+        const { gzipSync } = await import('node:zlib');
+        const { randomBytes } = await import('node:crypto');
+
+        // a v3 header (magic, version, numPoints) and an incompressible payload,
+        // cut to its first 64KB: only a header-only read can report it
+        const numPoints = 100000;
+        const header = Buffer.alloc(16);
+        header.writeUInt32LE(0x5053474e, 0);
+        header.writeUInt32LE(3, 4);
+        header.writeUInt32LE(numPoints, 8);
+        header.writeUInt8(12, 13);
+        const zipped = gzipSync(Buffer.concat([header, randomBytes(numPoints * 20)]));
+
+        const dir = await mkdtemp(join(tmpdir(), 'st-info-cli-'));
+        const file = join(dir, 'truncated.spz');
+        await writeFile(file, zipped.subarray(0, 65536));
+        try {
+            const info = await infoJson(file);
+            assert.strictEqual(info.numGaussians, numPoints);
+            assert.strictEqual(info.shBands, 0);
+        } finally {
+            await rm(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('prints the text form unchanged', async () => {
+        const result = await runCli(['-q', 'test/fixtures/splat/minimal-v4.spz', '--info', 'null']);
+        assert.strictEqual(result.code, 0, `CLI failed:\n${result.stderr}\n${result.stdout}`);
+        assert.match(result.stdout, /^format: spz$/m);
+        assert.match(result.stdout, /^gaussians: \d+$/m);
+        assert.match(result.stdout, /^layers: position, geometric, color$/m);
+    });
+});
+
