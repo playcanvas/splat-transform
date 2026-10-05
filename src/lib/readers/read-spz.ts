@@ -18,7 +18,7 @@ import type {
     LayerLayout,
     SHBands
 } from '../chunk';
-import type { ReadSource } from '../io/read';
+import type { ReadSource, ReadStream } from '../io/read';
 import { Transform } from '../utils';
 
 import { fileChunkSource } from './reader-utils';
@@ -59,6 +59,161 @@ const LATEST_SPZ_VERSION = 4;
 const SPZ_VERSION_ZSTD = 4; // v4+ switched to per-stream ZSTD + 32-byte header
 const FLAG_ANTIALIASED = 0x1; // header flags byte (offset 14): trained with antialiasing
 
+// SPZ header: u32 magic 'NGSP', u32 version, u32 numPoints, u8 shDegree,
+// u8 fractionalBits, u8 flags, u8 reserved. v4 files start with this header
+// in plaintext; v1-3 files are gzip-compressed end-to-end with the same
+// header at the start of the decompressed stream.
+const SPZ_HEADER_SIZE = 16;
+
+// Compressed prefix to pull when gunzipping just the SPZ header. Optional gzip
+// header fields (FEXTRA up to 64KB, FNAME and FCOMMENT unbounded) can push the
+// compressed data past it, so the range grows by GZIP_PREFIX_GROWTH until it
+// reaches the header, ending with the whole file. Past GZIP_PREFIX_MAX_LIMIT
+// (or the file size) the read is open-ended.
+const GZIP_PREFIX_LIMIT = 65536;
+const GZIP_PREFIX_GROWTH = 16;
+const GZIP_PREFIX_MAX_LIMIT = 16 * 1024 * 1024;
+
+/**
+ * Read up to `length` bytes from a stream into a buffer. May return fewer
+ * bytes if the stream ends early. The caller closes the stream.
+ *
+ * @param stream - The stream to read from.
+ * @param length - Maximum number of bytes to read.
+ * @returns The bytes read (length <= `length`).
+ * @ignore
+ */
+const readPrefix = async (stream: ReadStream, length: number): Promise<Uint8Array> => {
+    const result = new Uint8Array(length);
+    let read = 0;
+    while (read < length) {
+        const n = await stream.pull(result.subarray(read));
+        if (n === 0) break;
+        read += n;
+    }
+    return result.subarray(0, read);
+};
+
+/**
+ * Stream-gunzip only the first `length` bytes of a gzip stream, then cancel
+ * the decompressor without consuming the rest of the input.
+ *
+ * @param stream - Stream over the (possibly bounded) compressed input. The caller closes it.
+ * @param length - Number of decompressed bytes wanted.
+ * @returns The first `length` decompressed bytes, or null if the input ran out
+ * before they were produced (a longer prefix may have them).
+ * @ignore
+ */
+const gunzipPrefix = async (stream: ReadStream, length: number): Promise<Uint8Array | null> => {
+    let inputEnded = false;
+    const inputStream = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+            const chunk = new Uint8Array(32768);
+            const n = await stream.pull(chunk);
+            if (n === 0) {
+                inputEnded = true;
+                controller.close();
+            } else {
+                controller.enqueue(chunk.subarray(0, n));
+            }
+        }
+    });
+    // Type assertion needed due to TypeScript's strict typing of DecompressionStream
+    const reader = inputStream
+        .pipeThrough(new DecompressionStream('gzip') as unknown as TransformStream<Uint8Array, Uint8Array>)
+        .getReader();
+    try {
+        const result = new Uint8Array(length);
+        let read = 0;
+        while (read < length) {
+            let chunk: ReadableStreamReadResult<Uint8Array>;
+            try {
+                chunk = await reader.read();
+            } catch (err) {
+                // a truncated input fails the decompressor once it ends; corrupt data fails earlier
+                if (inputEnded) return null;
+                throw err;
+            }
+            if (chunk.done) {
+                return null;
+            }
+            const n = Math.min(chunk.value.length, length - read);
+            result.set(chunk.value.subarray(0, n), read);
+            read += n;
+        }
+        return result;
+    } finally {
+        // Stop decompression early; the bounded input is truncated, so
+        // draining it to EOF would throw.
+        await reader.cancel().catch<undefined>(() => undefined);
+    }
+};
+
+/**
+ * Read an SPZ file's leading 16 header bytes without decoding the file: the v4
+ * header is plaintext; for the gzip-wrapped v1-3 container only enough of the
+ * compressed prefix is inflated to reach it (usually the first 64KB, more if
+ * optional gzip header fields come first).
+ *
+ * @param source - The SPZ file.
+ * @returns The header bytes (fewer than 16 if the file is shorter).
+ * @ignore
+ */
+const readSpzHeader = async (source: ReadSource): Promise<Uint8Array> => {
+    const headStream = source.read(0, SPZ_HEADER_SIZE);
+    let header: Uint8Array;
+    try {
+        header = await readPrefix(headStream, SPZ_HEADER_SIZE);
+    } finally {
+        headStream.close();
+    }
+    if (header.length >= 2 && header[0] === 0x1f && header[1] === 0x8b) {
+        for (let limit = GZIP_PREFIX_LIMIT; ; limit *= GZIP_PREFIX_GROWTH) {
+            const wholeFile = (source.size !== undefined && limit >= source.size) || limit > GZIP_PREFIX_MAX_LIMIT;
+            const zipped = wholeFile ? source.read(0) : source.read(0, limit);
+            let prefix: Uint8Array | null;
+            try {
+                prefix = await gunzipPrefix(zipped, SPZ_HEADER_SIZE);
+            } finally {
+                zipped.close();
+            }
+            if (prefix) return prefix;
+            if (wholeFile) throw new Error('Unexpected end of gzip stream');
+        }
+    }
+    return header;
+};
+
+/**
+ * Validate the header fields every SPZ version shares and read the scene-wide ones.
+ *
+ * @param header - View over at least the first 16 (decompressed) bytes.
+ * @returns The version, splat count and SH band count.
+ * @ignore
+ */
+const parseSpzHeader = (header: DataView): { version: number; numSplats: number; shBands: SHBands } => {
+    if (header.getUint32(0, true) !== 0x5053474e) {
+        // 'NGSP'
+        throw new Error('invalid .spz file header');
+    }
+
+    const version = header.getUint32(4, true);
+    if (version < MIN_SPZ_VERSION || version > LATEST_SPZ_VERSION) {
+        throw new Error(`Unsupported .spz version ${version}`);
+    }
+
+    const shDegree = header.getUint8(12);
+    if (shDegree < 0 || shDegree >= HARMONICS_COMPONENT_COUNT.length) {
+        throw new Error(`Unsupported SH degree ${shDegree}`);
+    }
+    if (shDegree > 3) {
+        // SPZ degree 4 (72 coeffs) exceeds splat-transform's SH band-3 model.
+        throw new Error('Unsupported .spz SH degree 4 (band 4); splat-transform supports up to band 3');
+    }
+
+    return { version, numSplats: header.getUint32(8, true), shBands: shDegree as SHBands };
+};
+
 // The resident, decompressed per-attribute byte views for one scene.
 type SpzStreams = {
     version: number;
@@ -85,40 +240,23 @@ const parseSpz = async (source: ReadSource): Promise<SpzStreams | null> => {
     }
 
     const totalSize = fileBuffer.length;
-    const MIN_HEADER_SIZE = 16;
-    if (totalSize < MIN_HEADER_SIZE) {
+    if (totalSize < SPZ_HEADER_SIZE) {
         throw new Error('File too small to be valid .spz format');
     }
 
-    const magicView = new DataView(fileBuffer.buffer, fileBuffer.byteOffset, MIN_HEADER_SIZE);
-    if (magicView.getUint32(0, true) !== 0x5053474e) {
-        // 'NGSP'
-        throw new Error('invalid .spz file header');
-    }
+    const { version, numSplats, shBands } = parseSpzHeader(
+        new DataView(fileBuffer.buffer, fileBuffer.byteOffset, SPZ_HEADER_SIZE)
+    );
 
-    const version = magicView.getUint32(4, true);
-    if (version < MIN_SPZ_VERSION || version > LATEST_SPZ_VERSION) {
-        throw new Error(`Unsupported .spz version ${version}`);
-    }
-
-    const HEADER_SIZE = version >= SPZ_VERSION_ZSTD ? 32 : MIN_HEADER_SIZE;
+    const HEADER_SIZE = version >= SPZ_VERSION_ZSTD ? 32 : SPZ_HEADER_SIZE;
     if (totalSize < HEADER_SIZE) {
         throw new Error('File too small to be valid .spz format');
     }
 
     const header = new DataView(fileBuffer.buffer, fileBuffer.byteOffset, HEADER_SIZE);
-    const numSplats = header.getUint32(8, true);
-    const shDegree = header.getUint8(12);
+    const shDegree = shBands;
     const fractionalBits = header.getUint8(13);
     const antialiased = (header.getUint8(14) & FLAG_ANTIALIASED) !== 0;
-    if (shDegree < 0 || shDegree >= HARMONICS_COMPONENT_COUNT.length) {
-        throw new Error(`Unsupported SH degree ${shDegree}`);
-    }
-    if (shDegree > 3) {
-        // SPZ degree 4 (72 coeffs) exceeds splat-transform's SH band-3 model.
-        throw new Error('Unsupported .spz SH degree 4 (band 4); splat-transform supports up to band 3');
-    }
-    const shBands = shDegree as SHBands;
 
     const harmonicsComponentCount = HARMONICS_COMPONENT_COUNT[shDegree];
     const positionsByteSize = numSplats * 9; // 3 × int24
@@ -382,4 +520,34 @@ const readSpz = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
     return fileChunkSource(source, meta, read);
 };
 
-export { readSpz };
+/**
+ * Header-only SPZ metadata for `readFileInfo`: the splat count and SH bands come
+ * from the 16-byte header, without decompressing the scene. The payload itself
+ * isn't verified (like the SOG `meta.json` peek); `readSpz` checks it on a full read.
+ *
+ * @param source - The SPZ file.
+ * @returns The metadata a `FileInfo` is built from.
+ * @ignore
+ */
+const statSpzSource = async (
+    source: ReadSource
+): Promise<
+    Pick<ChunkSourceMetadata, 'numGaussians' | 'numLods' | 'lodCounts' | 'shBands' | 'availableLayers' | 'extraColumns'>
+> => {
+    const header = await readSpzHeader(source);
+    if (header.length < SPZ_HEADER_SIZE) {
+        throw new Error('File too small to be valid .spz format');
+    }
+
+    const { numSplats, shBands } = parseSpzHeader(new DataView(header.buffer, header.byteOffset, SPZ_HEADER_SIZE));
+    return {
+        numGaussians: numSplats,
+        numLods: 1,
+        lodCounts: [numSplats],
+        shBands,
+        availableLayers: new Set<ChunkLayer>(['position', 'geometric', 'color']),
+        extraColumns: []
+    };
+};
+
+export { readSpz, readSpzHeader, statSpzSource };
