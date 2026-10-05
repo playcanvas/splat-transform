@@ -3,7 +3,16 @@ import type { ChunkLayer, ChunkSource, ChunkSourceMetadata, ExtraColumn, SHBands
 import { dataTableToChunkSource } from './compat/data-table';
 import type { ReadFileSystem } from './io/read';
 import { ZipReadFileSystem } from './io/read';
-import { readKsplat, readMjs, readPly, readSogSource, readSplat, readSpz, statSogSource, statSpzSource } from './readers';
+import {
+    readKsplat,
+    readMjs,
+    readPly,
+    readSogSource,
+    readSplat,
+    readSpz,
+    statSogSource,
+    statSpzSource
+} from './readers';
 import { readLccSource } from './readers/read-lcc';
 import { readLcc2Source } from './readers/read-lcc2';
 import { readLodSource } from './readers/read-lod';
