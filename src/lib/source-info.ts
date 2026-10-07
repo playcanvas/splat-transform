@@ -133,12 +133,13 @@ const sparkline = (counts: number[]): string => {
         .join('');
 };
 
-// Map a LOD's stats to display space for JSON output: value arrays through the
-// per-column display transform, stdDev from the per-value display-space
-// spread, counts and histograms as computed.
+// Map a LOD's stats to display space for JSON output: order statistics through
+// the per-column display transform (monotonic, so they map exactly), mean and
+// stdDev from the per-value display-space accumulation, counts and histograms
+// as computed.
 const displayLodStats = (lod: LodStats) => {
     const mapped = (values: number[]): number[] => values.map((v, i) => displayValue(lod.columns[i], v));
-    const { displayStdDev, ...data } = lod.data;
+    const { displayMean, displayStdDev, ...data } = lod.data;
     return {
         ...lod,
         data: {
@@ -146,7 +147,7 @@ const displayLodStats = (lod: LodStats) => {
             min: mapped(lod.data.min),
             max: mapped(lod.data.max),
             median: mapped(lod.data.median),
-            mean: mapped(lod.data.mean),
+            mean: displayMean,
             stdDev: displayStdDev
         }
     };
@@ -161,7 +162,7 @@ const statsTable = (lod: LodStats): string[] => {
         String(displayValue(name, data.min[i])),
         String(displayValue(name, data.max[i])),
         String(displayValue(name, data.median[i])),
-        String(displayValue(name, data.mean[i])),
+        String(data.displayMean[i]),
         String(data.displayStdDev[i]),
         String(data.nanCount[i]),
         String(data.infCount[i]),
@@ -182,8 +183,8 @@ const statsTable = (lod: LodStats): string[] => {
 /**
  * Render a source's statistics for the `stats` action: the info block followed
  * by one table per LOD (text), or the info object plus a per-LOD columnar
- * `stats` array (JSON — the {@link LodStats} shape, with `displayStdDev`
- * reported as `stdDev`). Values are shown in display space (see
+ * `stats` array (JSON — the {@link LodStats} shape, with `displayMean` and
+ * `displayStdDev` reported as `mean` and `stdDev`). Values are shown in display space (see
  * {@link forwardTransforms}); histogram bin edges span `[min[i], max[i]]`.
  * @param meta - The source metadata.
  * @param stats - The computed per-LOD statistics.

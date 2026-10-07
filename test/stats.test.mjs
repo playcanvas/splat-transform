@@ -193,15 +193,15 @@ describe('computeStats accuracy', () => {
         const json = JSON.parse(outputs[0]);
         for (const name of ['opacity', 'scale_0', 'f_dc_0']) {
             const i = lods[0].columns.indexOf(name);
-            const expected = +forwardTransforms[name](lods[0].data.mean[i]).toPrecision(6);
-            assert.strictEqual(json.stats[0].data.mean[i], expected, `${name} display mean`);
+            const expected = +forwardTransforms[name](lods[0].data.median[i]).toPrecision(6);
+            assert.strictEqual(json.stats[0].data.median[i], expected, `${name} display median`);
         }
         // Untransformed columns pass through raw.
         const xi = lods[0].columns.indexOf('x');
         assert.strictEqual(json.stats[0].data.mean[xi], lods[0].data.mean[xi]);
     });
 
-    it('reports stdDev of the display-space values (opacity/scale/f_dc)', async () => {
+    it('reports mean and stdDev of the display-space values (opacity/scale/f_dc)', async () => {
         const dt = createTestDataTable(200);
         const scale = dt.getColumnByName('scale_0').data;
         const opacity = dt.getColumnByName('opacity').data;
@@ -212,12 +212,15 @@ describe('computeStats accuracy', () => {
         const { lods } = await computeStats(dt);
         const outputs = await captureOutput(() => processDataTable(dt, [{ kind: 'stats', format: 'json' }, { kind: 'stats' }]));
         const json = JSON.parse(outputs[0]);
+        assert.ok(!('displayMean' in json.stats[0].data), 'JSON reports displayMean as mean');
         assert.ok(!('displayStdDev' in json.stats[0].data), 'JSON reports displayStdDev as stdDev');
         for (const name of ['opacity', 'scale_0', 'f_dc_0', 'x']) {
             const i = lods[0].columns.indexOf(name);
             const fn = forwardTransforms[name] ?? ((v) => v);
-            const expected = exactStats(Array.from(dt.getColumnByName(name).data, fn)).stdDev;
-            assert.ok(Math.abs(lods[0].data.displayStdDev[i] - expected) <= 1e-5 * (1 + expected), `${name}.displayStdDev`);
+            const expected = exactStats(Array.from(dt.getColumnByName(name).data, fn));
+            assert.ok(Math.abs(lods[0].data.displayMean[i] - expected.mean) <= 1e-5 * (1 + Math.abs(expected.mean)), `${name}.displayMean`);
+            assert.ok(Math.abs(lods[0].data.displayStdDev[i] - expected.stdDev) <= 1e-5 * (1 + expected.stdDev), `${name}.displayStdDev`);
+            assert.strictEqual(json.stats[0].data.mean[i], lods[0].data.displayMean[i], `${name} JSON mean`);
             assert.strictEqual(json.stats[0].data.stdDev[i], lods[0].data.displayStdDev[i], `${name} JSON stdDev`);
         }
         // A constant column has zero spread in any space (not exp(0) = 1).
@@ -233,7 +236,27 @@ describe('computeStats accuracy', () => {
         const { lods } = await computeStats(dt);
         const i = lods[0].columns.indexOf('scale_0');
         assert.ok(Number.isFinite(lods[0].data.stdDev[i]));
+        assert.strictEqual(lods[0].data.displayMean[i], Infinity);
         assert.strictEqual(lods[0].data.displayStdDev[i], Infinity);
+    });
+
+    it('reports the arithmetic display mean, not the transformed raw mean', async () => {
+        const dt = createTestDataTable(2);
+        dt.getColumnByName('scale_0').data.set([0, Math.log(4)]);
+        const { lods } = await computeStats(dt);
+        const i = lods[0].columns.indexOf('scale_0');
+        assert.strictEqual(lods[0].data.displayMean[i], 2.5); // exp(rawMean) would be 2
+    });
+
+    it('keeps display stats finite when squared display values would overflow', async () => {
+        const dt = createTestDataTable(2);
+        dt.getColumnByName('scale_0').data.set([699, 700]); // exp finite, exp^2 overflows
+        const { lods } = await computeStats(dt);
+        const i = lods[0].columns.indexOf('scale_0');
+        const [a, b] = [Math.exp(699), Math.exp(700)];
+        const close = (actual, expected) => Math.abs(actual - expected) <= 1e-5 * expected;
+        assert.ok(close(lods[0].data.displayMean[i], (a + b) / 2), 'displayMean');
+        assert.ok(close(lods[0].data.displayStdDev[i], (b - a) / 2), 'displayStdDev');
     });
 
     it('accepts a DataTable and a ChunkSource with identical results', async () => {
