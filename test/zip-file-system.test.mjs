@@ -134,6 +134,23 @@ describe('ZipFileSystem zip64', () => {
         zip.close();
     });
 
+    it('finds the zip64 locator behind a maximum-length archive comment', async () => {
+        const a = bytesOf(50, 3);
+        const b = bytesOf(150, 4);
+        const bytes = await writeZip([['a', [a]], ['b', [b]]], 100);
+
+        // a 65535-byte comment puts the locator 65557 bytes from the end
+        const commented = new Uint8Array(bytes.length + 0xffff);
+        commented.set(bytes);
+        new DataView(commented.buffer).setUint16(bytes.length - 2, 0xffff, true);
+
+        const zip = await readZip(commented);
+        assert.deepStrictEqual(await zip.list(), ['a', 'b']);
+        assert.deepStrictEqual(await readEntry(zip, 'a'), a);
+        assert.deepStrictEqual(await readEntry(zip, 'b'), b);
+        zip.close();
+    });
+
     it('writes the zip64 end record past 65534 entries', async () => {
         const entries = Array.from({ length: 0xffff }, (_, i) => [`f${i}`, [bytesOf(i % 7, i)]]);
         const bytes = await writeZip(entries);

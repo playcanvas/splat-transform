@@ -224,8 +224,10 @@ class ZipReadFileSystem implements ReadFileSystem {
             throw new Error('Cannot read zip from source with unknown size');
         }
 
-        // Read the last 65KB to find the End of Central Directory record
-        const eocdSearchSize = Math.min(65536 + 22, size);
+        // Read the last 65KB to find the End of Central Directory record (plus
+        // 20 bytes so the zip64 locator ahead of it is in reach even behind a
+        // maximum-length comment)
+        const eocdSearchSize = Math.min(65536 + 22 + 20, size);
         const eocdStream = this.source.read(size - eocdSearchSize, size);
         const eocdData = await eocdStream.readAll();
         eocdStream.close();
