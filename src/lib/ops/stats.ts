@@ -1,5 +1,6 @@
 import { SH_REST_COUNTS } from '../chunk';
 import type { ChunkData, ChunkDataPool, ChunkLayer, ChunkSource, ChunkSourceMetadata } from '../chunk';
+import { forwardTransforms } from '../value-transforms';
 
 /**
  * One-pass streaming statistics over a {@link ChunkSource}: exact
@@ -37,6 +38,14 @@ type LodStatsData = {
     mean: number[];
     /** Per-column population standard deviation. */
     stdDev: number[];
+    /**
+     * Per-column population standard deviation of the display-space values
+     * (opacity/scale/f_dc through their forward transforms; equal to `stdDev`
+     * for untransformed columns). A spread can't be mapped through a nonlinear
+     * transform after the fact, so it is accumulated per value. `Infinity`
+     * when a display value overflows (e.g. `exp` of a huge log-scale).
+     */
+    displayStdDev: number[];
     /** Per-column NaN count. */
     nanCount: number[];
     /** Per-column Infinity count. */
@@ -89,6 +98,8 @@ type SourceStats = {
  * mean/variance, NaN/Inf counts, and a fine histogram with exact fixed-width
  * bins whose range doubles (merging bin pairs losslessly) whenever a value
  * falls outside — so a single pass needs no prior knowledge of the range.
+ * With a `display` transform it also tracks Welford variance of the
+ * transformed values.
  */
 class StatsAccumulator {
     n = 0;
@@ -98,6 +109,12 @@ class StatsAccumulator {
     max = -Infinity;
     private mean = 0;
     private m2 = 0;
+
+    private displayMean = 0;
+    private displayM2 = 0;
+    private displayOverflow = false;
+
+    constructor(private display?: (v: number) => number) {}
 
     // Fine histogram, seeded lazily from the first two distinct values (a
     // constant column never allocates). `firstValue`/`firstCount` track the
@@ -124,6 +141,17 @@ class StatsAccumulator {
         const d = v - this.mean;
         this.mean += d / this.n;
         this.m2 += d * (v - this.mean);
+
+        if (this.display) {
+            const dv = this.display(v);
+            if (dv === Infinity) {
+                this.displayOverflow = true;
+            } else {
+                const dd = dv - this.displayMean;
+                this.displayMean += dd / this.n;
+                this.displayM2 += dd * (dv - this.displayMean);
+            }
+        }
 
         if (this.bins === null) {
             if (this.firstCount === 0 || v === this.firstValue) {
@@ -233,17 +261,20 @@ class StatsAccumulator {
         median: number;
         mean: number;
         stdDev: number;
+        displayStdDev: number;
         nanCount: number;
         infCount: number;
         histogram: number[];
     } {
         const empty = this.n === 0;
+        const stdDev = empty ? NaN : round(Math.sqrt(this.m2 / this.n));
         return {
             min: empty ? NaN : round(this.min),
             max: empty ? NaN : round(this.max),
             median: round(this.quantile(0.5)),
             mean: empty ? NaN : round(this.mean),
-            stdDev: empty ? NaN : round(Math.sqrt(this.m2 / this.n)),
+            stdDev,
+            displayStdDev: !this.display || empty ? stdDev : this.displayOverflow ? Infinity : round(Math.sqrt(this.displayM2 / this.n)),
             nanCount: this.nanCount,
             infCount: this.infCount,
             histogram: this.computeHistogram()
@@ -302,7 +333,7 @@ const computeSourceStats = async (src: ChunkSource, pool: ChunkDataPool): Promis
     const hasFill = meta.availableLayers.has('position') && meta.availableLayers.has('geometric');
 
     for (let lod = 0; lod < meta.numLods; lod++) {
-        const accs = plans.map(() => new StatsAccumulator());
+        const accs = plans.map((p) => new StatsAccumulator(forwardTransforms[p.name]));
         const lodCount = meta.lodCounts[lod];
         const numChunks = meta.numChunks[lod] ?? 0;
 
@@ -390,6 +421,7 @@ const computeSourceStats = async (src: ChunkSource, pool: ChunkDataPool): Promis
                 median: results.map((r) => r.median),
                 mean: results.map((r) => r.mean),
                 stdDev: results.map((r) => r.stdDev),
+                displayStdDev: results.map((r) => r.displayStdDev),
                 nanCount: results.map((r) => r.nanCount),
                 infCount: results.map((r) => r.infCount),
                 histogram: results.map((r) => r.histogram)

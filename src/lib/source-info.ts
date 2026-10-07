@@ -134,18 +134,20 @@ const sparkline = (counts: number[]): string => {
 };
 
 // Map a LOD's stats to display space for JSON output: value arrays through the
-// per-column display transform, counts and histograms as computed.
-const displayLodStats = (lod: LodStats): LodStats => {
+// per-column display transform, stdDev from the per-value display-space
+// spread, counts and histograms as computed.
+const displayLodStats = (lod: LodStats) => {
     const mapped = (values: number[]): number[] => values.map((v, i) => displayValue(lod.columns[i], v));
+    const { displayStdDev, ...data } = lod.data;
     return {
         ...lod,
         data: {
-            ...lod.data,
+            ...data,
             min: mapped(lod.data.min),
             max: mapped(lod.data.max),
             median: mapped(lod.data.median),
             mean: mapped(lod.data.mean),
-            stdDev: mapped(lod.data.stdDev)
+            stdDev: displayStdDev
         }
     };
 };
@@ -160,7 +162,7 @@ const statsTable = (lod: LodStats): string[] => {
         String(displayValue(name, data.max[i])),
         String(displayValue(name, data.median[i])),
         String(displayValue(name, data.mean[i])),
-        String(displayValue(name, data.stdDev[i])),
+        String(data.displayStdDev[i]),
         String(data.nanCount[i]),
         String(data.infCount[i]),
         sparkline(data.histogram[i])
@@ -180,9 +182,9 @@ const statsTable = (lod: LodStats): string[] => {
 /**
  * Render a source's statistics for the `stats` action: the info block followed
  * by one table per LOD (text), or the info object plus a per-LOD columnar
- * `stats` array (JSON — exactly the {@link LodStats} shape). Values are shown
- * in display space (see {@link forwardTransforms}); histogram bin edges span
- * `[min[i], max[i]]`.
+ * `stats` array (JSON — the {@link LodStats} shape, with `displayStdDev`
+ * reported as `stdDev`). Values are shown in display space (see
+ * {@link forwardTransforms}); histogram bin edges span `[min[i], max[i]]`.
  * @param meta - The source metadata.
  * @param stats - The computed per-LOD statistics.
  * @param format - Output format. Default: 'text'

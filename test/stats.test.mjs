@@ -201,6 +201,41 @@ describe('computeStats accuracy', () => {
         assert.strictEqual(json.stats[0].data.mean[xi], lods[0].data.mean[xi]);
     });
 
+    it('reports stdDev of the display-space values (opacity/scale/f_dc)', async () => {
+        const dt = createTestDataTable(200);
+        const scale = dt.getColumnByName('scale_0').data;
+        const opacity = dt.getColumnByName('opacity').data;
+        for (let i = 0; i < dt.numRows; i++) {
+            scale[i] = -6 + (i % 17) * 0.4; // log-scales spanning ~3 decades
+            opacity[i] = -4 + (i % 13) * 0.7;
+        }
+        const { lods } = await computeStats(dt);
+        const outputs = await captureOutput(() => processDataTable(dt, [{ kind: 'stats', format: 'json' }, { kind: 'stats' }]));
+        const json = JSON.parse(outputs[0]);
+        assert.ok(!('displayStdDev' in json.stats[0].data), 'JSON reports displayStdDev as stdDev');
+        for (const name of ['opacity', 'scale_0', 'f_dc_0', 'x']) {
+            const i = lods[0].columns.indexOf(name);
+            const fn = forwardTransforms[name] ?? ((v) => v);
+            const expected = exactStats(Array.from(dt.getColumnByName(name).data, fn)).stdDev;
+            assert.ok(Math.abs(lods[0].data.displayStdDev[i] - expected) <= 1e-5 * (1 + expected), `${name}.displayStdDev`);
+            assert.strictEqual(json.stats[0].data.stdDev[i], lods[0].data.displayStdDev[i], `${name} JSON stdDev`);
+        }
+        // A constant column has zero spread in any space (not exp(0) = 1).
+        const s1 = lods[0].columns.indexOf('scale_1');
+        assert.strictEqual(json.stats[0].data.stdDev[s1], 0);
+        const row = outputs[1].split('\n').find((l) => l.startsWith('| scale_1 '));
+        assert.strictEqual(row.split('|')[6].trim(), '0');
+    });
+
+    it('reports an infinite display stdDev when a display value overflows', async () => {
+        const dt = createTestDataTable(4);
+        dt.getColumnByName('scale_0').data[1] = 1000; // finite log-scale, exp overflows
+        const { lods } = await computeStats(dt);
+        const i = lods[0].columns.indexOf('scale_0');
+        assert.ok(Number.isFinite(lods[0].data.stdDev[i]));
+        assert.strictEqual(lods[0].data.displayStdDev[i], Infinity);
+    });
+
     it('accepts a DataTable and a ChunkSource with identical results', async () => {
         const dt = createTestDataTable(100, { includeSH: true, shBands: 1 });
         const fromTable = await computeStats(dt);
