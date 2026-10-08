@@ -40,15 +40,17 @@ const brokenWorker = () => {
 };
 
 // more tasks than workers, so several workers are starting when the first fails
-const runTasks = async (WorkerQueue) => {
+const runTasks = async (WorkerQueue, count = 5, size = 4) => {
     const results = await Promise.all(
-        Array.from({ length: 5 }, () => WorkerQueue.run('quantize1d', {
-            columns: [{ name: 'a', data: new Float32Array([1, 2, 3, 4]) }]
+        Array.from({ length: count }, () => WorkerQueue.run('quantize1d', {
+            columns: [{ name: 'a', data: Float32Array.from({ length: size }, (_, i) => Math.sin(i)) }]
         }))
     );
-    assert.strictEqual(results.length, 5);
-    results.forEach((result) => assert.strictEqual(result.labels[0].data.length, 4));
+    assert.strictEqual(results.length, count);
+    results.forEach((result) => assert.strictEqual(result.labels[0].data.length, size));
 };
+
+const settle = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe('worker queue (bundled)', { skip }, () => {
     it('runs tasks inline, without respawning, when no worker can start', { timeout: 20_000 }, async () => {
@@ -77,5 +79,36 @@ describe('worker queue (bundled)', { skip }, () => {
 
         assert.strictEqual(WorkerQueue.isInline, true);
         assert.strictEqual(broken.starts(), 4);
+    });
+
+    it('lets a surviving worker drain the queue without launching more after one fails to start', { timeout: 20_000 }, async () => {
+        const WorkerQueue = await freshQueue('one-survivor');
+        WorkerQueue.maxWorkers = 1;
+        await runTasks(WorkerQueue, 1);
+
+        // the running worker stays healthy, but new ones can no longer load
+        const broken = brokenWorker();
+        WorkerQueue.workerUrl = broken.path;
+        WorkerQueue.maxWorkers = 4;
+        // tasks long enough for the failed launches to happen while work is queued
+        await runTasks(WorkerQueue, 8, 10_000);
+        await settle(500);
+
+        assert.strictEqual(broken.starts(), 3);
+        assert.strictEqual(WorkerQueue.isInline, false);
+    });
+
+    it('tries workers again after destroy()', { timeout: 20_000 }, async () => {
+        const WorkerQueue = await freshQueue('retry-after-destroy');
+        WorkerQueue.workerUrl = brokenWorker().path;
+        WorkerQueue.maxWorkers = 4;
+        await runTasks(WorkerQueue);
+        assert.strictEqual(WorkerQueue.isInline, true);
+
+        await WorkerQueue.destroy();
+        WorkerQueue.workerUrl = null;
+        await runTasks(WorkerQueue);
+
+        assert.strictEqual(WorkerQueue.isInline, false);
     });
 });
