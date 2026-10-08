@@ -37,10 +37,9 @@ const outstanding = new Set<Promise<unknown>>();
 // user-configurable: max worker threads (null = auto), 0 forces inline
 let maxWorkers: number | null = null;
 
-// memoized once workers prove unavailable (spawn failed before any worker
-// ever signalled ready, or the environment can't run them)
+// memoized once workers prove unavailable (the last live worker failed to
+// start, or the environment can't run them)
 let unavailable = false;
-let everReady = false;
 
 let resolvedMaxWorkers: number | null = null;
 let spawnLoopActive = false;
@@ -75,11 +74,10 @@ const removeSlot = (slot: Slot) => {
     }
 };
 
-// a worker died: before any worker has been ready this means the environment
-// can't run workers, so it isn't replaced (that would respawn forever); once
-// the last starting worker has failed too, memoize that and go inline. After
-// a ready signal, the in-flight task failed and the worker is replaced on
-// demand
+// a worker died: before its own ready signal it failed to start, so it isn't
+// replaced (a launch that keeps failing would otherwise respawn forever);
+// once no workers are left, memoize that and go inline. After its ready
+// signal, the in-flight task failed and the worker is replaced on demand
 function onSlotDeath(slot: Slot, err: Error) {
     if (slot.dead) {
         return;
@@ -93,7 +91,7 @@ function onSlotDeath(slot: Slot, err: Error) {
         task.reject(err);
     }
 
-    if (wasStarting && !everReady) {
+    if (wasStarting) {
         if (slots.length === 0) {
             unavailable = true;
             drainQueueInline();
@@ -110,7 +108,6 @@ function onSlotMessage(slot: Slot, message: WorkerMessage) {
     }
 
     if (message.type === 'ready') {
-        everReady = true;
         slot.state = 'idle';
     } else {
         const task = slot.current;
