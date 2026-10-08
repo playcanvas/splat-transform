@@ -75,9 +75,11 @@ const removeSlot = (slot: Slot) => {
     }
 };
 
-// a worker died: before its ready signal this means the environment can't
-// run workers (memoize and go inline); after, the in-flight task failed and
-// the worker is replaced on demand
+// a worker died: before any worker has been ready this means the environment
+// can't run workers, so it isn't replaced (that would respawn forever); once
+// the last starting worker has failed too, memoize that and go inline. After
+// a ready signal, the in-flight task failed and the worker is replaced on
+// demand
 function onSlotDeath(slot: Slot, err: Error) {
     if (slot.dead) {
         return;
@@ -91,9 +93,11 @@ function onSlotDeath(slot: Slot, err: Error) {
         task.reject(err);
     }
 
-    if (wasStarting && !everReady && slots.length === 0) {
-        unavailable = true;
-        drainQueueInline();
+    if (wasStarting && !everReady) {
+        if (slots.length === 0) {
+            unavailable = true;
+            drainQueueInline();
+        }
         return;
     }
 
