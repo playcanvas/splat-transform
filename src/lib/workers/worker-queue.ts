@@ -199,7 +199,9 @@ async function ensureSpawned() {
         const max = maxWorkers ?? resolvedMaxWorkers;
         let available = slots.filter((s) => s.state !== 'busy').length;
 
-        while (slots.length < max && available < queue.length) {
+        // recheck startFailed: in browsers new Worker() can throw
+        // synchronously (e.g. a CSP SecurityError), setting it mid-loop
+        while (!startFailed && slots.length < max && available < queue.length) {
             const slot: Slot = {
                 state: 'starting',
                 current: null,

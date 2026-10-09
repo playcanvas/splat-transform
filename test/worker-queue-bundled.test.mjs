@@ -10,6 +10,7 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { Worker as NodeWorker } from 'node:worker_threads';
 
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 const distPath = join(rootDir, 'dist/index.mjs');
@@ -51,6 +52,43 @@ const runTasks = async (WorkerQueue, count = 5, size = 4) => {
 };
 
 const settle = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// an instance on the pool's browser path (the Electron renderer check makes
+// it skip the node path), where new Worker() runs synchronously in the launch
+// loop rather than after an await
+const browserQueue = async (tag) => {
+    process.type = 'renderer';
+    try {
+        return await freshQueue(tag);
+    } finally {
+        delete process.type;
+    }
+};
+
+// a browser-style Worker over worker_threads; once blocked, construction
+// throws synchronously, as a CSP SecurityError does
+class BrowserWorker {
+    static blocked = false;
+    static blockedLaunches = 0;
+    static live = [];
+
+    constructor(url) {
+        if (BrowserWorker.blocked) {
+            BrowserWorker.blockedLaunches++;
+            throw new DOMException('worker blocked', 'SecurityError');
+        }
+        const worker = new NodeWorker(url);
+        worker.on('message', (data) => this.onmessage?.({ data }));
+        worker.on('error', (err) => this.onerror?.({ message: err.message }));
+        this.postMessage = (message, transfer) => worker.postMessage(message, transfer);
+        this.terminate = () => worker.terminate();
+        this.crash = () => {
+            worker.terminate();
+            this.onerror?.({ message: 'worker crashed' });
+        };
+        BrowserWorker.live.push(this);
+    }
+}
 
 describe('worker queue (bundled)', { skip }, () => {
     it('runs tasks inline, without respawning, when no worker can start', { timeout: 20_000 }, async () => {
@@ -110,5 +148,30 @@ describe('worker queue (bundled)', { skip }, () => {
         await runTasks(WorkerQueue);
 
         assert.strictEqual(WorkerQueue.isInline, false);
+    });
+
+    it('stops a launch batch at the first startup failure thrown by new Worker()', { timeout: 20_000 }, async () => {
+        globalThis.Worker = BrowserWorker;
+        try {
+            const WorkerQueue = await browserQueue('browser-sync-throw');
+            WorkerQueue.maxWorkers = 2;
+            const tasks = Array.from({ length: 16 }, () => WorkerQueue.run('quantize1d', {
+                columns: [{ name: 'a', data: Float32Array.from({ length: 10_000 }, (_, i) => Math.sin(i)) }]
+            }));
+            await tasks[0];
+
+            // the worker that ran it crashes with work queued, and its
+            // replacements now throw in new Worker()
+            BrowserWorker.blocked = true;
+            BrowserWorker.live[0].crash();
+            const results = await Promise.allSettled(tasks);
+
+            assert.strictEqual(results.filter((result) => result.status === 'rejected').length, 1);
+            assert.strictEqual(BrowserWorker.blockedLaunches, 1);
+            assert.strictEqual(WorkerQueue.isInline, false);
+            await WorkerQueue.destroy();
+        } finally {
+            delete globalThis.Worker;
+        }
     });
 });
