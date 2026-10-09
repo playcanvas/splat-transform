@@ -66,7 +66,8 @@ const browserQueue = async (tag) => {
 };
 
 // a browser-style Worker over worker_threads; once blocked, construction
-// throws synchronously, as a CSP SecurityError does
+// throws synchronously, as a CSP SecurityError does. `busy` marks a worker
+// that has been posted a task and hasn't replied yet
 class BrowserWorker {
     static blocked = false;
     static blockedLaunches = 0;
@@ -78,9 +79,16 @@ class BrowserWorker {
             throw new DOMException('worker blocked', 'SecurityError');
         }
         const worker = new NodeWorker(url);
-        worker.on('message', (data) => this.onmessage?.({ data }));
+        this.busy = false;
+        worker.on('message', (data) => {
+            this.busy = false;
+            this.onmessage?.({ data });
+        });
         worker.on('error', (err) => this.onerror?.({ message: err.message }));
-        this.postMessage = (message, transfer) => worker.postMessage(message, transfer);
+        this.postMessage = (message, transfer) => {
+            this.busy = message.type === 'run';
+            worker.postMessage(message, transfer);
+        };
         this.terminate = () => worker.terminate();
         this.crash = () => {
             worker.terminate();
@@ -160,10 +168,11 @@ describe('worker queue (bundled)', { skip }, () => {
             }));
             await tasks[0];
 
-            // the worker that ran it crashes with work queued, and its
-            // replacements now throw in new Worker()
+            // a worker running a task (so past its ready, whichever started
+            // first) crashes with work queued, and its replacements now throw
+            // in new Worker()
             BrowserWorker.blocked = true;
-            BrowserWorker.live[0].crash();
+            BrowserWorker.live.find((worker) => worker.busy).crash();
             const results = await Promise.allSettled(tasks);
 
             assert.strictEqual(results.filter((result) => result.status === 'rejected').length, 1);
