@@ -37,10 +37,14 @@ const outstanding = new Set<Promise<unknown>>();
 // user-configurable: max worker threads (null = auto), 0 forces inline
 let maxWorkers: number | null = null;
 
-// memoized once workers prove unavailable (spawn failed before any worker
-// ever signalled ready, or the environment can't run them)
+// memoized when the environment can't run workers at all
 let unavailable = false;
-let everReady = false;
+
+// set when a worker fails to start: no more are launched (launches that keep
+// failing would otherwise repeat for as long as work is queued) until the
+// pool is destroyed or given another worker URL. Surviving workers drain the
+// queue; with none left, tasks run inline
+let startFailed = false;
 
 let resolvedMaxWorkers: number | null = null;
 let spawnLoopActive = false;
@@ -51,7 +55,7 @@ let spawnLoopActive = false;
 // bundlers that don't (set this explicitly there, mirroring WebPCodec.wasmUrl)
 let workerUrl: string | null = null;
 
-const inlineMode = () => !workerBundled || unavailable || maxWorkers === 0;
+const inlineMode = () => !workerBundled || unavailable || maxWorkers === 0 || (startFailed && slots.length === 0);
 
 const runTaskInline = async (task: PendingTask) => {
     try {
@@ -75,9 +79,10 @@ const removeSlot = (slot: Slot) => {
     }
 };
 
-// a worker died: before its ready signal this means the environment can't
-// run workers (memoize and go inline); after, the in-flight task failed and
-// the worker is replaced on demand
+// a worker died: before its own ready signal it failed to start, which stops
+// further launches (see startFailed); after it, the in-flight task failed and
+// the worker is replaced on demand, unless launches have stopped. Once no
+// workers are left and none will be launched, the queue runs inline
 function onSlotDeath(slot: Slot, err: Error) {
     if (slot.dead) {
         return;
@@ -91,8 +96,11 @@ function onSlotDeath(slot: Slot, err: Error) {
         task.reject(err);
     }
 
-    if (wasStarting && !everReady && slots.length === 0) {
-        unavailable = true;
+    if (wasStarting) {
+        startFailed = true;
+    }
+
+    if (startFailed && slots.length === 0) {
         drainQueueInline();
         return;
     }
@@ -106,7 +114,6 @@ function onSlotMessage(slot: Slot, message: WorkerMessage) {
     }
 
     if (message.type === 'ready') {
-        everReady = true;
         slot.state = 'idle';
     } else {
         const task = slot.current;
@@ -177,7 +184,7 @@ async function spawnSlot(slot: Slot) {
 // concurrent calls (slots are pushed synchronously inside the loop, so the
 // limit holds). Never rejects - spawn failures route through onSlotDeath.
 async function ensureSpawned() {
-    if (spawnLoopActive || inlineMode()) {
+    if (spawnLoopActive || inlineMode() || startFailed) {
         return;
     }
     spawnLoopActive = true;
@@ -192,7 +199,9 @@ async function ensureSpawned() {
         const max = maxWorkers ?? resolvedMaxWorkers;
         let available = slots.filter((s) => s.state !== 'busy').length;
 
-        while (slots.length < max && available < queue.length) {
+        // recheck startFailed: in browsers new Worker() can throw
+        // synchronously (e.g. a CSP SecurityError), setting it mid-loop
+        while (!startFailed && slots.length < max && available < queue.length) {
             const slot: Slot = {
                 state: 'starting',
                 current: null,
@@ -281,6 +290,8 @@ const destroyPool = async () => {
         slot.dead = true;
         slot.terminate();
     });
+    // an explicit retry boundary: the next run() may launch workers again
+    startFailed = false;
 };
 
 /**
@@ -311,6 +322,8 @@ class WorkerQueue {
      */
     static set workerUrl(value: string | null) {
         workerUrl = value;
+        // a new script may load where the old one failed to
+        startFailed = false;
     }
 
     /**
@@ -375,7 +388,8 @@ class WorkerQueue {
     /**
      * Waits for in-flight tasks to settle, then terminates all workers.
      * Optional: idle workers don't keep the Node process alive, and workers
-     * respawn lazily on the next run() call.
+     * respawn lazily on the next run() call - including after workers failed
+     * to start and tasks fell back to running inline.
      *
      * @returns A promise that resolves once all workers are terminated.
      */
