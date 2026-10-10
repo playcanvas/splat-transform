@@ -10,19 +10,25 @@
  */
 
 import assert from 'node:assert';
+import { randomBytes } from 'node:crypto';
 import { readFile as fsReadFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { gunzipSync, gzipSync } from 'node:zlib';
 
 import { createTestDataTable, encodePlyBinary } from './helpers/test-utils.mjs';
-import { Column, DataTable, MemoryReadFileSystem, logger, readFile, readFileInfo } from '../src/lib/index.js';
+import {
+    Column, DataTable, MemoryFileSystem, MemoryReadFileSystem, WebPCodec,
+    logger, readFile, readFileInfo, readPly, writeSource
+} from '../src/lib/index.js';
 import { columnNamesFromMeta, dataTableToChunkSource } from '../src/lib/compat/data-table.js';
 import { processSource } from '../src/lib/process-source.js';
 import { createChunkDataPool } from '../src/lib/chunk/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(__dirname, 'fixtures', 'splat');
+WebPCodec.wasmUrl = join(__dirname, '..', 'lib', 'webp.wasm');
 
 // Canonical non-SH columns in the order columnNamesFromMeta emits them.
 const STANDARD = [
@@ -35,6 +41,19 @@ const memFs = (name, bytes) => {
     const fs = new MemoryReadFileSystem();
     fs.set(name, bytes);
     return fs;
+};
+
+// Write an antialiased-tagged PLY as `outputFormat` and return every output file
+// in a read file system, so the result can be peeked and fully read.
+const writeAntialiased = async (filename, outputFormat) => {
+    const pool = createChunkDataPool();
+    const plyFs = memFs('in.ply', encodePlyBinary(createTestDataTable(16), ['SplatRenderMode: mip']));
+    const source = await readPly(await plyFs.createSource('in.ply'), pool);
+    const out = new MemoryFileSystem();
+    await writeSource({ filename, outputFormat, source, pool, options: {} }, out);
+    const fileSystem = new MemoryReadFileSystem();
+    for (const [name, bytes] of out.results) fileSystem.set(name, bytes);
+    return fileSystem;
 };
 
 describe('columnNamesFromMeta', () => {
@@ -91,6 +110,7 @@ describe('readFileInfo', () => {
         assert.strictEqual(info.numLods, 1);
         assert.deepStrictEqual(info.lodCounts, [50]);
         assert.strictEqual(info.shBands, 1);
+        assert.strictEqual(info.model, 'default');
         assert.deepStrictEqual(info.layers, ['position', 'geometric', 'color']);
         assert.deepStrictEqual(info.extraColumns, []); // all standard columns, nothing extra
     });
@@ -147,6 +167,117 @@ describe('readFileInfo', () => {
         assert.strictEqual(info.format, 'spz');
         assert.ok(info.numGaussians > 0);
         assert.ok(info.layers.includes('position') && info.layers.includes('geometric'));
+    });
+
+    it('reports .spz metadata that agrees with a full read, for every version', async () => {
+        for (const fixture of ['minimal-raw.spz', 'minimal-v2.spz', 'minimal-v3.spz', 'minimal-v4.spz']) {
+            const bytes = await fsReadFile(join(fixturesDir, fixture));
+            const fileSystem = memFs('minimal.spz', bytes);
+            const info = await readFileInfo({ filename: 'minimal.spz', inputFormat: 'spz', options, params: [], fileSystem });
+            const [full] = await readFile({ filename: 'minimal.spz', inputFormat: 'spz', options, params: [], fileSystem });
+            assert.strictEqual(info.gaussian, true, fixture);
+            assert.strictEqual(info.numGaussians, full.meta.numGaussians, fixture);
+            assert.deepStrictEqual(info.lodCounts, [full.meta.numGaussians], fixture);
+            assert.strictEqual(info.shBands, full.meta.shBands, fixture);
+            assert.strictEqual(info.model, full.meta.model, fixture);
+            assert.deepStrictEqual(info.layers, ['position', 'geometric', 'color'], fixture);
+            await full.close();
+        }
+    });
+
+    it('reads a gzip-wrapped .spz from its header without decompressing the scene', async () => {
+        // v3 header (magic, version, numPoints, shDegree 0, fractionalBits 12) plus a
+        // payload large enough that its gzip stream is far longer than the prefix read
+        const numPoints = 100000;
+        const header = new Uint8Array(16);
+        const view = new DataView(header.buffer);
+        view.setUint32(0, 0x5053474e, true);
+        view.setUint32(4, 3, true);
+        view.setUint32(8, numPoints, true);
+        view.setUint8(13, 12);
+        const payload = randomBytes(numPoints * 20); // random, so it doesn't compress
+        const zipped = gzipSync(Buffer.concat([header, payload]));
+        assert.ok(zipped.length > 2 * 65536);
+
+        // only the first 64KB survives: a full read can't decode it, the header peek can
+        const fileSystem = memFs('big.spz', new Uint8Array(zipped.subarray(0, 65536)));
+        const info = await readFileInfo({ filename: 'big.spz', inputFormat: 'spz', options, params: [], fileSystem });
+        assert.strictEqual(info.numGaussians, numPoints);
+        assert.strictEqual(info.shBands, 0);
+        await assert.rejects(() => readFile({ filename: 'big.spz', inputFormat: 'spz', options, params: [], fileSystem }));
+    });
+
+    it('reads a gzip-wrapped .spz whose optional gzip header fields push the data past 64KB', async () => {
+        // re-wrap a v3 fixture with a 65,535-byte FEXTRA and a 70,000-byte FNAME, so the
+        // compressed data starts well past the first prefix read
+        const raw = gunzipSync(await fsReadFile(join(fixturesDir, 'minimal-v3.spz')));
+        const plain = gzipSync(raw);
+        const extra = Buffer.alloc(2 + 65535, 0x41);
+        extra.writeUInt16LE(65535, 0);
+        const name = Buffer.concat([Buffer.alloc(70000, 0x61), Buffer.from([0])]);
+        const header = Buffer.from(plain.subarray(0, 10));
+        header[3] |= 0x04 | 0x08; // FEXTRA | FNAME
+        const bytes = new Uint8Array(Buffer.concat([header, extra, name, plain.subarray(10)]));
+
+        const fileSystem = memFs('padded.spz', bytes);
+        const info = await readFileInfo({ filename: 'padded.spz', inputFormat: 'spz', options, params: [], fileSystem });
+        const [full] = await readFile({ filename: 'padded.spz', inputFormat: 'spz', options, params: [], fileSystem });
+        assert.strictEqual(info.numGaussians, full.meta.numGaussians);
+        assert.strictEqual(info.shBands, full.meta.shBands);
+        await full.close();
+    });
+
+    it('reports the model a SOG is tagged with, bundled or not, matching a full read', async () => {
+        // absolute, so the unbundled textures land beside meta.json (the writer
+        // resolves their paths against the current directory)
+        for (const [filename, outputFormat] of [['/out/meta.json', 'sog'], ['/out/scene.sog', 'sog-bundle']]) {
+            const fileSystem = await writeAntialiased(filename, outputFormat);
+            const info = await readFileInfo({ filename, inputFormat: 'sog', options, params: [], fileSystem });
+            const [full] = await readFile({ filename, inputFormat: 'sog', options, params: [], fileSystem });
+            assert.strictEqual(info.model, 'antialiased', filename);
+            assert.strictEqual(full.meta.model, 'antialiased', filename);
+            assert.strictEqual(info.numGaussians, full.meta.numGaussians, filename);
+            await full.close();
+        }
+    });
+
+    it('reports an antialiased .spz from its header flag, matching a full read', async () => {
+        // v4 (plaintext header) written from an antialiased-tagged PLY, and a
+        // gzip-wrapped v3 fixture with the flag set by hand
+        const raw = gunzipSync(await fsReadFile(join(fixturesDir, 'minimal-v3.spz')));
+        raw[14] |= 0x1;
+        const files = [
+            ['out.spz', await writeAntialiased('out.spz', 'spz')],
+            ['v3.spz', memFs('v3.spz', new Uint8Array(gzipSync(raw)))]
+        ];
+        for (const [filename, fileSystem] of files) {
+            const info = await readFileInfo({ filename, inputFormat: 'spz', options, params: [], fileSystem });
+            const [full] = await readFile({ filename, inputFormat: 'spz', options, params: [], fileSystem });
+            assert.strictEqual(info.model, 'antialiased', filename);
+            assert.strictEqual(full.meta.model, 'antialiased', filename);
+            await full.close();
+        }
+    });
+
+    it('rejects a corrupt gzip-wrapped .spz', async () => {
+        const bytes = new Uint8Array([0x1f, 0x8b, 0x08, 0x00, 0, 0, 0, 0, 0, 0x03, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+        await assert.rejects(() => readFileInfo({
+            filename: 'corrupt.spz', inputFormat: 'spz', options, params: [], fileSystem: memFs('corrupt.spz', bytes)
+        }));
+    });
+
+    it('rejects a .spz with an invalid header', async () => {
+        const read = bytes => readFileInfo({
+            filename: 'bad.spz', inputFormat: 'spz', options, params: [], fileSystem: memFs('bad.spz', bytes)
+        });
+        await assert.rejects(() => read(new TextEncoder().encode('not an spz file at all')), /invalid \.spz file header/);
+
+        const wrongVersion = new Uint8Array(16);
+        new DataView(wrongVersion.buffer).setUint32(0, 0x5053474e, true);
+        new DataView(wrongVersion.buffer).setUint32(4, 9, true);
+        await assert.rejects(() => read(wrongVersion), /Unsupported \.spz version 9/);
+
+        await assert.rejects(() => read(new Uint8Array([0x4e, 0x47, 0x53, 0x50])), /File too small/);
     });
 });
 

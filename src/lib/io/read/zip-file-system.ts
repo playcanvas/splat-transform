@@ -224,8 +224,10 @@ class ZipReadFileSystem implements ReadFileSystem {
             throw new Error('Cannot read zip from source with unknown size');
         }
 
-        // Read the last 65KB to find the End of Central Directory record
-        const eocdSearchSize = Math.min(65536 + 22, size);
+        // Read the last 65KB to find the End of Central Directory record (plus
+        // 20 bytes so the zip64 locator ahead of it is in reach even behind a
+        // maximum-length comment)
+        const eocdSearchSize = Math.min(65536 + 22 + 20, size);
         const eocdStream = this.source.read(size - eocdSearchSize, size);
         const eocdData = await eocdStream.readAll();
         eocdStream.close();
@@ -249,9 +251,32 @@ class ZipReadFileSystem implements ReadFileSystem {
         }
 
         const eocdView = new DataView(eocdData.buffer, eocdData.byteOffset + eocdOffset, 22);
-        const entryCount = eocdView.getUint16(10, true);
-        const cdSize = eocdView.getUint32(12, true);
-        const cdOffset = eocdView.getUint32(16, true);
+        let entryCount = eocdView.getUint16(10, true);
+        let cdSize = eocdView.getUint32(12, true);
+        let cdOffset = eocdView.getUint32(16, true);
+
+        // A maxed-out field means the real value is in the zip64 end of
+        // central directory record, found via the locator just ahead of the
+        // EOCD. Without a locator the classic values stand.
+        if (entryCount === 0xffff || cdSize === 0xffffffff || cdOffset === 0xffffffff) {
+            const locatorOffset = eocdOffset - 20;
+            const locatorView =
+                locatorOffset >= 0 ? new DataView(eocdData.buffer, eocdData.byteOffset + locatorOffset, 20) : null;
+            if (locatorView && locatorView.getUint32(0, true) === 0x07064b50) {
+                const zip64EocdOffset = Number(locatorView.getBigUint64(8, true));
+                const zip64Stream = this.source.read(zip64EocdOffset, zip64EocdOffset + 56);
+                const zip64Data = await zip64Stream.readAll();
+                zip64Stream.close();
+
+                const zip64View = new DataView(zip64Data.buffer, zip64Data.byteOffset, 56);
+                if (zip64View.getUint32(0, true) !== 0x06064b50) {
+                    throw new Error('Invalid zip64 end of central directory signature');
+                }
+                entryCount = Number(zip64View.getBigUint64(32, true));
+                cdSize = Number(zip64View.getBigUint64(40, true));
+                cdOffset = Number(zip64View.getBigUint64(48, true));
+            }
+        }
 
         // Read central directory
         const cdStream = this.source.read(cdOffset, cdOffset + cdSize);
@@ -275,12 +300,37 @@ class ZipReadFileSystem implements ReadFileSystem {
 
             const gpFlags = cdView.getUint16(8, true);
             const method = cdView.getUint16(10, true);
-            const compressedSize = cdView.getUint32(20, true);
-            const uncompressedSize = cdView.getUint32(24, true);
+            let compressedSize = cdView.getUint32(20, true);
+            let uncompressedSize = cdView.getUint32(24, true);
             const nameLen = cdView.getUint16(28, true);
             const extraLen = cdView.getUint16(30, true);
             const commentLen = cdView.getUint16(32, true);
-            const localHeaderOffset = cdView.getUint32(42, true);
+            let localHeaderOffset = cdView.getUint32(42, true);
+
+            // zip64: maxed-out fields are carried, in fixed order, by the
+            // zip64 extended information extra field (header id 0x0001)
+            if (uncompressedSize === 0xffffffff || compressedSize === 0xffffffff || localHeaderOffset === 0xffffffff) {
+                const extraEnd = 46 + nameLen + extraLen;
+                let p = 46 + nameLen;
+                while (p + 4 <= extraEnd && cdView.getUint16(p, true) !== 0x0001) {
+                    p += 4 + cdView.getUint16(p + 2, true);
+                }
+                if (p + 4 > extraEnd) {
+                    throw new Error('Zip64 extra field not found in central directory entry');
+                }
+                p += 4;
+                if (uncompressedSize === 0xffffffff) {
+                    uncompressedSize = Number(cdView.getBigUint64(p, true));
+                    p += 8;
+                }
+                if (compressedSize === 0xffffffff) {
+                    compressedSize = Number(cdView.getBigUint64(p, true));
+                    p += 8;
+                }
+                if (localHeaderOffset === 0xffffffff) {
+                    localHeaderOffset = Number(cdView.getBigUint64(p, true));
+                }
+            }
 
             const nameBytes = cdData.subarray(offset + 46, offset + 46 + nameLen);
             const utf8 = (gpFlags & 0x800) !== 0;

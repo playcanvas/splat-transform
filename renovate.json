@@ -20,10 +20,6 @@
     {
       "matchDepTypes": ["dependencies"],
       "rangeStrategy": "widen"
-    },
-    {
-      "matchPackageNames": ["webgpu"],
-      "enabled": false
     }
   ]
 }

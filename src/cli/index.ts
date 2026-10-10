@@ -23,6 +23,7 @@ import {
     materializeToDataTable,
     processSourceBridged,
     readFile,
+    readFileInfo,
     readPly,
     resolveSplatModel,
     revision,
@@ -57,6 +58,7 @@ import { readLcc2Source, readLcc2EnvironmentSource } from '../lib/readers/read-l
 import { readLodSource, readLodEnvironmentSource } from '../lib/readers/read-lod';
 import { loadCameraTrack } from '../lib/render/camera-track';
 import type { CameraTrack } from '../lib/render/camera-track';
+import { formatFileInfo } from '../lib/source-info';
 import { frameFilename } from '../lib/writers/utils';
 
 import { createDevice, enumerateAdapters, getPeakGpuMemory } from './node-device';
@@ -1304,6 +1306,31 @@ const main = async () => {
             }
         }
         const decimateAction = decimateIdx.length === 1 ? (singleSceneActions[decimateIdx[0]] as CliDecimate) : null;
+
+        // `--info` alone on one input with no output: report through readFileInfo,
+        // which reads only the header where the format allows (sog, spz) instead of
+        // opening, and for eager readers decoding, the whole file. The output is
+        // what the info action prints for the same file.
+        const [onlyAction] = singleSceneActions;
+        if (
+            isNullOutput &&
+            inputArgs.length === 1 &&
+            singleSceneActions.length === 1 &&
+            onlyAction.kind === 'info' &&
+            soleInputFormat !== 'mjs'
+        ) {
+            const { filename: inFile, fileSystem } = resolveInput(inputArgs[0].filename);
+            const info = await readFileInfo({
+                filename: inFile,
+                inputFormat: soleInputFormat,
+                options: { ...options, lodSelect: [] },
+                params: [],
+                fileSystem
+            });
+            logger.output(formatFileInfo(info, onlyAction.format));
+            reportDone();
+            exit(0);
+        }
 
         if (isNullOutput || (outputFormat !== 'lod' && singleSceneActions.every((a) => a.kind !== 'lod'))) {
             const pool = createChunkDataPool();
