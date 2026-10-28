@@ -39,6 +39,12 @@ type ChunkSourceMetadata = {
     readonly availableLayers: ReadonlySet<ChunkLayer>;
     /** Per-layer stride + field map. Keyed by layer; only present for available layers. */
     readonly layouts: Readonly<Partial<Record<ChunkLayer, LayerLayout>>>;
+    /**
+     * Application-defined JSON carried by the scene's container (SOG `meta.json` /
+     * `lod-meta.json` `extras`, as in glTF). No meaning to splat-transform: read,
+     * passed through and written back. Absent when the scene has none.
+     */
+    readonly extras?: unknown;
 };
 
 /**

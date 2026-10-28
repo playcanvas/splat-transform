@@ -157,7 +157,9 @@ const taskHandlers = {
     // Decimation merge stream: n-ary moment match of packed member-major
     // groups. Inputs are member-major (pos 3 / geo 8 / color colorDim floats
     // per member, groups back to back per `sizes`); outputs are group-major.
-    // `other` columns (when present) copy from the dominant-mass member.
+    // `other` columns (when present) copy from the dominant-mass member, except
+    // the excess-opacity word (`excessWord`), which is read as part of each
+    // member's mass and written with the merged excess.
     mergeGroups: (args: {
         pos: Float32Array;
         geo: Float32Array;
@@ -166,19 +168,30 @@ const taskHandlers = {
         colorDim: number;
         other?: Uint32Array;
         otherDim?: number;
+        excessWord?: number;
     }): TaskOutput<{ pos: Float32Array; geo: Float32Array; color: Float32Array; other?: Uint32Array }> => {
         const { sizes, colorDim } = args;
         const g = sizes.length;
         const otherDim = args.otherDim ?? 0;
-        const view = { pos: args.pos, geo: args.geo, color: args.color, colorDim };
+        const excessWord = args.other && args.excessWord !== undefined ? args.excessWord : -1;
+        let excess: Float32Array | undefined;
+        if (excessWord >= 0) {
+            const words = new Float32Array(args.other!.buffer, args.other!.byteOffset, args.other!.length);
+            const n = args.geo.length / 8;
+            excess = new Float32Array(n);
+            for (let i = 0; i < n; i++) excess[i] = words[i * otherDim + excessWord];
+        }
+        const view = { pos: args.pos, geo: args.geo, color: args.color, colorDim, excess };
         const outPos = new Float32Array(g * 3);
         const outGeo = new Float32Array(g * 8);
         const outColor = new Float32Array(g * colorDim);
         const outOther = args.other && otherDim > 0 ? new Uint32Array(g * otherDim) : undefined;
+        const outOtherF32 = outOther ? new Float32Array(outOther.buffer) : undefined;
         const merged = {
             pos: new Float64Array(3),
             geo: new Float64Array(8),
-            color: new Float64Array(colorDim)
+            color: new Float64Array(colorDim),
+            excess: 0
         };
         const scratch = createMergeScratch();
         const members: number[] = [];
@@ -195,7 +208,7 @@ const taskHandlers = {
                 let dominant = base,
                     best = -Infinity;
                 for (let m = 0; m < size; m++) {
-                    const mass = splatMass(args.geo, base + m);
+                    const mass = splatMass(args.geo, base + m, excess);
                     if (mass > best) {
                         best = mass;
                         dominant = base + m;
@@ -204,6 +217,7 @@ const taskHandlers = {
                 for (let c = 0; c < otherDim; c++) {
                     outOther[gi * otherDim + c] = args.other![dominant * otherDim + c];
                 }
+                if (excessWord >= 0) outOtherF32![gi * otherDim + excessWord] = merged.excess;
             }
             base += size;
         }

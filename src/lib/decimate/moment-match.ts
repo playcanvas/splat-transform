@@ -271,13 +271,22 @@ type SplatView = {
     geo: Float32Array;
     color: Float32Array;
     colorDim: number;
+    /**
+     * Per-splat excess opacity (`opacity_excess`, 1 f32/splat): mass a previous
+     * decimation could not carry at opacity <= 1. Absent = 0 for every splat.
+     */
+    excess?: Float32Array;
 };
 
-/** Merged-splat output: pos 3, geo 8 (same encoding as SplatView), color colorDim. */
+/**
+ * Merged-splat output: pos 3, geo 8 (same encoding as SplatView), color
+ * colorDim, plus the merged excess opacity `max(0, A - 1)`.
+ */
 type MergedOut = {
     pos: Float64Array;
     geo: Float64Array;
     color: Float64Array;
+    excess: number;
 };
 
 /**
@@ -313,19 +322,33 @@ const createMergeScratch = (): MergeScratch => ({
 });
 
 /**
- * Merge weight of one splat: area·α "ink" mass (+1e-30, the merge-path
- * epsilon; the cost-path cache uses +1e-12 — both match their legacy
- * counterparts exactly).
+ * True opacity of one splat: `sigmoid(opacity) + opacity_excess`, which may
+ * exceed 1 for a splat an earlier decimation clamped.
  * @param geo - Geometric-layer view (8 f32/splat).
  * @param i - Splat index.
+ * @param excess - Excess-opacity column, if any.
+ * @returns The splat's true opacity.
+ */
+const splatOpacity = (geo: Float32Array, i: number, excess?: Float32Array): number => {
+    const a = sigmoid(geo[i * 8 + 7]);
+    return excess ? a + excess[i] : a;
+};
+
+/**
+ * Merge weight of one splat: area·A "ink" mass, A the true opacity (+1e-30,
+ * the merge-path epsilon; the cost-path cache uses +1e-12 — both match their
+ * legacy counterparts exactly).
+ * @param geo - Geometric-layer view (8 f32/splat).
+ * @param i - Splat index.
+ * @param excess - Excess-opacity column, if any.
  * @returns The merge weight.
  */
-const splatMass = (geo: Float32Array, i: number): number => {
+const splatMass = (geo: Float32Array, i: number, excess?: Float32Array): number => {
     const i8 = i * 8;
     const sx = Math.max(Math.exp(geo[i8 + 4]), 1e-12);
     const sy = Math.max(Math.exp(geo[i8 + 5]), 1e-12);
     const sz = Math.max(Math.exp(geo[i8 + 6]), 1e-12);
-    return sigmoid(geo[i8 + 7]) * ellipsoidArea(sx, sy, sz) + 1e-30;
+    return splatOpacity(geo, i, excess) * ellipsoidArea(sx, sy, sz) + 1e-30;
 };
 
 /**
@@ -348,7 +371,7 @@ const mergeGroup = (
     out: MergedOut,
     scratch: MergeScratch
 ): void => {
-    const { pos, geo, color, colorDim } = view;
+    const { pos, geo, color, colorDim, excess } = view;
 
     // Per-member normalized weights, computed once — splatMass is
     // transcendental-heavy and was previously re-evaluated per loop (and per
@@ -360,7 +383,7 @@ const mergeGroup = (
     }
     let W = 0;
     for (let m = 0; m < count; m++) {
-        const mass = splatMass(geo, members[m]);
+        const mass = splatMass(geo, members[m], excess);
         weights[m] = mass;
         W += mass;
     }
@@ -468,8 +491,12 @@ const mergeGroup = (
     const s1 = Math.sqrt(ev1);
     const s2 = Math.sqrt(ev2);
 
-    // Mass-conserving opacity, capped at 1 (no scale inflation).
-    const alphaM = Math.min(1, W / Math.max(ellipsoidArea(s0, s1, s2), 1e-30));
+    // Mass-conserving opacity, capped at 1 (no scale inflation). What the cap
+    // cuts off is kept as excess opacity, so the full mass A = alphaM + excess
+    // survives into the output for renderers (and later levels) to use.
+    const A = W / Math.max(ellipsoidArea(s0, s1, s2), 1e-30);
+    const alphaM = Math.min(1, A);
+    out.excess = A > 1 ? A - 1 : 0;
 
     const Rm = scratch.rM;
     Rm[0] = vecs[o0];
@@ -521,6 +548,7 @@ export {
     rotmatToQuat,
     ellipsoidArea,
     splatMass,
+    splatOpacity,
     mergeGroup,
     createMergeScratch,
     type SplatView,

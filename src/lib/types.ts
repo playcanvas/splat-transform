@@ -45,6 +45,15 @@ type Options = {
     /** SPZ format version to write. Default: 4. */
     spzVersion?: 3 | 4;
 
+    /** SOG format version to write (SOG, SOG bundle and LOD output). Default: 3. HTML output always embeds v2. */
+    sogVersion?: 2 | 3;
+
+    /** Store this source column as per-gaussian SOG blind data (v3 only), in `bytes` (1-4, default: fewest that fit). */
+    sogBlind?: { column: string; bytes?: 1 | 2 | 3 | 4 };
+
+    /** JSON to store as the SOG / LOD output's `extras` (application-defined, as in glTF). Default: the source's extras. */
+    sogExtras?: unknown;
+
     /** Size of each voxel in world units for voxel output. Default: 0.05 */
     voxelResolution?: number;
 
@@ -182,6 +191,13 @@ type Options = {
      * device's binding limits.
      */
     renderResidentBudget?: number;
+
+    /**
+     * Draw excess opacity (`opacity_excess`, kept by decimation) with the
+     * over-unity plateau profile. Default true; false renders as if the
+     * column were absent, for debugging and A/B comparison.
+     */
+    renderCompensation?: boolean;
 };
 
 /**

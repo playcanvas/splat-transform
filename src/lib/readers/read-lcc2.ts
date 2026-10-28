@@ -485,7 +485,7 @@ const readChunkCount = async (fileSystem: ReadFileSystem, splatType: string, ful
                 const count =
                     version === undefined
                         ? sogMeta.means?.shape?.[0] // V1: texture shape
-                        : version === 2
+                        : version === 2 || version === 3
                           ? sogMeta.count
                           : undefined;
                 if (!Number.isInteger(count) || count < 0) {

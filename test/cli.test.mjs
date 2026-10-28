@@ -3,9 +3,11 @@
  */
 
 import { spawn } from 'node:child_process';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -14,6 +16,9 @@ const cliArgsEnvName = 'SPLAT_TRANSFORM_CLI_TEST_ARGS';
 
 const cliBootstrap = `
 const cliArgs = JSON.parse(process.env.${cliArgsEnvName});
+// from source the codec resolves its wasm relative to src/lib; point it at the shipped copy
+const { WebPCodec } = await import('./src/lib/utils/webp-codec.ts');
+WebPCodec.wasmUrl = process.cwd() + '/lib/webp.wasm';
 process.argv = ['node', 'src/cli/index.ts', ...cliArgs];
 const { main } = await import('./src/cli/index.ts');
 await main();
@@ -107,6 +112,22 @@ describe('CLI parsing', () => {
 
         assert.notStrictEqual(result.code, 0, 'CLI should reject --tag-lod -2');
         assert.match(result.stderr, /Must be >= 0, or -1/);
+    });
+
+    it('rejects --sog-version values other than 2 or 3', async () => {
+        const result = await runCli(['--gpu', 'cpu', 'test/fixtures/splat/minimal.splat', '--sog-version', '4', 'null']);
+
+        assert.notStrictEqual(result.code, 0, 'CLI should reject --sog-version 4');
+        assert.match(result.stderr, /Invalid sog-version value: 4/);
+    });
+
+    it('rejects a malformed --sog-blind', async () => {
+        for (const value of [':2', 'id:5', 'id:2:3']) {
+            const result = await runCli(['--gpu', 'cpu', 'test/fixtures/splat/minimal.splat', '--sog-blind', value, 'null']);
+
+            assert.notStrictEqual(result.code, 0, `CLI should reject --sog-blind ${value}`);
+            assert.match(result.stderr, /Invalid sog-blind value/);
+        }
     });
 });
 
@@ -344,3 +365,39 @@ describe('CLI --info (header-only report)', () => {
     });
 });
 
+
+describe('CLI --sog-extras', () => {
+    it('writes extras to lod-meta.json only, and the LOD reader carries them on', async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'sog-extras-'));
+        try {
+            const extras = { scene: 'minimal', ids: [1, 2, 3] };
+            await writeFile(join(dir, 'extras.json'), JSON.stringify(extras));
+            // LOD output takes PLY inputs
+            const ply = join(dir, 'minimal.ply');
+            let result = await runCli(['--gpu', 'cpu', '-w', 'test/fixtures/splat/minimal.splat', ply]);
+            assert.strictEqual(result.code, 0, `CLI failed:\n${result.stderr}\n${result.stdout}`);
+            const lodMeta = join(dir, 'lod', 'lod-meta.json');
+            result = await runCli([
+                '--gpu', 'cpu', '-w',
+                ply, '-l', '0',
+                ply, '-l', '1',
+                '--sog-extras', join(dir, 'extras.json'),
+                lodMeta
+            ]);
+            assert.strictEqual(result.code, 0, `CLI failed:\n${result.stderr}\n${result.stdout}`);
+            assert.deepStrictEqual(JSON.parse(await readFile(lodMeta, 'utf8')).extras, extras);
+            for (const unit of (await readdir(join(dir, 'lod'))).filter((d) => /^\d+_\d+$/.test(d))) {
+                const unitMeta = JSON.parse(await readFile(join(dir, 'lod', unit, 'meta.json'), 'utf8'));
+                assert.strictEqual(unitMeta.extras, undefined, `unit ${unit} carries no extras`);
+            }
+
+            // the LOD reader puts them on the source, so a SOG written from it keeps them
+            const sogMeta = join(dir, 'out', 'meta.json');
+            result = await runCli(['--gpu', 'cpu', '-w', lodMeta, sogMeta]);
+            assert.strictEqual(result.code, 0, `CLI failed:\n${result.stderr}\n${result.stdout}`);
+            assert.deepStrictEqual(JSON.parse(await readFile(sogMeta, 'utf8')).extras, extras);
+        } finally {
+            await rm(dir, { recursive: true, force: true });
+        }
+    });
+});

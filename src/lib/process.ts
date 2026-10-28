@@ -84,8 +84,8 @@ type FilterByValue = {
 type FilterBands = {
     /** Action type identifier. */
     kind: 'filterBands';
-    /** Maximum SH band to keep (0-3). */
-    value: 0 | 1 | 2 | 3;
+    /** Maximum SH band to keep (0-4). */
+    value: 0 | 1 | 2 | 3 | 4;
 };
 
 /**
@@ -417,8 +417,8 @@ const processDataTable = async (
                 const outputBands = processAction.value;
 
                 if (outputBands < inputBands) {
-                    const inputCoeffs = [0, 3, 8, 15][inputBands];
-                    const outputCoeffs = [0, 3, 8, 15][outputBands];
+                    const inputCoeffs = [0, 3, 8, 15, 24][inputBands];
+                    const outputCoeffs = [0, 3, 8, 15, 24][outputBands];
 
                     const map: Record<string, string | null> = {};
                     for (let i = 0; i < inputCoeffs; ++i) {

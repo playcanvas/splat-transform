@@ -208,10 +208,6 @@ const parseSpzHeader = (
     if (shDegree < 0 || shDegree >= HARMONICS_COMPONENT_COUNT.length) {
         throw new Error(`Unsupported SH degree ${shDegree}`);
     }
-    if (shDegree > 3) {
-        // SPZ degree 4 (72 coeffs) exceeds splat-transform's SH band-3 model.
-        throw new Error('Unsupported .spz SH degree 4 (band 4); splat-transform supports up to band 3');
-    }
 
     return {
         version,
@@ -369,8 +365,7 @@ const tmpQuat = [0.0, 0.0, 0.0, 0.0];
  * WASM, no in-memory size ceiling, identical Node/browser. The decompressed
  * (compact) attribute bytes stay resident; each `read` unpacks only the
  * requested layers for the chunk. Decoding is raw (no coordinate conversion);
- * the source carries a pending `Transform.PLY`. SH degree 4 is rejected (the
- * chunk model supports up to band 3).
+ * the source carries a pending `Transform.PLY`. SH degrees 0-4 are supported.
  *
  * @param source - The read source for the `.spz` file.
  * @param pool - Pool whose `chunkSize` sets the gaussians-per-chunk granularity.

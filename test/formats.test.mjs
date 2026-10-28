@@ -925,12 +925,13 @@ describe('SPZ Format (Input Only)', () => {
         assert(Math.abs(Math.abs(rot3[1]) - Math.sin(Math.PI / 4)) < 0.01);
     });
 
-    it('rejects .spz v4 files with shDegree=4 (band 4 exceeds the chunk model)', async () => {
+    it('reads .spz v4 files with shDegree=4 as 4 SH bands', async () => {
         const spzData = await createSpzFixture({ version: 4, shDegree: 4 });
-        await assert.rejects(
-            readSpzTable(new BufferReadSource(spzData)),
-            /SH degree 4|band 4/
-        );
+        const dataTable = await readSpzTable(new BufferReadSource(spzData));
+
+        assert.strictEqual(dataTable.numRows, 2);
+        assert.ok(dataTable.getColumnByName('f_rest_71'), 'has all 72 f_rest columns');
+        assert.ok(!dataTable.getColumnByName('f_rest_72'));
     });
 
     it('should return an empty table for v4 files with mismatched stream count', async () => {

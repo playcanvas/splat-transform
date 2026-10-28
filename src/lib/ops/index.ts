@@ -11,3 +11,4 @@ export { concatSource } from './concat-source';
 export { filterNaNRows, filterByValueRows, filterBoxRows, filterSphereRows } from './filter-mask';
 export { computeSourceStats } from './stats';
 export type { LodStats, LodStatsData, SourceStats } from './stats';
+export { withOpacityExcess } from './opacity-excess-source';

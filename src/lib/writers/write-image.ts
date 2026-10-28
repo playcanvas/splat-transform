@@ -184,6 +184,13 @@ type WriteImageOptions = {
      */
     residentBudget?: number;
 
+    /**
+     * Draw excess opacity (`opacity_excess`, kept by decimation) with the
+     * over-unity plateau profile. Default true; false renders as if the
+     * column were absent (debugging, A/B).
+     */
+    compensation?: boolean;
+
     /** Function returning a GraphicsDevice. Required — rasterization runs on GPU. */
     createDevice?: DeviceCreator;
 };
@@ -232,6 +239,7 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         frames,
         webpEffort,
         residentBudget,
+        compensation,
         createDevice
     } = options;
     let { near = 0.2, focusDistance, sensorSize = 0.024 } = options;
@@ -466,7 +474,8 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         width: width!,
         height: height!,
         background,
-        residentBudget
+        residentBudget,
+        compensation
     });
     const tierNote: Record<SceneTier, string> = {
         resident: 'scene resident on GPU',

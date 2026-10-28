@@ -5,14 +5,14 @@ import { compact } from '../chunk';
 import type { ChunkDataPool, ChunkSource, ChunkSourceMetadata } from '../chunk';
 import type { ReadFileSystem } from '../io/read';
 import type { FileSystem } from '../io/write';
-import { bakeTransform } from '../ops';
+import { bakeTransform, withOpacityExcess } from '../ops';
 import { readPly } from '../readers/read-ply';
 import type { DeviceCreator } from '../types';
 import { fmtBytes, fmtCount, logger, Transform } from '../utils';
 import { writePlyStreaming } from '../writers/write-ply-streaming';
 
 import { createBlockProducerSource } from './block-producer';
-import { APP_CHUNK } from './gpu-edge-cost';
+import { appChunkWidth } from './gpu-edge-cost';
 import { mergeStream } from './merge-stream';
 import { kdPartition, coherenceRuns } from './partition';
 import type { ResidentPositions } from './partition';
@@ -119,12 +119,11 @@ const extractPositions = async (source: ChunkSource, pool: ChunkDataPool): Promi
  * @param opts - Options.
  * @returns The decimated stream-once source with exact metadata.
  */
-const decimateSource = async (
-    source: ChunkSource,
-    pool: ChunkDataPool,
-    opts: DecimateOptions
-): Promise<ChunkSource> => {
+const decimateSource = async (input: ChunkSource, pool: ChunkDataPool, opts: DecimateOptions): Promise<ChunkSource> => {
     const { targetCount } = opts;
+    // Every merge reads and writes the excess-opacity column (0 when the input
+    // has none), so the output always carries it.
+    const source = withOpacityExcess(input, pool);
     const inputMeta = source.meta;
 
     if (inputMeta.numLods > 1) {
@@ -141,7 +140,7 @@ const decimateSource = async (
         throw new Error(`decimate target must be at least 1 (got ${targetCount})`);
     }
     if (targetCount >= inputMeta.numGaussians) {
-        return source;
+        return input; // nothing merges, so nothing to add
     }
 
     const device: GraphicsDevice | undefined = opts.createDevice ? await opts.createDevice() : undefined;
@@ -177,7 +176,7 @@ const decimateSource = async (
             ?.limits?.maxStorageBufferBindingSize;
         if (typeof bindingLimit === 'number') {
             const largestBinding = (bs: number) =>
-                bs * (1 + HALO_CAP) * Math.max(Math.min(APP_CHUNK, colorDim) * 4, 36);
+                bs * (1 + HALO_CAP) * Math.max(Math.min(appChunkWidth(colorDim), colorDim) * 4, 36);
             while (blockSize > 1 << 16 && largestBinding(blockSize) > bindingLimit) {
                 blockSize >>= 1;
             }
@@ -257,7 +256,9 @@ const decimateSource = async (
             extraColumns: src.meta.extraColumns,
             transform: src.meta.transform,
             availableLayers: src.meta.availableLayers,
-            layouts: src.meta.layouts
+            layouts: src.meta.layouts,
+            // generations can spill through PLY, which has no extras: carry the input's
+            ...(input.meta.extras !== undefined ? { extras: input.meta.extras } : {})
         };
 
         const isFinal = outCount <= targetCount;

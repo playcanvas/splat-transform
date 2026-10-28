@@ -79,6 +79,7 @@ const detectShBands = (dataTable: DataTable): SHBands => {
     if (count === SH_REST_COUNTS[1]) return 1;
     if (count === SH_REST_COUNTS[2]) return 2;
     if (count === SH_REST_COUNTS[3]) return 3;
+    if (count === SH_REST_COUNTS[4]) return 4;
     throw new Error(`dataTableToChunkSource: unrecognized f_rest_* count: ${count}`);
 };
 

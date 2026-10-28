@@ -8,6 +8,7 @@ import type { SceneView, SortedOrder, StreamedRange } from '../gpu/gpu-scene-ras
 import { buildCameraBasis } from './camera';
 import type { Projection, RenderCamera } from './camera';
 import { TILE_SIZE, storageBindingLimit } from './config';
+import { withLinearOpacity } from './linear-opacity';
 import { SortScratch, sortCandidatesByDepth } from './preprocess';
 
 /**
@@ -59,6 +60,8 @@ type SceneRendererOptions = {
     residentBudget?: number;
     /** Use this tier regardless of fit (tests); default picks the first that fits. */
     tier?: SceneTier;
+    /** Draw excess opacity with the over-unity profile; default true. */
+    compensation?: boolean;
 };
 
 /**
@@ -121,7 +124,9 @@ class SceneRenderer {
 
     constructor(device: GraphicsDevice, source: ChunkSource, pool: ChunkDataPool, options: SceneRendererOptions) {
         this.device = device;
-        this.source = source;
+        // excess opacity reaches the GPU folded into a linear opacity slot
+        const linear = options.compensation === false ? null : withLinearOpacity(source, pool);
+        this.source = linear ?? source;
         this.pool = pool;
         this.options = options;
         this.numSplats = source.meta.lodCounts[0];
@@ -151,6 +156,7 @@ class SceneRenderer {
             groupTilesX,
             groupTilesY,
             sizeClamp: options.sizeClamp,
+            linearOpacity: !!linear,
             bgR: bg.r,
             bgG: bg.g,
             bgB: bg.b,

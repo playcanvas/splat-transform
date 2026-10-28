@@ -1,4 +1,5 @@
 import type { ChunkDataPool, ChunkSource } from '../chunk';
+import { withExtras } from '../extras';
 import { dirname, join, readFile } from '../io/read';
 import type { ReadFileSystem } from '../io/read';
 import type { Options } from '../types';
@@ -26,6 +27,7 @@ type LodMeta = {
     environment?: string;
     filenames: string[];
     tree: LodNode;
+    extras?: unknown;
 };
 
 const parseLodMeta = (text: string, filename: string): LodMeta => {
@@ -166,7 +168,8 @@ const readLodSource = async (
             });
     });
 
-    return containerSource(segmentsByLod, pool);
+    // the scene's extras live in lod-meta.json, not in its units
+    return withExtras(await containerSource(segmentsByLod, pool), meta.extras);
 };
 
 /**

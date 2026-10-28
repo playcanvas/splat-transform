@@ -13,7 +13,7 @@
  * embedded by the tile-AABB chunk via JS-template substitution at
  * construction time (see `sharedCincludes` in the rasterizer ctor).
  *
- * @param coeffsPerChannel - Per-channel SH coefficient count (0/3/8/15).
+ * @param coeffsPerChannel - Per-channel SH coefficient count (0/3/8/15/24).
  * @returns WGSL source for the project compute shader.
  */
 const projectWgsl = (coeffsPerChannel: number) => /* wgsl */ `
@@ -73,8 +73,36 @@ const SH_C3_3: f32 = 0.3731763325901154;
 const SH_C3_4: f32 = -0.4570457994644658;
 const SH_C3_5: f32 = 1.445305721320277;
 const SH_C3_6: f32 = -0.5900435899266435;
+const SH_C4_0: f32 = 2.5033429417967046;
+const SH_C4_1: f32 = -1.7701307697799304;
+const SH_C4_2: f32 = 0.9461746957575601;
+const SH_C4_3: f32 = -0.6690465435572892;
+const SH_C4_4: f32 = 0.10578554691520431;
+const SH_C4_5: f32 = -0.6690465435572892;
+const SH_C4_6: f32 = 0.47308734787878004;
+const SH_C4_7: f32 = -1.7701307697799304;
+const SH_C4_8: f32 = 0.6258357354491761;
 
 const COEFFS_PER_CHANNEL: u32 = ${coeffsPerChannel}u;
+
+// Over-unity profile (excess opacity): exp(-D/2 * max(0, r - (D-1))^2) for
+// r in sigma units, which carries mass
+//   I(D) = (D-1)^2/2 + 1/D + (D-1)/2 * sqrt(2 pi / D),  I(1) = 1.
+fn profileMass(D: f32) -> f32 {
+    let p = D - 1.0;
+    return 0.5 * p * p + 1.0 / D + 0.5 * p * sqrt(6.283185307179586 / D);
+}
+
+// Inverse of profileMass by bisection; I(D) >= (D-1)^2/2 bounds D above.
+fn profileParamForMass(m: f32) -> f32 {
+    var lo = 1.0;
+    var hi = 1.0 + sqrt(2.0 * m);
+    for (var k = 0; k < 24; k = k + 1) {
+        let mid = 0.5 * (lo + hi);
+        if (profileMass(mid) < m) { lo = mid; } else { hi = mid; }
+    }
+    return 0.5 * (lo + hi);
+}
 
 fn writeInvalid(idx: u32) {
     projected[idx * 3u + 0u] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
@@ -111,6 +139,18 @@ fn main(
     let lsY = attr(8u, s);
     let lsZ = attr(9u, s);
     let opacity = attr(10u, s);
+    // LINEAR_OPACITY: the slot holds the true opacity A (may exceed 1)
+    // rather than a logit; see render/linear-opacity.ts.
+#ifdef LINEAR_OPACITY
+    let amp = opacity;
+#else
+    let amp = 1.0 / (1.0 + exp(-opacity));
+#endif
+    // A > 1: draw the plateau profile at shape plateauD (0 = plain gaussian).
+    var plateauD = 0.0;
+    if (amp > 1.0) {
+        plateauD = 1.0 + PLATEAU_SHRINK * (profileParamForMass(amp) - 1.0);
+    }
     let fdcR = attr(11u, s);
     let fdcG = attr(12u, s);
     let fdcB = attr(13u, s);
@@ -157,7 +197,11 @@ fn main(
     if (detU <= 0.0) { writeInvalid(i); return; }
     let mid = 0.5 * (cov00 + cov11);
     let disc = sqrt(max(DISCRIMINANT_FLOOR, mid * mid - detU));
-    var radiusRaw = SIGMA_CUTOFF * sqrt(mid + disc);
+    // The plateau profile reaches GAUSSIAN_FLOOR at (D'-1) + SIGMA_CUTOFF/sqrt(D')
+    // sigma, which is SIGMA_CUTOFF at D' = 1.
+    var extentSigma = SIGMA_CUTOFF;
+    if (plateauD > 1.0) { extentSigma = (plateauD - 1.0) + SIGMA_CUTOFF / sqrt(plateauD); }
+    var radiusRaw = extentSigma * sqrt(mid + disc);
 
     // Size clamp: a splat whose radius exceeds SIZE_CLAMP_FRAC of the
     // shorter image edge is scaled down uniformly (covariance × s²) until
@@ -222,6 +266,9 @@ fn main(
 #ifdef SH_BAND_3
     #include "shBand3"
 #endif
+#ifdef SH_BAND_4
+    #include "shBand4"
+#endif
 
     let colR = max(0.0, cR + 0.5);
     let colG = max(0.0, cG + 0.5);
@@ -235,9 +282,10 @@ fn main(
     let dofAlphaScale = 1.0;
 #endif
 
-    let alpha = (1.0 / (1.0 + exp(-opacity))) * dofAlphaScale;
+    // the plateau profile peaks at 1 by construction
+    let alpha = select(amp, 1.0, plateauD > 1.0) * dofAlphaScale;
 
-    projected[i * 3u + 0u] = vec4<f32>(screenX, screenY, radius, 0.0);
+    projected[i * 3u + 0u] = vec4<f32>(screenX, screenY, radius, plateauD);
     projected[i * 3u + 1u] = vec4<f32>(covInvA, covInvB, covInvC, alpha);
     projected[i * 3u + 2u] = vec4<f32>(colR, colG, colB, 0.0);
 

@@ -362,6 +362,11 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 // accumulate in shared memory and land in sums[] with plain (non-atomic)
 // adds — dispatch ordering serializes the per-chunk accumulation. Points
 // outside the bound chunk are skipped and picked up by that chunk's dispatch.
+// Columns per cross-thread reduction pass: 64 threads x 48 f32 = 12KB of
+// workgroup storage, inside the 16KB WebGPU minimum for any column count
+// (72 columns at SH band 4 would need 18KB in one pass).
+const REDUCE_COLUMN_BLOCK = 48;
+
 const reduceWgsl = (floatType: string, numColumns: number) => /* wgsl */ `
 ${floatType === 'f16' ? 'enable f16;' : ''}
 
@@ -379,8 +384,9 @@ struct Uniforms {
 @group(0) @binding(5) var<storage, read_write> sums: array<f32>;
 
 const numColumns = ${numColumns}u;
+const block = ${Math.min(numColumns, REDUCE_COLUMN_BLOCK)}u;
 
-var<workgroup> partials: array<f32, ${numColumns * 64}>;
+var<workgroup> partials: array<f32, ${Math.min(numColumns, REDUCE_COLUMN_BLOCK) * 64}>;
 
 @compute @workgroup_size(64)
 fn main(
@@ -408,18 +414,22 @@ fn main(
             }
         }
     }
-    for (var j = 0u; j < numColumns; j++) {
-        partials[local_id * numColumns + j] = acc[j];
-    }
-    workgroupBarrier();
-
-    // cross-thread reduce: thread j serially sums column j over the 64 partials
-    for (var j = local_id; j < numColumns; j += 64u) {
-        var s = 0.0;
-        for (var t = 0u; t < 64u; t++) {
-            s += partials[t * numColumns + j];
+    // cross-thread reduce, one column block at a time: thread j serially sums
+    // column j of the block over the 64 partials
+    for (var b = 0u; b < numColumns; b += block) {
+        let w = min(block, numColumns - b);
+        for (var j = 0u; j < w; j++) {
+            partials[local_id * block + j] = acc[b + j];
         }
-        sums[cluster * numColumns + j] += s;
+        workgroupBarrier();
+        for (var j = local_id; j < w; j += 64u) {
+            var s = 0.0;
+            for (var t = 0u; t < 64u; t++) {
+                s += partials[t * block + j];
+            }
+            sums[cluster * numColumns + b + j] += s;
+        }
+        workgroupBarrier();
     }
 }
 `;
@@ -563,7 +573,12 @@ class GpuKmeans {
         const wgStorage: number = wgpuLimits?.maxComputeWorkgroupStorageSize ?? 16384;
         const tileBudget = Math.min(wgStorage, 12 * 1024);
         const tileRowBytes = useF16 ? numColumns * 2 : roundUp(numColumns, 4) * 4;
-        const tileSize = Math.max(64, Math.min(128, Math.floor(tileBudget / (tileRowBytes * 64)) * 64));
+        // the f16 kernel loads tileSize/64 rows per thread, so its tile is a
+        // multiple of 64; the f32 kernel strides its load and may go below 64
+        // rows when a row is wide (SH band 4: 72 columns)
+        const tileSize = useF16
+            ? Math.max(64, Math.min(128, Math.floor(tileBudget / (tileRowBytes * 64)) * 64))
+            : Math.max(16, Math.min(128, Math.floor(tileBudget / (tileRowBytes * 16)) * 16));
         const ppt = pptForColumns(numColumns);
         // the f32 assign benched fastest at 128 threads on an A10G (vs 64)
         const assignWorkgroupSize = useF16 ? 64 : 128;

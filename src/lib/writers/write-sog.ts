@@ -1,19 +1,19 @@
 import { basename, dirname, resolve } from 'pathe';
 
-import { createChunkDataPool } from '../chunk';
+import { createChunkDataPool, OPACITY_EXCESS_COLUMN, SH_REST_COUNTS } from '../chunk';
 import type { ChunkDataPool, ChunkSource } from '../chunk';
 import { dataTableToChunkSource } from '../compat/data-table';
-import { shRestNames } from '../data-table';
 import type { DataTable } from '../data-table';
 import { writeFile, ZipFileSystem } from '../io/write';
 import type { FileSystem } from '../io/write';
-import { bakeTransform } from '../ops';
+import { bakeTransform, reduceBandsSource } from '../ops';
 import { sortMortonInterleaved } from '../ops/morton-order';
 import { kmeansInterleaved } from '../spatial';
 import type { SplatModel } from '../splat-model';
 import type { DeviceCreator } from '../types';
 import { logger, sigmoid, Transform } from '../utils';
-import { version } from '../version';
+import { encodeQuatExpMap } from '../utils/quat-expmap';
+import { version as version_ } from '../version';
 import { runEncodeWebp, runQuantize1dColumns } from '../workers';
 
 import { logWrittenFile } from './utils';
@@ -33,6 +33,10 @@ type SogLayers = {
     colorDc: Float32Array[];
     /** Interleaved `f_rest_*`, for k-means (empty at 0 bands). */
     shRest: Float32Array;
+    /** `opacity_excess` column, or null when the source has none. */
+    excess: Float32Array | null;
+    /** The requested blind-data column as unsigned integers, or null. */
+    blind: Uint32Array | null;
 };
 
 // Gather every SOG input layer with one source.read() per chunk, so an
@@ -41,7 +45,7 @@ type SogLayers = {
 // output, whose practical ceiling is ~1-2M gaussians (larger scenes are written
 // as many small units by the LOD writer), and it lets every texture pipeline
 // start immediately instead of waiting on a per-layer read.
-const gatherSogLayers = async (source: ChunkSource, pool: ChunkDataPool): Promise<SogLayers> => {
+const gatherSogLayers = async (source: ChunkSource, pool: ChunkDataPool, blindColumn?: string): Promise<SogLayers> => {
     const { meta } = source;
     const n = meta.numGaussians;
     const positionLayout = meta.layouts.position!;
@@ -50,12 +54,28 @@ const gatherSogLayers = async (source: ChunkSource, pool: ChunkDataPool): Promis
     const positionStride = positionLayout.stride >>> 2;
     const geometricStride = geometricLayout.stride >>> 2;
     const colorStride = colorLayout.stride >>> 2;
-    const restCount = [0, 9, 24, 45][meta.shBands];
+    const restCount = SH_REST_COUNTS[meta.shBands];
+
+    // `other`-layer columns SOG understands: the excess opacity (always picked up
+    // when present) and the user-named blind column (only when asked for).
+    const otherLayout = meta.availableLayers.has('other') ? meta.layouts.other : undefined;
+    const excessField = otherLayout?.fields[OPACITY_EXCESS_COLUMN];
+    const blindField = blindColumn !== undefined ? otherLayout?.fields[blindColumn] : undefined;
+    if (blindColumn !== undefined && !blindField) {
+        const available = meta.extraColumns.map((c) => c.name).join(', ') || 'none';
+        throw new Error(
+            `SOG blind data: column '${blindColumn}' not found in the source (extra columns: ${available})`
+        );
+    }
+    const otherStride = otherLayout ? otherLayout.stride >>> 2 : 0;
+    const readOther = !!(excessField || blindField);
 
     const position = new Float32Array(n * positionStride);
     const geometric = GEOMETRIC_COLS.map(() => new Float32Array(n));
     const colorDc = Array.from({ length: 3 }, () => new Float32Array(n));
     const shRest = new Float32Array(n * restCount);
+    const excess = excessField ? new Float32Array(n) : null;
+    const blind = blindField ? new Uint32Array(n) : null;
 
     let base = 0;
     const numChunks = meta.numChunks[0] ?? 0;
@@ -64,12 +84,14 @@ const gatherSogLayers = async (source: ChunkSource, pool: ChunkDataPool): Promis
         const positionData = pool.acquire('position', positionLayout, count);
         const geometricData = pool.acquire('geometric', geometricLayout, count);
         const colorData = pool.acquire('color', colorLayout, count);
+        const otherData = readOther ? pool.acquire('other', otherLayout!, count) : null;
         try {
             await source.read({
                 chunkIndex: k,
                 position: positionData,
                 geometric: geometricData,
-                color: colorData
+                color: colorData,
+                ...(otherData ? { other: otherData } : {})
             });
 
             const pos = new Float32Array(positionData.data, 0, count * positionStride);
@@ -93,15 +115,42 @@ const gatherSogLayers = async (source: ChunkSource, pool: ChunkDataPool): Promis
                     shRest.set(color.subarray(offset + 3, offset + 3 + restCount), (base + i) * restCount);
                 }
             }
+
+            if (otherData) {
+                const f32 = new Float32Array(otherData.data, 0, count * otherStride);
+                const u32 = new Uint32Array(otherData.data, 0, count * otherStride);
+                if (excess) {
+                    const w = excessField!.byteOffset >>> 2;
+                    for (let i = 0; i < count; i++) excess[base + i] = f32[i * otherStride + w];
+                }
+                if (blind) {
+                    const w = blindField!.byteOffset >>> 2;
+                    if (blindField!.type === 'uint32') {
+                        for (let i = 0; i < count; i++) blind[base + i] = u32[i * otherStride + w];
+                    } else {
+                        // a float column is accepted only when it holds integers
+                        for (let i = 0; i < count; i++) {
+                            const v = f32[i * otherStride + w];
+                            if (!(Number.isInteger(v) && v >= 0 && v <= 0xffffffff)) {
+                                throw new Error(
+                                    `SOG blind data: column '${blindColumn}' holds ${v}; blind data must be unsigned integers`
+                                );
+                            }
+                            blind[base + i] = v;
+                        }
+                    }
+                }
+            }
         } finally {
             positionData.release();
             geometricData.release();
             colorData.release();
+            otherData?.release();
         }
         base += count;
     }
 
-    return { position, geometric, colorDc, shRest };
+    return { position, geometric, colorDc, shRest, excess, blind };
 };
 
 type WriteSogSourceOptions = {
@@ -119,15 +168,110 @@ type WriteSogSourceOptions = {
     // upstream (`filterSource` / `gatherRows`) so the source *is* the subset,
     // then pass its within-source ordering here.
     indices?: Uint32Array;
+    /**
+     * SOG format version to write. Default 3. Version 2 is for viewers that
+     * predate v3: it cannot carry excess opacity, blind data or a 4th SH band,
+     * and drops them with a warning.
+     */
+    version?: SogVersion;
+    /**
+     * Carry a per-gaussian unsigned integer from the source's `column` into
+     * `blind.webp` (v3 only). `bytes` (1-4) defaults to the fewest that hold the
+     * column's largest value.
+     */
+    blind?: SogBlindOptions;
+    /**
+     * Application-defined JSON for meta.json's `extras` (as in glTF). Undefined
+     * writes the source's extras, if any; null writes none.
+     */
+    extras?: unknown;
+};
+
+/** SOG format version. */
+type SogVersion = 2 | 3;
+
+/** Which source column to store as SOG blind data, and in how many bytes. */
+type SogBlindOptions = { column: string; bytes?: 1 | 2 | 3 | 4 };
+
+/** Opacity codebook entries reserved for over-unity values when any are present. */
+const OVER_UNITY_ENTRIES = 64;
+
+/** Cap on stored opacity, keeping the codebook finite for pathological input. */
+const MAX_OPACITY = 1e4;
+
+/**
+ * Build the v3 opacity codebook and per-gaussian labels from the true opacity
+ * `A = sigmoid(opacity) + opacity_excess`.
+ *
+ * Sub-unity values sit on a uniform lattice `i / (L - 1)`, so a scene without
+ * excess gets exactly v2's 8-bit opacity (`L = 256`, codebook `i / 255`) and
+ * 0 and 1 are always exact. When any `A > 1`, the top {@link OVER_UNITY_ENTRIES}
+ * entries are given over to them, quantized in log space by the same 1D
+ * quantizer as the scales; the sub-unity step grows from 1/255 to 1/191.
+ *
+ * @param opacity - Logit opacity column.
+ * @param excess - Excess opacity column, or null.
+ * @returns The 256-entry codebook (ascending) and one label per gaussian.
+ */
+const buildOpacityCodebook = async (
+    opacity: Float32Array,
+    excess: Float32Array | null
+): Promise<{ codebook: Float32Array; labels: Uint8Array }> => {
+    const n = opacity.length;
+    // f64 so a sub-unity label is the same rounding v2 makes
+    const A = new Float64Array(n);
+    const over: number[] = [];
+    for (let i = 0; i < n; i++) {
+        const e = excess ? excess[i] : 0;
+        let a = sigmoid(opacity[i]) + (e > 0 ? e : 0);
+        if (!(a >= 0)) a = 0; // NaN
+        if (a > MAX_OPACITY) a = MAX_OPACITY;
+        A[i] = a;
+        if (a > 1) over.push(i);
+    }
+
+    const codebook = new Float32Array(256);
+    const labels = new Uint8Array(n);
+    const L = over.length > 0 ? 256 - OVER_UNITY_ENTRIES : 256;
+    for (let i = 0; i < L; i++) codebook[i] = i / (L - 1);
+    for (let i = 0; i < n; i++) {
+        if (A[i] <= 1) labels[i] = Math.round(A[i] * (L - 1));
+    }
+
+    if (over.length > 0) {
+        const logs = new Float32Array(over.length);
+        for (let j = 0; j < over.length; j++) logs[j] = Math.log(A[over[j]]);
+        const q = await runQuantize1dColumns([{ name: 'opacity', data: logs }], OVER_UNITY_ENTRIES);
+        for (let j = 0; j < OVER_UNITY_ENTRIES; j++) codebook[L + j] = Math.exp(q.centroids[j]);
+        const hi = q.labels[0].data;
+        for (let j = 0; j < over.length; j++) labels[over[j]] = L + hi[j];
+    }
+
+    return { codebook, labels };
+};
+
+/**
+ * Fewest bytes (1-4) that hold every value.
+ *
+ * @param values - The blind data.
+ * @returns The byte count.
+ */
+const blindBytesFor = (values: Uint32Array): 1 | 2 | 3 | 4 => {
+    let max = 0;
+    for (let i = 0; i < values.length; i++) if (values[i] > max) max = values[i];
+    return max < 0x100 ? 1 : max < 0x10000 ? 2 : max < 0x1000000 ? 3 : 4;
 };
 
 type ShNMeta = { count: number; bands: number; codebook: number[]; files: string[] };
+
+type BlindMeta = { name: string; bytes: 1 | 2 | 3 | 4; files: string[] };
 
 type Clustering = { centroids: Float32Array; labels: Uint32Array };
 
 // One SOG write between its two phases: the gathered layers plus the worker
 // and GPU jobs already running on them.
 type SogWriteState = {
+    version: SogVersion;
     numRows: number;
     shBands: number;
     model: SplatModel;
@@ -140,6 +284,12 @@ type SogWriteState = {
     scalesQuant: ReturnType<typeof runQuantize1dColumns>;
     colorsQuant: ReturnType<typeof runQuantize1dColumns>;
     shCluster: Promise<Clustering> | null;
+    /** v3 only: the opacity codebook job. */
+    opacityQuant: Promise<{ codebook: Float32Array; labels: Uint8Array }> | null;
+    /** v3 only: blind data to write, with its resolved byte count. */
+    blind: { name: string; bytes: 1 | 2 | 3 | 4; values: Uint32Array } | null;
+    /** meta.json `extras`, or undefined for none. */
+    extras: unknown;
     // k-means iterations completed so far, and where to report further ones
     progress: { done: number; report: ((done: number) => void) | null };
 };
@@ -159,11 +309,23 @@ type SogWriteState = {
 const startSogWrite = async (
     source: ChunkSource,
     pool: ChunkDataPool,
-    options: Pick<WriteSogSourceOptions, 'iterations' | 'createDevice' | 'indices'>
+    options: Pick<WriteSogSourceOptions, 'iterations' | 'createDevice' | 'indices' | 'version' | 'blind' | 'extras'>
 ): Promise<SogWriteState> => {
     const { iterations, createDevice } = options;
+    const version = options.version ?? 3;
+    if (version !== 2 && version !== 3) {
+        throw new Error(`writeSogSource: unsupported SOG version ${version as number} (must be 2 or 3)`);
+    }
+    if (options.blind?.bytes !== undefined && ![1, 2, 3, 4].includes(options.blind.bytes)) {
+        throw new Error(`SOG blind data: bytes must be 1, 2, 3 or 4 (got ${options.blind.bytes})`);
+    }
 
-    const baked = bakeTransform(source, Transform.PLY);
+    let baked = bakeTransform(source, Transform.PLY);
+    // v2 readers infer bands from the palette width and stop at 3
+    if (version === 2 && baked.meta.shBands > 3) {
+        logger.warn('SOG v2 cannot store a 4th SH band; writing 3 bands (use SOG v3)');
+        baked = reduceBandsSource(baked, 3, pool);
+    }
     const { meta } = baked;
     const numRows = meta.numGaussians;
     const shBands = meta.shBands;
@@ -195,7 +357,27 @@ const startSogWrite = async (
         );
     }
 
-    const layers = await gatherSogLayers(baked, pool);
+    if (version === 2 && options.blind) {
+        logger.warn(`SOG v2 cannot store blind data; '${options.blind.column}' is not written (use SOG v3)`);
+    }
+    const blindColumn = version === 3 ? options.blind?.column : undefined;
+    const layers = await gatherSogLayers(baked, pool, blindColumn);
+
+    if (version === 2 && layers.excess?.some((e) => e > 0)) {
+        logger.warn('SOG v2 cannot store opacity above 1; excess opacity is discarded (use SOG v3)');
+    }
+
+    let blind: SogWriteState['blind'] = null;
+    if (layers.blind) {
+        const needed = blindBytesFor(layers.blind);
+        const bytes = options.blind!.bytes ?? needed;
+        if (bytes < needed) {
+            throw new Error(
+                `SOG blind data: column '${blindColumn}' needs ${needed} bytes but ${bytes} were requested`
+            );
+        }
+        blind = { name: blindColumn!, bytes, values: layers.blind };
+    }
 
     // ---- Worker-side jobs first, so the pool is busy while the main thread
     // runs its own passes in the finish phase. Quantize-bearing textures go
@@ -212,7 +394,7 @@ const startSogWrite = async (
         { name: 'f_dc_1', data: fdc1 },
         { name: 'f_dc_2', data: fdc2 }
     ]);
-    const restCount = [0, 9, 24, 45][shBands];
+    const restCount = SH_REST_COUNTS[shBands];
     const paletteSize = Math.min(64, 2 ** Math.floor(Math.log2(numRows / 1024))) * 1024;
     const progress: SogWriteState['progress'] = { done: 0, report: null };
     const shCluster =
@@ -233,13 +415,15 @@ const startSogWrite = async (
                   );
               })()
             : null;
+    const opacityQuant = version === 3 ? buildOpacityCodebook(layers.geometric[7], layers.excess) : null;
     // If the finish phase throws (or never runs), these settle later; mark
     // their rejections handled so the original error propagates instead of an
     // unhandled rejection.
     // eslint-disable-next-line @typescript-eslint/no-empty-function -- preserve rejection-only control flow
-    [scalesQuant, colorsQuant, shCluster].forEach((p) => p?.catch(() => {}));
+    [scalesQuant, colorsQuant, shCluster, opacityQuant].forEach((p) => p?.catch(() => {}));
 
     return {
+        version,
         numRows,
         shBands,
         model: meta.model,
@@ -252,6 +436,9 @@ const startSogWrite = async (
         scalesQuant,
         colorsQuant,
         shCluster,
+        opacityQuant,
+        blind,
+        extras: options.extras === null ? undefined : (options.extras ?? meta.extras),
         progress
     };
 };
@@ -276,8 +463,8 @@ const finishSogWrite = async (
     const emitInfo = logging !== 'silent';
     const openGroup = logging === 'own';
 
-    const { numRows, shBands, width, height, layers, iterations, restCount, paletteSize, progress } = state;
-    const { scalesQuant, colorsQuant, shCluster } = state;
+    const { version, numRows, shBands, width, height, layers, iterations, restCount, paletteSize, progress } = state;
+    const { scalesQuant, colorsQuant, shCluster, opacityQuant, blind } = state;
     const channels = 4;
 
     const bundleWriter = bundle ? await fs.createWriter(outputFilename) : null;
@@ -288,9 +475,13 @@ const finishSogWrite = async (
     // encodes run concurrently and each awaits inside its chained section.
     let writeChain: Promise<void> = Promise.resolve();
 
-    const writeWebp = (filename: string, data: Uint8Array, w = width, h = height): Promise<void> => {
+    // `exact` textures carry data in alpha that can be 0, so they must use the
+    // level encoder, which keeps the RGB of fully transparent texels; the
+    // simple-API default discards it. Level 6 is libwebp's preset for the
+    // simple API's own defaults (method 4, quality 75).
+    const writeWebp = (filename: string, data: Uint8Array, w = width, h = height, exact = false): Promise<void> => {
         const pathname = zipFs ? filename : resolve(dirname(outputFilename), filename);
-        const encoded = runEncodeWebp(data, w, h, webpEffort);
+        const encoded = runEncodeWebp(data, w, h, webpEffort ?? (exact ? 6 : undefined));
         const write = writeChain.then(async () => {
             const webp = await encoded;
             await writeFile(outputFs, pathname, webp);
@@ -343,6 +534,15 @@ const finishSogWrite = async (
         }
 
         const [r0, r1, r2, r3, , , , op] = layers.geometric;
+        const v3 = version === 3;
+
+        // ---- v3 rotation: a 24-bit exp map, one byte in the otherwise-unused
+        // alpha of each of means_l / means_u / scales. Indexed by source row.
+        const rot = v3 ? new Uint8Array(numRows * 3) : null;
+        if (rot) {
+            for (let g = 0; g < numRows; g++) encodeQuatExpMap(r0[g], r1[g], r2[g], r3[g], rot, g * 3);
+        }
+
         // ---- means: Morton order (unless a caller-supplied order is used) +
         // log-encoded positions split into low/high bytes.
         const meansMeta = (() => {
@@ -373,18 +573,18 @@ const finishSogWrite = async (
                 meansL[ti * 4] = x & 0xff;
                 meansL[ti * 4 + 1] = y & 0xff;
                 meansL[ti * 4 + 2] = z & 0xff;
-                meansL[ti * 4 + 3] = 0xff;
+                meansL[ti * 4 + 3] = rot ? rot[g * 3] : 0xff;
                 meansU[ti * 4] = (x >> 8) & 0xff;
                 meansU[ti * 4 + 1] = (y >> 8) & 0xff;
                 meansU[ti * 4 + 2] = (z >> 8) & 0xff;
-                meansU[ti * 4 + 3] = 0xff;
+                meansU[ti * 4 + 3] = rot ? rot[g * 3 + 1] : 0xff;
             }
             pending.push(writeWebp('means_l.webp', meansL), writeWebp('means_u.webp', meansU));
             return { mins: minMax.map((v) => v[0]), maxs: minMax.map((v) => v[1]) };
         })();
 
-        // ---- quats: largest-3 packed quaternions.
-        {
+        // ---- v2 quats: largest-3 packed quaternions.
+        if (!v3) {
             const quats = new Uint8Array(width * height * channels);
             const q = [0, 0, 0, 0];
             const sqrt2 = Math.sqrt(2);
@@ -417,29 +617,42 @@ const finishSogWrite = async (
                 q[3] *= s;
                 const idx = quatIdx[maxComp];
                 const ti = i;
-                quats[ti * 4] = 255 * (q[idx[0]] * 0.5 + 0.5);
-                quats[ti * 4 + 1] = 255 * (q[idx[1]] * 0.5 + 0.5);
-                quats[ti * 4 + 2] = 255 * (q[idx[2]] * 0.5 + 0.5);
+                // Round, don't let the Uint8Array store truncate: truncation
+                // biases every component down half a step and doubles the
+                // rotation error the 8-bit lattice allows.
+                quats[ti * 4] = Math.round(255 * (q[idx[0]] * 0.5 + 0.5));
+                quats[ti * 4 + 1] = Math.round(255 * (q[idx[1]] * 0.5 + 0.5));
+                quats[ti * 4 + 2] = Math.round(255 * (q[idx[2]] * 0.5 + 0.5));
                 quats[ti * 4 + 3] = 252 + maxComp;
             }
             pending.push(writeWebp('quats.webp', quats));
         }
 
-        // ---- scales: quantized log-scales.
+        // ---- scales: quantized log-scales (v3: rotation byte 2 in alpha).
         const sd = await scalesQuant;
-        pending.push(
-            writeLabels(
-                'scales.webp',
-                sd.labels.map((c) => c.data),
-                indices
-            )
-        );
+        const scaleCols = sd.labels.map((c) => c.data);
+        if (rot) {
+            const rz = new Uint8Array(numRows);
+            for (let g = 0; g < numRows; g++) rz[g] = rot[g * 3 + 2];
+            scaleCols.push(rz);
+        }
+        pending.push(writeLabels('scales.webp', scaleCols, indices));
         const scalesCodebook = Array.from(sd.centroids);
 
-        // ---- sh0: quantized DC + sigmoid(opacity).
-        const opacityData = new Uint8Array(numRows);
-        for (let i = 0; i < numRows; ++i) {
-            opacityData[i] = Math.max(0, Math.min(255, sigmoid(op[i]) * 255));
+        // ---- sh0: quantized DC + opacity (v2: linear 0..1 byte; v3: index
+        // into the opacity codebook, which may exceed 1).
+        let opacityData: Uint8Array;
+        let opacityCodebook: number[] | null = null;
+        if (opacityQuant) {
+            const oq = await opacityQuant;
+            opacityData = oq.labels;
+            opacityCodebook = Array.from(oq.codebook);
+        } else {
+            // rounded, like the quaternions: a Uint8Array store truncates
+            opacityData = new Uint8Array(numRows);
+            for (let i = 0; i < numRows; ++i) {
+                opacityData[i] = Math.max(0, Math.min(255, Math.round(sigmoid(op[i]) * 255)));
+            }
         }
         const cd = await colorsQuant;
         pending.push(writeLabels('sh0.webp', [...cd.labels.map((c) => c.data), opacityData], indices));
@@ -448,7 +661,7 @@ const finishSogWrite = async (
         // ---- shN: k-means palette + per-gaussian labels.
         let shN: ShNMeta | null = null;
         if (shCluster) {
-            const shCoeffs = [0, 3, 8, 15][shBands];
+            const shCoeffs = restCount / 3;
             const { centroids, labels } = await shCluster;
             const numCentroids = centroids.length / restCount;
 
@@ -458,7 +671,7 @@ const finishSogWrite = async (
             for (let j = 0; j < restCount; ++j) {
                 const col = new Float32Array(numCentroids);
                 for (let i = 0; i < numCentroids; ++i) col[i] = centroids[i * restCount + j];
-                cbCols.push({ name: shRestNames[j], data: col });
+                cbCols.push({ name: `f_rest_${j}`, data: col });
             }
             const codebookPromise = runQuantize1dColumns(cbCols);
 
@@ -495,21 +708,54 @@ const finishSogWrite = async (
             };
         }
 
+        // ---- blind (v3): little-endian bytes in R,G,B,A. Unused channels are
+        // RGB 0 / A 255, so every texel is opaque unless the data itself uses A.
+        let blindMeta: BlindMeta | null = null;
+        if (blind) {
+            const { values, bytes } = blind;
+            const buf = new Uint8Array(width * height * channels);
+            for (let i = 0; i < numRows; ++i) {
+                const v = values[indices[i]];
+                const ti = i * 4;
+                buf[ti] = v & 0xff;
+                buf[ti + 1] = bytes > 1 ? (v >>> 8) & 0xff : 0;
+                buf[ti + 2] = bytes > 2 ? (v >>> 16) & 0xff : 0;
+                buf[ti + 3] = bytes > 3 ? (v >>> 24) & 0xff : 0xff;
+            }
+            pending.push(writeWebp('blind.webp', buf, width, height, bytes > 3));
+            blindMeta = { name: blind.name, bytes, files: ['blind.webp'] };
+        }
+
         await Promise.all(pending);
 
         // ---- meta.json --------------------------------------------------
-        const metaObj = {
-            version: 2,
-            asset: { generator: `splat-transform v${version}` },
-            count: numRows,
-            // untagged scenes stay byte-identical to pre-3.2 output
-            ...(state.model === 'default' ? {} : { model: state.model }),
-            means: { mins: meansMeta.mins, maxs: meansMeta.maxs, files: ['means_l.webp', 'means_u.webp'] },
-            scales: { codebook: scalesCodebook, files: ['scales.webp'] },
-            quats: { files: ['quats.webp'] },
-            sh0: { codebook: colorsCodebook, files: ['sh0.webp'] },
-            ...(shN ? { shN } : {})
-        };
+        const metaObj = v3
+            ? {
+                  version: 3,
+                  asset: { generator: `splat-transform v${version_}` },
+                  count: numRows,
+                  ...(state.model === 'default' ? {} : { model: state.model }),
+                  means: { mins: meansMeta.mins, maxs: meansMeta.maxs, files: ['means_l.webp', 'means_u.webp'] },
+                  scales: { codebook: scalesCodebook, files: ['scales.webp'] },
+                  sh0: { codebook: colorsCodebook, files: ['sh0.webp'] },
+                  opacity: { codebook: opacityCodebook },
+                  ...(shN ? { shN } : {}),
+                  ...(blindMeta ? { blind: blindMeta } : {}),
+                  ...(state.extras !== undefined ? { extras: state.extras } : {})
+              }
+            : {
+                  version: 2,
+                  asset: { generator: `splat-transform v${version_}` },
+                  count: numRows,
+                  // untagged scenes stay byte-identical to pre-3.2 output
+                  ...(state.model === 'default' ? {} : { model: state.model }),
+                  means: { mins: meansMeta.mins, maxs: meansMeta.maxs, files: ['means_l.webp', 'means_u.webp'] },
+                  scales: { codebook: scalesCodebook, files: ['scales.webp'] },
+                  quats: { files: ['quats.webp'] },
+                  sh0: { codebook: colorsCodebook, files: ['sh0.webp'] },
+                  ...(shN ? { shN } : {}),
+                  ...(state.extras !== undefined ? { extras: state.extras } : {})
+              };
         const metaJson = new TextEncoder().encode(JSON.stringify(metaObj));
         const metaFilename = zipFs ? 'meta.json' : outputFilename;
         await writeFile(outputFs, metaFilename, metaJson);
@@ -595,3 +841,4 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem): Promise<void>
 };
 
 export { finishSogWrite, startSogWrite, writeSog, writeSogSource };
+export type { SogBlindOptions, SogVersion };

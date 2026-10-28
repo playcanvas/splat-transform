@@ -1,5 +1,6 @@
 import type { GraphicsDevice } from 'playcanvas';
 
+import { OPACITY_EXCESS_COLUMN } from '../chunk';
 import type { ChunkData, ChunkDataPool, ChunkSource } from '../chunk';
 import { GpuEdgeCost } from '../gpu/gpu-edge-cost';
 import { GpuKnn } from '../gpu/gpu-knn';
@@ -111,12 +112,19 @@ const gatherBlockView = async (
     const viewColorDim = Math.min(colorComponents ?? colorDim, colorDim);
     const wantOther = includeOther && availableLayers.has('other') && (layouts.other?.stride ?? 0) > 0;
     const otherDim = wantOther ? layouts.other!.stride >> 2 : 0;
+    // The excess-opacity word is part of every splat's mass, so it is read even
+    // when the caller doesn't want the rest of the other layer.
+    const excessField = availableLayers.has('other') ? layouts.other?.fields[OPACITY_EXCESS_COLUMN] : undefined;
+    const readOther = wantOther || !!excessField;
+    const readDim = readOther ? layouts.other!.stride >> 2 : 0;
+    const excessWord = excessField ? excessField.byteOffset >> 2 : 0;
 
     const view: SplatView = {
         pos: new Float32Array(n * 3),
         geo: new Float32Array(n * 8),
         color: new Float32Array(n * viewColorDim),
-        colorDim: viewColorDim
+        colorDim: viewColorDim,
+        excess: excessField ? new Float32Array(n) : undefined
     };
     const other = wantOther ? new Uint32Array(n * otherDim) : undefined;
 
@@ -126,7 +134,7 @@ const gatherBlockView = async (
             const count = Math.min(batch, indices.length - off);
             const geoCd = pool.acquire('geometric', layouts.geometric!, count);
             const colCd = pool.acquire('color', layouts.color!, count);
-            const othCd: ChunkData | undefined = wantOther ? pool.acquire('other', layouts.other!, count) : undefined;
+            const othCd: ChunkData | undefined = readOther ? pool.acquire('other', layouts.other!, count) : undefined;
             await source.read({
                 indices,
                 indexOffset: off,
@@ -146,7 +154,12 @@ const gatherBlockView = async (
                     for (let c = 0; c < viewColorDim; c++) view.color[dst + c] = colSrc[src + c];
                 }
             }
-            if (othCd) other!.set(new Uint32Array(othCd.data, 0, count * otherDim), (rowBase + off) * otherDim);
+            if (othCd && wantOther)
+                other!.set(new Uint32Array(othCd.data, 0, count * otherDim), (rowBase + off) * otherDim);
+            if (othCd && view.excess) {
+                const words = new Float32Array(othCd.data, 0, count * readDim);
+                for (let r = 0; r < count; r++) view.excess[rowBase + off + r] = words[r * readDim + excessWord];
+            }
             geoCd.release();
             colCd.release();
             othCd?.release();

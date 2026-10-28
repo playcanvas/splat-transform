@@ -65,7 +65,7 @@ const TWO_PI_1_5 = (2 * Math.PI) ** 1.5;
  *   [3..8]   covariance Σ (xx, xy, xz, yy, yz, zz) — unregularized
  *   [9]      sqrtDet = √|Σ| = sx·sy·sz
  *   [10]     alpha (linear opacity)
- *   [11]     mass (area·α merge weight)
+ *   [11]     mass (area·A merge weight, A = α + excess opacity)
  *   [12..14] base colour (0.5 + C0·f_dc per channel)
  *   [15]     |base|²
  *
@@ -77,7 +77,7 @@ const TWO_PI_1_5 = (2 * Math.PI) ** 1.5;
  * @returns The splat count n.
  */
 const buildSplatCache = (view: SplatView, out: Float32Array): number => {
-    const { pos, geo, color, colorDim } = view;
+    const { pos, geo, color, colorDim, excess } = view;
     const n = geo.length / 8;
     const R = new Float32Array(9);
     const S = new Float32Array(9);
@@ -116,7 +116,7 @@ const buildSplatCache = (view: SplatView, out: Float32Array): number => {
         out[o + 8] = S[8];
         out[o + 9] = sx * sy * sz;
         out[o + 10] = a;
-        out[o + 11] = a * ellipsoidArea(sx, sy, sz) + 1e-30;
+        out[o + 11] = (excess ? a + excess[i] : a) * ellipsoidArea(sx, sy, sz) + 1e-30;
 
         const br = 0.5 + C0 * color[i * colorDim];
         const bg = 0.5 + C0 * color[i * colorDim + 1];

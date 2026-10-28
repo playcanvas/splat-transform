@@ -1,12 +1,13 @@
 import type { GraphicsDevice } from 'playcanvas';
 
+import { OPACITY_EXCESS_COLUMN } from '../chunk';
 import type { ChunkData, ChunkDataPool, ChunkSource } from '../chunk';
 import { createMergeScratch, makeGaussianSamples, sigmoid, ellipsoidArea } from '../decimate/moment-match';
 import type { SplatView } from '../decimate/moment-match';
 import { WorkerQueue } from '../workers';
 
 import { buildCostCache, computeEdgeCostView } from './edge-cost-cpu';
-import { APP_CHUNK, GpuEdgeCost } from './gpu-edge-cost';
+import { appChunkWidth, GpuEdgeCost } from './gpu-edge-cost';
 import type { EdgeCostCache } from './gpu-edge-cost';
 import { GpuKnn } from './gpu-knn';
 import { collectBlock, verifyAndFixKnn, toGlobalNeighbors, KNN_FIXED } from './knn-blocks';
@@ -86,12 +87,19 @@ const gatherBlockView = async (
     const colorDim = layouts.color!.stride >> 2;
     const wantOther = includeOther && availableLayers.has('other') && (layouts.other?.stride ?? 0) > 0;
     const otherDim = wantOther ? layouts.other!.stride >> 2 : 0;
+    // The excess-opacity word is part of every splat's mass, so it is read even
+    // when the caller doesn't want the rest of the other layer.
+    const excessField = availableLayers.has('other') ? layouts.other?.fields[OPACITY_EXCESS_COLUMN] : undefined;
+    const readOther = wantOther || !!excessField;
+    const readDim = readOther ? layouts.other!.stride >> 2 : 0;
+    const excessWord = excessField ? excessField.byteOffset >> 2 : 0;
 
     const view: SplatView = {
         pos: new Float32Array(n * 3),
         geo: new Float32Array(n * 8),
         color: new Float32Array(n * colorDim),
-        colorDim
+        colorDim,
+        excess: excessField ? new Float32Array(n) : undefined
     };
     const other = wantOther ? new Uint32Array(n * otherDim) : undefined;
 
@@ -101,7 +109,7 @@ const gatherBlockView = async (
             const count = Math.min(batch, indices.length - off);
             const geoCd = pool.acquire('geometric', layouts.geometric!, count);
             const colCd = pool.acquire('color', layouts.color!, count);
-            const othCd: ChunkData | undefined = wantOther ? pool.acquire('other', layouts.other!, count) : undefined;
+            const othCd: ChunkData | undefined = readOther ? pool.acquire('other', layouts.other!, count) : undefined;
             await source.read({
                 indices,
                 indexOffset: off,
@@ -112,7 +120,12 @@ const gatherBlockView = async (
             });
             view.geo.set(new Float32Array(geoCd.data, 0, count * 8), (rowBase + off) * 8);
             view.color.set(new Float32Array(colCd.data, 0, count * colorDim), (rowBase + off) * colorDim);
-            if (othCd) other!.set(new Uint32Array(othCd.data, 0, count * otherDim), (rowBase + off) * otherDim);
+            if (othCd && wantOther)
+                other!.set(new Uint32Array(othCd.data, 0, count * otherDim), (rowBase + off) * otherDim);
+            if (othCd && view.excess) {
+                const words = new Float32Array(othCd.data, 0, count * readDim);
+                for (let r = 0; r < count; r++) view.excess[rowBase + off + r] = words[r * readDim + excessWord];
+            }
             geoCd.release();
             colCd.release();
             othCd?.release();
@@ -155,9 +168,9 @@ const indexOfSorted = (sorted: Uint32Array, g: number): number => {
 
 // Pack the block view into the GpuEdgeCost cache layout (legacy packing:
 // posScalars 8-wide, rotR from normalized quats, appearance in ≤APP_CHUNK
-// column chunks with live-width strides).
+// column chunks (appChunkWidth) with live-width strides).
 const packGpuCache = (view: SplatView): EdgeCostCache => {
-    const { pos, geo, color, colorDim } = view;
+    const { pos, geo, color, colorDim, excess } = view;
     const n = geo.length / 8;
     const posScalars = new Float32Array(n * 8);
     const rotR = new Float32Array(n * 9);
@@ -176,7 +189,7 @@ const packGpuCache = (view: SplatView): EdgeCostCache => {
         posScalars[o] = pos[i * 3];
         posScalars[o + 1] = pos[i * 3 + 1];
         posScalars[o + 2] = pos[i * 3 + 2];
-        posScalars[o + 3] = linAlpha * ellipsoidArea(sx, sy, sz) + 1e-12;
+        posScalars[o + 3] = (excess ? linAlpha + excess[i] : linAlpha) * ellipsoidArea(sx, sy, sz) + 1e-12;
         posScalars[o + 4] =
             Math.log(Math.max(vx, 1e-30)) + Math.log(Math.max(vy, 1e-30)) + Math.log(Math.max(vz, 1e-30));
         posScalars[o + 5] = vx;
@@ -213,11 +226,12 @@ const packGpuCache = (view: SplatView): EdgeCostCache => {
         rotR.set(rot, i * 9);
     }
 
-    const numChunks = Math.ceil(colorDim / APP_CHUNK);
+    const chunkWidth = appChunkWidth(colorDim);
+    const numChunks = Math.ceil(colorDim / chunkWidth);
     const appChunks: Float32Array[] = [];
     for (let ch = 0; ch < numChunks; ch++) {
-        const kStart = ch * APP_CHUNK;
-        const width = Math.min(APP_CHUNK, colorDim - kStart);
+        const kStart = ch * chunkWidth;
+        const width = Math.min(chunkWidth, colorDim - kStart);
         const chunk = new Float32Array(n * width);
         for (let s = 0; s < n; s++) {
             const dst = s * width;

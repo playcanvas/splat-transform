@@ -413,9 +413,14 @@ const readCompressedChunked = (source: ReadSource, header: PlyHeader, pool: Chun
     const shBands: SHBands =
         restCount === 0
             ? 0
-            : ({ [SH_REST_COUNTS[1]]: 1, [SH_REST_COUNTS[2]]: 2, [SH_REST_COUNTS[3]]: 3 } as Record<number, SHBands>)[
-                  restCount
-              ];
+            : (
+                  {
+                      [SH_REST_COUNTS[1]]: 1,
+                      [SH_REST_COUNTS[2]]: 2,
+                      [SH_REST_COUNTS[3]]: 3,
+                      [SH_REST_COUNTS[4]]: 4
+                  } as Record<number, SHBands>
+              )[restCount];
     if (shBands === undefined) {
         throw new Error(`readPly: unrecognized compressed sh column count ${restCount}`);
     }
@@ -815,9 +820,14 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
     const shBands: SHBands =
         restCount === 0
             ? 0
-            : ({ [SH_REST_COUNTS[1]]: 1, [SH_REST_COUNTS[2]]: 2, [SH_REST_COUNTS[3]]: 3 } as Record<number, SHBands>)[
-                  restCount
-              ];
+            : (
+                  {
+                      [SH_REST_COUNTS[1]]: 1,
+                      [SH_REST_COUNTS[2]]: 2,
+                      [SH_REST_COUNTS[3]]: 3,
+                      [SH_REST_COUNTS[4]]: 4
+                  } as Record<number, SHBands>
+              )[restCount];
     if (shBands === undefined) {
         throw new Error(`readPly: unrecognized f_rest_* count ${restCount}`);
     }

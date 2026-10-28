@@ -16,6 +16,8 @@ import {
     UniformFormat
 } from 'playcanvas';
 
+import { SH_REST_COUNTS } from '../chunk';
+import type { SHBands } from '../chunk';
 import type { Projection } from '../render/camera';
 import { TILE_SIZE } from '../render/config';
 
@@ -30,6 +32,7 @@ import { quatRotation } from './shaders/chunks/quat-rotation';
 import { shBand1 } from './shaders/chunks/sh-band-1';
 import { shBand2 } from './shaders/chunks/sh-band-2';
 import { shBand3 } from './shaders/chunks/sh-band-3';
+import { shBand4 } from './shaders/chunks/sh-band-4';
 import { tileAabbEquirect } from './shaders/chunks/tile-aabb-equirect';
 import { tileAabbPinhole } from './shaders/chunks/tile-aabb-pinhole';
 import { tileWalkEquirect } from './shaders/chunks/tile-walk-equirect';
@@ -68,8 +71,8 @@ const OUTPUT_STRIDE_U32 = 1;
  * exercise this code path.
  */
 type SplatRasterizerOptions = {
-    /** Number of SH bands above DC (0–3). Determines input stride. */
-    numSHBands: 0 | 1 | 2 | 3;
+    /** Number of SH bands above DC (0–4). Determines input stride. */
+    numSHBands: SHBands;
     /**
      * Camera projection mode. Specializes the project, emit-pairs and
      * rasterize-binned shaders. `pinhole` (default) uses the classical
@@ -150,7 +153,7 @@ type SplatRasterizerOptions = {
 };
 
 const numSHCoeffsPerChannel = (bands: number): number => {
-    return bands === 0 ? 0 : bands === 1 ? 3 : bands === 2 ? 8 : 15;
+    return SH_REST_COUNTS[bands as SHBands] / 3;
 };
 
 type PipelineBuffers = {
@@ -377,6 +380,7 @@ class GpuSplatRasterizer {
             ['shBand1', shBand1],
             ['shBand2', shBand2],
             ['shBand3', shBand3],
+            ['shBand4', shBand4],
             ['quatRotation', quatRotation],
             ['covariance3D', covariance3D]
         ]);
@@ -393,6 +397,7 @@ class GpuSplatRasterizer {
         if (options.numSHBands >= 1) sharedCdefines.set('SH_BAND_1', '');
         if (options.numSHBands >= 2) sharedCdefines.set('SH_BAND_2', '');
         if (options.numSHBands >= 3) sharedCdefines.set('SH_BAND_3', '');
+        if (options.numSHBands >= 4) sharedCdefines.set('SH_BAND_4', '');
         if (options.sizeClamp === false) sharedCdefines.set('NO_SIZE_CLAMP', '');
 
         const mkShader = (

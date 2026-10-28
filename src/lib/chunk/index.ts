@@ -7,6 +7,7 @@ export {
     type LayerLayout,
     type ExtraColumn,
     SH_REST_COUNTS,
+    OPACITY_EXCESS_COLUMN,
     POSITION_STRIDE,
     GEOMETRIC_STRIDE,
     DEFAULT_CHUNK_SIZE,

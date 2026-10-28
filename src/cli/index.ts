@@ -52,6 +52,7 @@ import type {
 // CLI-only internals (deliberately off the public lib surface): the LOD-path
 // level resolver and the container source readers the LOD writer drives
 // directly (single-scene callers get these via readFile).
+import { resolveExtras, withExtras } from '../lib/extras';
 import { resolveLodLevels } from '../lib/ops';
 import { readLccSource, readLccEnvironmentSource } from '../lib/readers/read-lcc';
 import { readLcc2Source, readLcc2EnvironmentSource } from '../lib/readers/read-lcc2';
@@ -176,7 +177,12 @@ const cliOptionsConfig = {
     'lod-chunk-min': { type: 'string', default: '8' },
     'lod-file-count': { type: 'string', default: '' },
     'spz-version': { type: 'string', default: '4' },
+    'sog-version': { type: 'string', default: '3' },
+    'sog-blind': { type: 'string' },
+    'sog-extras': { type: 'string' },
     unbundled: { type: 'boolean', default: false },
+    // negated as --no-compensation (parseArgs allowNegative)
+    compensation: { type: 'boolean' },
     'voxel-size': { type: 'string' },
     'voxel-opacity': { type: 'string' },
     'voxel-external-fill': { type: 'string' },
@@ -460,6 +466,19 @@ const parseArguments = async () => {
     if (spzVersion !== 3 && spzVersion !== 4) {
         throw new Error(`Invalid spz-version value: ${v['spz-version']}. Must be 3 or 4.`);
     }
+    const sogVersion = parseInteger(v['sog-version']);
+    if (sogVersion !== 2 && sogVersion !== 3) {
+        throw new Error(`Invalid sog-version value: ${v['sog-version']}. Must be 2 or 3.`);
+    }
+    let sogBlind: { column: string; bytes?: 1 | 2 | 3 | 4 } | undefined;
+    if (v['sog-blind'] !== undefined) {
+        const [column, bytesStr, ...rest] = v['sog-blind'].split(':');
+        const bytes = bytesStr === undefined ? undefined : parseInteger(bytesStr);
+        if (!column || rest.length > 0 || (bytes !== undefined && ![1, 2, 3, 4].includes(bytes))) {
+            throw new Error(`Invalid sog-blind value: ${v['sog-blind']}. Must be <column>[:<1|2|3|4>].`);
+        }
+        sogBlind = { column, ...(bytes !== undefined ? { bytes: bytes as 1 | 2 | 3 | 4 } : {}) };
+    }
 
     // Image render options (apply when output is .webp).
     let renderProjection: 'pinhole' | 'equirect' | undefined;
@@ -603,6 +622,7 @@ const parseArguments = async () => {
         // The image writer's GPU-resident copy of the scene shares RAM with the
         // in-memory table on unified-memory machines, so bound it the same way.
         renderResidentBudget: Math.min(48 * 2 ** 30, Math.floor(totalmem() / 2)),
+        renderCompensation: v.compensation !== false,
         lodSelect: v['select-lod']
             .split(',')
             .filter((v) => !!v)
@@ -617,6 +637,9 @@ const parseArguments = async () => {
             .filter((v) => !!v)
             .map(parseInteger),
         spzVersion: spzVersion as 3 | 4,
+        sogVersion: sogVersion as 2 | 3,
+        sogBlind,
+        ...(v['sog-extras'] !== undefined ? { sogExtras: await readJsonFile(v['sog-extras']) } : {}),
         voxelResolution,
         opacityCutoff,
         navExteriorRadius,
@@ -698,12 +721,12 @@ const parseArguments = async () => {
                 }
                 case 'filter-harmonics': {
                     const shBands = parseInteger(t.value);
-                    if (![0, 1, 2, 3].includes(shBands)) {
-                        throw new Error(`Invalid filter-harmonics value: ${t.value}. Must be 0, 1, 2, or 3.`);
+                    if (![0, 1, 2, 3, 4].includes(shBands)) {
+                        throw new Error(`Invalid filter-harmonics value: ${t.value}. Must be 0, 1, 2, 3 or 4.`);
                     }
                     current.processActions.push({
                         kind: 'filterBands',
-                        value: shBands as 0 | 1 | 2 | 3
+                        value: shBands as 0 | 1 | 2 | 3 | 4
                     });
 
                     break;
@@ -881,7 +904,7 @@ ACTIONS (executed in order; can be repeated)
     -t, --translate        <x,y,z>          Translate Gaussians by (x, y, z)
     -r, --rotate           <x,y,z>          Rotate Gaussians by Euler angles, in degrees
     -s, --scale            <factor>         Uniformly scale Gaussians by factor
-    -H, --filter-harmonics <0|1|2|3>        Remove spherical harmonic bands > n
+    -H, --filter-harmonics <0|1|2|3|4>      Remove spherical harmonic bands > n
     -N, --filter-nan                        Remove Gaussians with NaN values, most Inf values, or a zero-norm rotation
     -B, --filter-box       <x,y,z,X,Y,Z>    Remove Gaussians outside box (min, max corners)
     -S, --filter-sphere    <x,y,z,radius>   Remove Gaussians outside sphere
@@ -924,6 +947,12 @@ GPU (used by SOG compression and GPU voxelization: --filter-cluster, --filter-fl
 SOG COMPRESSION (.sog, meta.json, lod-meta.json, .html outputs)
     -i, --sh-iterations    <n>              SH compression iterations (more=better). Default: 10
         --max-workers      <n>              Worker threads for SOG and image-sequence encoding (0 = inline/serial). Default: 4
+        --sog-version      <2|3>            SOG format version to write. 2 is for older viewers: it drops excess
+                                              opacity, blind data and a 4th SH band. Default: 3 (.html always embeds 2)
+        --sog-blind        <col>[:<bytes>]  Store integer column <col> as per-gaussian blind data (v3), in 1-4 bytes.
+                                              Default bytes: the fewest that hold the column's largest value
+        --sog-extras       <file.json>      Store this JSON as the output's extras (meta.json / lod-meta.json),
+                                              application-defined data as in glTF. Default: the input's extras, if any
 
 SPZ OUTPUT (.spz)
         --spz-version      <3|4>            The SPZ format version to write. Default: 4
@@ -961,6 +990,8 @@ IMAGE OUTPUT (.webp) — lossless WebP rendered via GPU rasterizer
         --resolution       <WxH>            Output resolution, e.g. 1920x1080. Default: 1280x720 (pinhole) or 2048x1024 (equirect)
         --camera-near      <n>              Near clip distance. Default: 0.2 (matches reference 3DGS)
         --background       <r,g,b[,a]>      Background color in [0,1]. Default: 0,0,0,1
+        --no-compensation                   Ignore excess opacity (opacity_excess from decimation) and draw every
+                                              gaussian at opacity <= 1. For debugging and A/B comparison.
         --f-stop           <N>              Aperture as a photographic f-stop (e.g. 2.8, 5.6, 11). Enables defocus blur;
                                             smaller = more blur. Pinhole only. Default: disabled (no defocus).
         --focus-distance   <n>              Camera-space Z of the focus plane (world units). Default: distance to --camera-target.
@@ -1382,7 +1413,10 @@ const main = async () => {
                     dts.push(await materializeToDataTable(s, pool));
                     await s.close();
                 }
-                return dataTableToChunkSource(combine(dts), pool.chunkSize, undefined, model);
+                return withExtras(
+                    dataTableToChunkSource(combine(dts), pool.chunkSize, undefined, model),
+                    resolveExtras(sources)
+                );
             };
 
             const phase = logger.group(`Output ${outputArg.filename}`, { index: phaseTotal, total: phaseTotal });
@@ -1571,7 +1605,7 @@ const main = async () => {
                     perLevel = perLevel.map((s) => bakeTransform(s, Transform.IDENTITY));
                 }
             }
-            const mainSource = perLevel.length === 1 ? perLevel[0] : stackLods(perLevel);
+            const mainSource = perLevel.length === 1 ? perLevel[0] : stackLods(perLevel, pool);
             const total = mainSource.meta.lodCounts.reduce((a, c) => a + c, 0);
             if (total === 0) {
                 throw new Error('No Gaussians to write');
@@ -1589,6 +1623,9 @@ const main = async () => {
                     iterations: options.iterations,
                     webpEffort: options.webpEffort,
                     createDevice: deviceCreator,
+                    sogVersion: options.sogVersion,
+                    sogBlind: options.sogBlind,
+                    extras: options.sogExtras,
                     chunkCount: options.lodChunkCount,
                     chunkExtent: options.lodChunkExtent,
                     chunkMin: options.lodChunkMin,

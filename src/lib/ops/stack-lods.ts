@@ -1,4 +1,8 @@
-import type { ChunkLayer, ChunkSource, ChunkSourceMetadata, ReadRequest } from '../chunk';
+import { OPACITY_EXCESS_COLUMN } from '../chunk';
+import type { ChunkDataPool, ChunkLayer, ChunkSource, ChunkSourceMetadata, ReadRequest } from '../chunk';
+import { resolveExtras } from '../extras';
+
+import { withOpacityExcess } from './opacity-excess-source';
 
 const LAYERS: ChunkLayer[] = ['position', 'geometric', 'color', 'other'];
 
@@ -14,15 +18,22 @@ const LAYERS: ChunkLayer[] = ['position', 'geometric', 'color', 'other'];
  * is a structural axis here; no source carries a per-gaussian LOD tag.
  *
  * All inputs must share layout (chunk size, SH bands, layers, extras, transform)
- * and be single-LOD; the stacked metadata is inherited from `sources[0]`.
+ * and be single-LOD; the stacked metadata is inherited from `sources[0]`. The one
+ * tolerated extra-column difference is `opacity_excess`: decimated levels carry
+ * it and the original level does not, and its absence means 0, so with a `pool`
+ * the levels without it are given a zero column.
  *
- * @param sources - The per-LOD single-LOD sources, in output-LOD order.
+ * @param inputs - The per-LOD single-LOD sources, in output-LOD order.
+ * @param pool - Pool for the zero-filled `opacity_excess` views; without it the levels must match exactly.
  * @returns A multi-LOD source dispatching by LOD to the inputs.
  */
-const stackLods = (sources: ChunkSource[]): ChunkSource => {
-    if (sources.length === 0) {
+const stackLods = (inputs: ChunkSource[], pool?: ChunkDataPool): ChunkSource => {
+    if (inputs.length === 0) {
         throw new Error('stackLods: at least one source is required');
     }
+    const hasExcess = (s: ChunkSource) => s.meta.extraColumns.some((e) => e.name === OPACITY_EXCESS_COLUMN);
+    const sources =
+        pool && inputs.some(hasExcess) ? inputs.map((s) => (hasExcess(s) ? s : withOpacityExcess(s, pool))) : inputs;
     const ref = sources[0].meta;
     const layerKey = (m: ChunkSourceMetadata) => LAYERS.filter((l) => m.availableLayers.has(l)).join(',');
     const extraKey = (m: ChunkSourceMetadata) => m.extraColumns.map((e) => `${e.name}:${e.type}`).join(',');
@@ -58,8 +69,11 @@ const stackLods = (sources: ChunkSource[]): ChunkSource => {
     }
 
     const lodCounts = sources.map((s) => s.meta.numGaussians);
+    const extras = resolveExtras(sources);
+    const { extras: _refExtras, ...refMeta } = ref;
     const meta: ChunkSourceMetadata = {
-        ...ref,
+        ...refMeta,
+        ...(extras !== undefined ? { extras } : {}),
         numGaussians: lodCounts[0],
         numLods: sources.length,
         lodCounts,

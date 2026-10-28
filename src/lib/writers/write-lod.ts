@@ -14,6 +14,7 @@ import { version } from '../version';
 
 import { logWrittenFile } from './utils';
 import { finishSogWrite, startSogWrite, writeSogSource } from './write-sog.js';
+import type { SogBlindOptions, SogVersion } from './write-sog.js';
 
 type Aabb = {
     min: number[];
@@ -55,6 +56,7 @@ type LodMeta = {
     environment?: string;
     filenames: string[];
     tree: MetaNode;
+    extras?: unknown;
 };
 
 const boundUnion = (result: Aabb, a: Aabb, b: Aabb) => {
@@ -433,6 +435,15 @@ type WriteLodSourceOptions = {
     webpEffort?: number;
     /** Supplies the GPU that SOG encoding uses. */
     createDevice?: DeviceCreator;
+    /** SOG version of every unit and the environment. Default 3. */
+    sogVersion?: SogVersion;
+    /** Per-gaussian blind data carried into every unit (v3 only). */
+    sogBlind?: SogBlindOptions;
+    /**
+     * Application-defined JSON for lod-meta.json's `extras` (as in glTF). Undefined writes
+     * the main source's extras, if any; null writes none. Units never carry extras.
+     */
+    extras?: unknown;
     chunkCount: number;
     chunkExtent: number;
     /**
@@ -478,6 +489,9 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
         iterations,
         webpEffort,
         createDevice,
+        sogVersion,
+        sogBlind,
+        extras,
         chunkCount,
         chunkExtent,
         chunkMin = 8,
@@ -630,6 +644,8 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
         filenames,
         tree
     };
+    const lodExtras = extras === null ? undefined : (extras ?? mainSource.meta.extras);
+    if (lodExtras !== undefined) meta.extras = lodExtras;
 
     // write the meta file with float precision quantization (approx. 32-bit float => ~7 significant digits)
     const replacer = (_key: string, value: unknown) => {
@@ -680,6 +696,11 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
                     iterations,
                     webpEffort,
                     createDevice: sharedCreateDevice,
+                    version: sogVersion,
+                    // the environment is a separate scene and may lack the column
+                    blind: envSource!.meta.extraColumns.some((c) => c.name === sogBlind?.column) ? sogBlind : undefined,
+                    // the scene's extras live in lod-meta.json only
+                    extras: null,
                     logging: 'flat'
                 },
                 fs
@@ -738,7 +759,14 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
 
         return {
             identity,
-            state: startSogWrite(unitSource, pool, { iterations, createDevice: sharedCreateDevice, indices: identity })
+            state: startSogWrite(unitSource, pool, {
+                iterations,
+                createDevice: sharedCreateDevice,
+                indices: identity,
+                version: sogVersion,
+                blind: sogBlind,
+                extras: null
+            })
         };
     };
 

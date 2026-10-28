@@ -1,3 +1,5 @@
+import { SH_REST_COUNTS } from '../chunk';
+import type { SHBands } from '../chunk';
 import type { DataTable } from '../data-table';
 import { getSHBands } from '../data-table';
 import { RadixSortScratch, radixSortIndicesByFloat } from '../spatial/radix-sort';
@@ -8,11 +10,11 @@ import type { CameraBasis, Projection } from './camera';
  * Number of SH coefficients per color channel for the scene's SH band
  * count. Matches the `f_rest_*` layout in DataTable (channel-major).
  *
- * @param bands - 0–3.
+ * @param bands - 0–4.
  * @returns Coefficient count per channel.
  */
 const numSHCoeffsPerChannel = (bands: number): number => {
-    return bands === 0 ? 0 : bands === 1 ? 3 : bands === 2 ? 8 : 15;
+    return SH_REST_COUNTS[bands as SHBands] / 3;
 };
 
 /**
@@ -25,7 +27,7 @@ const numSHCoeffsPerChannel = (bands: number): number => {
  *   [11..13] f_dc.rgb
  *   [14..14+3·N-1]  SH coefficients, channel-major: R[0..N-1], G[0..N-1], B[0..N-1]
  *
- * @param numSHBands - 0–3.
+ * @param numSHBands - 0–4.
  * @returns Per-gaussian stride in 32-bit floats.
  */
 const splatInputStride = (numSHBands: number): number => {
@@ -230,8 +232,8 @@ const packChunkInput = (
  * @param dataTable - Splat data.
  * @returns SH band count clamped to 0–3.
  */
-const sceneSHBands = (dataTable: DataTable): 0 | 1 | 2 | 3 => {
-    return getSHBands(dataTable) as 0 | 1 | 2 | 3;
+const sceneSHBands = (dataTable: DataTable): SHBands => {
+    return getSHBands(dataTable) as SHBands;
 };
 
 export {

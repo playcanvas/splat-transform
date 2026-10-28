@@ -1,6 +1,10 @@
+import { OPACITY_EXCESS_COLUMN } from '../chunk';
 import type { ChunkData, ChunkDataPool, ChunkLayer, ReadRequest, ChunkSource, ChunkSourceMetadata } from '../chunk';
+import { resolveExtras } from '../extras';
 import { resolveSplatModel } from '../splat-model';
 import { logger } from '../utils';
+
+import { withOpacityExcess } from './opacity-excess-source';
 
 const LAYERS: ChunkLayer[] = ['position', 'geometric', 'color', 'other'];
 
@@ -20,6 +24,9 @@ type MutableRowReadRequest = { indices: Uint32Array; indexOffset: number; count:
  * SH bands, available layers, extra columns) and on the pending coordinate-space
  * **transform** — concatenating data in mismatched spaces is silently wrong, so
  * a transform mismatch throws (the caller must bake to a common space first).
+ * The one tolerated extra-column difference is `opacity_excess`: a decimated
+ * input carries it and a raw one does not, and its absence means 0, so inputs
+ * without it are given a zero column.
  *
  * Single-LOD only. Reads stitch contiguous row ranges: an output chunk is filled
  * by block-copying the overlapping span out of each contributing source chunk
@@ -31,10 +38,15 @@ type MutableRowReadRequest = { indices: Uint32Array; indexOffset: number; count:
  * @param pool - Pool for the temporary source read buffers; `chunkSize` must match the sources'.
  * @returns A derived source serving the concatenated gaussians chunk-by-chunk.
  */
-const concatSource = (allSources: ChunkSource[], pool: ChunkDataPool): ChunkSource => {
-    if (allSources.length === 0) {
+const concatSource = (inputs: ChunkSource[], pool: ChunkDataPool): ChunkSource => {
+    if (inputs.length === 0) {
         throw new Error('concatSource: at least one source is required');
     }
+
+    const hasExcess = (s: ChunkSource) => s.meta.extraColumns.some((e) => e.name === OPACITY_EXCESS_COLUMN);
+    const allSources = inputs.some(hasExcess)
+        ? inputs.map((s) => (hasExcess(s) ? s : withOpacityExcess(s, pool)))
+        : inputs;
 
     const ref = allSources[0].meta;
     const layerKey = (m: ChunkSourceMetadata) => LAYERS.filter((l) => m.availableLayers.has(l)).join(',');
@@ -92,8 +104,11 @@ const concatSource = (allSources: ChunkSource[], pool: ChunkDataPool): ChunkSour
         total += c;
     }
 
+    const extras = resolveExtras(sources);
+    const { extras: _refExtras, ...refMeta } = ref;
     const meta: ChunkSourceMetadata = {
-        ...ref,
+        ...refMeta,
+        ...(extras !== undefined ? { extras } : {}),
         model,
         numGaussians: total,
         numLods: 1,

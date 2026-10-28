@@ -15,15 +15,17 @@ type ChunkLayer = 'position' | 'geometric' | 'color' | 'other';
  * - 1 - DC + 1st band (3 + 9 = 12 coefficients)
  * - 2 - DC + 1st + 2nd (3 + 24 = 27 coefficients)
  * - 3 - DC + 1st + 2nd + 3rd (3 + 45 = 48 coefficients)
+ * - 4 - DC + 1st..4th (3 + 72 = 75 coefficients)
  */
-type SHBands = 0 | 1 | 2 | 3;
+type SHBands = 0 | 1 | 2 | 3 | 4;
 
 /** Number of `f_rest_*` SH coefficients (excluding the 3 DC coefficients) per band level. */
 const SH_REST_COUNTS: Readonly<Record<SHBands, number>> = {
     0: 0,
     1: 9,
     2: 24,
-    3: 45
+    3: 45,
+    4: 72
 };
 
 /** Bytes per gaussian for the `position` layer. */
@@ -124,6 +126,14 @@ type ExtraColumn = {
 };
 
 /**
+ * Name of the `other`-layer column holding each gaussian's excess opacity: the
+ * part of its true (unclamped) opacity `A` above 1, `max(0, A - 1)`, which the
+ * plain 0..1 `opacity` cannot carry. Written by decimation; absent or 0 means
+ * nothing is owed, so `A = sigmoid(opacity) + opacity_excess` always.
+ */
+const OPACITY_EXCESS_COLUMN = 'opacity_excess';
+
+/**
  * Compute the byte stride and field map for an `other` layer given its extra columns.
  * Each column contributes 4 bytes (one f32 or u32) at its assigned offset.
  * @param extras - The extra columns, in storage order.
@@ -147,6 +157,7 @@ export {
     type LayerLayout,
     type ExtraColumn,
     SH_REST_COUNTS,
+    OPACITY_EXCESS_COLUMN,
     POSITION_STRIDE,
     GEOMETRIC_STRIDE,
     DEFAULT_CHUNK_SIZE,
