@@ -1,5 +1,4 @@
 // defines the interface for a stream writer class
-// eslint-disable-next-line @typescript-eslint/consistent-type-definitions -- preserve public declaration merging
 interface Writer {
     // total bytes successfully passed to write() so far
     readonly bytesWritten: number;
@@ -18,7 +17,6 @@ interface Writer {
     abort(): void | Promise<void>;
 }
 
-// eslint-disable-next-line @typescript-eslint/consistent-type-definitions -- preserve public declaration merging
 interface FileSystem {
     // create a writer for the given filename
     createWriter(filename: string): Writer | Promise<Writer>;

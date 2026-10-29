@@ -93,7 +93,6 @@ type ReadRequest =
  * `ChunkDataPool`, filled by `read`, used, and released back to the pool. The
  * source itself never holds long-lived buffer memory on the caller's behalf.
  */
-// eslint-disable-next-line @typescript-eslint/consistent-type-definitions -- preserve public declaration merging
 interface ChunkSource {
     readonly meta: ChunkSourceMetadata;
 
