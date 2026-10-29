@@ -355,7 +355,8 @@ const readSogSourceV2 = async (
             colOut[o + 1] = cCode[c0[o4 + 1]];
             colOut[o + 2] = cCode[c0[o4 + 2]];
             if (restCount > 0) {
-                const label = labelsRGBA![o4] | (labelsRGBA![o4 + 1] << 8); // 16-bit palette index
+                // palette index: 16-bit in v2, 24-bit in v3
+                const label = labelsRGBA![o4] | (labelsRGBA![o4 + 1] << 8) | (v3 ? labelsRGBA![o4 + 2] << 16 : 0);
                 if (label < paletteCount) {
                     // centroid texel coordinates: row from the label, column
                     // base from the label's slot, one column per coefficient

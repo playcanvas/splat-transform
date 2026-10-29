@@ -1,4 +1,4 @@
-import type { GraphicsDevice } from 'playcanvas';
+import type { Compute, GraphicsDevice } from 'playcanvas';
 import { BUFFERUSAGE_COPY_DST, BUFFERUSAGE_COPY_SRC, FloatPacking, StorageBuffer } from 'playcanvas';
 
 import { makeKernel } from './compute-kernel';
@@ -448,11 +448,13 @@ struct Uniforms {
 const numColumns = ${numColumns}u;
 
 @compute @workgroup_size(256)
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-    if (gid.x < uniforms.numCentroids * numColumns) {
-        let count = counts[gid.x / numColumns];
+fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) num_workgroups: vec3u) {
+    // 2D dispatch for large palettes (see dispatchFlat)
+    let i = gid.x + gid.y * num_workgroups.x * 256u;
+    if (i < uniforms.numCentroids * numColumns) {
+        let count = counts[i / numColumns];
         if (count > 0u) {
-            centroids[gid.x] = sums[gid.x] / f32(count);
+            centroids[i] = sums[i] / f32(count);
         }
     }
 }
@@ -515,12 +517,28 @@ struct Uniforms {
 @group(0) @binding(2) var<storage, read_write> centroidsF16: array<f16>;
 
 @compute @workgroup_size(256)
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-    if (gid.x < uniforms.totalElems) {
-        centroidsF16[gid.x] = f16(centroids[gid.x]);
+fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) num_workgroups: vec3u) {
+    // 2D dispatch for large palettes (see dispatchFlat)
+    let i = gid.x + gid.y * num_workgroups.x * 256u;
+    if (i < uniforms.totalElems) {
+        centroidsF16[i] = f16(centroids[i]);
     }
 }
 `;
+
+/**
+ * Dispatches `threads` invocations of a 256-wide kernel that reads its flat index as
+ * x + y * width, splitting into rows when one dimension would exceed WebGPU's 65535
+ * workgroups (e.g. a 262144-entry palette of 72 SH coefficients).
+ *
+ * @param compute - The compute to dispatch.
+ * @param threads - Total invocations needed.
+ */
+const dispatchFlat = (compute: Compute, threads: number) => {
+    const groups = Math.ceil(threads / 256);
+    const rows = Math.ceil(groups / 65535);
+    compute.setupDispatch(Math.ceil(groups / rows), rows);
+};
 
 class GpuKmeans {
     /**
@@ -803,7 +821,7 @@ class GpuKmeans {
 
                 const dispatchConvert = () => {
                     if (convert) {
-                        convert.compute.setupDispatch(Math.ceil((numCentroids * numColumns) / 256));
+                        dispatchFlat(convert.compute, numCentroids * numColumns);
                         device.computeDispatch([convert.compute], 'kmeans-convert');
                     }
                 };
@@ -897,7 +915,7 @@ class GpuKmeans {
                         device.computeDispatch([reseed.compute], 'kmeans-reseed');
                         submit();
                     }
-                    divide.compute.setupDispatch(Math.ceil((numCentroids * numColumns) / 256));
+                    dispatchFlat(divide.compute, numCentroids * numColumns);
                     device.computeDispatch([divide.compute], 'kmeans-divide');
                     dispatchConvert();
                     submit();

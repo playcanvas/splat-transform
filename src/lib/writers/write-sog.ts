@@ -185,6 +185,11 @@ type WriteSogSourceOptions = {
      * writes the source's extras, if any; null writes none.
      */
     extras?: unknown;
+    /**
+     * SH palette entries. Default: about one per 1024 gaussians, at most 65536. Above 65536 needs
+     * v3 (24-bit labels), up to {@link MAX_SH_PALETTE}.
+     */
+    paletteSize?: number;
 };
 
 /** SOG format version. */
@@ -206,6 +211,12 @@ const MAX_OPACITY = 1e4;
  * largest scale, so render quality varies by ±1.5 dB with the splat set.
  */
 const SCALE_IMPORTANCE = 0.25;
+
+/**
+ * Largest SH palette written: the palette image is 64 entries per row, so this keeps it within the
+ * 4096 rows WebGL2 guarantees. v3 labels hold 24 bits; v2 labels 16 (65536 entries).
+ */
+const MAX_SH_PALETTE = 64 * 4096;
 
 /**
  * Build the v3 opacity codebook and per-gaussian labels from the true opacity
@@ -317,12 +328,23 @@ type SogWriteState = {
 const startSogWrite = async (
     source: ChunkSource,
     pool: ChunkDataPool,
-    options: Pick<WriteSogSourceOptions, 'iterations' | 'createDevice' | 'indices' | 'version' | 'blind' | 'extras'>
+    options: Pick<
+        WriteSogSourceOptions,
+        'iterations' | 'createDevice' | 'indices' | 'version' | 'blind' | 'extras' | 'paletteSize'
+    >
 ): Promise<SogWriteState> => {
     const { iterations, createDevice } = options;
     const version = options.version ?? 3;
     if (version !== 2 && version !== 3) {
         throw new Error(`writeSogSource: unsupported SOG version ${version as number} (must be 2 or 3)`);
+    }
+    if (options.paletteSize !== undefined) {
+        const maxPalette = version === 3 ? MAX_SH_PALETTE : 65536;
+        if (!Number.isInteger(options.paletteSize) || options.paletteSize < 1 || options.paletteSize > maxPalette) {
+            throw new Error(
+                `SOG v${version} SH palette size must be an integer from 1 to ${maxPalette} (got ${options.paletteSize})`
+            );
+        }
     }
     if (options.blind?.bytes !== undefined && ![1, 2, 3, 4].includes(options.blind.bytes)) {
         throw new Error(`SOG blind data: bytes must be 1, 2, 3 or 4 (got ${options.blind.bytes})`);
@@ -408,7 +430,7 @@ const startSogWrite = async (
         { name: 'f_dc_2', data: fdc2 }
     ]);
     const restCount = SH_REST_COUNTS[shBands];
-    const paletteSize = Math.min(64, 2 ** Math.floor(Math.log2(numRows / 1024))) * 1024;
+    const paletteSize = options.paletteSize ?? Math.min(64, 2 ** Math.floor(Math.log2(numRows / 1024))) * 1024;
     const progress: SogWriteState['progress'] = { done: 0, report: null };
     const shCluster =
         shBands > 0
@@ -694,7 +716,8 @@ const finishSogWrite = async (
                 const ti = i;
                 labelsBuf[ti * 4 + 0] = 0xff & label;
                 labelsBuf[ti * 4 + 1] = 0xff & (label >> 8);
-                labelsBuf[ti * 4 + 2] = 0;
+                // v3 labels are 24-bit; v2 readers expect 0
+                labelsBuf[ti * 4 + 2] = version === 3 ? 0xff & (label >> 16) : 0;
                 labelsBuf[ti * 4 + 3] = 0xff;
             }
 
@@ -714,7 +737,8 @@ const finishSogWrite = async (
                 writeWebp('shN_labels.webp', labelsBuf)
             );
             shN = {
-                count: paletteSize,
+                // fewer gaussians than requested entries: each is its own entry
+                count: numCentroids,
                 bands: shBands,
                 codebook: Array.from(cb.centroids),
                 files: ['shN_centroids.webp', 'shN_labels.webp']

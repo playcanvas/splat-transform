@@ -323,3 +323,42 @@ describe('SOG extras', () => {
         await out.close();
     });
 });
+
+describe('SOG v3 SH palette', () => {
+    // 70000 gaussians, each with its own random band-1 SH, and a palette larger than the scene, so
+    // every gaussian is its own entry and labels run past 65535 into the third label byte
+    const count = 70000;
+    const makeData = () => {
+        const dt = createTestDataTable(count, { includeSH: true, shBands: 1 });
+        const r = rng(11);
+        for (let k = 0; k < 9; k++) {
+            const col = dt.getColumnByName(`f_rest_${k}`).data;
+            for (let i = 0; i < count; i++) col[i] = 2 * r() - 1;
+        }
+        return dt;
+    };
+
+    it('stores more than 65536 entries with 24-bit labels', async () => {
+        const src = makeData();
+        const { meta, table } = await roundTrip(src, { paletteSize: 80000 });
+        assert.strictEqual(meta.shN.count, count);
+
+        const key = (t, i) => ['x', 'y', 'z'].map((c) => Math.round(2 * t.getColumnByName(c).data[i])).join(',');
+        const byKey = new Map();
+        for (let i = 0; i < src.numRows; i++) byKey.set(key(src, i), i);
+        let maxErr = 0;
+        for (let j = 0; j < table.numRows; j++) {
+            const i = byKey.get(key(table, j));
+            for (let k = 0; k < 9; k++) {
+                const err = Math.abs(src.getColumnByName(`f_rest_${k}`).data[i] - table.getColumnByName(`f_rest_${k}`).data[j]);
+                maxErr = Math.max(maxErr, err);
+            }
+        }
+        // only the 8-bit codebook stage is lossy; a dropped third label byte would swap in random entries
+        assert.ok(maxErr < 0.02, `max SH error ${maxErr}`);
+    });
+
+    it('v2 rejects a palette larger than 65536', async () => {
+        await assert.rejects(roundTrip(makeData(), { version: 2, paletteSize: 80000 }), /palette size/);
+    });
+});

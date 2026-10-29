@@ -54,6 +54,12 @@ type Options = {
     /** JSON to store as the SOG / LOD output's `extras` (application-defined, as in glTF). Default: the source's extras. */
     sogExtras?: unknown;
 
+    /**
+     * SH palette entries for SOG / SOG bundle output. Default: about one per 1024 gaussians, at most
+     * 65536. v3 allows up to 262144 (24-bit labels); v2 up to 65536. LOD output keeps the default.
+     */
+    sogPaletteSize?: number;
+
     /** Size of each voxel in world units for voxel output. Default: 0.05 */
     voxelResolution?: number;
 

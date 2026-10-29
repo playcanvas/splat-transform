@@ -208,7 +208,8 @@ const writeSource = async (writeSourceOptions: WriteSourceOptions, fs: FileSyste
                     createDevice,
                     version: options.sogVersion,
                     blind: options.sogBlind,
-                    extras: options.sogExtras
+                    extras: options.sogExtras,
+                    paletteSize: options.sogPaletteSize
                 },
                 fs
             );

@@ -179,6 +179,8 @@ Apply when writing `.sog`, `meta.json`, `lod-meta.json`, or `.html` outputs.
 
 ```none
 -i, --sh-iterations    <n>              Iterations for SH compression (more=better). Default: 10
+    --sh-palette-size  <n>              SH palette entries for .sog / meta.json (more=better, slower). Up to 262144
+                                          with SOG v3, 65536 with v2. Default: one per 1024 gaussians, at most 65536
     --max-workers      <n>              Worker threads for SOG encoding (0 = inline/serial). Default: 4
 ```
 
