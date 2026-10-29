@@ -211,6 +211,13 @@ const computeEdgeCost = (cache: Float32Array, i: number, j: number): number => {
 
     // Merged opacity: mass-conserving, capped at 1 (needs merged scales, i.e.
     // eigenvalues of Σ_m — Smith's closed form for a symmetric 3×3).
+    // The cap is deliberate even though merges keep the excess above 1
+    // (opacity_excess): it only steers selection. Uncapping it (and scoring
+    // inputs at α + excess) was A/B tested on five scenes (2026-10-29) and
+    // was worse under the default compensation, because this additive field
+    // ignores occlusion and the renderer draws excess as a shrunk opaque
+    // plateau, so dense merges score cheaper than they render. The cap sites
+    // in recost-core.ts, gpu-edge-cost.ts and gpu-recost.ts must stay in step.
     const q = (sxx + syy + szz) / 3;
     const p1 = sxy * sxy + sxz * sxz + syz * syz;
     let e0: number, e1: number, e2: number;
