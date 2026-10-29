@@ -13,6 +13,8 @@ import type { SplatModel } from '../splat-model';
 import type { DeviceCreator } from '../types';
 import { logger, sigmoid, Transform } from '../utils';
 import { encodeQuatExpMap } from '../utils/quat-expmap';
+import { BLIND_ENCODING_BYTES, encodeBlindValue, integerEncodingFor, isBlindEncoding } from '../utils/sog-blind';
+import type { SogBlindEncoding, SogBlindTexture } from '../utils/sog-blind';
 import { version as version_ } from '../version';
 import { runEncodeWebp, runQuantize1dColumns } from '../workers';
 
@@ -35,8 +37,8 @@ type SogLayers = {
     shRest: Float32Array;
     /** `opacity_excess` column, or null when the source has none. */
     excess: Float32Array | null;
-    /** The requested blind-data column as unsigned integers, or null. */
-    blind: Uint32Array | null;
+    /** The requested blind-data columns, in request order (f64 holds uint32 and float32 values exactly). */
+    blind: Float64Array[];
 };
 
 // Gather every SOG input layer with one source.read() per chunk, so an
@@ -45,7 +47,11 @@ type SogLayers = {
 // output, whose practical ceiling is ~1-2M gaussians (larger scenes are written
 // as many small units by the LOD writer), and it lets every texture pipeline
 // start immediately instead of waiting on a per-layer read.
-const gatherSogLayers = async (source: ChunkSource, pool: ChunkDataPool, blindColumn?: string): Promise<SogLayers> => {
+const gatherSogLayers = async (
+    source: ChunkSource,
+    pool: ChunkDataPool,
+    blindColumns: string[] = []
+): Promise<SogLayers> => {
     const { meta } = source;
     const n = meta.numGaussians;
     const positionLayout = meta.layouts.position!;
@@ -57,25 +63,26 @@ const gatherSogLayers = async (source: ChunkSource, pool: ChunkDataPool, blindCo
     const restCount = SH_REST_COUNTS[meta.shBands];
 
     // `other`-layer columns SOG understands: the excess opacity (always picked up
-    // when present) and the user-named blind column (only when asked for).
+    // when present) and the user-named blind columns (only when asked for).
     const otherLayout = meta.availableLayers.has('other') ? meta.layouts.other : undefined;
     const excessField = otherLayout?.fields[OPACITY_EXCESS_COLUMN];
-    const blindField = blindColumn !== undefined ? otherLayout?.fields[blindColumn] : undefined;
-    if (blindColumn !== undefined && !blindField) {
-        const available = meta.extraColumns.map((c) => c.name).join(', ') || 'none';
-        throw new Error(
-            `SOG blind data: column '${blindColumn}' not found in the source (extra columns: ${available})`
-        );
-    }
+    const blindFields = blindColumns.map((column) => {
+        const field = otherLayout?.fields[column];
+        if (!field) {
+            const available = meta.extraColumns.map((c) => c.name).join(', ') || 'none';
+            throw new Error(`SOG blind data: column '${column}' not found in the source (extra columns: ${available})`);
+        }
+        return field;
+    });
     const otherStride = otherLayout ? otherLayout.stride >>> 2 : 0;
-    const readOther = !!(excessField || blindField);
+    const readOther = !!excessField || blindFields.length > 0;
 
     const position = new Float32Array(n * positionStride);
     const geometric = GEOMETRIC_COLS.map(() => new Float32Array(n));
     const colorDc = Array.from({ length: 3 }, () => new Float32Array(n));
     const shRest = new Float32Array(n * restCount);
     const excess = excessField ? new Float32Array(n) : null;
-    const blind = blindField ? new Uint32Array(n) : null;
+    const blind = blindFields.map(() => new Float64Array(n));
 
     let base = 0;
     const numChunks = meta.numChunks[0] ?? 0;
@@ -123,22 +130,11 @@ const gatherSogLayers = async (source: ChunkSource, pool: ChunkDataPool, blindCo
                     const w = excessField!.byteOffset >>> 2;
                     for (let i = 0; i < count; i++) excess[base + i] = f32[i * otherStride + w];
                 }
-                if (blind) {
-                    const w = blindField!.byteOffset >>> 2;
-                    if (blindField!.type === 'uint32') {
-                        for (let i = 0; i < count; i++) blind[base + i] = u32[i * otherStride + w];
-                    } else {
-                        // a float column is accepted only when it holds integers
-                        for (let i = 0; i < count; i++) {
-                            const v = f32[i * otherStride + w];
-                            if (!(Number.isInteger(v) && v >= 0 && v <= 0xffffffff)) {
-                                throw new Error(
-                                    `SOG blind data: column '${blindColumn}' holds ${v}; blind data must be unsigned integers`
-                                );
-                            }
-                            blind[base + i] = v;
-                        }
-                    }
+                for (let b = 0; b < blind.length; b++) {
+                    const w = blindFields[b].byteOffset >>> 2;
+                    const words = blindFields[b].type === 'uint32' ? u32 : f32;
+                    const column = blind[b];
+                    for (let i = 0; i < count; i++) column[base + i] = words[i * otherStride + w];
                 }
             }
         } finally {
@@ -175,11 +171,11 @@ type WriteSogSourceOptions = {
      */
     version?: SogVersion;
     /**
-     * Carry a per-gaussian unsigned integer from the source's `column` into
-     * `blind.webp` (v3 only). `bytes` (1-4) defaults to the fewest that hold the
-     * column's largest value.
+     * Per-gaussian blind data (v3 only): source columns packed into blind
+     * textures, one entry per texture. Each texture's fields fill its 4 bytes
+     * (R, G, B, A) in order; see {@link SogBlindEncoding} for the encodings.
      */
-    blind?: SogBlindOptions;
+    blind?: SogBlindTexture[];
     /**
      * Application-defined JSON for meta.json's `extras` (as in glTF). Undefined
      * writes the source's extras, if any; null writes none.
@@ -195,8 +191,11 @@ type WriteSogSourceOptions = {
 /** SOG format version. */
 type SogVersion = 2 | 3;
 
-/** Which source column to store as SOG blind data, and in how many bytes. */
-type SogBlindOptions = { column: string; bytes?: 1 | 2 | 3 | 4 };
+/**
+ * WebGL2 guarantees 16 vertex texture units and SOG v3 uses 6 of them, so more
+ * blind textures than this may not render on the weakest devices.
+ */
+const MAX_PORTABLE_BLIND_TEXTURES = 10;
 
 /** Opacity codebook entries reserved for over-unity values when any are present. */
 const OVER_UNITY_ENTRIES = 64;
@@ -270,20 +269,90 @@ const buildOpacityCodebook = async (
 };
 
 /**
- * Fewest bytes (1-4) that hold every value.
+ * Check the requested blind textures' shape: known encodings, ranges only on
+ * unorm fields, at most 4 bytes per texture and each column used once.
  *
- * @param values - The blind data.
- * @returns The byte count.
+ * @param textures - The requested textures.
  */
-const blindBytesFor = (values: Uint32Array): 1 | 2 | 3 | 4 => {
-    let max = 0;
-    for (let i = 0; i < values.length; i++) if (values[i] > max) max = values[i];
-    return max < 0x100 ? 1 : max < 0x10000 ? 2 : max < 0x1000000 ? 3 : 4;
+const validateBlindTextures = (textures: SogBlindTexture[]): void => {
+    const seen = new Set<string>();
+    for (const fields of textures) {
+        if (fields.length === 0) throw new Error('SOG blind data: a blind texture needs at least one field');
+        let bytes = 0;
+        for (const f of fields) {
+            if (seen.has(f.column)) throw new Error(`SOG blind data: column '${f.column}' is stored more than once`);
+            seen.add(f.column);
+            if (f.encoding !== undefined && !isBlindEncoding(f.encoding)) {
+                throw new Error(`SOG blind data: unknown encoding '${f.encoding as string}' for column '${f.column}'`);
+            }
+            if (f.range !== undefined) {
+                if (!f.encoding?.startsWith('unorm')) {
+                    throw new Error(`SOG blind data: a range applies only to unorm8 / unorm16 (column '${f.column}')`);
+                }
+                const [min, max] = f.range;
+                if (!(Number.isFinite(min) && Number.isFinite(max) && min < max)) {
+                    throw new Error(`SOG blind data: invalid range [${min}, ${max}] for column '${f.column}'`);
+                }
+            }
+            // an unspecified encoding resolves to at most 4 bytes; count it as 1 here
+            bytes += f.encoding ? BLIND_ENCODING_BYTES[f.encoding] : 1;
+        }
+        if (bytes > 4) {
+            const names = fields.map((f) => f.column).join(', ');
+            throw new Error(`SOG blind data: fields ${names} need ${bytes} bytes; a blind texture holds 4`);
+        }
+    }
+};
+
+/**
+ * Resolve each blind texture's fields against the gathered columns: default
+ * encodings (the fewest-byte unsigned integer that holds the column), byte
+ * offsets, and the 4-byte limit again now that defaults are known.
+ *
+ * @param textures - The requested textures (validated).
+ * @param columns - The gathered columns, in request order.
+ * @returns The resolved textures.
+ */
+const resolveBlindTextures = (textures: SogBlindTexture[], columns: Float64Array[]): ResolvedBlindTexture[] => {
+    let next = 0;
+    return textures.map((fields) => {
+        let offset = 0;
+        const resolved = fields.map((f) => {
+            const values = columns[next++];
+            let encoding = f.encoding;
+            if (!encoding) {
+                let max = 0;
+                for (let i = 0; i < values.length; i++) if (values[i] > max) max = values[i];
+                encoding = integerEncodingFor(max);
+            }
+            const field = { name: f.column, encoding, offset, range: f.range, values };
+            offset += BLIND_ENCODING_BYTES[encoding];
+            return field;
+        });
+        if (offset > 4) {
+            const names = fields.map((f) => f.column).join(', ');
+            throw new Error(`SOG blind data: fields ${names} need ${offset} bytes; a blind texture holds 4`);
+        }
+        return { fields: resolved, bytes: offset };
+    });
 };
 
 type ShNMeta = { count: number; bands: number; codebook: number[]; files: string[] };
 
-type BlindMeta = { name: string; bytes: 1 | 2 | 3 | 4; files: string[] };
+type BlindFieldMeta = { name: string; type: SogBlindEncoding; offset: number; min?: number; max?: number };
+
+type BlindMeta = { files: string[]; fields: BlindFieldMeta[] };
+
+type ResolvedBlindTexture = {
+    fields: {
+        name: string;
+        encoding: SogBlindEncoding;
+        offset: number;
+        range: [number, number] | undefined;
+        values: Float64Array;
+    }[];
+    bytes: number;
+};
 
 type Clustering = { centroids: Float32Array; labels: Uint32Array };
 
@@ -305,8 +374,8 @@ type SogWriteState = {
     shCluster: Promise<Clustering> | null;
     /** v3 only: the opacity codebook job. */
     opacityQuant: Promise<{ codebook: Float32Array; labels: Uint8Array }> | null;
-    /** v3 only: blind data to write, with its resolved byte count. */
-    blind: { name: string; bytes: 1 | 2 | 3 | 4; values: Uint32Array } | null;
+    /** v3 only: blind textures to write, with resolved encodings and offsets. */
+    blind: ResolvedBlindTexture[];
     /** meta.json `extras`, or undefined for none. */
     extras: unknown;
     // k-means iterations completed so far, and where to report further ones
@@ -346,9 +415,8 @@ const startSogWrite = async (
             );
         }
     }
-    if (options.blind?.bytes !== undefined && ![1, 2, 3, 4].includes(options.blind.bytes)) {
-        throw new Error(`SOG blind data: bytes must be 1, 2, 3 or 4 (got ${options.blind.bytes})`);
-    }
+    const blindTextures = options.blind ?? [];
+    validateBlindTextures(blindTextures);
 
     let baked = bakeTransform(source, Transform.PLY);
     // v2 readers infer bands from the palette width and stop at 3
@@ -387,27 +455,23 @@ const startSogWrite = async (
         );
     }
 
-    if (version === 2 && options.blind) {
-        logger.warn(`SOG v2 cannot store blind data; '${options.blind.column}' is not written (use SOG v3)`);
+    const blindColumns = blindTextures.flat().map((f) => f.column);
+    if (version === 2 && blindColumns.length > 0) {
+        logger.warn(`SOG v2 cannot store blind data; ${blindColumns.join(', ')} not written (use SOG v3)`);
     }
-    const blindColumn = version === 3 ? options.blind?.column : undefined;
-    const layers = await gatherSogLayers(baked, pool, blindColumn);
+    if (version === 3 && blindTextures.length > MAX_PORTABLE_BLIND_TEXTURES) {
+        logger.warn(
+            `${blindTextures.length} SOG blind textures may exceed the vertex texture units of some WebGL2 devices ` +
+                `(${MAX_PORTABLE_BLIND_TEXTURES} fit everywhere); pack narrow columns into shared textures`
+        );
+    }
+    const layers = await gatherSogLayers(baked, pool, version === 3 ? blindColumns : []);
 
     if (version === 2 && layers.excess?.some((e) => e > 0)) {
         logger.warn('SOG v2 cannot store opacity above 1; excess opacity is discarded (use SOG v3)');
     }
 
-    let blind: SogWriteState['blind'] = null;
-    if (layers.blind) {
-        const needed = blindBytesFor(layers.blind);
-        const bytes = options.blind!.bytes ?? needed;
-        if (bytes < needed) {
-            throw new Error(
-                `SOG blind data: column '${blindColumn}' needs ${needed} bytes but ${bytes} were requested`
-            );
-        }
-        blind = { name: blindColumn!, bytes, values: layers.blind };
-    }
+    const blind = version === 3 ? resolveBlindTextures(blindTextures, layers.blind) : [];
 
     // ---- Worker-side jobs first, so the pool is busy while the main thread
     // runs its own passes in the finish phase. Quantize-bearing textures go
@@ -745,22 +809,34 @@ const finishSogWrite = async (
             };
         }
 
-        // ---- blind (v3): little-endian bytes in R,G,B,A. Unused channels are
-        // RGB 0 / A 255, so every texel is opaque unless the data itself uses A.
-        let blindMeta: BlindMeta | null = null;
-        if (blind) {
-            const { values, bytes } = blind;
+        // ---- blind (v3): each texture's fields fill its bytes (R, G, B, A) in
+        // order, each little-endian. Unused bytes are RGB 0 / A 255, so every
+        // texel is opaque unless the data itself uses A.
+        const blindMeta: BlindMeta[] = [];
+        for (let t = 0; t < blind.length; t++) {
+            const { fields, bytes } = blind[t];
             const buf = new Uint8Array(width * height * channels);
-            for (let i = 0; i < numRows; ++i) {
-                const v = values[indices[i]];
-                const ti = i * 4;
-                buf[ti] = v & 0xff;
-                buf[ti + 1] = bytes > 1 ? (v >>> 8) & 0xff : 0;
-                buf[ti + 2] = bytes > 2 ? (v >>> 16) & 0xff : 0;
-                buf[ti + 3] = bytes > 3 ? (v >>> 24) & 0xff : 0xff;
+            if (bytes < 4) for (let ti = 3; ti < buf.length; ti += 4) buf[ti] = 0xff;
+            for (const f of fields) {
+                const n = BLIND_ENCODING_BYTES[f.encoding];
+                const range = f.range ?? [0, 1];
+                for (let i = 0; i < numRows; ++i) {
+                    const v = encodeBlindValue(f.values[indices[i]], f.encoding, range, f.name);
+                    const ti = i * 4 + f.offset;
+                    for (let k = 0; k < n; k++) buf[ti + k] = (v >>> (8 * k)) & 0xff;
+                }
             }
-            pending.push(writeWebp('blind.webp', buf, width, height, bytes > 3));
-            blindMeta = { name: blind.name, bytes, files: ['blind.webp'] };
+            const file = `blind_${t}.webp`;
+            pending.push(writeWebp(file, buf, width, height, bytes > 3));
+            blindMeta.push({
+                files: [file],
+                fields: fields.map((f) => ({
+                    name: f.name,
+                    type: f.encoding,
+                    offset: f.offset,
+                    ...(f.range ? { min: f.range[0], max: f.range[1] } : {})
+                }))
+            });
         }
 
         await Promise.all(pending);
@@ -777,7 +853,7 @@ const finishSogWrite = async (
                   sh0: { codebook: colorsCodebook, files: ['sh0.webp'] },
                   opacity: { codebook: opacityCodebook },
                   ...(shN ? { shN } : {}),
-                  ...(blindMeta ? { blind: blindMeta } : {}),
+                  ...(blindMeta.length > 0 ? { blind: blindMeta } : {}),
                   ...(state.extras !== undefined ? { extras: state.extras } : {})
               }
             : {
@@ -878,4 +954,4 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem): Promise<void>
 };
 
 export { finishSogWrite, startSogWrite, writeSog, writeSogSource };
-export type { SogBlindOptions, SogVersion };
+export type { SogVersion };

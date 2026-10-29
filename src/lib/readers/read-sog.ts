@@ -28,6 +28,8 @@ import { isSplatModel } from '../splat-model';
 import type { SplatModel } from '../splat-model';
 import { logger, Transform, WebPCodec } from '../utils';
 import { decodeQuatExpMap } from '../utils/quat-expmap';
+import { BLIND_ENCODING_BYTES, decodeBlindValue, isBlindEncoding, isIntegerEncoding } from '../utils/sog-blind';
+import type { SogBlindEncoding } from '../utils/sog-blind';
 
 import { readSogV1 } from './read-sog-v1';
 import type { MetaV1 } from './read-sog-v1';
@@ -47,19 +49,26 @@ type MetaV2 = {
     sh0: { codebook: number[]; files: string[] };
     opacity?: { codebook: number[] };
     shN?: { count: number; bands: number; codebook: number[]; files: string[] };
-    blind?: { name: string; bytes: number; files: string[] };
+    blind?: { files: string[]; fields: { name: string; type: string; offset: number; min?: number; max?: number }[] }[];
     extras?: unknown;
 };
 
 // The `other`-layer columns a V3 meta implies: excess opacity when its codebook
-// reaches above 1, and the blind column under its recorded name.
+// reaches above 1, and each blind field under its recorded name (integer
+// encodings as uint32, the rest as float32).
 const extraColumnsFromMeta = (meta: MetaV2): ExtraColumn[] => {
     const extras: ExtraColumn[] = [];
     if (meta.version === 3 && meta.opacity && meta.opacity.codebook.some((v) => v > 1)) {
         extras.push({ name: OPACITY_EXCESS_COLUMN, type: 'float32' });
     }
     if (meta.version === 3 && meta.blind) {
-        extras.push({ name: meta.blind.name, type: 'uint32' });
+        for (const texture of meta.blind) {
+            for (const f of texture.fields) {
+                if (!isBlindEncoding(f.type))
+                    throw new Error(`SOG blind field '${f.name}' has unknown type '${f.type}'`);
+                extras.push({ name: f.name, type: isIntegerEncoding(f.type) ? 'uint32' : 'float32' });
+            }
+        }
     }
     return extras;
 };
@@ -214,22 +223,44 @@ const readSogSourceV2 = async (
     const oLogit = oCode.map((a) => sigmoidInv(a));
     const oExcess = oCode.map((a) => (a > 1 ? a - 1 : 0));
 
-    // V3 blind data: little-endian bytes in R,G,B,A.
+    // V3 blind data: each texture's fields at their byte offsets in R,G,B,A, little-endian.
     const extras = extraColumnsFromMeta(meta);
-    let blindRGBA: Uint8Array | null = null;
-    const blindBytes = meta.blind?.bytes ?? 0;
-    if (v3 && meta.blind) {
-        if (![1, 2, 3, 4].includes(blindBytes)) throw new Error(`SOG blind bytes must be 1-4 (got ${blindBytes})`);
-        const bl = decoder.decodeRGBA(await load(meta.blind.files[0]));
-        blindRGBA = bl.rgba;
-        if (bl.width * bl.height < count) throw new Error('SOG blind texture too small for count');
-    }
     const otherL = extras.length > 0 ? otherLayout(extras) : null;
     const excessWord = otherL?.fields[OPACITY_EXCESS_COLUMN]
         ? otherL.fields[OPACITY_EXCESS_COLUMN].byteOffset >>> 2
         : -1;
-    const blindWord = otherL && meta.blind ? otherL.fields[meta.blind.name].byteOffset >>> 2 : -1;
     const otherSw = otherL ? otherL.stride >>> 2 : 0;
+    const blindFields: {
+        rgba: Uint8Array;
+        offset: number;
+        bytes: number;
+        encoding: SogBlindEncoding;
+        range: [number, number];
+        word: number;
+        integer: boolean;
+    }[] = [];
+    if (v3 && meta.blind) {
+        for (const texture of meta.blind) {
+            const bl = decoder.decodeRGBA(await load(texture.files[0]));
+            if (bl.width * bl.height < count) throw new Error('SOG blind texture too small for count');
+            for (const f of texture.fields) {
+                const encoding = f.type as SogBlindEncoding;
+                const bytes = BLIND_ENCODING_BYTES[encoding];
+                if (!(Number.isInteger(f.offset) && f.offset >= 0 && f.offset + bytes <= 4)) {
+                    throw new Error(`SOG blind field '${f.name}' does not fit its texture (offset ${f.offset})`);
+                }
+                blindFields.push({
+                    rgba: bl.rgba,
+                    offset: f.offset,
+                    bytes,
+                    encoding,
+                    range: [f.min ?? 0, f.max ?? 1],
+                    word: otherL!.fields[f.name].byteOffset >>> 2,
+                    integer: isIntegerEncoding(encoding)
+                });
+            }
+        }
+    }
 
     // shN (optional): label -> centroid palette -> codebook, channel-major f_rest.
     let shBands: SHBands = 0;
@@ -339,13 +370,17 @@ const readSogSourceV2 = async (
                 f32View[0] = oExcess[c0[o4 + 3]];
                 othOut[o + excessWord] = u32View[0];
             }
-            if (blindWord >= 0) {
-                const b = blindRGBA!;
-                let v = b[o4];
-                if (blindBytes > 1) v |= b[o4 + 1] << 8;
-                if (blindBytes > 2) v |= b[o4 + 2] << 16;
-                if (blindBytes > 3) v |= b[o4 + 3] << 24;
-                othOut[o + blindWord] = v >>> 0;
+            for (const f of blindFields) {
+                const b = f.rgba;
+                const t = o4 + f.offset;
+                let bits = 0;
+                for (let k = 0; k < f.bytes; k++) bits |= b[t + k] << (8 * k);
+                if (f.integer) {
+                    othOut[o + f.word] = bits >>> 0;
+                } else {
+                    f32View[0] = decodeBlindValue(bits >>> 0, f.encoding, f.range);
+                    othOut[o + f.word] = u32View[0];
+                }
             }
         }
 

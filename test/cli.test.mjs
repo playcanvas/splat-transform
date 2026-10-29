@@ -3,7 +3,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
@@ -121,8 +121,35 @@ describe('CLI parsing', () => {
         assert.match(result.stderr, /Invalid sog-version value: 4/);
     });
 
+    it('packs repeated --sog-blind fields into blind textures', async () => {
+        const { Column } = await import('../src/lib/index.js');
+        const { createTestDataTable, encodePlyBinary } = await import('./helpers/test-utils.mjs');
+        const dt = createTestDataTable(16);
+        dt.addColumn(new Column('a', Float32Array.from({ length: 16 }, (_, i) => i / 15)));
+        dt.addColumn(new Column('depth', Float32Array.from({ length: 16 }, (_, i) => 1 + i)));
+        dt.addColumn(new Column('id', Uint32Array.from({ length: 16 }, (_, i) => i * 1000)));
+        const dir = await mkdtemp(join(tmpdir(), 'st-blind-cli-'));
+        try {
+            await writeFile(join(dir, 'in.ply'), encodePlyBinary(dt));
+            await mkdir(join(dir, 'out'));
+            const result = await runCli([
+                '--gpu', 'cpu', join(dir, 'in.ply'),
+                '--sog-blind', 'a:unorm8,depth:unorm8[1,16]', '--sog-blind', 'id',
+                join(dir, 'out', 'meta.json')
+            ]);
+            assert.strictEqual(result.code, 0, result.stderr);
+            const meta = JSON.parse(await readFile(join(dir, 'out', 'meta.json'), 'utf8'));
+            assert.deepStrictEqual(meta.blind, [
+                { files: ['blind_0.webp'], fields: [{ name: 'a', type: 'unorm8', offset: 0 }, { name: 'depth', type: 'unorm8', offset: 1, min: 1, max: 16 }] },
+                { files: ['blind_1.webp'], fields: [{ name: 'id', type: 'u16', offset: 0 }] }
+            ]);
+        } finally {
+            await rm(dir, { recursive: true, force: true });
+        }
+    });
+
     it('rejects a malformed --sog-blind', async () => {
-        for (const value of [':2', 'id:5', 'id:2:3']) {
+        for (const value of [':u8', 'id:5', 'id:u8:u8', 'id:unorm8[0]', 'a,,b', 'id:u9']) {
             const result = await runCli(['--gpu', 'cpu', 'test/fixtures/splat/minimal.splat', '--sog-blind', value, 'null']);
 
             assert.notStrictEqual(result.code, 0, `CLI should reject --sog-blind ${value}`);

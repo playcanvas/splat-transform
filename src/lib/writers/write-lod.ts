@@ -10,11 +10,12 @@ import type { BTreeNode } from '../spatial';
 import { BTree } from '../spatial';
 import type { DeviceCreator } from '../types';
 import { logger, Transform } from '../utils';
+import type { SogBlindTexture } from '../utils/sog-blind';
 import { version } from '../version';
 
 import { logWrittenFile } from './utils';
 import { finishSogWrite, startSogWrite, writeSogSource } from './write-sog.js';
-import type { SogBlindOptions, SogVersion } from './write-sog.js';
+import type { SogVersion } from './write-sog.js';
 
 type Aabb = {
     min: number[];
@@ -438,7 +439,7 @@ type WriteLodSourceOptions = {
     /** SOG version of every unit and the environment. Default 3. */
     sogVersion?: SogVersion;
     /** Per-gaussian blind data carried into every unit (v3 only). */
-    sogBlind?: SogBlindOptions;
+    sogBlind?: SogBlindTexture[];
     /**
      * Application-defined JSON for lod-meta.json's `extras` (as in glTF). Undefined writes
      * the main source's extras, if any; null writes none. Units never carry extras.
@@ -697,8 +698,12 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
                     webpEffort,
                     createDevice: sharedCreateDevice,
                     version: sogVersion,
-                    // the environment is a separate scene and may lack the column
-                    blind: envSource!.meta.extraColumns.some((c) => c.name === sogBlind?.column) ? sogBlind : undefined,
+                    // the environment is a separate scene and may lack some columns: keep the fields it has
+                    blind: sogBlind
+                        ?.map((fields) =>
+                            fields.filter((f) => envSource!.meta.extraColumns.some((c) => c.name === f.column))
+                        )
+                        .filter((fields) => fields.length > 0),
                     // the scene's extras live in lod-meta.json only
                     extras: null,
                     logging: 'flat'

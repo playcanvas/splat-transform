@@ -47,7 +47,8 @@ import type {
     FilterCluster,
     Options as LibOptions,
     CollisionMeshShape,
-    ReadFileSystem
+    ReadFileSystem,
+    SogBlindTexture
 } from '../lib';
 // CLI-only internals (deliberately off the public lib surface): the LOD-path
 // level resolver and the container source readers the LOD writer drives
@@ -60,6 +61,7 @@ import { readLodSource, readLodEnvironmentSource } from '../lib/readers/read-lod
 import { loadCameraTrack } from '../lib/render/camera-track';
 import type { CameraTrack } from '../lib/render/camera-track';
 import { formatFileInfo } from '../lib/source-info';
+import { isBlindEncoding } from '../lib/utils/sog-blind';
 import { frameFilename } from '../lib/writers/utils';
 
 import { createDevice, enumerateAdapters, getPeakGpuMemory } from './node-device';
@@ -178,7 +180,7 @@ const cliOptionsConfig = {
     'lod-file-count': { type: 'string', default: '' },
     'spz-version': { type: 'string', default: '4' },
     'sog-version': { type: 'string', default: '3' },
-    'sog-blind': { type: 'string' },
+    'sog-blind': { type: 'string', multiple: true },
     'sog-extras': { type: 'string' },
     'sh-palette-size': { type: 'string' },
     unbundled: { type: 'boolean', default: false },
@@ -354,6 +356,42 @@ const parseArguments = async () => {
         throw new Error(`Invalid collision mesh shape: ${value}. Expected smooth or faces.`);
     };
 
+    // --sog-blind <field>[,<field>...], field = <column>[:<encoding>[[min,max]]]; the
+    // range's comma sits inside brackets, so fields split on top-level commas only
+    const parseSogBlind = (value: string): SogBlindTexture => {
+        const invalid = (why: string) =>
+            new Error(`Invalid sog-blind value: ${value}. ${why} Must be <column>[:<encoding>][,...].`);
+        const parts: string[] = [];
+        let depth = 0;
+        let start = 0;
+        for (let i = 0; i < value.length; i++) {
+            if (value[i] === '[') depth++;
+            else if (value[i] === ']') depth--;
+            else if (value[i] === ',' && depth === 0) {
+                parts.push(value.slice(start, i));
+                start = i + 1;
+            }
+        }
+        parts.push(value.slice(start));
+        return parts.map((part) => {
+            const m = /^([^:[\],]+)(?::([a-z0-9]+)(?:\[([^,\]]+),([^,\]]+)\])?)?$/.exec(part.trim());
+            if (!m) throw invalid(`Malformed field '${part}'.`);
+            const [, column, name, min, max] = m;
+            let encoding: SogBlindTexture[number]['encoding'];
+            if (name !== undefined) {
+                if (!isBlindEncoding(name)) {
+                    throw invalid(`Unknown encoding '${name}' (u8, u16, u24, u32, f16, f32, unorm8, unorm16).`);
+                }
+                encoding = name;
+            }
+            return {
+                column,
+                ...(encoding !== undefined ? { encoding } : {}),
+                ...(min !== undefined ? { range: [parseNumber(min), parseNumber(max)] as [number, number] } : {})
+            };
+        });
+    };
+
     const parseComparator = (value: string): 'lt' | 'lte' | 'gt' | 'gte' | 'eq' | 'neq' => {
         switch (value) {
             case 'lt':
@@ -471,15 +509,7 @@ const parseArguments = async () => {
     if (sogVersion !== 2 && sogVersion !== 3) {
         throw new Error(`Invalid sog-version value: ${v['sog-version']}. Must be 2 or 3.`);
     }
-    let sogBlind: { column: string; bytes?: 1 | 2 | 3 | 4 } | undefined;
-    if (v['sog-blind'] !== undefined) {
-        const [column, bytesStr, ...rest] = v['sog-blind'].split(':');
-        const bytes = bytesStr === undefined ? undefined : parseInteger(bytesStr);
-        if (!column || rest.length > 0 || (bytes !== undefined && ![1, 2, 3, 4].includes(bytes))) {
-            throw new Error(`Invalid sog-blind value: ${v['sog-blind']}. Must be <column>[:<1|2|3|4>].`);
-        }
-        sogBlind = { column, ...(bytes !== undefined ? { bytes: bytes as 1 | 2 | 3 | 4 } : {}) };
-    }
+    const sogBlind = v['sog-blind'] ? v['sog-blind'].map(parseSogBlind) : undefined;
 
     // Image render options (apply when output is .webp).
     let renderProjection: 'pinhole' | 'equirect' | undefined;
@@ -953,8 +983,12 @@ SOG COMPRESSION (.sog, meta.json, lod-meta.json, .html outputs)
         --max-workers      <n>              Worker threads for SOG and image-sequence encoding (0 = inline/serial). Default: 4
         --sog-version      <2|3>            SOG format version to write. 2 is for older viewers: it drops excess
                                               opacity, blind data and a 4th SH band. Default: 3 (.html always embeds 2)
-        --sog-blind        <col>[:<bytes>]  Store integer column <col> as per-gaussian blind data (v3), in 1-4 bytes.
-                                              Default bytes: the fewest that hold the column's largest value
+        --sog-blind        <field>[,...]    Store columns as per-gaussian blind data (v3): one blind texture per flag,
+                                              its fields filling 4 bytes (R,G,B,A) in order. field = <col>[:<enc>]
+                                              enc: u8 u16 u24 u32 (unsigned integers), f16 f32 (float bits),
+                                              unorm8 unorm16 (float in [0,1], or unorm8[min,max]). Default: the
+                                              fewest-byte uint that fits. Repeatable, e.g. --sog-blind id
+                                              --sog-blind a:unorm8,b:unorm8,depth:f16
         --sog-extras       <file.json>      Store this JSON as the output's extras (meta.json / lod-meta.json),
                                               application-defined data as in glTF. Default: the input's extras, if any
 

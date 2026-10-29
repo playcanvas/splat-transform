@@ -2,6 +2,7 @@ import type { ExperienceSettings } from '@playcanvas/supersplat-viewer/settings'
 import type { GraphicsDevice } from 'playcanvas';
 
 import type { CameraTrack } from './render/camera-track';
+import type { SogBlindTexture } from './utils/sog-blind';
 
 /**
  * Collision mesh shape generated alongside voxel output.
@@ -48,8 +49,8 @@ type Options = {
     /** SOG format version to write (SOG, SOG bundle and LOD output). Default: 3. HTML output always embeds v2. */
     sogVersion?: 2 | 3;
 
-    /** Store this source column as per-gaussian SOG blind data (v3 only), in `bytes` (1-4, default: fewest that fit). */
-    sogBlind?: { column: string; bytes?: 1 | 2 | 3 | 4 };
+    /** Per-gaussian SOG blind data (v3 only): source columns packed into blind textures, one entry per texture. */
+    sogBlind?: SogBlindTexture[];
 
     /** JSON to store as the SOG / LOD output's `extras` (application-defined, as in glTF). Default: the source's extras. */
     sogExtras?: unknown;

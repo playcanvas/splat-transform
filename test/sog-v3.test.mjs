@@ -18,6 +18,7 @@ import {
 } from '../src/lib/index.js';
 import { readPly } from '../src/lib/readers/read-ply.js';
 import { readSogSource } from '../src/lib/readers/read-sog.js';
+import { floatToHalfBits, halfBitsToFloat } from '../src/lib/utils/sog-blind.js';
 import { writeSogSource } from '../src/lib/writers/write-sog.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -202,55 +203,107 @@ describe('SOG v3 opacity', () => {
 });
 
 describe('SOG v3 blind data', () => {
-    const withBlind = (values) => {
-        const dt = createTestDataTable(values.length);
-        dt.addColumn(new Column('segment', Uint32Array.from(values)));
+    const withColumns = (n, columns) => {
+        const dt = createTestDataTable(n);
+        for (const [name, data] of Object.entries(columns)) dt.addColumn(new Column(name, data));
         return dt;
     };
 
-    for (const [bytes, max] of [[1, 0xff], [2, 0xffff], [3, 0xffffff], [4, 0xffffffff]]) {
-        it(`round-trips ${bytes}-byte values exactly (incl. 0 and max)`, async () => {
-            const r = rng(10 + bytes);
+    // out row j -> source row, matched by position (the writer reorders by Morton code)
+    const sourceRows = (src, out) => {
+        const key = (t, i) => ['x', 'y', 'z'].map((c) => Math.round(2 * t.getColumnByName(c).data[i])).join(',');
+        const byKey = new Map();
+        for (let i = 0; i < src.numRows; i++) byKey.set(key(src, i), i);
+        return Array.from({ length: out.numRows }, (_, j) => byKey.get(key(out, j)));
+    };
+
+    for (const [type, max] of [['u8', 0xff], ['u16', 0xffff], ['u24', 0xffffff], ['u32', 0xffffffff]]) {
+        it(`round-trips integers exactly, defaulting to the fewest bytes (${type})`, async () => {
+            const r = rng(10 + max % 7);
             const values = Array.from({ length: 300 }, (_, i) => (i === 0 ? 0 : i === 1 ? max : Math.floor(r() * max)));
-            const dt = withBlind(values);
-            const { meta, table } = await roundTrip(dt, { blind: { column: 'segment' } });
-            assert.deepStrictEqual(meta.blind, { name: 'segment', bytes, files: ['blind.webp'] });
-            const key = (t, i) => ['x', 'y', 'z'].map((c) => Math.round(2 * t.getColumnByName(c).data[i])).join(',');
-            const byKey = new Map();
-            for (let i = 0; i < dt.numRows; i++) byKey.set(key(dt, i), i);
+            const dt = withColumns(values.length, { segment: Uint32Array.from(values) });
+            const { meta, table } = await roundTrip(dt, { blind: [[{ column: 'segment' }]] });
+            assert.deepStrictEqual(meta.blind, [{ files: ['blind_0.webp'], fields: [{ name: 'segment', type, offset: 0 }] }]);
+            const rows = sourceRows(dt, table);
             const out = table.getColumnByName('segment').data;
-            for (let j = 0; j < table.numRows; j++) {
-                assert.strictEqual(out[j], values[byKey.get(key(table, j))]);
-            }
+            for (let j = 0; j < table.numRows; j++) assert.strictEqual(out[j], values[rows[j]]);
         });
     }
 
-    it('honours an explicit byte count and rejects one that is too small', async () => {
-        const dt = withBlind([1, 2, 300]);
-        const { meta } = await roundTrip(dt, { blind: { column: 'segment', bytes: 4 } });
-        assert.strictEqual(meta.blind.bytes, 4);
-        await assert.rejects(roundTrip(dt, { blind: { column: 'segment', bytes: 1 } }), /needs 2 bytes/);
+    it('packs four unorm8 floats into one texture', async () => {
+        const n = 200;
+        const r = rng(3);
+        const cols = Object.fromEntries(['a', 'b', 'c', 'd'].map((k) => [k, Float32Array.from({ length: n }, (_, i) => (i === 0 ? 0 : i === 1 ? 1 : r()))]));
+        const dt = withColumns(n, cols);
+        const { meta, table } = await roundTrip(dt, { blind: [['a', 'b', 'c', 'd'].map((column) => ({ column, encoding: 'unorm8' }))] });
+        assert.deepStrictEqual(meta.blind[0].fields.map((f) => [f.name, f.type, f.offset]), [['a', 'unorm8', 0], ['b', 'unorm8', 1], ['c', 'unorm8', 2], ['d', 'unorm8', 3]]);
+        assert.strictEqual(meta.blind[0].fields[0].min, undefined, 'the default [0, 1] range is not stored');
+        const rows = sourceRows(dt, table);
+        for (const k of ['a', 'b', 'c', 'd']) {
+            const out = table.getColumnByName(k).data;
+            for (let j = 0; j < n; j++) {
+                const v = cols[k][rows[j]];
+                assert.ok(Math.abs(out[j] - Math.round(v * 255) / 255) < 1e-6, `${k}: ${out[j]} vs ${v}`);
+            }
+        }
     });
 
-    it('rejects a missing column and non-integer floats; accepts integral floats', async () => {
-        const dt = withBlind([1, 2, 3]);
-        await assert.rejects(roundTrip(dt, { blind: { column: 'nope' } }), /column 'nope' not found/);
+    it('maps a unorm range and records it; rejects values outside it', async () => {
+        const values = Float32Array.from([0.1, 5, 42]);
+        const dt = withColumns(3, { depth: values });
+        const { meta, table } = await roundTrip(dt, { blind: [[{ column: 'depth', encoding: 'unorm16', range: [0.1, 42] }]] });
+        assert.deepStrictEqual(meta.blind[0].fields[0], { name: 'depth', type: 'unorm16', offset: 0, min: 0.1, max: 42 });
+        const rows = sourceRows(dt, table);
+        const out = table.getColumnByName('depth').data;
+        for (let j = 0; j < 3; j++) assert.ok(Math.abs(out[j] - values[rows[j]]) <= (41.9 / 65535) * 0.5 + 1e-6);
+        await assert.rejects(roundTrip(dt, { blind: [[{ column: 'depth', encoding: 'unorm8' }]] }), /outside its unorm8 range \[0, 1\]/);
+    });
 
-        const f = createTestDataTable(3);
-        f.addColumn(new Column('label', Float32Array.from([1, 2.5, 3])));
-        await assert.rejects(roundTrip(f, { blind: { column: 'label' } }), /must be unsigned integers/);
+    it('stores f32 bits exactly and f16 rounded to nearest, mixed with an integer field', async () => {
+        const f = Float32Array.from([0, -1.5, 3.14159, 1e-30, -65504, 123456.789]);
+        const h = Float32Array.from([0, -1.5, 3.14159, 1e-5, -65504, 0.333]);
+        const id = Uint32Array.from([0, 1, 2, 3, 4, 65535]);
+        const dt = withColumns(6, { f, h, id });
+        const { meta, table } = await roundTrip(dt, { blind: [[{ column: 'f', encoding: 'f32' }], [{ column: 'h', encoding: 'f16' }, { column: 'id', encoding: 'u16' }]] });
+        assert.deepStrictEqual(meta.blind.map((t) => t.files[0]), ['blind_0.webp', 'blind_1.webp']);
+        assert.deepStrictEqual(meta.blind[1].fields.map((x) => [x.name, x.type, x.offset]), [['h', 'f16', 0], ['id', 'u16', 2]]);
+        const rows = sourceRows(dt, table);
+        for (let j = 0; j < 6; j++) {
+            const i = rows[j];
+            assert.strictEqual(table.getColumnByName('f').data[j], f[i]);
+            assert.strictEqual(table.getColumnByName('h').data[j], halfBitsToFloat(floatToHalfBits(h[i])));
+            assert.strictEqual(table.getColumnByName('id').data[j], id[i]);
+        }
+        await assert.rejects(roundTrip(withColumns(1, { h: Float32Array.from([70000]) }), { blind: [[{ column: 'h', encoding: 'f16' }]] }), /outside the f16 range/);
+    });
 
-        const ok = createTestDataTable(3);
-        ok.addColumn(new Column('label', Float32Array.from([1, 2, 3])));
-        const { meta } = await roundTrip(ok, { blind: { column: 'label' } });
-        assert.strictEqual(meta.blind.bytes, 1);
+    it('rejects malformed requests', async () => {
+        const dt = withColumns(3, { a: Uint32Array.from([1, 2, 300]), b: Float32Array.from([1, 2.5, 3]) });
+        const cases = [
+            [[[{ column: 'nope' }]], /column 'nope' not found/],
+            [[[{ column: 'a', encoding: 'u32' }, { column: 'b', encoding: 'u8' }]], /need 5 bytes; a blind texture holds 4/],
+            [[[{ column: 'a' }], [{ column: 'a' }]], /stored more than once/],
+            [[[{ column: 'a', encoding: 'u16', range: [0, 1] }]], /range applies only to unorm8/],
+            [[[{ column: 'b', encoding: 'unorm8', range: [1, 1] }]], /invalid range/],
+            [[[{ column: 'a', encoding: 'u8' }]], /u8 stores unsigned integers 0 to 255/],
+            [[[{ column: 'b' }]], /stores unsigned integers/],
+            [[[]], /at least one field/]
+        ];
+        for (const [blind, error] of cases) await assert.rejects(roundTrip(dt, { blind }), error);
+    });
+
+    it('accepts integral floats under the default integer encoding', async () => {
+        const dt = withColumns(3, { label: Float32Array.from([1, 2, 3]) });
+        const { meta, table } = await roundTrip(dt, { blind: [[{ column: 'label' }]] });
+        assert.strictEqual(meta.blind[0].fields[0].type, 'u8');
+        assert.deepStrictEqual(Array.from(table.getColumnByName('label').data).sort(), [1, 2, 3]);
     });
 
     it('v2 ignores blind data with a warning', async () => {
-        const dt = withBlind([1, 2, 3]);
+        const dt = withColumns(3, { segment: Uint32Array.from([1, 2, 3]) });
         let result;
         const warnings = await captureWarnings(async () => {
-            result = await roundTrip(dt, { version: 2, blind: { column: 'segment' } });
+            result = await roundTrip(dt, { version: 2, blind: [[{ column: 'segment' }]] });
         });
         assert.ok(warnings.some((w) => /cannot store blind data/.test(w)), warnings.join('\n'));
         assert.strictEqual(result.meta.blind, undefined);
