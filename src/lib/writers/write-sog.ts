@@ -200,6 +200,14 @@ const OVER_UNITY_ENTRIES = 64;
 const MAX_OPACITY = 1e4;
 
 /**
+ * Importance exponent of the scale codebook: entries are weighted by exp(0.25 * log scale), shifting
+ * resolution toward the large splats that cover the most pixels. Without it the few hundred thousand
+ * large splats of a scene can share 3-4 entries, and which of them land where depends on the single
+ * largest scale, so render quality varies by ±1.5 dB with the splat set.
+ */
+const SCALE_IMPORTANCE = 0.25;
+
+/**
  * Build the v3 opacity codebook and per-gaussian labels from the true opacity
  * `A = sigmoid(opacity) + opacity_excess`.
  *
@@ -384,11 +392,16 @@ const startSogWrite = async (
     // first (each is a full-column pass); SH k-means mostly waits on the GPU.
     const [, , , , s0, s1, s2] = layers.geometric;
     const [fdc0, fdc1, fdc2] = layers.colorDc;
-    const scalesQuant = runQuantize1dColumns([
-        { name: 'scale_0', data: s0 },
-        { name: 'scale_1', data: s1 },
-        { name: 'scale_2', data: s2 }
-    ]);
+    const scalesQuant = runQuantize1dColumns(
+        [
+            { name: 'scale_0', data: s0 },
+            { name: 'scale_1', data: s1 },
+            { name: 'scale_2', data: s2 }
+        ],
+        256,
+        0.5,
+        SCALE_IMPORTANCE
+    );
     const colorsQuant = runQuantize1dColumns([
         { name: 'f_dc_0', data: fdc0 },
         { name: 'f_dc_1', data: fdc1 },
