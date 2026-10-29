@@ -1,0 +1,57 @@
+name: Release
+
+run-name: Release ${{ inputs.type }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      type:
+        description: "Version bump"
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    if: ${{ github.repository == 'playcanvas/splat-transform' && github.ref_name == 'main' }}
+    # queue releases instead of racing them
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    steps:
+      # tags pushed with GITHUB_TOKEN don't trigger the publish workflow
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_KEY }}
+
+      - name: Check out code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+
+      - name: Configure git
+        run: |
+          id=$(gh api "/users/${{ steps.app-token.outputs.app-slug }}[bot]" --jq .id)
+          git config user.name "${{ steps.app-token.outputs.app-slug }}[bot]"
+          git config user.email "${id}+${{ steps.app-token.outputs.app-slug }}[bot]@users.noreply.github.com"
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+
+      - name: Tag release
+        run: |
+          tag=$(npm version "$TYPE")
+          git push --atomic origin HEAD:main "refs/tags/$tag"
+          echo "Released $tag" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          TYPE: ${{ inputs.type }}
