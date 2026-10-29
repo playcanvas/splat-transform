@@ -68,7 +68,6 @@ type LogEvent =
  * at the façade (see {@link LoggerCore.isLevelVisible}) before reaching
  * the renderer; `error` is always delivered.
  */
-// eslint-disable-next-line @typescript-eslint/consistent-type-definitions -- preserve public declaration merging
 interface Renderer {
     /**
      * Handle a log event.
@@ -91,7 +90,6 @@ interface Renderer {
  * can adopt `using bar = logger.bar(...)` because `using` only requires
  * the `[Symbol.dispose]` shape structurally.
  */
-// eslint-disable-next-line @typescript-eslint/consistent-type-definitions -- preserve public declaration merging
 interface Bar {
     /**
      * Advance the bar by `n` ticks.
@@ -133,7 +131,6 @@ interface Bar {
  * can adopt `using g = logger.group(...)` because `using` only requires
  * the `[Symbol.dispose]` shape structurally.
  */
-// eslint-disable-next-line @typescript-eslint/consistent-type-definitions -- preserve public declaration merging
 interface Group {
     /**
      * Close the group, popping anything still open above it on the stack

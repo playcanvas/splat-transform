@@ -67,7 +67,6 @@ abstract class ReadStream {
  * Interface representing a readable data source.
  * Provides size information and creates streams for reading.
  */
-// eslint-disable-next-line @typescript-eslint/consistent-type-definitions -- preserve public declaration merging
 interface ReadSource {
     /**
      * The size of the source in bytes, or undefined if unknown.
@@ -107,7 +106,6 @@ type ProgressCallback = (bytesLoaded: number, totalBytes: number | undefined) =>
  * Interface for a file system that can create readable sources.
  * Implementations exist for various backends (URL, Node FS, Zip, Memory).
  */
-// eslint-disable-next-line @typescript-eslint/consistent-type-definitions -- preserve public declaration merging
 interface ReadFileSystem {
     /**
      * Create a readable source for the given path/identifier.

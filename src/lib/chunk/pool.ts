@@ -21,7 +21,6 @@ import type { ChunkLayer, LayerLayout } from './layout';
  * collector) instead. Call {@link ChunkDataPool.trim} to free pooled buffers
  * down to a target.
  */
-// eslint-disable-next-line @typescript-eslint/consistent-type-definitions -- preserve public declaration merging
 interface ChunkDataPool {
     /** Gaussians-per-chunk granularity this pool allocates for. */
     readonly chunkSize: number;
