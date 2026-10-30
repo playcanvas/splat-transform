@@ -83,9 +83,9 @@ export type { TypedArray, ColumnType, Row } from './data-table';
 export { dataTableToChunkSource, materializeToDataTable } from './compat/data-table';
 export { processDataTable } from './process';
 
-// Individual readers (advanced use; ply/splat/spz return a `ChunkSource`,
+// Individual readers (advanced use; ply/splat/spz/glb return a `ChunkSource`,
 // ksplat/mjs/sog return a `DataTable`)
-export { readKsplat, readMjs, readPly, readSog, readSplat, readSpz } from './readers';
+export { readGlb, readKsplat, readMjs, readPly, readSog, readSplat, readSpz } from './readers';
 
 // Individual writers (advanced use; DataTable-input compat set)
 export {

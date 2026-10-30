@@ -869,7 +869,7 @@ USAGE
   • Use 'null' as output to discard file output.
 
 SUPPORTED INPUTS
-    .ply   .compressed.ply   .sog   .spz   meta.json   lod-meta.json   .ksplat   .splat   .mjs   .lcc   .lcc2
+    .ply   .compressed.ply   .sog   .spz   meta.json   lod-meta.json   .ksplat   .splat   .glb   .mjs   .lcc   .lcc2
 
     Input filenames may also be http(s):// URLs (downloaded on demand;
     .mjs generators are local-only).

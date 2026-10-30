@@ -84,12 +84,16 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 | `.ksplat` | ✅ | ❌ | Compressed splat format (mkkellogg format) |
 | `.splat` | ✅ | ❌ | Compressed splat format (antimatter15 format) |
 | `.mjs` | ✅ | ❌ | Generate a scene using an mjs script (Beta) |
-| `.glb` | ❌ | ✅ | Binary glTF with [KHR_gaussian_splatting](https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_gaussian_splatting) extension |
+| `.glb` | ✅ | ✅ | Binary glTF with [KHR_gaussian_splatting](https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_gaussian_splatting) extension |
 | `.csv` | ❌ | ✅ | Comma-separated values spreadsheet |
 | `.html` | ❌ | ✅ | HTML viewer app (single-page or unbundled) based on SOG |
 | `.voxel.json` | ❌ | ✅ | Sparse voxel octree for collision detection |
 | `.webp` | ❌ | ✅ | Lossless WebP image rendered from a camera view via GPU rasterizer |
 | `null` | ❌ | ✅ | Discard output (useful with `--stats` for analysis-only runs) |
+
+GLB input currently supports one embedded-buffer `KHR_gaussian_splatting` ellipse primitive in the
+`srgb_rec709_display` color space, including indexed primitives. Multiple Gaussian primitives, mesh instancing,
+sparse accessors, and non-identity transforms on the Gaussian node hierarchy are rejected.
 
 ### Antialiased and 2DGS scenes
 

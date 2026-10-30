@@ -286,6 +286,9 @@ const writeGlb = async (options: WriteGlbOptions, fs: FileSystem) => {
     const { filename } = options;
     const dataTable = convertToSpace(options.dataTable, Transform.IDENTITY);
     const numSplats = dataTable.numRows;
+    if (numSplats === 0) {
+        throw new Error('writeGlb: cannot write an empty DataTable');
+    }
     const shBands = getSHBands(dataTable);
 
     const { segments, offsets, binBuffer } = buildBinaryBuffer(dataTable, numSplats, shBands);

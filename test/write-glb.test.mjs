@@ -105,6 +105,16 @@ const writeAndParse = async () => {
 const approx = (actual, expected) => Math.abs(actual - expected) <= 1e-4 * Math.max(1, Math.abs(expected));
 
 describe('writeGlb KHR_gaussian_splatting conformance', function () {
+    it('rejects an empty DataTable instead of emitting an invalid GLB', async function () {
+        const empty = new DataTable(
+            makeTable().columns.map((column) => new Column(column.name, new column.data.constructor(0)))
+        );
+        await assert.rejects(
+            writeGlb({ filename: '/empty.glb', dataTable: empty }, new MemoryFileSystem()),
+            /cannot write an empty DataTable/
+        );
+    });
+
     it('declares the KHR_gaussian_splatting extension', async function () {
         const { json } = await writeAndParse();
         assert.ok(json.extensionsUsed.includes('KHR_gaussian_splatting'));
