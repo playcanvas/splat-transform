@@ -1,5 +1,6 @@
 import type { ChunkDataPool, ReadRequest, ChunkSource, ChunkSourceMetadata } from '../chunk';
 import { concatSource } from '../ops';
+import type { SplatModel } from '../splat-model';
 import type { Transform } from '../utils';
 
 /**
@@ -35,12 +36,13 @@ type ContainerSegment = {
  * @param opts - Tuning options.
  * @param opts.cacheSize - Max resident decoded sub-files (default 3, min 2 so a chunk straddling two segments can be served).
  * @param opts.transform - Override the reported pending transform (sub-files decode to their own space; e.g. LCC2 relabels to `LCC2_TRANSFORM`). The sub-file data is unchanged — this only sets `meta.transform`.
+ * @param opts.model - Override the reported splat model (e.g. the one a `lod-meta.json` records for all its files). Only sets `meta.model`.
  * @returns A lazy multi-LOD source over the container.
  */
 const containerSource = async (
     segmentsByLod: ContainerSegment[][],
     pool: ChunkDataPool,
-    opts: { cacheSize?: number; transform?: Transform } = {}
+    opts: { cacheSize?: number; transform?: Transform; model?: SplatModel } = {}
 ): Promise<ChunkSource> => {
     const cacheSize = Math.max(2, opts.cacheSize ?? 3);
     const cache = new Map<ContainerSegment, Promise<ChunkSource>>();
@@ -108,6 +110,7 @@ const containerSource = async (
     const meta: ChunkSourceMetadata = {
         ...layout,
         transform: opts.transform ?? layout.transform,
+        model: opts.model ?? layout.model,
         numGaussians: lodCounts[0] ?? 0,
         numLods: segmentsByLod.length,
         lodCounts,

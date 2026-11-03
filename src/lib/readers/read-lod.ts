@@ -1,7 +1,10 @@
 import type { ChunkDataPool, ChunkSource } from '../chunk';
 import { dirname, join, readFile } from '../io/read';
 import type { ReadFileSystem } from '../io/read';
+import { isSplatModel } from '../splat-model';
+import type { SplatModel } from '../splat-model';
 import type { Options } from '../types';
+import { logger } from '../utils';
 
 import { containerSource } from './container-source';
 import type { ContainerSegment } from './container-source';
@@ -21,11 +24,19 @@ type LodNode = {
 type LodMeta = {
     version?: number;
     count?: number;
+    model?: string;
     counts?: number[];
     lodLevels: number;
     environment?: string;
     filenames: string[];
     tree: LodNode;
+};
+
+// An unrecognized model reads as 'default', as in SOG meta.json.
+const modelFromLodMeta = (value: string): SplatModel => {
+    if (isSplatModel(value)) return value;
+    logger.warn(`unrecognized splat model '${value}' in lod-meta.json, reading as 'default'`);
+    return 'default';
 };
 
 const parseLodMeta = (text: string, filename: string): LodMeta => {
@@ -166,7 +177,8 @@ const readLodSource = async (
             });
     });
 
-    return containerSource(segmentsByLod, pool);
+    // the model recorded for the whole tree wins over the files' own; without one, the files decide
+    return containerSource(segmentsByLod, pool, meta.model === undefined ? {} : { model: modelFromLodMeta(meta.model) });
 };
 
 /**

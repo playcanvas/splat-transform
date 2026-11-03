@@ -24,8 +24,10 @@ import {
     resolveSplatModel, writeSource
 } from '../src/lib/index.js';
 import { concatSource } from '../src/lib/ops/index.js';
+import { readLodSource } from '../src/lib/readers/read-lod.js';
 import { readPly, splatModelFromComments } from '../src/lib/readers/read-ply.js';
 import { splatModelComment } from '../src/lib/writers/utils.js';
+import { writeLodSource } from '../src/lib/writers/write-lod.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 WebPCodec.wasmUrl = join(__dirname, '..', 'lib', 'webp.wasm');
@@ -262,6 +264,63 @@ describe('combining sources', () => {
         assert.strictEqual(resolveSplatModel(['2dgs', 'default']), 'default');
         assert.strictEqual(resolveSplatModel(['antialiased', '2dgs']), 'default');
         assert.strictEqual(resolveSplatModel([]), 'default');
+    });
+});
+
+// Write a streamed LOD scene (lod-meta.json + SOG units) and return its files.
+const writeLod = async (source) => {
+    const fs = new MemoryFileSystem();
+    await writeLodSource({
+        filename: '/scene/lod-meta.json',
+        mainSource: source,
+        envSource: null,
+        iterations: 1,
+        chunkCount: 1,
+        chunkExtent: 16
+    }, fs);
+    return fs.results;
+};
+
+const lodMetaOf = files => JSON.parse(Buffer.from(files.get('/scene/lod-meta.json')).toString());
+
+// Open written LOD files, with lod-meta.json optionally replaced, as a source.
+const readLod = async (files, lodMeta) => {
+    const rfs = new MemoryReadFileSystem();
+    for (const [path, bytes] of files) rfs.set(path, bytes);
+    if (lodMeta) rfs.set('/scene/lod-meta.json', new TextEncoder().encode(JSON.stringify(lodMeta)));
+    return readLodSource(rfs, '/scene/lod-meta.json', {}, createChunkDataPool());
+};
+
+describe('streamed LOD scenes', () => {
+    it('tag lod-meta.json once for all their files', async () => {
+        const { source } = await openPly(createTestDataTable(16), ['SplatRenderMode: mip']);
+        const files = await writeLod(source);
+        const meta = lodMetaOf(files);
+        assert.strictEqual(meta.model, 'antialiased');
+
+        // the files carry the tag too, and the scene reads back as antialiased
+        for (const name of meta.filenames) {
+            const unit = JSON.parse(Buffer.from(files.get(`/scene/${name}`)).toString());
+            assert.strictEqual(unit.model, 'antialiased');
+        }
+        assert.strictEqual((await readLod(files)).meta.model, 'antialiased');
+    });
+
+    it('add no model key for an untagged scene', async () => {
+        const { source } = await openPly(createTestDataTable(16));
+        const files = await writeLod(source);
+        assert.ok(!('model' in lodMetaOf(files)), 'no model key for an untagged scene');
+        assert.strictEqual((await readLod(files)).meta.model, 'default');
+    });
+
+    it('read the lod-meta.json model over the files\' own', async () => {
+        const { source } = await openPly(createTestDataTable(16));
+        const files = await writeLod(source);
+        const tagged = { ...lodMetaOf(files), model: 'antialiased' };
+        assert.strictEqual((await readLod(files, tagged)).meta.model, 'antialiased');
+
+        const unknown = { ...lodMetaOf(files), model: 'future-model' };
+        assert.strictEqual((await readLod(files, unknown)).meta.model, 'default');
     });
 });
 
