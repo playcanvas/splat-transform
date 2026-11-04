@@ -165,7 +165,6 @@ type WriteVoxelOptions = {
 /**
  * Metadata for a voxel octree file.
  */
-// eslint-disable-next-line @typescript-eslint/consistent-type-definitions -- preserve public declaration merging
 interface VoxelMetadata {
     /** File format version */
     version: string;
