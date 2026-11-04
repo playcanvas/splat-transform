@@ -192,10 +192,6 @@ const unwrapPrefixes = (prefix: Uint32Array, numBlocks: number, total: number, o
  * group, accumulating each slice's composited colour in float on the GPU and
  * packing the mean on the last, so the frame costs one readback and
  * quantizes once.
- *
- * Every shader is shared with the chunked `GpuSplatRasterizer`; the scene
- * variants only change how attributes are addressed, so both produce
- * identical pixels.
  */
 class GpuSceneRasterizer {
     private device: GraphicsDevice;
@@ -314,7 +310,7 @@ class GpuSceneRasterizer {
             ['quatRotation', quatRotation],
             ['covariance3D', covariance3D]
         ]);
-        const cdefines = new Map<string, string>([['SCENE', '']]);
+        const cdefines = new Map<string, string>();
         if (projection === 'equirect') cdefines.set('PROJECTION_EQUIRECT', '');
         if (options.numSHBands >= 1) cdefines.set('SH_BAND_1', '');
         if (options.numSHBands >= 2) cdefines.set('SH_BAND_2', '');
@@ -1096,7 +1092,7 @@ class GpuSceneRasterizer {
             c.setParameter('offsetY', b.offsetY ?? 0);
             c.setParameter('imageWidth', o.imageWidth);
             c.setParameter('imageHeight', o.imageHeight);
-            c.setParameter('splatStride', 0);
+            c.setParameter('_p5', 0);
             c.setParameter('chunkSize', this.capacity);
             c.setParameter('groupPixelMinX', originX);
             c.setParameter('groupPixelMinY', originY);
