@@ -132,7 +132,7 @@ export const POLE_EPS = 0.005;
  * (`_keys0`, `_keys1`, `_values0`, `_values1` — another 4× pairsCap × 4 B).
  * That's 6 × pairsCap × 4 B = `PAIR_BUFFER_TOTAL_BYTES_PER_ELEMENT × pairsCap`.
  *
- * `chunkCap` is sized to keep this total under budget. The radix-sort
+ * The pairs cap is sized to keep this total under budget. The radix-sort
  * scratch is the dominant share; budgeting only the local buffers (as
  * earlier revisions did) under-counts actual GPU memory by ~3×.
  */
@@ -140,7 +140,7 @@ export const PAIR_BUFFER_BUDGET_BYTES = 768 * 1024 * 1024;
 
 /**
  * Total bytes per pair *element* across all six pair-sized buffers
- * (4 B × 6 buffers). Used by the orchestrator's chunkCap calculation
+ * (4 B × 6 buffers). Used by the rasterizer's pairs-cap calculation
  * so the math reflects actual GPU memory consumed by the sort
  * pipeline.
  */
@@ -157,29 +157,6 @@ export const storageBindingLimit = (device: GraphicsDevice): number => {
     const limits = (device as { limits?: { maxStorageBufferBindingSize?: number } }).limits;
     return limits?.maxStorageBufferBindingSize ?? 128 * 1024 * 1024;
 };
-
-/**
- * Gaussians per rasterizer chunk within the two pair-buffer limits: each of the
- * six pair-sized buffers must fit one storage binding, and together they must
- * fit `budgetBytes`.
- *
- * @param device - The graphics device.
- * @param maxCoveragePerSplat - Most tiles one splat may cover, so pairs per gaussian.
- * @param budgetBytes - Total bytes for all pair-sized buffers; {@link PAIR_BUFFER_BUDGET_BYTES} by default.
- * @returns The chunk cap, at least 1.
- */
-export const rasterChunkCap = (
-    device: GraphicsDevice,
-    maxCoveragePerSplat: number,
-    budgetBytes = PAIR_BUFFER_BUDGET_BYTES
-): number =>
-    Math.max(
-        1,
-        Math.min(
-            Math.floor(storageBindingLimit(device) / (maxCoveragePerSplat * 4)),
-            Math.floor(budgetBytes / (maxCoveragePerSplat * PAIR_BUFFER_TOTAL_BYTES_PER_ELEMENT))
-        )
-    );
 
 /**
  * Screen-size clamp, as a fraction of the shorter image edge. A splat

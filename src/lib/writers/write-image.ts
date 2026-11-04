@@ -179,7 +179,7 @@ type WriteImageOptions = {
      * Most bytes to hold GPU-resident for the scene. The resident path
      * uploads the scene once and renders every pass from it; scenes over
      * this budget, or over the device's binding limits, or that the device
-     * refuses to allocate, stream through the chunked path instead.
+     * refuses to allocate, are streamed from the source on every pass instead.
      * Default: no budget.
      */
     residentBudget?: number;

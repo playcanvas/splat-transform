@@ -11,7 +11,7 @@
  * in the projection-specific chunks (screen mapping + Jacobian + tile
  * AABB). The per-render `MAX_COVERAGE_PER_SPLAT` cap is similarly
  * embedded by the tile-AABB chunk via JS-template substitution at
- * construction time (see `sharedCincludes` in the rasterizer ctor).
+ * construction time (see `cincludes` in the rasterizer ctor).
  *
  * @param coeffsPerChannel - Per-channel SH coefficient count (0/3/8/15/24).
  * @returns WGSL source for the project compute shader.
@@ -24,13 +24,9 @@ const projectWgsl = (coeffsPerChannel: number) => /* wgsl */ `
 @group(0) @binding(2) var<storage, read_write> projected: array<vec4<f32>>;
 @group(0) @binding(3) var<storage, read_write> coverage: array<u32>;
 
-// Splat attribute access. The chunked path uploads an interleaved record
-// per gaussian (\`splats\`, stride \`splatStride\`); the scene rasterizer holds
-// the source's layers as they are stored (\`position\` 3, \`geometric\` 8 and
-// \`color\` 3 + SH floats per gaussian) and processes gaussians in the
-// depth-sorted \`order\`. Both resolve to the same f32 values, so the two
-// paths render identically.
-#ifdef SCENE
+// Splat attribute access. The source's layers are held as they are stored
+// (\`position\` 3, \`geometric\` 8 and \`color\` 3 + SH floats per gaussian)
+// and gaussians are processed in the depth-sorted \`order\`.
 @group(0) @binding(1) var<storage, read> position: array<f32>;
 @group(0) @binding(4) var<storage, read> geometric: array<f32>;
 @group(0) @binding(5) var<storage, read> color: array<f32>;
@@ -47,17 +43,6 @@ fn attr(c: u32, s: u32) -> f32 {
 fn shc(k: u32, s: u32) -> f32 {
     return color[s * COLOR_STRIDE_F32 + 3u + k];
 }
-#else
-@group(0) @binding(1) var<storage, read> splats: array<f32>;
-
-fn attr(c: u32, s: u32) -> f32 {
-    return splats[s * uniforms.splatStride + c];
-}
-
-fn shc(k: u32, s: u32) -> f32 {
-    return splats[s * uniforms.splatStride + 14u + k];
-}
-#endif
 
 const SH_C0: f32 = 0.28209479177387814;
 const SH_C1: f32 = 0.4886025119029199;
@@ -118,15 +103,11 @@ fn main(
     @builtin(local_invocation_id) lid: vec3<u32>
 ) {
     // Dispatches past the per-dimension workgroup limit are tiled in 2-D;
-    // linearise so the chunked (1-D) and resident paths index alike.
+    // linearise them.
     let i = (wgId.y * numWg.x + wgId.x) * 64u + lid.x;
     if (i >= uniforms.chunkSize) { return; }
 
-#ifdef SCENE
     let s = order[i];
-#else
-    let s = i;
-#endif
 
     let posX = attr(0u, s);
     let posY = attr(1u, s);

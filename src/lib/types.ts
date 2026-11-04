@@ -193,8 +193,8 @@ type Options = {
 
     /**
      * Most bytes the image writer may hold GPU-resident for the scene.
-     * Scenes over it, or that the device refuses to allocate, stream
-     * through the chunked path instead. Default: no limit beyond the
+     * Scenes over it, or that the device refuses to allocate, are streamed
+     * from the source on every pass instead. Default: no limit beyond the
      * device's binding limits.
      */
     renderResidentBudget?: number;

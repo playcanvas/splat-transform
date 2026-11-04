@@ -4,10 +4,9 @@
  * `SceneRenderer` renders a `ChunkSource` in one of three tiers: resident
  * (every layer on the GPU; GPU cull, depth sort and gather), streamed with
  * the GPU sort (positions resident, attributes gathered from the source per
- * pass in depth order) and streamed with the CPU sort. `renderSplats` (the
- * chunked reference path) culls and sorts on the CPU from a `DataTable` and
- * streams the sorted list. All four drive the same shaders and must produce
- * the same pixels.
+ * pass in depth order) and streamed with the CPU sort. All three drive the
+ * same shaders and must produce the same pixels; the resident tier is the
+ * reference the streamed ones are held to.
  *
  * The comparison is byte-exact. Scene positions sit on a 1/64 grid and the
  * cameras have exactly representable bases, so every path computes
@@ -150,6 +149,22 @@ const makeRenderer = async (scene, camera, tier) => {
  * @param {number} bytes - The binding limit to report.
  * @param {() => Promise<void>} fn - The work.
  */
+/**
+ * Render one view in the resident tier: the reference image.
+ *
+ * @param {object} scene - From `makeScene`.
+ * @param {object} camera - The view.
+ * @returns {Promise<Uint8Array>} RGBA bytes.
+ */
+const renderReference = async (scene, camera) => {
+    const renderer = await makeRenderer(scene, camera, 'resident');
+    try {
+        return await renderer.render(camera);
+    } finally {
+        renderer.destroy();
+    }
+};
+
 const withBindingLimit = async (bytes, fn) => {
     const real = device.limits;
     device.limits = { maxStorageBufferBindingSize: bytes, maxComputeWorkgroupsPerDimension: real.maxComputeWorkgroupsPerDimension };
@@ -160,7 +175,7 @@ const withBindingLimit = async (bytes, fn) => {
     }
 };
 
-describe('scene renderer matches the chunked path', () => {
+describe('scene renderer tiers agree', () => {
     it('aperture averaging softens an opaque edge and keeps the focus plane sharp', async (t) => {
         if (!device) return t.skip('no WebGPU adapter available');
         const { Vec3 } = await import('playcanvas');
@@ -250,7 +265,6 @@ describe('scene renderer matches the chunked path', () => {
     it('static pinhole, defocus and equirect are byte-identical in every tier', async (t) => {
         if (!device) return t.skip('no WebGPU adapter available');
         const { Vec3 } = await import('playcanvas');
-        const { renderSplats } = await import('../src/lib/render/index.js');
         const scene = await makeScene(20000, 7);
 
         const up = new Vec3(0, 1, 0);
@@ -281,7 +295,7 @@ describe('scene renderer matches the chunked path', () => {
         ];
 
         for (const [label, camera] of cases) {
-            const reference = await renderSplats(device, scene.dataTable, camera, background);
+            const reference = await renderReference(scene, camera);
             assert.ok(countForeground(reference) > 1000, `${label}: scene should cover the frame`);
             for (const tier of TIERS) {
                 const renderer = await makeRenderer(scene, camera, tier);
@@ -297,11 +311,10 @@ describe('scene renderer matches the chunked path', () => {
     it('renders in groups and cuts ranges within a small storage binding', async (t) => {
         if (!device) return t.skip('no WebGPU adapter available');
         const { Vec3 } = await import('playcanvas');
-        const { renderSplats } = await import('../src/lib/render/index.js');
         // Frame-filling gaussians: every scan block's pairs exceed the cap below.
         const scene = await makeScene(6000, 11, 0);
         const camera = { position: new Vec3(0, 0, 10), target: new Vec3(0, 0, 0), up: new Vec3(0, 1, 0), fovY: Math.PI / 3, width: 256, height: 192, near: 0.125 };
-        const reference = await renderSplats(device, scene.dataTable, camera, background);
+        const reference = await renderReference(scene, camera);
         assert.ok(countForeground(reference) > 1000, 'scene should cover the frame');
 
         // A 64 KiB binding: groups of one tile row (twelve per frame) and
