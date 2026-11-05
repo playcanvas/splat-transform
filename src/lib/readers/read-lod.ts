@@ -178,7 +178,11 @@ const readLodSource = async (
     });
 
     // the model recorded for the whole tree wins over the files' own; without one, the files decide
-    return containerSource(segmentsByLod, pool, meta.model === undefined ? {} : { model: modelFromLodMeta(meta.model) });
+    return containerSource(
+        segmentsByLod,
+        pool,
+        meta.model === undefined ? {} : { model: modelFromLodMeta(meta.model) }
+    );
 };
 
 /**
