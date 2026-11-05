@@ -1,5 +1,5 @@
 import { SIGMA_CUTOFF } from '../../render/config';
-import { OPACITY_MAX, plateauShape } from '../../utils/opacity';
+import { OPACITY_MAX, plateauCoreConstants } from '../../utils/opacity';
 
 import { wgslF32 } from './chunks/constants';
 
@@ -21,10 +21,7 @@ import { wgslF32 } from './chunks/constants';
  * @param coeffsPerChannel - Per-channel SH coefficient count (0/3/8/15/24).
  * @returns WGSL source for the project compute shader.
  */
-// the plateau shape D at evenly spaced A in [1, OPACITY_MAX]
-const PLATEAU_TABLE = Array.from({ length: 65 }, (_, k) =>
-    plateauShape(1 + ((OPACITY_MAX - 1) * k) / 64, SIGMA_CUTOFF)
-);
+const PLATEAU_CORE = plateauCoreConstants(SIGMA_CUTOFF);
 
 const projectWgsl = (coeffsPerChannel: number) => /* wgsl */ `
 #include "uniformsStruct"
@@ -80,17 +77,14 @@ const SH_C4_8: f32 = 0.6258357354491761;
 
 const COEFFS_PER_CHANNEL: u32 = ${coeffsPerChannel}u;
 
-// Over-unity opacity is drawn with the plateau profile exp(-D/2 * max(0, r * e - (D-1))^2) (r in
-// sigma), squeezed by e(D) so it ends at SIGMA_CUTOFF like a plain gaussian, at the shape D that
-// carries exactly its mass (see plateauShape in utils/opacity.ts). D is tabulated over A in
-// [1, OPACITY_MAX] and interpolated.
+// Over-unity opacity is drawn with peak 1 as an opaque core of radius u0 (a fraction of SIGMA_CUTOFF)
+// with the plain gaussian's falloff stretched over the rest, so it ends at SIGMA_CUTOFF like a plain
+// gaussian; u0 draws exactly its mass (see plateauCore in utils/opacity.ts).
 const OPACITY_MAX: f32 = ${wgslF32(OPACITY_MAX)};
-var<private> PLATEAU_SHAPE: array<f32, ${PLATEAU_TABLE.length}> = array<f32, ${PLATEAU_TABLE.length}>(${PLATEAU_TABLE.map(wgslF32).join(', ')});
 
-fn plateauShape(amp: f32) -> f32 {
-    let t = (min(amp, OPACITY_MAX) - 1.0) / (OPACITY_MAX - 1.0) * ${wgslF32(PLATEAU_TABLE.length - 1)};
-    let k = min(u32(t), ${PLATEAU_TABLE.length - 2}u);
-    return mix(PLATEAU_SHAPE[k], PLATEAU_SHAPE[k + 1u], t - f32(k));
+fn plateauCore(amp: f32) -> f32 {
+    let t = min(amp, OPACITY_MAX) - 1.0;
+    return sqrt(${wgslF32(PLATEAU_CORE.r0 * PLATEAU_CORE.r0)} + ${wgslF32(PLATEAU_CORE.q)} * t) - ${wgslF32(PLATEAU_CORE.r0)};
 }
 
 fn writeInvalid(idx: u32) {
@@ -131,10 +125,10 @@ fn main(
 #else
     let amp = 1.0 / (1.0 + exp(-opacity));
 #endif
-    // A > 1: draw the plateau profile at shape plateauD (0 = plain gaussian).
-    var plateauD = 0.0;
+    // A > 1: draw an opaque core of radius core (0 = plain gaussian).
+    var core = 0.0;
     if (amp > 1.0) {
-        plateauD = plateauShape(amp);
+        core = plateauCore(amp);
     }
     let fdcR = attr(11u, s);
     let fdcG = attr(12u, s);
@@ -182,7 +176,7 @@ fn main(
     if (detU <= 0.0) { writeInvalid(i); return; }
     let mid = 0.5 * (cov00 + cov11);
     let disc = sqrt(max(DISCRIMINANT_FLOOR, mid * mid - detU));
-    // The plateau profile is squeezed to end at SIGMA_CUTOFF too (see rasterize-binned.ts).
+    // The over-unity profile ends at SIGMA_CUTOFF too (see rasterize-binned.ts).
     var radiusRaw = SIGMA_CUTOFF * sqrt(mid + disc);
 
     // Size clamp: a splat whose radius exceeds SIZE_CLAMP_FRAC of the
@@ -264,10 +258,10 @@ fn main(
     let dofAlphaScale = 1.0;
 #endif
 
-    // the plateau profile peaks at 1 by construction
-    let alpha = select(amp, 1.0, plateauD > 1.0) * dofAlphaScale;
+    // the over-unity profile peaks at 1 by construction
+    let alpha = select(amp, 1.0, core > 0.0) * dofAlphaScale;
 
-    projected[i * 3u + 0u] = vec4<f32>(screenX, screenY, radius, plateauD);
+    projected[i * 3u + 0u] = vec4<f32>(screenX, screenY, radius, core);
     projected[i * 3u + 1u] = vec4<f32>(covInvA, covInvB, covInvC, alpha);
     projected[i * 3u + 2u] = vec4<f32>(colR, colG, colB, 0.0);
 

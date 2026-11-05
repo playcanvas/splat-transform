@@ -1,7 +1,7 @@
 /**
  * Rendering excess opacity (`opacity_excess`): a gaussian whose true opacity
- * exceeds 1 is drawn with the over-unity plateau profile — an opaque core and a
- * heavier edge carrying exactly its mass, with the opacity capped at
+ * exceeds 1 is drawn with an opaque core and the gaussian's falloff stretched
+ * over the rest of its footprint, carrying exactly its mass, with the opacity capped at
  * OPACITY_MAX — on every scene tier, and `compensation: false` draws it as if
  * the column were absent.
  */
@@ -10,7 +10,7 @@ import assert from 'node:assert';
 import { after, before, describe, it } from 'node:test';
 
 import { SIGMA_CUTOFF } from '../src/lib/render/config.js';
-import { OPACITY_MAX, plateauShape } from '../src/lib/utils/opacity.js';
+import { OPACITY_MAX, plateauCore, plateauCoreConstants } from '../src/lib/utils/opacity.js';
 
 let device = null;
 
@@ -106,9 +106,9 @@ describe('rendering excess opacity', () => {
             assert.deepStrictEqual(zero, plain, 'a zero excess renders as no excess');
             assert.deepStrictEqual(off, plain, 'compensation off ignores the excess');
             const heavy = footprint(heavyImg);
-            // A = 1.5625: D ≈ 1.84, squeezed to end at 3σ like the plain gaussian
+            // A = 1.5625: an opaque core of 0.24 of the 3σ footprint, ending at 3σ like the plain gaussian
             assert.ok(mass(heavyImg) > 1.3 * mass(plainImg), `excess draws more mass (${mass(heavyImg)} vs ${mass(plainImg)})`);
-            assert.ok(heavy.reach <= plain.reach + 0.1, `the squeezed plateau stays within the plain footprint (${heavy.reach} vs ${plain.reach})`);
+            assert.ok(heavy.reach <= plain.reach + 0.1, `the over-unity profile stays within the plain footprint (${heavy.reach} vs ${plain.reach})`);
             assert.deepStrictEqual(Array.from(heavyImg), Array.from(atMax), 'A = 16 renders as A = OPACITY_MAX (1.5625)');
         });
     }
@@ -117,36 +117,40 @@ describe('rendering excess opacity', () => {
         if (!device) return t.skip('no WebGPU adapter available');
         const plain = await render(await makeScene(null), 'resident', true);
         const heavy = await render(await makeScene(15), 'resident', true);
-        // pixel centres at 0.31σ and 0.94σ from the gaussian: the plateau core
-        // (radius (D-1)/e ≈ 0.83σ) is opaque, and its edge outweighs the gaussian's
+        // pixel centres at 0.31σ and 0.94σ from the gaussian: the core
+        // (radius 0.24 × 3σ ≈ 0.72σ) is opaque, and its edge outweighs the gaussian's
         const at = (image, x) => image[((W / 2) * W + x) * 4];
         assert.ok(at(heavy, W / 2) >= 250, `plateau core is opaque: ${at(heavy, W / 2)}`);
         assert.ok(at(heavy, W / 2 + 1) > at(plain, W / 2 + 1) + 40, `plateau edge at 0.94σ: ${at(heavy, W / 2 + 1)} vs ${at(plain, W / 2 + 1)}`);
     });
 });
 
-describe('plateau shape', () => {
-    // The drawn mass of a unit-peak splat as rasterize-binned.ts draws it: the squeezed profile minus
-    // GAUSSIAN_FLOOR, out to SIGMA_CUTOFF, integrated numerically.
-    const drawn = (D) => {
+describe('plateau core', () => {
+    // The drawn mass of a unit-peak splat as rasterize-binned.ts draws it: the distance in sigma remapped
+    // past the core, the gaussian minus GAUSSIAN_FLOOR, out to SIGMA_CUTOFF, integrated numerically.
+    const drawn = (core) => {
         const floor = Math.exp(-0.5 * SIGMA_CUTOFF * SIGMA_CUTOFF);
-        const e = (D - 1 + SIGMA_CUTOFF / Math.sqrt(D)) / SIGMA_CUTOFF;
         const steps = 20000;
         let mass = 0;
         for (let i = 0; i < steps; i++) {
             const r = ((i + 0.5) / steps) * SIGMA_CUTOFF;
-            const s = Math.max(0, r * e - (D - 1));
-            mass += Math.max(0, Math.exp(-0.5 * D * s * s) - floor) * 2 * Math.PI * r * (SIGMA_CUTOFF / steps);
+            const s = Math.max(0, r - core * SIGMA_CUTOFF) / (1 - core);
+            mass += Math.max(0, Math.exp(-0.5 * s * s) - floor) * 2 * Math.PI * r * (SIGMA_CUTOFF / steps);
         }
         return mass;
     };
 
     it('draws each opacity in (1, OPACITY_MAX] with its mass, relative to a plain gaussian of opacity 1', () => {
-        const plain = drawn(1);
+        const plain = drawn(0);
+        assert.strictEqual(plateauCore(1, SIGMA_CUTOFF), 0);
         for (let A = 1.025; A <= OPACITY_MAX; A += 0.025) {
-            const ratio = drawn(plateauShape(A, SIGMA_CUTOFF)) / plain;
-            assert.ok(Math.abs(ratio / A - 1) < 5e-4, `A = ${A.toFixed(3)} draws ${ratio.toFixed(4)}`);
+            const ratio = drawn(plateauCore(A, SIGMA_CUTOFF)) / plain;
+            assert.ok(Math.abs(ratio / A - 1) < 1e-5, `A = ${A.toFixed(3)} draws ${ratio.toFixed(6)}`);
         }
     });
-});
 
+    it('gives the engine constants at its 2√2σ cutoff (gsplatPlateauCore in gsplatHelpersVS)', () => {
+        const { r0, q } = plateauCoreConstants(2 * Math.SQRT2);
+        assert.ok(Math.abs(r0 * r0 - 0.28986718) < 1e-6 && Math.abs(q - 0.62504992) < 1e-6 && Math.abs(r0 - 0.53839315) < 1e-6, `${r0 * r0} ${q} ${r0}`);
+    });
+});

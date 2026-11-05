@@ -32,18 +32,6 @@ const decodeOpacityByte = (b: number): number => {
     return s * s;
 };
 
-/**
- * Squeeze of the plateau profile: its unsqueezed extent, `(D - 1) + cutoff / sqrt(D)` σ where it
- * reaches the plain gaussian's floor, over the plain gaussian's `cutoff` σ. The profile is drawn at
- * radius `r * e`, so it ends exactly where a plain gaussian does and its footprint, culls and
- * extent are the plain gaussian's. `e(1) = 1`.
- *
- * @param d - Plateau shape D, at least 1.
- * @param cutoff - The renderer's truncation radius, in σ.
- * @returns The squeeze e(D).
- */
-const plateauSqueeze = (d: number, cutoff: number): number => (d - 1 + cutoff / Math.sqrt(d)) / cutoff;
-
 // Abramowitz and Stegun 7.1.26, within 1.5e-7.
 const erf = (x: number): number => {
     const t = 1 / (1 + 0.3275911 * Math.abs(x));
@@ -56,52 +44,39 @@ const erf = (x: number): number => {
 };
 
 /**
- * Drawn mass of a unit-peak splat of plateau shape D (D = 1 for a plain gaussian), as a renderer
- * truncating at `cutoff` σ draws it: the squeezed profile `exp(-D/2 * max(0, r * e - (D - 1))^2)`
- * (see {@link plateauSqueeze}) with the floor `f = exp(-cutoff^2 / 2)` subtracted, so it reaches 0 at
- * `cutoff` σ. Integrated in closed form over the opaque core and the gaussian edge; a renderer that
- * also renormalizes by `1 / (1 - f)` scales every splat alike, so ratios are unaffected.
+ * Constants of {@link plateauCore} for a renderer truncating at `cutoff` σ: `u0 = sqrt(r0² + q t) - r0`.
+ * A unit-peak splat drawn as `exp(-ρ²/2) - f`, `f = exp(-cutoff² / 2)`, has its radius remapped past an
+ * opaque core of radius `u0` (a fraction of the cutoff): `ρ → max(0, ρ - u0 cutoff) / (1 - u0)`. Its
+ * drawn mass, over a plain gaussian's, is `1 + (a u0² + b u0) / G1`, with `G0` and `G1` the integrals of
+ * `g(x) = exp(-cutoff² x² / 2) - f` and `x g(x)` over `x` in [0, 1], `a = g(0)/2 - G0 + G1` and
+ * `b = G0 - 2 G1`; the root drawing `1 + t` times the mass is `r0 = b / 2a`, `q = G1 / a`. A renderer that
+ * also renormalizes by `1 / (1 - f)` scales every splat alike, so the constants are unaffected.
  *
- * @param d - Plateau shape D, at least 1.
  * @param cutoff - The renderer's truncation radius, in σ.
- * @returns The drawn mass, in σ².
+ * @returns The constants r0 and q.
  */
-const plateauDrawnMass = (d: number, cutoff: number): number => {
+const plateauCoreConstants = (cutoff: number): { r0: number; q: number } => {
     const f = Math.exp((-cutoff * cutoff) / 2);
-    const p = d - 1;
-    const e = plateauSqueeze(d, cutoff);
-    const edge = cutoff / Math.sqrt(d);
-    const core = Math.PI * p * p * (1 - f);
-    const tail =
-        2 *
-        Math.PI *
-        ((1 - f) / d -
-            (f * edge * edge) / 2 +
-            p * (Math.sqrt(Math.PI / (2 * d)) * erf(cutoff / Math.SQRT2) - f * edge));
-    return (core + tail) / (e * e);
+    const g0 = (Math.sqrt(Math.PI / 2) / cutoff) * erf(cutoff / Math.SQRT2) - f;
+    const g1 = (1 - f) / (cutoff * cutoff) - f / 2;
+    const a = (1 - f) / 2 - g0 + g1;
+    const b = g0 - 2 * g1;
+    return { r0: b / (2 * a), q: g1 / a };
 };
 
 /**
- * Plateau shape that draws true opacity `A` with exactly its mass: the D whose drawn mass is
- * `min(A, OPACITY_MAX)` times a plain gaussian's (see {@link plateauDrawnMass}); 1 for `A ≤ 1`.
- * Solved by bisection: callers tabulate it once rather than per gaussian.
+ * Core radius that draws true opacity `A` with exactly its mass: a unit-peak splat whose inner `u0` of
+ * the cutoff radius is opaque and whose plain gaussian falloff is stretched over the rest (see
+ * {@link plateauCoreConstants}). Its footprint, culls and extent are the plain gaussian's; 0 for `A ≤ 1`.
  *
- * @param a - True opacity.
+ * @param a - True opacity, capped at OPACITY_MAX.
  * @param cutoff - The renderer's truncation radius, in σ.
- * @returns The shape D, 1..~1.76.
+ * @returns The core radius u0, as a fraction of the cutoff (0..0.24 at 3σ).
  */
-const plateauShape = (a: number, cutoff: number): number => {
-    const m = Math.min(a, OPACITY_MAX);
-    if (!(m > 1)) return 1;
-    const plain = plateauDrawnMass(1, cutoff);
-    let lo = 1;
-    let hi = 3;
-    for (let k = 0; k < 48; k++) {
-        const mid = 0.5 * (lo + hi);
-        if (plateauDrawnMass(mid, cutoff) / plain < m) lo = mid;
-        else hi = mid;
-    }
-    return 0.5 * (lo + hi);
+const plateauCore = (a: number, cutoff: number): number => {
+    const { r0, q } = plateauCoreConstants(cutoff);
+    const t = Math.min(Math.max(a - 1, 0), OPACITY_MAX - 1);
+    return Math.sqrt(r0 * r0 + q * t) - r0;
 };
 
-export { OPACITY_MAX, encodeOpacityByte, decodeOpacityByte, plateauSqueeze, plateauDrawnMass, plateauShape };
+export { OPACITY_MAX, encodeOpacityByte, decodeOpacityByte, plateauCoreConstants, plateauCore };
