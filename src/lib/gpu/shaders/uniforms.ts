@@ -23,7 +23,7 @@ struct Uniforms {
     eyeX: f32, eyeY: f32, eyeZ: f32, _p3: f32,
     focalX: f32, focalY: f32, near: f32, _p4: f32,
     focusDistance: f32, apertureScale: f32, offsetX: f32, offsetY: f32,
-    imageWidth: u32, imageHeight: u32, splatStride: u32, chunkSize: u32,
+    imageWidth: u32, imageHeight: u32, _p5: u32, chunkSize: u32,
     groupPixelMinX: u32, groupPixelMinY: u32, groupPixelMaxX: u32, groupPixelMaxY: u32,
     groupTilesX: u32, groupTilesY: u32, groupPixelOriginX: u32, groupPixelOriginY: u32,
     bgR: f32, bgG: f32, bgB: f32, bgA: f32,
@@ -69,7 +69,7 @@ const uniformFormatEntries = (): UniformFormat[] => [
     new UniformFormat('offsetY', UNIFORMTYPE_FLOAT),
     new UniformFormat('imageWidth', UNIFORMTYPE_UINT),
     new UniformFormat('imageHeight', UNIFORMTYPE_UINT),
-    new UniformFormat('splatStride', UNIFORMTYPE_UINT),
+    new UniformFormat('_p5', UNIFORMTYPE_UINT),
     new UniformFormat('chunkSize', UNIFORMTYPE_UINT),
     new UniformFormat('groupPixelMinX', UNIFORMTYPE_UINT),
     new UniformFormat('groupPixelMinY', UNIFORMTYPE_UINT),
@@ -83,8 +83,7 @@ const uniformFormatEntries = (): UniformFormat[] => [
     new UniformFormat('bgG', UNIFORMTYPE_FLOAT),
     new UniformFormat('bgB', UNIFORMTYPE_FLOAT),
     new UniformFormat('bgA', UNIFORMTYPE_FLOAT),
-    // Resident (column-major) scene layout: column stride, and the splat /
-    // pair offsets of the range being emitted. Zero for the chunked path.
+    // Scene size, and the splat / pair offsets of the range being emitted.
     new UniformFormat('numSplats', UNIFORMTYPE_UINT),
     new UniformFormat('rangeStart', UNIFORMTYPE_UINT),
     new UniformFormat('emitBase', UNIFORMTYPE_UINT),
