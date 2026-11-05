@@ -88,7 +88,7 @@ describe('rendering excess opacity', () => {
             const plainImg = await render(await makeScene(null), tier, true);
             const plain = footprint(plainImg);
             const zero = footprint(await render(await makeScene(0), tier, true));
-            const atMax = await render(await makeScene(0.6), tier, true);
+            const atMax = await render(await makeScene(0.5625), tier, true);
             const heavyImg = await render(await makeScene(15), tier, true);
             const off = footprint(await render(await makeScene(15), tier, false));
 
@@ -96,10 +96,10 @@ describe('rendering excess opacity', () => {
             assert.deepStrictEqual(zero, plain, 'a zero excess renders as no excess');
             assert.deepStrictEqual(off, plain, 'compensation off ignores the excess');
             const heavy = footprint(heavyImg);
-            // A = 1.6: D = I^-1(1.6) ≈ 1.8, extent 0.8 + 3/√1.8 ≈ 3.04σ
+            // A = 1.5625: D = I^-1(1.5625) ≈ 1.75, extent 0.75 + 3/√1.75 ≈ 3.02σ
             assert.ok(heavy.lit > plain.lit, `excess lights more pixels (${heavy.lit} vs ${plain.lit})`);
             assert.ok(heavy.reach <= 3.4, `the capped plateau stays near 3σ (${heavy.reach})`);
-            assert.deepStrictEqual(Array.from(heavyImg), Array.from(atMax), 'A = 16 renders as A = OPACITY_MAX');
+            assert.deepStrictEqual(Array.from(heavyImg), Array.from(atMax), 'A = 16 renders as A = OPACITY_MAX (1.5625)');
         });
     }
 
@@ -108,7 +108,7 @@ describe('rendering excess opacity', () => {
         const plain = await render(await makeScene(null), 'resident', true);
         const heavy = await render(await makeScene(15), 'resident', true);
         // pixel centres at 0.31σ and 0.94σ from the gaussian: the plateau core
-        // (radius D-1 ≈ 0.8σ) is opaque, and its edge outweighs the gaussian's
+        // (radius D-1 ≈ 0.75σ) is opaque, and its edge outweighs the gaussian's
         const at = (image, x) => image[((W / 2) * W + x) * 4];
         assert.ok(at(heavy, W / 2) >= 250, `plateau core is opaque: ${at(heavy, W / 2)}`);
         assert.ok(at(heavy, W / 2 + 1) > at(plain, W / 2 + 1) + 40, `plateau edge at 0.94σ: ${at(heavy, W / 2 + 1)} vs ${at(plain, W / 2 + 1)}`);

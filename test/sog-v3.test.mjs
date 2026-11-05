@@ -147,8 +147,9 @@ describe('SOG v3 opacity', () => {
 
     it('the byte encoding is monotone, exact at 0, 1 and OPACITY_MAX, and round-trips', () => {
         assert.strictEqual(decodeOpacityByte(0), 0);
-        assert.strictEqual(decodeOpacityByte(224), 1);
+        assert.strictEqual(decodeOpacityByte(204), 1);
         assert.strictEqual(decodeOpacityByte(255), OPACITY_MAX);
+        assert.strictEqual(encodeOpacityByte(1), 204);
         for (let b = 0; b < 256; b++) {
             assert.strictEqual(encodeOpacityByte(decodeOpacityByte(b)), b, `byte ${b}`);
             if (b > 0) assert.ok(decodeOpacityByte(b) > decodeOpacityByte(b - 1), `monotone at ${b}`);
