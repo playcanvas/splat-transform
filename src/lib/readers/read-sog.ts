@@ -27,6 +27,7 @@ import type { ReadFileSystem } from '../io/read';
 import { isSplatModel } from '../splat-model';
 import type { SplatModel } from '../splat-model';
 import { logger, Transform, WebPCodec } from '../utils';
+import { decodeOpacityByte } from '../utils/opacity';
 import { decodeQuatExpMap } from '../utils/quat-expmap';
 import { BLIND_ENCODING_BYTES, decodeBlindValue, isBlindEncoding, isIntegerEncoding } from '../utils/sog-blind';
 import type { SogBlindEncoding } from '../utils/sog-blind';
@@ -36,8 +37,9 @@ import type { MetaV1 } from './read-sog-v1';
 
 // V2/V3 SOG meta layout - codebook-based quantization for scales / sh0 / shN.
 // V3 drops `quats` (the rotation is an exp map in the alpha channels of
-// means_l / means_u / scales), indexes opacity through `opacity.codebook`
-// (values may exceed 1) and adds optional `blind` data. Legacy V1 uses a
+// means_l / means_u / scales), stores opacity as a fixed byte that may reach
+// above 1 (`opacity.max` > 1 says some do, see decodeOpacityByte) and adds
+// optional `blind` data. Legacy V1 uses a
 // per-channel mins/maxs scheme and is handled separately in read-sog-v1.ts.
 type MetaV2 = {
     version: 2 | 3;
@@ -47,18 +49,18 @@ type MetaV2 = {
     scales: { codebook: number[]; files: string[] };
     quats?: { files: string[] };
     sh0: { codebook: number[]; files: string[] };
-    opacity?: { codebook: number[] };
+    opacity?: { max: number };
     shN?: { count: number; bands: number; codebook: number[]; files: string[] };
     blind?: { files: string[]; fields: { name: string; type: string; offset: number; min?: number; max?: number }[] }[];
     extras?: unknown;
 };
 
-// The `other`-layer columns a V3 meta implies: excess opacity when its codebook
-// reaches above 1, and each blind field under its recorded name (integer
+// The `other`-layer columns a V3 meta implies: excess opacity when its stored
+// opacity reaches above 1, and each blind field under its recorded name (integer
 // encodings as uint32, the rest as float32).
 const extraColumnsFromMeta = (meta: MetaV2): ExtraColumn[] => {
     const extras: ExtraColumn[] = [];
-    if (meta.version === 3 && meta.opacity && meta.opacity.codebook.some((v) => v > 1)) {
+    if (meta.version === 3 && (meta.opacity?.max ?? 1) > 1) {
         extras.push({ name: OPACITY_EXCESS_COLUMN, type: 'float32' });
     }
     if (meta.version === 3 && meta.blind) {
@@ -204,20 +206,13 @@ const readSogSourceV2 = async (
     const sCode = new Float32Array(meta.scales.codebook);
 
     // sh0: 3 color bytes index the codebook; the 4th is the opacity — linear
-    // 0..1 in V2, an index into opacity.codebook (values may exceed 1) in V3.
+    // 0..1 in V2, the fixed sqrt / over-unity byte in V3 (may exceed 1).
     const sh0 = decoder.decodeRGBA(await load(meta.sh0.files[0]));
     const c0 = sh0.rgba;
     if (sh0.width * sh0.height < count) throw new Error('SOG sh0 texture too small for count');
     const cCode = new Float32Array(meta.sh0.codebook);
     const oCode = new Float32Array(256);
-    if (v3) {
-        if (!meta.opacity || meta.opacity.codebook.length !== 256) {
-            throw new Error('SOG v3 meta must carry a 256-entry opacity codebook');
-        }
-        oCode.set(meta.opacity.codebook);
-    } else {
-        for (let i = 0; i < 256; i++) oCode[i] = i / 255;
-    }
+    for (let i = 0; i < 256; i++) oCode[i] = v3 ? decodeOpacityByte(i) : i / 255;
     // Precomputed per code: the stored logit (of the clamped opacity) and the
     // excess above 1.
     const oLogit = oCode.map((a) => sigmoidInv(a));

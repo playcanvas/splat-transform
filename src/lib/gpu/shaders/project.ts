@@ -1,3 +1,7 @@
+import { OPACITY_MAX, plateauShape } from '../../utils/opacity';
+
+import { wgslF32 } from './chunks/constants';
+
 /**
  * WGSL source for the project compute. Reads raw splat fields from the
  * per-slot input buffer, evaluates SH for view-dependent color, computes
@@ -16,6 +20,9 @@
  * @param coeffsPerChannel - Per-channel SH coefficient count (0/3/8/15/24).
  * @returns WGSL source for the project compute shader.
  */
+// I^-1(A) at evenly spaced A in [1, OPACITY_MAX]
+const PLATEAU_TABLE = Array.from({ length: 65 }, (_, k) => plateauShape(1 + ((OPACITY_MAX - 1) * k) / 64));
+
 const projectWgsl = (coeffsPerChannel: number) => /* wgsl */ `
 #include "uniformsStruct"
 #include "constants"
@@ -70,23 +77,16 @@ const SH_C4_8: f32 = 0.6258357354491761;
 
 const COEFFS_PER_CHANNEL: u32 = ${coeffsPerChannel}u;
 
-// Over-unity profile (excess opacity): exp(-D/2 * max(0, r - (D-1))^2) for
-// r in sigma units, which carries mass
-//   I(D) = (D-1)^2/2 + 1/D + (D-1)/2 * sqrt(2 pi / D),  I(1) = 1.
-fn profileMass(D: f32) -> f32 {
-    let p = D - 1.0;
-    return 0.5 * p * p + 1.0 / D + 0.5 * p * sqrt(6.283185307179586 / D);
-}
+// Over-unity opacity is drawn with the plateau profile exp(-D/2 * max(0, r - (D-1))^2) (r in
+// sigma) at the shape D that carries exactly its mass, D = I^-1(min(A, OPACITY_MAX)) (see
+// utils/opacity.ts). I^-1 is tabulated over A in [1, OPACITY_MAX] and interpolated.
+const OPACITY_MAX: f32 = ${wgslF32(OPACITY_MAX)};
+var<private> PLATEAU_SHAPE: array<f32, ${PLATEAU_TABLE.length}> = array<f32, ${PLATEAU_TABLE.length}>(${PLATEAU_TABLE.map(wgslF32).join(', ')});
 
-// Inverse of profileMass by bisection; I(D) >= (D-1)^2/2 bounds D above.
-fn profileParamForMass(m: f32) -> f32 {
-    var lo = 1.0;
-    var hi = 1.0 + sqrt(2.0 * m);
-    for (var k = 0; k < 24; k = k + 1) {
-        let mid = 0.5 * (lo + hi);
-        if (profileMass(mid) < m) { lo = mid; } else { hi = mid; }
-    }
-    return 0.5 * (lo + hi);
+fn plateauShape(amp: f32) -> f32 {
+    let t = (min(amp, OPACITY_MAX) - 1.0) / (OPACITY_MAX - 1.0) * ${wgslF32(PLATEAU_TABLE.length - 1)};
+    let k = min(u32(t), ${PLATEAU_TABLE.length - 2}u);
+    return mix(PLATEAU_SHAPE[k], PLATEAU_SHAPE[k + 1u], t - f32(k));
 }
 
 fn writeInvalid(idx: u32) {
@@ -130,7 +130,7 @@ fn main(
     // A > 1: draw the plateau profile at shape plateauD (0 = plain gaussian).
     var plateauD = 0.0;
     if (amp > 1.0) {
-        plateauD = 1.0 + PLATEAU_SHRINK * (profileParamForMass(amp) - 1.0);
+        plateauD = plateauShape(amp);
     }
     let fdcR = attr(11u, s);
     let fdcG = attr(12u, s);

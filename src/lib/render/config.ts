@@ -41,17 +41,6 @@ export const JACOBIAN_LIMIT_FACTOR = 1.3;
 export const OPACITY_CAP = 0.99;
 
 /**
- * Plateau shrink for over-unity opacity (excess opacity kept by decimation).
- * A gaussian whose true opacity `A` exceeds 1 is drawn with Spark's smooth
- * over-unity profile at shape `D' = 1 + PLATEAU_SHRINK·(D − 1)`, where `D`
- * carries mass `A`: an opaque core of radius `(D'−1)σ` joined C1-smoothly to a
- * gaussian edge. Drawing all of the mass as opaque core over-occludes (alpha
- * compositing saturates and the frame brightens); 0.40 measured best on the
- * two-sided gap metric across five scenes and three decimators (2026-08).
- */
-export const PLATEAU_SHRINK = 0.4;
-
-/**
  * Per-splat alpha cutoff. Contributions below this are dropped — saves
  * work for splats whose evaluated 2D Gaussian falls below quantization
  * threshold. INRIA reference. Disabled for defocus, where many faint

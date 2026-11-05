@@ -1,8 +1,9 @@
 /**
  * Rendering excess opacity (`opacity_excess`): a gaussian whose true opacity
- * exceeds 1 is drawn with the over-unity plateau profile — an opaque core and
- * a footprint wider than 3σ — on every scene tier, and `compensation: false`
- * draws it as if the column were absent.
+ * exceeds 1 is drawn with the over-unity plateau profile — an opaque core and a
+ * heavier edge carrying exactly its mass, with the opacity capped at
+ * OPACITY_MAX — on every scene tier, and `compensation: false` draws it as if
+ * the column were absent.
  */
 
 import assert from 'node:assert';
@@ -82,19 +83,23 @@ const footprint = (image) => {
 
 describe('rendering excess opacity', () => {
     for (const tier of TIERS) {
-        it(`${tier}: excess widens the footprint beyond 3σ; --no-compensation and a zero excess do not`, async (t) => {
+        it(`${tier}: excess lights a heavier footprint, capped at OPACITY_MAX; --no-compensation and a zero excess do not`, async (t) => {
             if (!device) return t.skip('no WebGPU adapter available');
-            const plain = footprint(await render(await makeScene(null), tier, true));
+            const plainImg = await render(await makeScene(null), tier, true);
+            const plain = footprint(plainImg);
             const zero = footprint(await render(await makeScene(0), tier, true));
-            const heavy = footprint(await render(await makeScene(15), tier, true));
+            const atMax = await render(await makeScene(0.6), tier, true);
+            const heavyImg = await render(await makeScene(15), tier, true);
             const off = footprint(await render(await makeScene(15), tier, false));
 
             assert.ok(plain.reach <= 3.3, `plain gaussian stays within 3σ (${plain.reach})`);
             assert.deepStrictEqual(zero, plain, 'a zero excess renders as no excess');
             assert.deepStrictEqual(off, plain, 'compensation off ignores the excess');
-            // A = 16: D ≈ 5.0, D' = 1 + 0.4·4 ≈ 2.6, extent ≈ 1.6 + 3/1.6 ≈ 3.5σ
-            assert.ok(heavy.reach > 3.3, `excess reaches past 3σ (${heavy.reach})`);
+            const heavy = footprint(heavyImg);
+            // A = 1.6: D = I^-1(1.6) ≈ 1.8, extent 0.8 + 3/√1.8 ≈ 3.04σ
             assert.ok(heavy.lit > plain.lit, `excess lights more pixels (${heavy.lit} vs ${plain.lit})`);
+            assert.ok(heavy.reach <= 3.4, `the capped plateau stays near 3σ (${heavy.reach})`);
+            assert.deepStrictEqual(Array.from(heavyImg), Array.from(atMax), 'A = 16 renders as A = OPACITY_MAX');
         });
     }
 
@@ -102,11 +107,10 @@ describe('rendering excess opacity', () => {
         if (!device) return t.skip('no WebGPU adapter available');
         const plain = await render(await makeScene(null), 'resident', true);
         const heavy = await render(await makeScene(15), 'resident', true);
-        // one sigma off centre: the plain gaussian has fallen to exp(-1/2),
-        // the plateau (radius D'-1 ≈ 1.6σ) is still at full opacity
-        const px = Math.round(W / 2 + SIGMA / (2 / W));
-        const at = (image) => image[((W / 2) * W + px) * 4];
-        assert.ok(at(heavy) > at(plain) + 40, `plateau at 1σ: ${at(heavy)} vs ${at(plain)}`);
-        assert.ok(at(heavy) >= 250, `plateau is opaque: ${at(heavy)}`);
+        // pixel centres at 0.31σ and 0.94σ from the gaussian: the plateau core
+        // (radius D-1 ≈ 0.8σ) is opaque, and its edge outweighs the gaussian's
+        const at = (image, x) => image[((W / 2) * W + x) * 4];
+        assert.ok(at(heavy, W / 2) >= 250, `plateau core is opaque: ${at(heavy, W / 2)}`);
+        assert.ok(at(heavy, W / 2 + 1) > at(plain, W / 2 + 1) + 40, `plateau edge at 0.94σ: ${at(heavy, W / 2 + 1)} vs ${at(plain, W / 2 + 1)}`);
     });
 });

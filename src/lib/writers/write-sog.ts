@@ -12,6 +12,7 @@ import { kmeansInterleaved } from '../spatial';
 import type { SplatModel } from '../splat-model';
 import type { DeviceCreator } from '../types';
 import { logger, sigmoid, Transform } from '../utils';
+import { decodeOpacityByte, encodeOpacityByte, OPACITY_MAX } from '../utils/opacity';
 import { encodeQuatExpMap } from '../utils/quat-expmap';
 import { BLIND_ENCODING_BYTES, encodeBlindValue, integerEncodingFor, isBlindEncoding } from '../utils/sog-blind';
 import type { SogBlindEncoding, SogBlindTexture } from '../utils/sog-blind';
@@ -197,12 +198,6 @@ type SogVersion = 2 | 3;
  */
 const MAX_PORTABLE_BLIND_TEXTURES = 10;
 
-/** Opacity codebook entries reserved for over-unity values when any are present. */
-const OVER_UNITY_ENTRIES = 64;
-
-/** Cap on stored opacity, keeping the codebook finite for pathological input. */
-const MAX_OPACITY = 1e4;
-
 /**
  * Importance exponent of the scale codebook: entries are weighted by exp(0.25 * log scale), shifting
  * resolution toward the large splats that cover the most pixels. Without it the few hundred thousand
@@ -218,54 +213,25 @@ const SCALE_IMPORTANCE = 0.25;
 const MAX_SH_PALETTE = 64 * 4096;
 
 /**
- * Build the v3 opacity codebook and per-gaussian labels from the true opacity
- * `A = sigmoid(opacity) + opacity_excess`.
- *
- * Sub-unity values sit on a uniform lattice `i / (L - 1)`, so a scene without
- * excess gets exactly v2's 8-bit opacity (`L = 256`, codebook `i / 255`) and
- * 0 and 1 are always exact. When any `A > 1`, the top {@link OVER_UNITY_ENTRIES}
- * entries are given over to them, quantized in log space by the same 1D
- * quantizer as the scales; the sub-unity step grows from 1/255 to 1/191.
+ * Encode the v3 opacity byte of every gaussian from its true opacity
+ * `A = sigmoid(opacity) + opacity_excess` (see {@link encodeOpacityByte}; `A` above
+ * {@link OPACITY_MAX} is clamped).
  *
  * @param opacity - Logit opacity column.
  * @param excess - Excess opacity column, or null.
- * @returns The 256-entry codebook (ascending) and one label per gaussian.
+ * @returns One byte per gaussian and the largest opacity stored.
  */
-const buildOpacityCodebook = async (
-    opacity: Float32Array,
-    excess: Float32Array | null
-): Promise<{ codebook: Float32Array; labels: Uint8Array }> => {
+const encodeOpacityBytes = (opacity: Float32Array, excess: Float32Array | null): { bytes: Uint8Array; max: number } => {
     const n = opacity.length;
-    // f64 so a sub-unity label is the same rounding v2 makes
-    const A = new Float64Array(n);
-    const over: number[] = [];
+    const bytes = new Uint8Array(n);
+    let max = 0;
     for (let i = 0; i < n; i++) {
         const e = excess ? excess[i] : 0;
-        let a = sigmoid(opacity[i]) + (e > 0 ? e : 0);
-        if (!(a >= 0)) a = 0; // NaN
-        if (a > MAX_OPACITY) a = MAX_OPACITY;
-        A[i] = a;
-        if (a > 1) over.push(i);
+        const b = encodeOpacityByte(sigmoid(opacity[i]) + (e > 0 ? e : 0));
+        bytes[i] = b;
+        if (b > max) max = b;
     }
-
-    const codebook = new Float32Array(256);
-    const labels = new Uint8Array(n);
-    const L = over.length > 0 ? 256 - OVER_UNITY_ENTRIES : 256;
-    for (let i = 0; i < L; i++) codebook[i] = i / (L - 1);
-    for (let i = 0; i < n; i++) {
-        if (A[i] <= 1) labels[i] = Math.round(A[i] * (L - 1));
-    }
-
-    if (over.length > 0) {
-        const logs = new Float32Array(over.length);
-        for (let j = 0; j < over.length; j++) logs[j] = Math.log(A[over[j]]);
-        const q = await runQuantize1dColumns([{ name: 'opacity', data: logs }], OVER_UNITY_ENTRIES);
-        for (let j = 0; j < OVER_UNITY_ENTRIES; j++) codebook[L + j] = Math.exp(q.centroids[j]);
-        const hi = q.labels[0].data;
-        for (let j = 0; j < over.length; j++) labels[over[j]] = L + hi[j];
-    }
-
-    return { codebook, labels };
+    return { bytes, max: decodeOpacityByte(max) };
 };
 
 /**
@@ -372,8 +338,6 @@ type SogWriteState = {
     scalesQuant: ReturnType<typeof runQuantize1dColumns>;
     colorsQuant: ReturnType<typeof runQuantize1dColumns>;
     shCluster: Promise<Clustering> | null;
-    /** v3 only: the opacity codebook job. */
-    opacityQuant: Promise<{ codebook: Float32Array; labels: Uint8Array }> | null;
     /** v3 only: blind textures to write, with resolved encodings and offsets. */
     blind: ResolvedBlindTexture[];
     /** meta.json `extras`, or undefined for none. */
@@ -514,12 +478,11 @@ const startSogWrite = async (
                   );
               })()
             : null;
-    const opacityQuant = version === 3 ? buildOpacityCodebook(layers.geometric[7], layers.excess) : null;
     // If the finish phase throws (or never runs), these settle later; mark
     // their rejections handled so the original error propagates instead of an
     // unhandled rejection.
     // eslint-disable-next-line @typescript-eslint/no-empty-function -- preserve rejection-only control flow
-    [scalesQuant, colorsQuant, shCluster, opacityQuant].forEach((p) => p?.catch(() => {}));
+    [scalesQuant, colorsQuant, shCluster].forEach((p) => p?.catch(() => {}));
 
     return {
         version,
@@ -535,7 +498,6 @@ const startSogWrite = async (
         scalesQuant,
         colorsQuant,
         shCluster,
-        opacityQuant,
         blind,
         extras: options.extras === null ? undefined : (options.extras ?? meta.extras),
         progress
@@ -563,7 +525,7 @@ const finishSogWrite = async (
     const openGroup = logging === 'own';
 
     const { version, numRows, shBands, width, height, layers, iterations, restCount, paletteSize, progress } = state;
-    const { scalesQuant, colorsQuant, shCluster, opacityQuant, blind } = state;
+    const { scalesQuant, colorsQuant, shCluster, blind } = state;
     const channels = 4;
 
     const bundleWriter = bundle ? await fs.createWriter(outputFilename) : null;
@@ -738,14 +700,14 @@ const finishSogWrite = async (
         pending.push(writeLabels('scales.webp', scaleCols, indices));
         const scalesCodebook = Array.from(sd.centroids);
 
-        // ---- sh0: quantized DC + opacity (v2: linear 0..1 byte; v3: index
-        // into the opacity codebook, which may exceed 1).
+        // ---- sh0: quantized DC + opacity (v2: linear 0..1 byte; v3: the
+        // fixed sqrt / over-unity byte, see encodeOpacityByte).
         let opacityData: Uint8Array;
-        let opacityCodebook: number[] | null = null;
-        if (opacityQuant) {
-            const oq = await opacityQuant;
-            opacityData = oq.labels;
-            opacityCodebook = Array.from(oq.codebook);
+        let opacityMax = 1;
+        if (v3) {
+            const enc = encodeOpacityBytes(op, layers.excess);
+            opacityData = enc.bytes;
+            opacityMax = enc.max;
         } else {
             // rounded, like the quaternions: a Uint8Array store truncates
             opacityData = new Uint8Array(numRows);
@@ -851,7 +813,7 @@ const finishSogWrite = async (
                   means: { mins: meansMeta.mins, maxs: meansMeta.maxs, files: ['means_l.webp', 'means_u.webp'] },
                   scales: { codebook: scalesCodebook, files: ['scales.webp'] },
                   sh0: { codebook: colorsCodebook, files: ['sh0.webp'] },
-                  opacity: { codebook: opacityCodebook },
+                  ...(opacityMax > 1 ? { opacity: { max: opacityMax } } : {}),
                   ...(shN ? { shN } : {}),
                   ...(blindMeta.length > 0 ? { blind: blindMeta } : {}),
                   ...(state.extras !== undefined ? { extras: state.extras } : {})

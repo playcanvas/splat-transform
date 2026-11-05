@@ -1,6 +1,6 @@
 /**
- * SOG v3 (default) vs v2: rotation encodings, opacity codebook with excess
- * opacity above 1, blind data, and what v2 drops.
+ * SOG v3 (default) vs v2: rotation encodings, the fixed opacity byte with
+ * excess opacity above 1, blind data, and what v2 drops.
  */
 
 import assert from 'node:assert';
@@ -18,6 +18,7 @@ import {
 } from '../src/lib/index.js';
 import { readPly } from '../src/lib/readers/read-ply.js';
 import { readSogSource } from '../src/lib/readers/read-sog.js';
+import { decodeOpacityByte, encodeOpacityByte, OPACITY_MAX } from '../src/lib/utils/opacity.js';
 import { floatToHalfBits, halfBitsToFloat } from '../src/lib/utils/sog-blind.js';
 import { writeSogSource } from '../src/lib/writers/write-sog.js';
 
@@ -135,19 +136,46 @@ describe('SOG rotation encodings', () => {
 });
 
 describe('SOG v3 opacity', () => {
-    it('without excess, decodes exactly as v2 (codebook i/255)', async () => {
-        const dt = createTestDataTable(500);
-        const v2 = await roundTrip(dt, { version: 2 });
-        const v3 = await roundTrip(dt);
-        assert.deepStrictEqual(v3.meta.opacity.codebook, Array.from({ length: 256 }, (_, i) => Math.fround(i / 255)));
-        assert.deepStrictEqual(
-            Array.from(v3.table.getColumnByName('opacity').data),
-            Array.from(v2.table.getColumnByName('opacity').data)
-        );
-        assert.ok(!v3.table.getColumnByName('opacity_excess'), 'no excess column when nothing exceeds 1');
+    const sig = (v) => 1 / (1 + Math.exp(-v));
+    // out row j -> source row, matched by position (the writer reorders by Morton code)
+    const matchRows = (src, out) => {
+        const key = (t, i) => ['x', 'y', 'z'].map((c) => Math.round(2 * t.getColumnByName(c).data[i])).join(',');
+        const byKey = new Map();
+        for (let i = 0; i < src.numRows; i++) byKey.set(key(src, i), i);
+        return Array.from({ length: out.numRows }, (_, j) => byKey.get(key(out, j)));
+    };
+
+    it('the byte encoding is monotone, exact at 0, 1 and OPACITY_MAX, and round-trips', () => {
+        assert.strictEqual(decodeOpacityByte(0), 0);
+        assert.strictEqual(decodeOpacityByte(224), 1);
+        assert.strictEqual(decodeOpacityByte(255), OPACITY_MAX);
+        for (let b = 0; b < 256; b++) {
+            assert.strictEqual(encodeOpacityByte(decodeOpacityByte(b)), b, `byte ${b}`);
+            if (b > 0) assert.ok(decodeOpacityByte(b) > decodeOpacityByte(b - 1), `monotone at ${b}`);
+        }
+        assert.strictEqual(encodeOpacityByte(100), 255, 'clamped to OPACITY_MAX');
+        assert.strictEqual(encodeOpacityByte(NaN), 0);
+        // finer than v2's linear byte where translucent layers live
+        for (const a of [0.005, 0.01, 0.02, 0.05]) {
+            const err = Math.abs(decodeOpacityByte(encodeOpacityByte(a)) - a);
+            assert.ok(err < 0.25 / 255, `error ${err} at ${a}`);
+        }
     });
 
-    it('carries opacity above 1 and restores opacity_excess', async () => {
+    it('without excess, stores opacity on the byte lattice and writes no opacity meta', async () => {
+        const dt = createTestDataTable(500);
+        const { meta, table } = await roundTrip(dt);
+        assert.strictEqual(meta.opacity, undefined);
+        assert.ok(!table.getColumnByName('opacity_excess'), 'no excess column when nothing exceeds 1');
+        const src = matchRows(dt, table);
+        const inOp = dt.getColumnByName('opacity').data, outOp = table.getColumnByName('opacity').data;
+        for (let j = 0; j < table.numRows; j++) {
+            const want = decodeOpacityByte(encodeOpacityByte(sig(inOp[src[j]])));
+            assert.ok(Math.abs(sig(outOp[j]) - want) < 1e-5, `row ${j}: ${sig(outOp[j])} vs ${want}`);
+        }
+    });
+
+    it('carries opacity above 1, clamped to OPACITY_MAX, and restores opacity_excess', async () => {
         const n = 2000;
         const dt = createTestDataTable(n);
         const r = rng(3);
@@ -161,31 +189,19 @@ describe('SOG v3 opacity', () => {
         }
         dt.addColumn(new Column('opacity_excess', excess));
         const { meta, table } = await roundTrip(dt);
+        assert.strictEqual(meta.opacity.max, OPACITY_MAX);
 
-        const cb = meta.opacity.codebook;
-        assert.strictEqual(cb.length, 256);
-        assert.ok(cb.every((v, i) => i === 0 || v >= cb[i - 1]), 'codebook ascending');
-        assert.strictEqual(cb[0], 0);
-        assert.strictEqual(cb[191], 1, 'unit opacity is exact');
-
-        // match rows by position, compare A = sigmoid(opacity) + excess
-        const key = (t, i) => ['x', 'y', 'z'].map((c) => Math.round(2 * t.getColumnByName(c).data[i])).join(',');
-        const byKey = new Map();
-        for (let i = 0; i < n; i++) byKey.set(key(dt, i), i);
+        const src = matchRows(dt, table);
         const outEx = table.getColumnByName('opacity_excess').data;
         const outOp = table.getColumnByName('opacity').data;
-        const sig = (v) => 1 / (1 + Math.exp(-v));
-        let worstRel = 0, worstAbs = 0;
         for (let j = 0; j < table.numRows; j++) {
-            const i = byKey.get(key(table, j));
-            const aIn = sig(op[i]) + excess[i];
+            const i = src[j];
+            const want = decodeOpacityByte(encodeOpacityByte(sig(op[i]) + excess[i]));
             const aOut = sig(outOp[j]) + outEx[j];
-            if (aIn > 1) worstRel = Math.max(worstRel, Math.abs(aOut / aIn - 1));
-            else worstAbs = Math.max(worstAbs, Math.abs(aOut - aIn));
+            assert.ok(Math.abs(aOut - want) < 1e-5, `row ${j}: ${aOut} vs ${want}`);
+            assert.ok(aOut <= OPACITY_MAX + 1e-6, 'clamped');
             assert.ok(outEx[j] === 0 || sig(outOp[j]) > 0.999, 'excess only on saturated splats');
         }
-        assert.ok(worstRel < 0.05, `over-unity relative error ${worstRel}`);
-        assert.ok(worstAbs <= 0.5 / 191 + 1e-6, `sub-unity error ${worstAbs}`);
     });
 
     it('v2 drops excess opacity with a warning', async () => {
