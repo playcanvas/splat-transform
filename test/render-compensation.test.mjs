@@ -9,6 +9,9 @@
 import assert from 'node:assert';
 import { after, before, describe, it } from 'node:test';
 
+import { SIGMA_CUTOFF } from '../src/lib/render/config.js';
+import { OPACITY_MAX, plateauShape } from '../src/lib/utils/opacity.js';
+
 let device = null;
 
 before(async () => {
@@ -121,3 +124,29 @@ describe('rendering excess opacity', () => {
         assert.ok(at(heavy, W / 2 + 1) > at(plain, W / 2 + 1) + 40, `plateau edge at 0.94σ: ${at(heavy, W / 2 + 1)} vs ${at(plain, W / 2 + 1)}`);
     });
 });
+
+describe('plateau shape', () => {
+    // The drawn mass of a unit-peak splat as rasterize-binned.ts draws it: the squeezed profile minus
+    // GAUSSIAN_FLOOR, out to SIGMA_CUTOFF, integrated numerically.
+    const drawn = (D) => {
+        const floor = Math.exp(-0.5 * SIGMA_CUTOFF * SIGMA_CUTOFF);
+        const e = (D - 1 + SIGMA_CUTOFF / Math.sqrt(D)) / SIGMA_CUTOFF;
+        const steps = 20000;
+        let mass = 0;
+        for (let i = 0; i < steps; i++) {
+            const r = ((i + 0.5) / steps) * SIGMA_CUTOFF;
+            const s = Math.max(0, r * e - (D - 1));
+            mass += Math.max(0, Math.exp(-0.5 * D * s * s) - floor) * 2 * Math.PI * r * (SIGMA_CUTOFF / steps);
+        }
+        return mass;
+    };
+
+    it('draws each opacity in (1, OPACITY_MAX] with its mass, relative to a plain gaussian of opacity 1', () => {
+        const plain = drawn(1);
+        for (let A = 1.025; A <= OPACITY_MAX; A += 0.025) {
+            const ratio = drawn(plateauShape(A, SIGMA_CUTOFF)) / plain;
+            assert.ok(Math.abs(ratio / A - 1) < 5e-4, `A = ${A.toFixed(3)} draws ${ratio.toFixed(4)}`);
+        }
+    });
+});
+
