@@ -46,23 +46,37 @@ const plateauMass = (d: number): number => {
 };
 
 /**
- * Plateau shape that draws true opacity `A` with exactly its mass, `D = I⁻¹(min(A, OPACITY_MAX))`;
- * 1 for `A ≤ 1`. Solved by bisection: callers tabulate it once rather than per gaussian.
+ * Squeeze of the plateau profile: its unsqueezed extent, `(D - 1) + cutoff / sqrt(D)` σ where it
+ * reaches the plain gaussian's floor, over the plain gaussian's `cutoff` σ. The profile is drawn at
+ * radius `r * e`, so it ends exactly where a plain gaussian does and its footprint, culls and
+ * extent are the plain gaussian's. `e(1) = 1`.
+ *
+ * @param d - Plateau shape D, at least 1.
+ * @param cutoff - The renderer's truncation radius, in σ.
+ * @returns The squeeze e(D).
+ */
+const plateauSqueeze = (d: number, cutoff: number): number => (d - 1 + cutoff / Math.sqrt(d)) / cutoff;
+
+/**
+ * Plateau shape that draws true opacity `A` with exactly its mass when squeezed (see
+ * {@link plateauSqueeze}): `I(D) / e(D)^2 = min(A, OPACITY_MAX)`; 1 for `A ≤ 1`. Solved by
+ * bisection: callers tabulate it once rather than per gaussian.
  *
  * @param a - True opacity.
- * @returns The shape D, 1..I⁻¹(OPACITY_MAX) (≈ 1.75).
+ * @param cutoff - The renderer's truncation radius, in σ.
+ * @returns The shape D, 1..~1.84.
  */
-const plateauShape = (a: number): number => {
+const plateauShape = (a: number, cutoff: number): number => {
     const m = Math.min(a, OPACITY_MAX);
     if (!(m > 1)) return 1;
     let lo = 1;
-    let hi = 1 + Math.sqrt(2 * m);
+    let hi = 3;
     for (let k = 0; k < 48; k++) {
         const mid = 0.5 * (lo + hi);
-        if (plateauMass(mid) < m) lo = mid;
+        if (plateauMass(mid) / plateauSqueeze(mid, cutoff) ** 2 < m) lo = mid;
         else hi = mid;
     }
     return 0.5 * (lo + hi);
 };
 
-export { OPACITY_MAX, encodeOpacityByte, decodeOpacityByte, plateauMass, plateauShape };
+export { OPACITY_MAX, encodeOpacityByte, decodeOpacityByte, plateauMass, plateauSqueeze, plateauShape };

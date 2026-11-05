@@ -1,3 +1,4 @@
+import { SIGMA_CUTOFF } from '../../render/config';
 import { OPACITY_MAX, plateauShape } from '../../utils/opacity';
 
 import { wgslF32 } from './chunks/constants';
@@ -20,8 +21,10 @@ import { wgslF32 } from './chunks/constants';
  * @param coeffsPerChannel - Per-channel SH coefficient count (0/3/8/15/24).
  * @returns WGSL source for the project compute shader.
  */
-// I^-1(A) at evenly spaced A in [1, OPACITY_MAX]
-const PLATEAU_TABLE = Array.from({ length: 65 }, (_, k) => plateauShape(1 + ((OPACITY_MAX - 1) * k) / 64));
+// the plateau shape D at evenly spaced A in [1, OPACITY_MAX]
+const PLATEAU_TABLE = Array.from({ length: 65 }, (_, k) =>
+    plateauShape(1 + ((OPACITY_MAX - 1) * k) / 64, SIGMA_CUTOFF)
+);
 
 const projectWgsl = (coeffsPerChannel: number) => /* wgsl */ `
 #include "uniformsStruct"
@@ -77,9 +80,10 @@ const SH_C4_8: f32 = 0.6258357354491761;
 
 const COEFFS_PER_CHANNEL: u32 = ${coeffsPerChannel}u;
 
-// Over-unity opacity is drawn with the plateau profile exp(-D/2 * max(0, r - (D-1))^2) (r in
-// sigma) at the shape D that carries exactly its mass, D = I^-1(min(A, OPACITY_MAX)) (see
-// utils/opacity.ts). I^-1 is tabulated over A in [1, OPACITY_MAX] and interpolated.
+// Over-unity opacity is drawn with the plateau profile exp(-D/2 * max(0, r * e - (D-1))^2) (r in
+// sigma), squeezed by e(D) so it ends at SIGMA_CUTOFF like a plain gaussian, at the shape D that
+// carries exactly its mass (see plateauShape in utils/opacity.ts). D is tabulated over A in
+// [1, OPACITY_MAX] and interpolated.
 const OPACITY_MAX: f32 = ${wgslF32(OPACITY_MAX)};
 var<private> PLATEAU_SHAPE: array<f32, ${PLATEAU_TABLE.length}> = array<f32, ${PLATEAU_TABLE.length}>(${PLATEAU_TABLE.map(wgslF32).join(', ')});
 
@@ -178,11 +182,8 @@ fn main(
     if (detU <= 0.0) { writeInvalid(i); return; }
     let mid = 0.5 * (cov00 + cov11);
     let disc = sqrt(max(DISCRIMINANT_FLOOR, mid * mid - detU));
-    // The plateau profile reaches GAUSSIAN_FLOOR at (D'-1) + SIGMA_CUTOFF/sqrt(D')
-    // sigma, which is SIGMA_CUTOFF at D' = 1.
-    var extentSigma = SIGMA_CUTOFF;
-    if (plateauD > 1.0) { extentSigma = (plateauD - 1.0) + SIGMA_CUTOFF / sqrt(plateauD); }
-    var radiusRaw = extentSigma * sqrt(mid + disc);
+    // The plateau profile is squeezed to end at SIGMA_CUTOFF too (see rasterize-binned.ts).
+    var radiusRaw = SIGMA_CUTOFF * sqrt(mid + disc);
 
     // Size clamp: a splat whose radius exceeds SIZE_CLAMP_FRAC of the
     // shorter image edge is scaled down uniformly (covariance × s²) until
