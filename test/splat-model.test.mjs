@@ -1,7 +1,7 @@
 /**
  * Splat model (default / antialiased / 2dgs) detection and propagation.
  *
- *  - comment parsing: Brush's `SplatRenderMode:` and Postshot's `antialiased N`;
+ *  - comment parsing: Brush's `SplatRenderMode:` and Postshot's `postshot.anti_aliasing=N`;
  *  - PLY / compressed-PLY / SOG / SPZ outputs carry the tag (PLY always in
  *    Brush's spelling, whichever form it was read from);
  *  - a 2DGS PLY (no scale_2) reads with a full geometric layer and writes back
@@ -71,9 +71,15 @@ describe('splatModelFromComments', () => {
         assert.strictEqual(splatModelFromComments(['SplatRenderMode: 2dgs']), '2dgs');
     });
 
-    it('reads Postshot\'s antialiased flag', () => {
-        assert.strictEqual(splatModelFromComments(['antialiased 1']), 'antialiased');
-        assert.strictEqual(splatModelFromComments(['antialiased 0']), 'default');
+    it('reads Postshot\'s anti-aliasing flag', () => {
+        // the header comments of a Postshot v1.1.69 export trained with anti-aliasing
+        const postshot = ['Postshot v1.1.69', 'postshot.anti_aliasing=1', 'postshot.color.primaries=sRGB', 'postshot.color.eotf=sRGB'];
+        assert.strictEqual(splatModelFromComments(postshot), 'antialiased');
+        // without anti-aliasing Postshot omits the line
+        assert.strictEqual(splatModelFromComments(['Postshot v1.1.69', 'postshot.color.primaries=sRGB']), 'default');
+        assert.strictEqual(splatModelFromComments(['postshot.anti_aliasing=0']), 'default');
+        // no producer writes `antialiased 1`; it is not a flag
+        assert.strictEqual(splatModelFromComments(['antialiased 1']), 'default');
     });
 
     it('ignores case, surrounding whitespace and unrelated comments', () => {
@@ -87,8 +93,8 @@ describe('splatModelFromComments', () => {
     });
 
     it('takes the last match across both forms', () => {
-        assert.strictEqual(splatModelFromComments(['antialiased 1', 'SplatRenderMode: default']), 'default');
-        assert.strictEqual(splatModelFromComments(['SplatRenderMode: default', 'antialiased 1']), 'antialiased');
+        assert.strictEqual(splatModelFromComments(['postshot.anti_aliasing=1', 'SplatRenderMode: default']), 'default');
+        assert.strictEqual(splatModelFromComments(['SplatRenderMode: default', 'postshot.anti_aliasing=1']), 'antialiased');
     });
 
     it('emits Brush\'s spelling, and nothing for default', () => {
@@ -110,7 +116,7 @@ describe('antialiased scenes', () => {
     });
 
     it('retags a Postshot-tagged PLY in Brush\'s spelling', async () => {
-        const { source, pool } = await openPly(createTestDataTable(16), ['antialiased 1']);
+        const { source, pool } = await openPly(createTestDataTable(16), ['postshot.anti_aliasing=1']);
         assert.strictEqual(source.meta.model, 'antialiased');
 
         const header = plyHeaderText((await writeChunked(source, pool, 'out.ply', 'ply')).get('out.ply'));
@@ -119,7 +125,7 @@ describe('antialiased scenes', () => {
     });
 
     it('tags compressed PLY output', async () => {
-        const { source, pool } = await openPly(createTestDataTable(16), ['antialiased 1']);
+        const { source, pool } = await openPly(createTestDataTable(16), ['postshot.anti_aliasing=1']);
         const out = await writeChunked(source, pool, 'out.compressed.ply', 'compressed-ply');
         assert.match(plyHeaderText(out.get('out.compressed.ply')), /comment SplatRenderMode: mip/);
     });
@@ -250,14 +256,14 @@ describe('2dgs scenes', () => {
 describe('combining sources', () => {
     it('keeps a shared model', async () => {
         const pool = createChunkDataPool();
-        const a = await readPly(await sourceFromBytes(encodePlyBinary(createTestDataTable(16), ['antialiased 1'])), pool);
+        const a = await readPly(await sourceFromBytes(encodePlyBinary(createTestDataTable(16), ['postshot.anti_aliasing=1'])), pool);
         const b = await readPly(await sourceFromBytes(encodePlyBinary(createTestDataTable(16), ['SplatRenderMode: mip'])), pool);
         assert.strictEqual(concatSource([a, b], pool).meta.model, 'antialiased');
     });
 
     it('falls back to default when models disagree', async () => {
         const pool = createChunkDataPool();
-        const aa = await readPly(await sourceFromBytes(encodePlyBinary(createTestDataTable(16), ['antialiased 1'])), pool);
+        const aa = await readPly(await sourceFromBytes(encodePlyBinary(createTestDataTable(16), ['postshot.anti_aliasing=1'])), pool);
         const plain = await readPly(await sourceFromBytes(encodePlyBinary(createTestDataTable(16))), pool);
         assert.strictEqual(concatSource([aa, plain], pool).meta.model, 'default');
 

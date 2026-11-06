@@ -69,13 +69,13 @@ const MODE_TO_MODEL: Readonly<Record<string, SplatModel>> = {
     '2dgs': '2dgs'
 };
 
-// Postshot's flag.
-const AA_COMMENT_KEY = 'antialiased ';
+// Postshot's flag (v1.0.110 to v1.1.69 write `postshot.anti_aliasing=1`, and omit it without anti-aliasing).
+const AA_COMMENT_KEY = 'postshot.anti_aliasing=';
 
 /**
  * Detect the splat model from a PLY header's comments. Two producer forms are
  * recognized: Brush's `SplatRenderMode: default | mip | 2dgs` and Postshot's
- * `antialiased 0 | 1`.
+ * `postshot.anti_aliasing=0 | 1`.
  *
  * Matching is case-insensitive and the last match wins (as Brush's own importer
  * does), so a file carrying both forms is decided by header order. Unrecognized
