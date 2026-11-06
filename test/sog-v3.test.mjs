@@ -506,3 +506,25 @@ describe('opacity_linear in streamed scenes', () => {
         await lod.close();
     });
 });
+
+describe('opacity_linear in formats that store only the logit', () => {
+    it('is baked into the opacity, since it wins over the logit', async () => {
+        const { writeSource, readFile, getInputFormat } = await import('../src/lib/index.js');
+        for (const [filename, outputFormat, tolerance] of [['out.compressed.ply', 'compressed-ply', 1 / 255], ['out.splat', 'splat', 1 / 255]]) {
+            const pool = createChunkDataPool();
+            const dt = createTestDataTable(8);
+            dt.getColumnByName('opacity').data.fill(20); // the logit says opaque
+            dt.addColumn(new Column('opacity_linear', new Float32Array(8).fill(0.25)));
+            const fs = new MemoryFileSystem();
+            await writeSource({ filename, outputFormat, source: await plySource(dt, pool), pool, options: {} }, fs);
+            const rfs = new MemoryReadFileSystem();
+            rfs.set(filename, fs.results.get(filename));
+            const [back] = await readFile({ filename, inputFormat: getInputFormat(filename), fileSystem: rfs, pool });
+            const op = (await materializeToDataTable(back, pool)).getColumnByName('opacity').data;
+            for (const v of op) {
+                const a = 1 / (1 + Math.exp(-v));
+                assert.ok(Math.abs(a - 0.25) <= tolerance, `${outputFormat}: opacity ${a}`);
+            }
+        }
+    });
+});

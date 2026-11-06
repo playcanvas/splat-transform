@@ -53,9 +53,10 @@ import type {
 // CLI-only internals (deliberately off the public lib surface): the LOD-path
 // level resolver and the container source readers the LOD writer drives
 // directly (single-scene callers get these via readFile).
+import { OPACITY_LINEAR_COLUMN } from '../lib/chunk';
 import { resolveComments, withComments } from '../lib/comments';
 import { resolveExtras, withExtras } from '../lib/extras';
-import { resolveLodLevels } from '../lib/ops';
+import { resolveLodLevels, withOpacityLinear } from '../lib/ops';
 import { readLccSource, readLccEnvironmentSource } from '../lib/readers/read-lcc';
 import { readLcc2Source, readLcc2EnvironmentSource } from '../lib/readers/read-lcc2';
 import { readLodSource, readLodEnvironmentSource } from '../lib/readers/read-lod';
@@ -1438,8 +1439,13 @@ const main = async () => {
 
             // Stitch inputs: uniform layout -> concatSource (transforms unified as
             // combine() does); mixed layout -> bridge through the DataTable combine().
-            const combineSources = async (sources: ChunkSource[]): Promise<ChunkSource> => {
-                if (sources.length === 1) return sources[0];
+            const combineSources = async (inputs: ChunkSource[]): Promise<ChunkSource> => {
+                if (inputs.length === 1) return inputs[0];
+                // opacity_linear's absence means sigmoid(opacity), not the 0 combine() would fill
+                const hasLinear = (s: ChunkSource) => s.meta.extraColumns.some((e) => e.name === OPACITY_LINEAR_COLUMN);
+                const sources = inputs.some(hasLinear)
+                    ? inputs.map((s) => (hasLinear(s) ? s : withOpacityLinear(s, pool)))
+                    : inputs;
                 const sig = (m: ChunkSourceMetadata) =>
                     `${m.shBands}|${[...m.availableLayers].sort().join(',')}|${m.extraColumns.map((e) => `${e.name}:${e.type}`).join(',')}`;
                 if (sources.every((s) => sig(s.meta) === sig(sources[0].meta))) {

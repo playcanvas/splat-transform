@@ -436,3 +436,41 @@ describe('CLI --sog-extras', () => {
         }
     });
 });
+
+describe('CLI combining opacity_linear', () => {
+    // A 2-gaussian PLY at half opacity (logit 0), with `extra` float columns.
+    const writePly = async (path, extra) => {
+        const { encodePlyBinary } = await import('./helpers/test-utils.mjs');
+        const { Column, DataTable } = await import('../src/lib/index.js');
+        const one = (v) => new Float32Array(2).fill(v);
+        const names = ['x', 'y', 'z', 'rot_0', 'rot_1', 'rot_2', 'rot_3', 'scale_0', 'scale_1', 'scale_2', 'f_dc_0', 'f_dc_1', 'f_dc_2', 'opacity'];
+        const columns = names.map((n) => new Column(n, one(n === 'rot_0' ? 1 : n.startsWith('scale') ? -3 : 0)));
+        for (const [n, v] of Object.entries(extra)) columns.push(new Column(n, one(v)));
+        await writeFile(path, encodePlyBinary(new DataTable(columns)));
+    };
+
+    for (const [label, plainExtra] of [['matching layouts', {}], ['mixed layouts (the table combine)', { tag: 7 }]]) {
+        it(`fills it with sigmoid(opacity) for an input without it, with ${label}`, async () => {
+            const dir = await mkdtemp(join(tmpdir(), 'splat-linear-'));
+            try {
+                await writePly(join(dir, 'plain.ply'), plainExtra);
+                await writePly(join(dir, 'heavy.ply'), { opacity_linear: 1.5 });
+                const out = join(dir, 'out.ply');
+                const result = await runCli(['--gpu', 'cpu', join(dir, 'plain.ply'), join(dir, 'heavy.ply'), out]);
+                assert.strictEqual(result.code, 0, `CLI failed:\n${result.stderr}\n${result.stdout}`);
+
+                const { MemoryReadFileSystem } = await import('../src/lib/index.js');
+                const { createChunkDataPool } = await import('../src/lib/chunk/index.js');
+                const { materializeToDataTable } = await import('../src/lib/compat/data-table.js');
+                const { readPly } = await import('../src/lib/readers/read-ply.js');
+                const rfs = new MemoryReadFileSystem();
+                rfs.set('out.ply', new Uint8Array(await readFile(out)));
+                const pool = createChunkDataPool();
+                const table = await materializeToDataTable(await readPly(await rfs.createSource('out.ply'), pool), pool);
+                assert.deepStrictEqual(Array.from(table.getColumnByName('opacity_linear').data), [0.5, 0.5, 1.5, 1.5]);
+            } finally {
+                await rm(dir, { recursive: true, force: true });
+            }
+        });
+    }
+});

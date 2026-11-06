@@ -65,4 +65,45 @@ const withOpacityLinear = (src: ChunkSource, pool: ChunkDataPool): ChunkSource =
     return { meta, read, close: () => src.close() };
 };
 
-export { withOpacityLinear };
+/**
+ * Bake `opacity_linear` into the opacity logit, as a lazy view, for writers whose
+ * format stores only the logit: the geometric layer's opacity slot reads
+ * `logit(clamp(opacity_linear, 0, 1))`, since the column wins over `opacity`
+ * wherever it is present. Sources without the column are returned unchanged.
+ *
+ * @param src - Parent source.
+ * @param pool - Pool for the column temporaries; `chunkSize` must match the parent's.
+ * @returns A source whose opacity logit agrees with its `opacity_linear`.
+ */
+const bakeOpacityLinear = (src: ChunkSource, pool: ChunkDataPool): ChunkSource => {
+    const other = src.meta.availableLayers.has('other') ? src.meta.layouts.other : undefined;
+    const field = other?.fields[OPACITY_LINEAR_COLUMN];
+    if (!other || !field) return src;
+    const sw = other.stride >>> 2;
+    const word = field.byteOffset >>> 2;
+
+    const read = async (request: ReadRequest): Promise<void> => {
+        const geo = request.geometric;
+        if (!geo) {
+            await src.read(request);
+            return;
+        }
+        // read the column into a temp unless the caller asked for `other` too
+        const tmp = request.other ? null : pool.acquire('other', other, geo.count);
+        try {
+            await src.read(tmp ? { ...request, other: tmp } : request);
+            const lin = new Float32Array((tmp ?? request.other)!.data, 0, geo.count * sw);
+            const g = new Float32Array(geo.data, 0, geo.count * 8);
+            for (let i = 0; i < geo.count; i++) {
+                const a = Math.min(Math.max(lin[i * sw + word], 1e-7), 1 - 1e-7);
+                g[i * 8 + 7] = Math.log(a / (1 - a));
+            }
+        } finally {
+            tmp?.release();
+        }
+    };
+
+    return { meta: src.meta, read, close: () => src.close() };
+};
+
+export { bakeOpacityLinear, withOpacityLinear };
