@@ -36,7 +36,7 @@ type CostCache = {
 };
 
 const buildCostCache = (view: SplatView): CostCache => {
-    const { geo, excess } = view;
+    const { geo, linearOpacity } = view;
     const n = geo.length / 8;
     const R = new Float32Array(n * 9);
     const v = new Float32Array(n * 3);
@@ -81,7 +81,7 @@ const buildCostCache = (view: SplatView): CostCache => {
         quatToRotmat(qw, qx, qy, qz, R, i9);
         sigmaFromRotVar(R, i9, vx, vy, vz, sigma, i9);
 
-        mass[i] = (excess ? linAlpha + excess[i] : linAlpha) * ellipsoidArea(sx, sy, sz) + 1e-12;
+        mass[i] = (linearOpacity ? linearOpacity[i] : linAlpha) * ellipsoidArea(sx, sy, sz) + 1e-12;
     }
 
     return { R, v, invdiag, logdet, sigma, mass };

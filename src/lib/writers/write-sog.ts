@@ -1,6 +1,6 @@
 import { basename, dirname, resolve } from 'pathe';
 
-import { createChunkDataPool, OPACITY_EXCESS_COLUMN, SH_REST_COUNTS } from '../chunk';
+import { createChunkDataPool, OPACITY_LINEAR_COLUMN, SH_REST_COUNTS } from '../chunk';
 import type { ChunkDataPool, ChunkSource } from '../chunk';
 import { dataTableToChunkSource } from '../compat/data-table';
 import type { DataTable } from '../data-table';
@@ -42,8 +42,8 @@ type SogLayers = {
     colorDc: Float32Array[];
     /** Interleaved `f_rest_*`, for k-means (empty at 0 bands). */
     shRest: Float32Array;
-    /** `opacity_excess` column, or null when the source has none. */
-    excess: Float32Array | null;
+    /** `opacity_linear` column (true opacity, wins over the logit), or null when the source has none. */
+    linear: Float32Array | null;
     /** The requested blind-data columns, in request order (f64 holds uint32 and float32 values exactly). */
     blind: Float64Array[];
 };
@@ -69,10 +69,10 @@ const gatherSogLayers = async (
     const colorStride = colorLayout.stride >>> 2;
     const restCount = SH_REST_COUNTS[meta.shBands];
 
-    // `other`-layer columns SOG understands: the excess opacity (always picked up
+    // `other`-layer columns SOG understands: the true opacity (always picked up
     // when present) and the user-named blind columns (only when asked for).
     const otherLayout = meta.availableLayers.has('other') ? meta.layouts.other : undefined;
-    const excessField = otherLayout?.fields[OPACITY_EXCESS_COLUMN];
+    const linearField = otherLayout?.fields[OPACITY_LINEAR_COLUMN];
     const blindFields = blindColumns.map((column) => {
         const field = otherLayout?.fields[column];
         if (!field) {
@@ -82,13 +82,13 @@ const gatherSogLayers = async (
         return field;
     });
     const otherStride = otherLayout ? otherLayout.stride >>> 2 : 0;
-    const readOther = !!excessField || blindFields.length > 0;
+    const readOther = !!linearField || blindFields.length > 0;
 
     const position = new Float32Array(n * positionStride);
     const geometric = GEOMETRIC_COLS.map(() => new Float32Array(n));
     const colorDc = Array.from({ length: 3 }, () => new Float32Array(n));
     const shRest = new Float32Array(n * restCount);
-    const excess = excessField ? new Float32Array(n) : null;
+    const linear = linearField ? new Float32Array(n) : null;
     const blind = blindFields.map(() => new Float64Array(n));
 
     let base = 0;
@@ -133,9 +133,9 @@ const gatherSogLayers = async (
             if (otherData) {
                 const f32 = new Float32Array(otherData.data, 0, count * otherStride);
                 const u32 = new Uint32Array(otherData.data, 0, count * otherStride);
-                if (excess) {
-                    const w = excessField!.byteOffset >>> 2;
-                    for (let i = 0; i < count; i++) excess[base + i] = f32[i * otherStride + w];
+                if (linear) {
+                    const w = linearField!.byteOffset >>> 2;
+                    for (let i = 0; i < count; i++) linear[base + i] = f32[i * otherStride + w];
                 }
                 for (let b = 0; b < blind.length; b++) {
                     const w = blindFields[b].byteOffset >>> 2;
@@ -153,7 +153,7 @@ const gatherSogLayers = async (
         base += count;
     }
 
-    return { position, geometric, colorDc, shRest, excess, blind };
+    return { position, geometric, colorDc, shRest, linear, blind };
 };
 
 type WriteSogSourceOptions = {
@@ -173,7 +173,7 @@ type WriteSogSourceOptions = {
     indices?: Uint32Array;
     /**
      * SOG format version to write. Default 3. Version 2 is for viewers that
-     * predate v3: it cannot carry excess opacity, blind data or a 4th SH band,
+     * predate v3: it cannot carry opacity above 1, blind data or a 4th SH band,
      * and drops them with a warning.
      */
     version?: SogVersion;
@@ -225,20 +225,19 @@ const MAX_SH_PALETTE = 64 * 4096;
 
 /**
  * Encode the v3 opacity byte of every gaussian from its true opacity
- * `A = sigmoid(opacity) + opacity_excess` (see {@link encodeOpacityByte}; `A` above
- * {@link OPACITY_MAX} is clamped).
+ * `A`: `opacity_linear` when present, else `sigmoid(opacity)` (see
+ * {@link encodeOpacityByte}; `A` above {@link OPACITY_MAX} is clamped).
  *
  * @param opacity - Logit opacity column.
- * @param excess - Excess opacity column, or null.
+ * @param linear - True opacity column, or null.
  * @returns One byte per gaussian and the largest opacity stored.
  */
-const encodeOpacityBytes = (opacity: Float32Array, excess: Float32Array | null): { bytes: Uint8Array; max: number } => {
+const encodeOpacityBytes = (opacity: Float32Array, linear: Float32Array | null): { bytes: Uint8Array; max: number } => {
     const n = opacity.length;
     const bytes = new Uint8Array(n);
     let max = 0;
     for (let i = 0; i < n; i++) {
-        const e = excess ? excess[i] : 0;
-        const b = encodeOpacityByte(sigmoid(opacity[i]) + (e > 0 ? e : 0));
+        const b = encodeOpacityByte(linear ? linear[i] : sigmoid(opacity[i]));
         bytes[i] = b;
         if (b > max) max = b;
     }
@@ -454,8 +453,8 @@ const startSogWrite = async (
     }
     const layers = await gatherSogLayers(baked, pool, version === 3 ? blindColumns : []);
 
-    if (version === 2 && layers.excess?.some((e) => e > 0)) {
-        logger.warn('SOG v2 cannot store opacity above 1; excess opacity is discarded (use SOG v3)');
+    if (version === 2 && layers.linear?.some((a) => a > 1)) {
+        logger.warn('SOG v2 cannot store opacity above 1; it is clamped to 1 (use SOG v3)');
     }
 
     const blind = version === 3 ? resolveBlindTextures(blindTextures, layers.blind) : [];
@@ -729,14 +728,16 @@ const finishSogWrite = async (
         let opacityData: Uint8Array;
         let opacityMax = 1;
         if (v3) {
-            const enc = encodeOpacityBytes(op, layers.excess);
+            const enc = encodeOpacityBytes(op, layers.linear);
             opacityData = enc.bytes;
             opacityMax = enc.max;
         } else {
             // rounded, like the quaternions: a Uint8Array store truncates
+            const lin = layers.linear;
             opacityData = new Uint8Array(numRows);
             for (let i = 0; i < numRows; ++i) {
-                opacityData[i] = Math.max(0, Math.min(255, Math.round(sigmoid(op[i]) * 255)));
+                const a = lin ? lin[i] : sigmoid(op[i]);
+                opacityData[i] = Math.max(0, Math.min(255, Math.round(a * 255)));
             }
         }
         const cd = await colorsQuant;

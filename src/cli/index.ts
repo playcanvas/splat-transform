@@ -989,8 +989,8 @@ SOG COMPRESSION (.sog, meta.json, lod-meta.json, .html outputs)
         --sh-palette-size  <n>              SH palette entries for .sog / meta.json (more=better, slower). Up to 262144
                                               with SOG v3, 65536 with v2. Default: one per 1024 gaussians, at most 65536
         --max-workers      <n>              Worker threads for SOG and image-sequence encoding (0 = inline/serial). Default: 4
-        --sog-version      <2|3>            SOG format version to write. 2 is for older viewers: it drops excess
-                                              opacity, blind data and a 4th SH band. Default: 3 (.html always embeds 2)
+        --sog-version      <2|3>            SOG format version to write. 2 is for older viewers: it drops opacity
+                                              above 1, blind data and a 4th SH band. Default: 3 (.html always embeds 2)
         --sog-blind        <field>[,...]    Store columns as per-gaussian blind data (v3): one blind texture per flag,
                                               its fields filling 4 bytes (R,G,B,A) in order. field = <col>[:<enc>]
                                               enc: u8 u16 u24 u32 (unsigned integers), f16 f32 (float bits),
@@ -1037,7 +1037,7 @@ IMAGE OUTPUT (.webp) — lossless WebP rendered via GPU rasterizer
         --resolution       <WxH>            Output resolution, e.g. 1920x1080. Default: 1280x720 (pinhole) or 2048x1024 (equirect)
         --camera-near      <n>              Near clip distance. Default: 0.2 (matches reference 3DGS)
         --background       <r,g,b[,a]>      Background color in [0,1]. Default: 0,0,0,1
-        --no-compensation                   Ignore excess opacity (opacity_excess from decimation) and draw every
+        --no-compensation                   Clamp opacity above 1 (opacity_linear from decimation) and draw every
                                               gaussian at opacity <= 1. For debugging and A/B comparison.
         --aa-filter-size   <px²>            Screen-space filter of scenes trained with anti-aliasing (splat model
                                               antialiased), used in place of the 0.3 px² dilation. Default: 0.1

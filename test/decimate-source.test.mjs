@@ -137,8 +137,8 @@ describe('decimateSourceAdaptive', () => {
             extraColumns: [{ name: 'tag', type: 'uint32' }]
         });
         const out = await decimateSourceAdaptive(source, pool, { targetCount: 600 });
-        // merges also write the excess opacity they could not carry
-        assert.deepStrictEqual([...out.meta.extraColumns.map(e => e.name)], ['tag', 'opacity_excess']);
+        // merges also write their true opacity, above 1 too
+        assert.deepStrictEqual([...out.meta.extraColumns.map(e => e.name)], ['tag', 'opacity_linear']);
         const { other } = await readLayers(out, pool, ["other"]);
         await out.close();
         assert.strictEqual(other.length, 600 * 2);

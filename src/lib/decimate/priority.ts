@@ -1,6 +1,6 @@
 import type { GraphicsDevice } from 'playcanvas';
 
-import { OPACITY_EXCESS_COLUMN } from '../chunk';
+import { OPACITY_LINEAR_COLUMN } from '../chunk';
 import type { ChunkData, ChunkDataPool, ChunkSource } from '../chunk';
 import { GpuEdgeCost } from '../gpu/gpu-edge-cost';
 import { GpuKnn } from '../gpu/gpu-knn';
@@ -112,19 +112,19 @@ const gatherBlockView = async (
     const viewColorDim = Math.min(colorComponents ?? colorDim, colorDim);
     const wantOther = includeOther && availableLayers.has('other') && (layouts.other?.stride ?? 0) > 0;
     const otherDim = wantOther ? layouts.other!.stride >> 2 : 0;
-    // The excess-opacity word is part of every splat's mass, so it is read even
+    // The true-opacity word is part of every splat's mass, so it is read even
     // when the caller doesn't want the rest of the other layer.
-    const excessField = availableLayers.has('other') ? layouts.other?.fields[OPACITY_EXCESS_COLUMN] : undefined;
-    const readOther = wantOther || !!excessField;
+    const linearField = availableLayers.has('other') ? layouts.other?.fields[OPACITY_LINEAR_COLUMN] : undefined;
+    const readOther = wantOther || !!linearField;
     const readDim = readOther ? layouts.other!.stride >> 2 : 0;
-    const excessWord = excessField ? excessField.byteOffset >> 2 : 0;
+    const linearWord = linearField ? linearField.byteOffset >> 2 : 0;
 
     const view: SplatView = {
         pos: new Float32Array(n * 3),
         geo: new Float32Array(n * 8),
         color: new Float32Array(n * viewColorDim),
         colorDim: viewColorDim,
-        excess: excessField ? new Float32Array(n) : undefined
+        linearOpacity: linearField ? new Float32Array(n) : undefined
     };
     const other = wantOther ? new Uint32Array(n * otherDim) : undefined;
 
@@ -156,9 +156,9 @@ const gatherBlockView = async (
             }
             if (othCd && wantOther)
                 other!.set(new Uint32Array(othCd.data, 0, count * otherDim), (rowBase + off) * otherDim);
-            if (othCd && view.excess) {
+            if (othCd && view.linearOpacity) {
                 const words = new Float32Array(othCd.data, 0, count * readDim);
-                for (let r = 0; r < count; r++) view.excess[rowBase + off + r] = words[r * readDim + excessWord];
+                for (let r = 0; r < count; r++) view.linearOpacity[rowBase + off + r] = words[r * readDim + linearWord];
             }
             geoCd.release();
             colCd.release();

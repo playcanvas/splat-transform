@@ -1,5 +1,5 @@
 /**
- * True opacity `A = sigmoid(opacity) + opacity_excess` is stored and drawn up to this value,
+ * True opacity `A` (`opacity_linear`, else `sigmoid(opacity)`) is stored and drawn up to this value,
  * `(255 / 204)^2 = 1.25^2`, the top of the 8-bit encoding. Merges can owe far more (the
  * moment-matched mass double-counts children that overlap along a view), but on five scenes at deep
  * LOD levels the render improves as `A` is capped, down to ~1.55, and the decimator's own cascade is

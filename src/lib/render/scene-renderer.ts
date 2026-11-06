@@ -60,7 +60,7 @@ type SceneRendererOptions = {
     residentBudget?: number;
     /** Use this tier regardless of fit (tests); default picks the first that fits. */
     tier?: SceneTier;
-    /** Draw excess opacity with the over-unity profile; default true. */
+    /** Draw opacity above 1 (`opacity_linear`) with the over-unity profile; default true. */
     compensation?: boolean;
     /** Screen-space filter, in pixels², of scenes trained with anti-aliasing; default `AA_FILTER_COV` (0.1). */
     antiAliasFilterSize?: number;
@@ -126,8 +126,9 @@ class SceneRenderer {
 
     constructor(device: GraphicsDevice, source: ChunkSource, pool: ChunkDataPool, options: SceneRendererOptions) {
         this.device = device;
-        // excess opacity reaches the GPU folded into a linear opacity slot
-        const linear = options.compensation === false ? null : withLinearOpacity(source, pool);
+        // opacity_linear reaches the GPU in the opacity slot; without
+        // compensation it is clamped to 1
+        const linear = withLinearOpacity(source, pool, options.compensation === false ? 1 : Infinity);
         this.source = linear ?? source;
         this.pool = pool;
         this.options = options;

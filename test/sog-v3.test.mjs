@@ -1,6 +1,6 @@
 /**
  * SOG v3 (default) vs v2: rotation encodings, the fixed opacity byte with
- * excess opacity above 1, blind data, and what v2 drops.
+ * true opacity above 1 (opacity_linear), blind data, and what v2 drops.
  */
 
 import assert from 'node:assert';
@@ -163,11 +163,11 @@ describe('SOG v3 opacity', () => {
         }
     });
 
-    it('without excess, stores opacity on the byte lattice and writes no opacity meta', async () => {
+    it('without opacity above 1, stores opacity on the byte lattice and writes no opacity meta', async () => {
         const dt = createTestDataTable(500);
         const { meta, table } = await roundTrip(dt);
         assert.strictEqual(meta.opacity, undefined);
-        assert.ok(!table.getColumnByName('opacity_excess'), 'no excess column when nothing exceeds 1');
+        assert.ok(!table.getColumnByName('opacity_linear'), 'no opacity_linear column when nothing exceeds 1');
         const src = matchRows(dt, table);
         const inOp = dt.getColumnByName('opacity').data, outOp = table.getColumnByName('opacity').data;
         for (let j = 0; j < table.numRows; j++) {
@@ -176,46 +176,53 @@ describe('SOG v3 opacity', () => {
         }
     });
 
-    it('carries opacity above 1, clamped to OPACITY_MAX, and restores opacity_excess', async () => {
+    it('carries opacity above 1, clamped to OPACITY_MAX, and restores opacity_linear', async () => {
         const n = 2000;
         const dt = createTestDataTable(n);
         const r = rng(3);
-        const excess = new Float32Array(n);
+        const linear = new Float32Array(n);
         const op = dt.getColumnByName('opacity').data;
         for (let i = 0; i < n; i++) {
             if (i % 3 === 0) {
                 op[i] = 20; // saturated (sigmoid ~1)
-                excess[i] = Math.exp(r() * Math.log(40)) - 1 + 1e-3; // A in (1, 40]
+                linear[i] = Math.exp(r() * Math.log(40)) + 1e-3; // A in (1, 40]
+            } else {
+                linear[i] = r(); // unrelated to the logit: the column wins
             }
         }
-        dt.addColumn(new Column('opacity_excess', excess));
+        dt.addColumn(new Column('opacity_linear', linear));
         const { meta, table } = await roundTrip(dt);
         assert.strictEqual(meta.opacity.max, OPACITY_MAX);
 
         const src = matchRows(dt, table);
-        const outEx = table.getColumnByName('opacity_excess').data;
+        const outLin = table.getColumnByName('opacity_linear').data;
         const outOp = table.getColumnByName('opacity').data;
         for (let j = 0; j < table.numRows; j++) {
-            const i = src[j];
-            const want = decodeOpacityByte(encodeOpacityByte(sig(op[i]) + excess[i]));
-            const aOut = sig(outOp[j]) + outEx[j];
-            assert.ok(Math.abs(aOut - want) < 1e-5, `row ${j}: ${aOut} vs ${want}`);
-            assert.ok(aOut <= OPACITY_MAX + 1e-6, 'clamped');
-            assert.ok(outEx[j] === 0 || sig(outOp[j]) > 0.999, 'excess only on saturated splats');
+            const want = decodeOpacityByte(encodeOpacityByte(linear[src[j]]));
+            assert.ok(Math.abs(outLin[j] - want) < 1e-5, `row ${j}: ${outLin[j]} vs ${want}`);
+            assert.ok(outLin[j] <= OPACITY_MAX + 1e-6, 'clamped');
+            assert.ok(Math.abs(sig(outOp[j]) - Math.min(outLin[j], 1)) < 1e-5, 'the logit holds the clamped opacity');
         }
     });
 
-    it('v2 drops excess opacity with a warning', async () => {
+    it('v2 writes opacity_linear clamped to 1, with a warning', async () => {
         const dt = createTestDataTable(100);
-        const excess = new Float32Array(100);
-        excess[0] = 2;
-        dt.addColumn(new Column('opacity_excess', excess));
+        const linear = new Float32Array(100).fill(0.25);
+        linear[0] = 2;
+        dt.addColumn(new Column('opacity_linear', linear));
         let result;
         const warnings = await captureWarnings(async () => {
             result = await roundTrip(dt, { version: 2 });
         });
         assert.ok(warnings.some((w) => /opacity above 1/.test(w)), warnings.join('\n'));
-        assert.ok(!result.table.getColumnByName('opacity_excess'));
+        const { table } = result;
+        assert.ok(!table.getColumnByName('opacity_linear'));
+        const src = matchRows(dt, table);
+        const outOp = table.getColumnByName('opacity').data;
+        for (let j = 0; j < table.numRows; j++) {
+            const want = src[j] === 0 ? 1 : Math.round(0.25 * 255) / 255;
+            assert.ok(Math.abs(sig(outOp[j]) - want) < 1e-5, `row ${j}: ${sig(outOp[j])} vs ${want}`);
+        }
     });
 });
 

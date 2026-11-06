@@ -5,7 +5,7 @@ import { compact } from '../chunk';
 import type { ChunkDataPool, ChunkSource, ChunkSourceMetadata } from '../chunk';
 import type { ReadFileSystem } from '../io/read';
 import type { FileSystem } from '../io/write';
-import { bakeTransform, withOpacityExcess } from '../ops';
+import { bakeTransform, withOpacityLinear } from '../ops';
 import { readPly } from '../readers/read-ply';
 import type { DeviceCreator } from '../types';
 import { fmtBytes, fmtCount, logger, Transform } from '../utils';
@@ -178,9 +178,9 @@ const extractPositions = async (source: ChunkSource, pool: ChunkDataPool): Promi
  */
 const decimateSource = async (input: ChunkSource, pool: ChunkDataPool, opts: DecimateOptions): Promise<ChunkSource> => {
     const { targetCount } = opts;
-    // Every merge reads and writes the excess-opacity column (0 when the input
-    // has none), so the output always carries it.
-    const source = withOpacityExcess(input, pool);
+    // Every merge reads and writes the true-opacity column (sigmoid(opacity)
+    // when the input has none), so the output always carries it.
+    const source = withOpacityLinear(input, pool);
     const inputMeta = source.meta;
 
     if (inputMeta.numLods > 1) {

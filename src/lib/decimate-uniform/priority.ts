@@ -1,6 +1,6 @@
 import type { GraphicsDevice } from 'playcanvas';
 
-import { OPACITY_EXCESS_COLUMN } from '../chunk';
+import { OPACITY_LINEAR_COLUMN } from '../chunk';
 import type { ChunkData, ChunkDataPool, ChunkSource } from '../chunk';
 import { createMergeScratch, makeGaussianSamples, sigmoid, ellipsoidArea } from '../decimate/moment-match';
 import type { SplatView } from '../decimate/moment-match';
@@ -87,19 +87,19 @@ const gatherBlockView = async (
     const colorDim = layouts.color!.stride >> 2;
     const wantOther = includeOther && availableLayers.has('other') && (layouts.other?.stride ?? 0) > 0;
     const otherDim = wantOther ? layouts.other!.stride >> 2 : 0;
-    // The excess-opacity word is part of every splat's mass, so it is read even
+    // The true-opacity word is part of every splat's mass, so it is read even
     // when the caller doesn't want the rest of the other layer.
-    const excessField = availableLayers.has('other') ? layouts.other?.fields[OPACITY_EXCESS_COLUMN] : undefined;
-    const readOther = wantOther || !!excessField;
+    const linearField = availableLayers.has('other') ? layouts.other?.fields[OPACITY_LINEAR_COLUMN] : undefined;
+    const readOther = wantOther || !!linearField;
     const readDim = readOther ? layouts.other!.stride >> 2 : 0;
-    const excessWord = excessField ? excessField.byteOffset >> 2 : 0;
+    const linearWord = linearField ? linearField.byteOffset >> 2 : 0;
 
     const view: SplatView = {
         pos: new Float32Array(n * 3),
         geo: new Float32Array(n * 8),
         color: new Float32Array(n * colorDim),
         colorDim,
-        excess: excessField ? new Float32Array(n) : undefined
+        linearOpacity: linearField ? new Float32Array(n) : undefined
     };
     const other = wantOther ? new Uint32Array(n * otherDim) : undefined;
 
@@ -122,9 +122,9 @@ const gatherBlockView = async (
             view.color.set(new Float32Array(colCd.data, 0, count * colorDim), (rowBase + off) * colorDim);
             if (othCd && wantOther)
                 other!.set(new Uint32Array(othCd.data, 0, count * otherDim), (rowBase + off) * otherDim);
-            if (othCd && view.excess) {
+            if (othCd && view.linearOpacity) {
                 const words = new Float32Array(othCd.data, 0, count * readDim);
-                for (let r = 0; r < count; r++) view.excess[rowBase + off + r] = words[r * readDim + excessWord];
+                for (let r = 0; r < count; r++) view.linearOpacity[rowBase + off + r] = words[r * readDim + linearWord];
             }
             geoCd.release();
             colCd.release();
@@ -170,7 +170,7 @@ const indexOfSorted = (sorted: Uint32Array, g: number): number => {
 // posScalars 8-wide, rotR from normalized quats, appearance in ≤APP_CHUNK
 // column chunks (appChunkWidth) with live-width strides).
 const packGpuCache = (view: SplatView): EdgeCostCache => {
-    const { pos, geo, color, colorDim, excess } = view;
+    const { pos, geo, color, colorDim, linearOpacity } = view;
     const n = geo.length / 8;
     const posScalars = new Float32Array(n * 8);
     const rotR = new Float32Array(n * 9);
@@ -189,7 +189,7 @@ const packGpuCache = (view: SplatView): EdgeCostCache => {
         posScalars[o] = pos[i * 3];
         posScalars[o + 1] = pos[i * 3 + 1];
         posScalars[o + 2] = pos[i * 3 + 2];
-        posScalars[o + 3] = (excess ? linAlpha + excess[i] : linAlpha) * ellipsoidArea(sx, sy, sz) + 1e-12;
+        posScalars[o + 3] = (linearOpacity ? linearOpacity[i] : linAlpha) * ellipsoidArea(sx, sy, sz) + 1e-12;
         posScalars[o + 4] =
             Math.log(Math.max(vx, 1e-30)) + Math.log(Math.max(vy, 1e-30)) + Math.log(Math.max(vz, 1e-30));
         posScalars[o + 5] = vx;

@@ -185,9 +185,9 @@ type WriteImageOptions = {
     residentBudget?: number;
 
     /**
-     * Draw excess opacity (`opacity_excess`, kept by decimation) with the
-     * over-unity plateau profile. Default true; false renders as if the
-     * column were absent (debugging, A/B).
+     * Draw opacity above 1 (`opacity_linear`, kept by decimation) with the
+     * over-unity plateau profile. Default true; false clamps it to 1
+     * (debugging, A/B).
      */
     compensation?: boolean;
 

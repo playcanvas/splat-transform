@@ -1,9 +1,9 @@
 /**
- * Rendering excess opacity (`opacity_excess`): a gaussian whose true opacity
+ * Rendering true opacity (`opacity_linear`): a gaussian whose true opacity
  * exceeds 1 is drawn with an opaque core and the gaussian's falloff stretched
  * over the rest of its footprint, carrying exactly its mass, with the opacity capped at
- * OPACITY_MAX — on every scene tier, and `compensation: false` draws it as if
- * the column were absent.
+ * OPACITY_MAX — on every scene tier. The column always wins over the logit, and
+ * `compensation: false` clamps it to 1.
  */
 
 import assert from 'node:assert';
@@ -32,9 +32,9 @@ const W = 64;
 const SIGMA = 0.05;
 
 // One white isotropic gaussian at the origin of std dev `sigma`, saturated
-// unless `opacity` (a logit) says otherwise, with excess `e` (null = no column
-// at all), tagged with splat model `model`.
-const makeScene = async (e, { sigma = SIGMA, opacity = 20, model = 'default' } = {}) => {
+// unless `opacity` (a logit) says otherwise, with true opacity `a`
+// (opacity_linear; null = no column at all), tagged with splat model `model`.
+const makeScene = async (a, { sigma = SIGMA, opacity = 20, model = 'default' } = {}) => {
     const { Column, DataTable, dataTableToChunkSource } = await import('../src/lib/index.js');
     const { createChunkDataPool } = await import('../src/lib/chunk/index.js');
     const one = (v) => new Float32Array([v]);
@@ -47,7 +47,7 @@ const makeScene = async (e, { sigma = SIGMA, opacity = 20, model = 'default' } =
         new Column('f_dc_0', one(0.5 / 0.28209479177387814)), new Column('f_dc_1', one(0.5 / 0.28209479177387814)),
         new Column('f_dc_2', one(0.5 / 0.28209479177387814))
     ];
-    if (e !== null) columns.push(new Column('opacity_excess', one(e)));
+    if (a !== null) columns.push(new Column('opacity_linear', one(a)));
     return { source: dataTableToChunkSource(new DataTable(columns), undefined, undefined, model), pool: createChunkDataPool() };
 };
 
@@ -92,23 +92,23 @@ const footprint = (image) => {
     return { lit, reach };
 };
 
-describe('rendering excess opacity', () => {
+describe('rendering true opacity', () => {
     for (const tier of TIERS) {
-        it(`${tier}: excess lights a heavier footprint, capped at OPACITY_MAX; --no-compensation and a zero excess do not`, async (t) => {
+        it(`${tier}: opacity above 1 lights a heavier footprint, capped at OPACITY_MAX; --no-compensation and A = 1 do not`, async (t) => {
             if (!device) return t.skip('no WebGPU adapter available');
             const plainImg = await render(await makeScene(null), tier, true);
             const plain = footprint(plainImg);
-            const zero = footprint(await render(await makeScene(0), tier, true));
-            const atMax = await render(await makeScene(0.5625), tier, true);
-            const heavyImg = await render(await makeScene(15), tier, true);
-            const off = footprint(await render(await makeScene(15), tier, false));
+            const one = footprint(await render(await makeScene(1), tier, true));
+            const atMax = await render(await makeScene(1.5625), tier, true);
+            const heavyImg = await render(await makeScene(16), tier, true);
+            const off = footprint(await render(await makeScene(16), tier, false));
 
             assert.ok(plain.reach <= 3.3, `plain gaussian stays within 3σ (${plain.reach})`);
-            assert.deepStrictEqual(zero, plain, 'a zero excess renders as no excess');
-            assert.deepStrictEqual(off, plain, 'compensation off ignores the excess');
+            assert.deepStrictEqual(one, plain, 'A = 1 renders as the saturated logit');
+            assert.deepStrictEqual(off, plain, 'compensation off clamps A to 1');
             const heavy = footprint(heavyImg);
             // A = 1.5625: an opaque core of 0.24 of the 3σ footprint, ending at 3σ like the plain gaussian
-            assert.ok(mass(heavyImg) > 1.3 * mass(plainImg), `excess draws more mass (${mass(heavyImg)} vs ${mass(plainImg)})`);
+            assert.ok(mass(heavyImg) > 1.3 * mass(plainImg), `A > 1 draws more mass (${mass(heavyImg)} vs ${mass(plainImg)})`);
             assert.ok(heavy.reach <= plain.reach + 0.1, `the over-unity profile stays within the plain footprint (${heavy.reach} vs ${plain.reach})`);
             assert.deepStrictEqual(Array.from(heavyImg), Array.from(atMax), 'A = 16 renders as A = OPACITY_MAX (1.5625)');
         });
@@ -117,12 +117,21 @@ describe('rendering excess opacity', () => {
     it('the core of an over-unity gaussian is opaque', async (t) => {
         if (!device) return t.skip('no WebGPU adapter available');
         const plain = await render(await makeScene(null), 'resident', true);
-        const heavy = await render(await makeScene(15), 'resident', true);
+        const heavy = await render(await makeScene(16), 'resident', true);
         // pixel centres at 0.31σ and 0.94σ from the gaussian: the core
         // (radius 0.24 × 3σ ≈ 0.72σ) is opaque, and its edge outweighs the gaussian's
         const at = (image, x) => image[((W / 2) * W + x) * 4];
         assert.ok(at(heavy, W / 2) >= 250, `plateau core is opaque: ${at(heavy, W / 2)}`);
         assert.ok(at(heavy, W / 2 + 1) > at(plain, W / 2 + 1) + 40, `plateau edge at 0.94σ: ${at(heavy, W / 2 + 1)} vs ${at(plain, W / 2 + 1)}`);
+    });
+
+    it('opacity_linear wins over the opacity logit', async (t) => {
+        if (!device) return t.skip('no WebGPU adapter available');
+        const plain = await render(await makeScene(null), 'resident', true);
+        const hidden = await render(await makeScene(0, { opacity: 20 }), 'resident', true);
+        const shown = await render(await makeScene(1, { opacity: -20 }), 'resident', true);
+        assert.strictEqual(mass(hidden), 0, 'a zero column hides a splat whose logit is opaque');
+        assert.deepStrictEqual(Array.from(shown), Array.from(plain), 'A = 1 draws opaque whatever the logit says');
     });
 });
 
@@ -137,14 +146,14 @@ describe('rendering antialiased scenes', () => {
         ['a 1.6 px splat', { sigma: SIGMA }, null],
         ['a 0.5 px splat', { sigma: 0.016 }, null],
         ['a half-opaque splat', { sigma: SIGMA, opacity: 0 }, null],
-        ['an over-unity splat (A = 1.5625)', { sigma: SIGMA }, 0.5625]
+        ['an over-unity splat (A = 1.5625)', { sigma: SIGMA }, 1.5625]
     ];
     for (const tier of TIERS) {
         it(`${tier}: draws the undilated mass`, async (t) => {
             if (!device) return t.skip('no WebGPU adapter available');
-            for (const [label, opts, e] of cases) {
-                const plain = mass(await render(await makeScene(e, opts), tier, true));
-                const aa = mass(await render(await makeScene(e, { ...opts, model: 'antialiased' }), tier, true));
+            for (const [label, opts, a] of cases) {
+                const plain = mass(await render(await makeScene(a, opts), tier, true));
+                const aa = mass(await render(await makeScene(a, { ...opts, model: 'antialiased' }), tier, true));
                 const expected = aaFactor(opts.sigma);
                 assert.ok(Math.abs(aa / plain / expected - 1) < 0.03, `${label}: ratio ${(aa / plain).toFixed(4)}, expected ${expected.toFixed(4)}`);
             }

@@ -1,4 +1,4 @@
-import { OPACITY_EXCESS_COLUMN } from '../chunk';
+import { OPACITY_LINEAR_COLUMN } from '../chunk';
 import { WorkerQueue } from '../workers';
 
 import { blockPlanPrefix } from './block-allocation';
@@ -34,8 +34,8 @@ async function* blockPlanMergeStream(
     const colorDim = layouts.color!.stride >> 2;
     const hasOther = availableLayers.has('other') && (layouts.other?.stride ?? 0) > 0;
     const otherDim = hasOther ? layouts.other!.stride >> 2 : 0;
-    const excessField = hasOther ? layouts.other!.fields[OPACITY_EXCESS_COLUMN] : undefined;
-    const excessWord = excessField ? excessField.byteOffset >> 2 : undefined;
+    const linearField = hasOther ? layouts.other!.fields[OPACITY_LINEAR_COLUMN] : undefined;
+    const linearWord = linearField ? linearField.byteOffset >> 2 : undefined;
 
     let rows = 0;
     let emitted = 0;
@@ -87,7 +87,7 @@ async function* blockPlanMergeStream(
                     colorDim,
                     other: mOther,
                     otherDim,
-                    excessWord
+                    linearWord
                 },
                 transfer
             );

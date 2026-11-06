@@ -126,12 +126,13 @@ type ExtraColumn = {
 };
 
 /**
- * Name of the `other`-layer column holding each gaussian's excess opacity: the
- * part of its true (unclamped) opacity `A` above 1, `max(0, A - 1)`, which the
- * plain 0..1 `opacity` cannot carry. Written by decimation; absent or 0 means
- * nothing is owed, so `A = sigmoid(opacity) + opacity_excess` always.
+ * Name of the `other`-layer column holding each gaussian's true opacity `A`,
+ * linear and unclamped, which the plain 0..1 `opacity` logit cannot carry above
+ * 1. Written by decimation (`opacity` then holds `logit(min(A, 1))` for readers
+ * that don't know the column). When present it always wins: `A = opacity_linear`,
+ * whatever `opacity` says; when absent, `A = sigmoid(opacity)`.
  */
-const OPACITY_EXCESS_COLUMN = 'opacity_excess';
+const OPACITY_LINEAR_COLUMN = 'opacity_linear';
 
 /**
  * Compute the byte stride and field map for an `other` layer given its extra columns.
@@ -157,7 +158,7 @@ export {
     type LayerLayout,
     type ExtraColumn,
     SH_REST_COUNTS,
-    OPACITY_EXCESS_COLUMN,
+    OPACITY_LINEAR_COLUMN,
     POSITION_STRIDE,
     GEOMETRIC_STRIDE,
     DEFAULT_CHUNK_SIZE,

@@ -272,21 +272,21 @@ type SplatView = {
     color: Float32Array;
     colorDim: number;
     /**
-     * Per-splat excess opacity (`opacity_excess`, 1 f32/splat): mass a previous
-     * decimation could not carry at opacity <= 1. Absent = 0 for every splat.
+     * Per-splat true opacity (`opacity_linear`, 1 f32/splat), which may exceed 1
+     * and wins over the logit when present. Absent = `sigmoid(opacity)`.
      */
-    excess?: Float32Array;
+    linearOpacity?: Float32Array;
 };
 
 /**
  * Merged-splat output: pos 3, geo 8 (same encoding as SplatView), color
- * colorDim, plus the merged excess opacity `max(0, A - 1)`.
+ * colorDim, plus the merged true opacity `A` (unclamped).
  */
 type MergedOut = {
     pos: Float64Array;
     geo: Float64Array;
     color: Float64Array;
-    excess: number;
+    linearOpacity: number;
 };
 
 /**
@@ -322,16 +322,15 @@ const createMergeScratch = (): MergeScratch => ({
 });
 
 /**
- * True opacity of one splat: `sigmoid(opacity) + opacity_excess`, which may
- * exceed 1 for a splat an earlier decimation clamped.
+ * True opacity of one splat: `opacity_linear` when present (it may exceed 1),
+ * else `sigmoid(opacity)`.
  * @param geo - Geometric-layer view (8 f32/splat).
  * @param i - Splat index.
- * @param excess - Excess-opacity column, if any.
+ * @param linearOpacity - True-opacity column, if any.
  * @returns The splat's true opacity.
  */
-const splatOpacity = (geo: Float32Array, i: number, excess?: Float32Array): number => {
-    const a = sigmoid(geo[i * 8 + 7]);
-    return excess ? a + excess[i] : a;
+const splatOpacity = (geo: Float32Array, i: number, linearOpacity?: Float32Array): number => {
+    return linearOpacity ? linearOpacity[i] : sigmoid(geo[i * 8 + 7]);
 };
 
 /**
@@ -340,15 +339,15 @@ const splatOpacity = (geo: Float32Array, i: number, excess?: Float32Array): numb
  * legacy counterparts exactly).
  * @param geo - Geometric-layer view (8 f32/splat).
  * @param i - Splat index.
- * @param excess - Excess-opacity column, if any.
+ * @param linearOpacity - True-opacity column, if any.
  * @returns The merge weight.
  */
-const splatMass = (geo: Float32Array, i: number, excess?: Float32Array): number => {
+const splatMass = (geo: Float32Array, i: number, linearOpacity?: Float32Array): number => {
     const i8 = i * 8;
     const sx = Math.max(Math.exp(geo[i8 + 4]), 1e-12);
     const sy = Math.max(Math.exp(geo[i8 + 5]), 1e-12);
     const sz = Math.max(Math.exp(geo[i8 + 6]), 1e-12);
-    return splatOpacity(geo, i, excess) * ellipsoidArea(sx, sy, sz) + 1e-30;
+    return splatOpacity(geo, i, linearOpacity) * ellipsoidArea(sx, sy, sz) + 1e-30;
 };
 
 /**
@@ -371,7 +370,7 @@ const mergeGroup = (
     out: MergedOut,
     scratch: MergeScratch
 ): void => {
-    const { pos, geo, color, colorDim, excess } = view;
+    const { pos, geo, color, colorDim, linearOpacity } = view;
 
     // Per-member normalized weights, computed once — splatMass is
     // transcendental-heavy and was previously re-evaluated per loop (and per
@@ -383,7 +382,7 @@ const mergeGroup = (
     }
     let W = 0;
     for (let m = 0; m < count; m++) {
-        const mass = splatMass(geo, members[m], excess);
+        const mass = splatMass(geo, members[m], linearOpacity);
         weights[m] = mass;
         W += mass;
     }
@@ -491,12 +490,12 @@ const mergeGroup = (
     const s1 = Math.sqrt(ev1);
     const s2 = Math.sqrt(ev2);
 
-    // Mass-conserving opacity, capped at 1 (no scale inflation). What the cap
-    // cuts off is kept as excess opacity, so the full mass A = alphaM + excess
-    // survives into the output for renderers (and later levels) to use.
+    // Mass-conserving opacity (no scale inflation). The logit is capped at 1;
+    // the full mass A is kept as opacity_linear for renderers (and later
+    // levels) to use.
     const A = W / Math.max(ellipsoidArea(s0, s1, s2), 1e-30);
     const alphaM = Math.min(1, A);
-    out.excess = A > 1 ? A - 1 : 0;
+    out.linearOpacity = A;
 
     const Rm = scratch.rM;
     Rm[0] = vecs[o0];

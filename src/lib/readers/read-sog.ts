@@ -1,7 +1,7 @@
 import {
     POSITION_STRIDE,
     GEOMETRIC_STRIDE,
-    OPACITY_EXCESS_COLUMN,
+    OPACITY_LINEAR_COLUMN,
     SH_REST_COUNTS,
     colorStride,
     positionFields,
@@ -56,13 +56,13 @@ type MetaV2 = {
     comments?: string[];
 };
 
-// The `other`-layer columns a V3 meta implies: excess opacity when its stored
+// The `other`-layer columns a V3 meta implies: the true opacity when its stored
 // opacity reaches above 1, and each blind field under its recorded name (integer
 // encodings as uint32, the rest as float32).
 const extraColumnsFromMeta = (meta: MetaV2): ExtraColumn[] => {
     const extras: ExtraColumn[] = [];
     if (meta.version === 3 && (meta.opacity?.max ?? 1) > 1) {
-        extras.push({ name: OPACITY_EXCESS_COLUMN, type: 'float32' });
+        extras.push({ name: OPACITY_LINEAR_COLUMN, type: 'float32' });
     }
     if (meta.version === 3 && meta.blind) {
         for (const texture of meta.blind) {
@@ -214,16 +214,15 @@ const readSogSourceV2 = async (
     const cCode = new Float32Array(meta.sh0.codebook);
     const oCode = new Float32Array(256);
     for (let i = 0; i < 256; i++) oCode[i] = v3 ? decodeOpacityByte(i) : i / 255;
-    // Precomputed per code: the stored logit (of the clamped opacity) and the
-    // excess above 1.
+    // Precomputed per code: the stored logit (of the clamped opacity); the
+    // true opacity itself is oCode.
     const oLogit = oCode.map((a) => sigmoidInv(a));
-    const oExcess = oCode.map((a) => (a > 1 ? a - 1 : 0));
 
     // V3 blind data: each texture's fields packed in order into R,G,B,A, little-endian.
     const extras = extraColumnsFromMeta(meta);
     const otherL = extras.length > 0 ? otherLayout(extras) : null;
-    const excessWord = otherL?.fields[OPACITY_EXCESS_COLUMN]
-        ? otherL.fields[OPACITY_EXCESS_COLUMN].byteOffset >>> 2
+    const linearWord = otherL?.fields[OPACITY_LINEAR_COLUMN]
+        ? otherL.fields[OPACITY_LINEAR_COLUMN].byteOffset >>> 2
         : -1;
     const otherSw = otherL ? otherL.stride >>> 2 : 0;
     const blindFields: {
@@ -364,10 +363,10 @@ const readSogSourceV2 = async (
 
         if (othOut) {
             const o = r * otherSw;
-            if (excessWord >= 0) {
+            if (linearWord >= 0) {
                 // reinterpret: the other layer is word-typed per field
-                f32View[0] = oExcess[c0[o4 + 3]];
-                othOut[o + excessWord] = u32View[0];
+                f32View[0] = oCode[c0[o4 + 3]];
+                othOut[o + linearWord] = u32View[0];
             }
             for (const f of blindFields) {
                 const b = f.rgba;
@@ -460,7 +459,7 @@ const fetchSogMeta = async (fileSystem: ReadFileSystem, filename: string) => {
  * Header-only SOG peek: parse `meta.json` and report the metadata a file-info
  * summary needs — gaussian count, SH bands, splat model and available layers — **without**
  * decoding any WebP texture. SOG always carries position/geometric/color; V3 adds
- * `opacity_excess` and blind-data extras when its meta declares them. V2/V3 only;
+ * `opacity_linear` and blind-data extras when its meta declares them. V2/V3 only;
  * legacy V1 (no `version`) returns `null` so the caller can fall back to a full read.
  *
  * @param fileSystem - The file system to read meta.json from.

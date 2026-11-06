@@ -1,11 +1,11 @@
-import { OPACITY_EXCESS_COLUMN } from '../chunk';
+import { OPACITY_LINEAR_COLUMN } from '../chunk';
 import type { ChunkData, ChunkDataPool, ChunkLayer, ReadRequest, ChunkSource, ChunkSourceMetadata } from '../chunk';
 import { resolveComments } from '../comments';
 import { resolveExtras } from '../extras';
 import { resolveSplatModel } from '../splat-model';
 import { logger } from '../utils';
 
-import { withOpacityExcess } from './opacity-excess-source';
+import { withOpacityLinear } from './opacity-linear-source';
 
 const LAYERS: ChunkLayer[] = ['position', 'geometric', 'color', 'other'];
 
@@ -25,9 +25,9 @@ type MutableRowReadRequest = { indices: Uint32Array; indexOffset: number; count:
  * SH bands, available layers, extra columns) and on the pending coordinate-space
  * **transform** — concatenating data in mismatched spaces is silently wrong, so
  * a transform mismatch throws (the caller must bake to a common space first).
- * The one tolerated extra-column difference is `opacity_excess`: a decimated
- * input carries it and a raw one does not, and its absence means 0, so inputs
- * without it are given a zero column.
+ * The one tolerated extra-column difference is `opacity_linear`: a decimated
+ * input carries it and a raw one does not, and its absence means
+ * `sigmoid(opacity)`, so inputs without it are given that column.
  *
  * Single-LOD only. Reads stitch contiguous row ranges: an output chunk is filled
  * by block-copying the overlapping span out of each contributing source chunk
@@ -44,9 +44,9 @@ const concatSource = (inputs: ChunkSource[], pool: ChunkDataPool): ChunkSource =
         throw new Error('concatSource: at least one source is required');
     }
 
-    const hasExcess = (s: ChunkSource) => s.meta.extraColumns.some((e) => e.name === OPACITY_EXCESS_COLUMN);
-    const allSources = inputs.some(hasExcess)
-        ? inputs.map((s) => (hasExcess(s) ? s : withOpacityExcess(s, pool)))
+    const hasLinear = (s: ChunkSource) => s.meta.extraColumns.some((e) => e.name === OPACITY_LINEAR_COLUMN);
+    const allSources = inputs.some(hasLinear)
+        ? inputs.map((s) => (hasLinear(s) ? s : withOpacityLinear(s, pool)))
         : inputs;
 
     const ref = allSources[0].meta;
