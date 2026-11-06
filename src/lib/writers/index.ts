@@ -12,3 +12,6 @@ export { writeSog, writeSogSource } from './write-sog';
 export { writeSpz } from './write-spz';
 export { writeVoxel } from './write-voxel';
 export type { WriteVoxelOptions, VoxelMetadata } from './write-voxel';
+
+export { writeVoxelTiles } from './write-voxel-tiles';
+export type { WriteVoxelTilesOptions, VoxelTileManifest, VoxelTile, VoxelTileBounds } from './write-voxel-tiles';

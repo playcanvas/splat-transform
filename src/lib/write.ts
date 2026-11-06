@@ -1,8 +1,19 @@
+import { basename } from 'pathe';
+
 import type { ChunkDataPool, ChunkLayer, ChunkSource } from './chunk';
 import { materializeToDataTable } from './compat/data-table';
 import type { FileSystem } from './io/write';
 import type { DeviceCreator, Options } from './types';
-import { writeCsv, writeGlb, writeHtml, writeImage, writeSogSource, writeSpz, writeVoxel } from './writers';
+import {
+    writeCsv,
+    writeGlb,
+    writeHtml,
+    writeImage,
+    writeSogSource,
+    writeSpz,
+    writeVoxel,
+    writeVoxelTiles
+} from './writers';
 import { writeCompressedPlySource } from './writers/write-compressed-ply';
 import { writePlyStreaming } from './writers/write-ply-streaming';
 import { writeSplatStreaming } from './writers/write-splat-streaming';
@@ -21,6 +32,7 @@ import { writeSplatStreaming } from './writers/write-splat-streaming';
  * - `lod` - Multi-LOD format with chunked data
  * - `html` - Self-contained HTML viewer (separate assets)
  * - `html-bundle` - Self-contained HTML viewer (all assets embedded)
+ * - `voxel-tiles` - Manifest of spatially tiled surface collision files
  * - `voxel` - Sparse voxel octree format for collision detection
  * - `image` - Rasterized RGBA image (lossless WebP) rendered from a camera view
  */
@@ -37,6 +49,7 @@ type OutputFormat =
     | 'html'
     | 'html-bundle'
     | 'voxel'
+    | 'voxel-tiles'
     | 'image';
 
 /**
@@ -58,6 +71,8 @@ const getOutputFormat = (filename: string, options: Options): OutputFormat => {
 
     if (lowerFilename.endsWith('.csv')) {
         return 'csv';
+    } else if (basename(lowerFilename) === 'voxel-tiles.json' || lowerFilename.endsWith('.voxel-tiles.json')) {
+        return 'voxel-tiles';
     } else if (lowerFilename.endsWith('.voxel.json')) {
         return 'voxel';
     } else if (lowerFilename.endsWith('lod-meta.json')) {
@@ -202,6 +217,20 @@ const writeSource = async (writeSourceOptions: WriteSourceOptions, fs: FileSyste
             throw new Error('writeSource: lod output must be written via writeLodSource');
         case 'image':
             await writeImageSource(filename, source, pool, options, fs, createDevice);
+            break;
+        case 'voxel-tiles':
+            await writeVoxelTiles(
+                source,
+                pool,
+                {
+                    ...options,
+                    filename,
+                    tileSize: options.voxelTileSize,
+                    overlap: options.voxelTileOverlap,
+                    createDevice
+                },
+                fs
+            );
             break;
         case 'voxel': {
             // Voxelization consumes only position + geometric (see writeVoxel:

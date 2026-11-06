@@ -585,3 +585,74 @@ const outputBuffer = memFs.results.get('output.ply');
 
 > [!NOTE]
 > For the full walkthrough — key exports, file system abstractions, processing actions, custom logging — see the [Library Usage](https://developer.playcanvas.com/user-manual/splat-transform/library/) guide. The TypeDoc reference for every export lives at [api.playcanvas.com/splat-transform](https://api.playcanvas.com/splat-transform/).
+
+### Tiled surface collision
+
+Write `scene.voxel-tiles.json` (or `voxel-tiles.json`) to generate independently
+loadable surface collision tiles for large scenes:
+
+```bash
+splat-transform scene.ply scene.voxel-tiles.json \
+  --voxel-size 0.08 --voxel-opacity 0.2 \
+  --voxel-tile-size 64 --voxel-tile-overlap 8
+```
+
+Each tile uses the unchanged `.voxel.json` / `.voxel.bin` **version 1.1** format.
+The version 1 manifest contains `voxelResolution`, `tileSize`, `overlap`,
+`fullBounds: { min, max }`, and `tiles`. Each tile entry contains `id`, `ix`, `iz`,
+`coreBounds`, `dataBounds`, and a `url` relative to the manifest. Bounds are XYZ
+arrays in world coordinates, with Y up. The core partitions ownership in XZ;
+the data bounds include overlap. Consumers should use the core for coverage and
+treat omitted tiles as unavailable for walking. Only successfully generated,
+nonempty tiles are included; empty areas do not point at nonexistent files.
+
+All grids use a common world-origin lattice. Tile size and overlap are rounded
+up to multiples of four voxels; the manifest records these effective values.
+Zero overlap is supported. Gaussian effective AABBs, including splats whose
+centers lie outside the tile, determine membership. A private one-block guard
+preserves the existing isolated-voxel cleanup across tile edges and is removed
+before writing. Overlapping data belongs to the same world voxel lattice.
+
+The writer reads only position and geometry through `ChunkSource`, scans one
+chunk at a time, and materializes one tile at a time. It keeps one bounds record
+per source chunk and may reread source chunks for different tiles. The default
+limit is **4,000,000 selected Gaussians per tile**, reduced further when the GPU's
+buffer or storage binding limit is smaller. The library's `maxGaussiansPerTile`
+option can change the CPU working-set limit. An over-budget tile fails before
+upload; reduce tile size or overlap. This is a bounded *output-stage* algorithm:
+inputs with eager decoders, preceding processing actions, and caller-owned data
+can still retain full-scene memory. It is not a faster-conversion guarantee.
+
+The first version supports surfaces only. It rejects exterior fill, floor fill,
+carving, and collision mesh output: those operations need additional global
+connectivity or mesh semantics. Select one LOD (LOD 0 by default in the CLI), as
+for ordinary voxel output. It does not reinterpret source rotations or apply a
+viewer-specific coordinate correction.
+
+Tiles are stored next to the manifest in a directory named after it, for example
+`scene-tiles/x0_z0/surface.voxel.json`. The manifest is written last. A failed run
+can leave unreferenced tile files, but does not publish a new manifest claiming a
+complete conversion. Generate into a **new output directory** for each run;
+in-place replacement of an existing dataset is not transactional. There is no
+resume or automatic subdivision in this first version.
+
+A small reproducible example is included, without external scene assets:
+
+```bash
+mkdir -p output/voxel-tiles-demo
+node bin/cli.mjs generators/gen-voxel-tiles.mjs output/voxel-tiles-demo/scene.ply
+node bin/cli.mjs generators/gen-voxel-tiles.mjs output/voxel-tiles-demo/scene.voxel-tiles.json \
+  --voxel-size 0.1 --voxel-tile-size 4 --voxel-tile-overlap 0.4
+```
+
+The generator creates a floor and low wall. A viewer with tiled collision support
+can display `scene.ply` and load `scene.voxel-tiles.json` through its collision URL.
+The GPU regression test checks world-space occupancy against monolithic output,
+including zero-overlap seams and an anisotropic rotated Gaussian:
+
+```bash
+TEST_WEBGPU=1 node --import tsx --test --test-force-exit test/voxel-tiles.test.mjs
+```
+
+The regular `npm test` suite runs CPU validation and budget tests; the GPU tests
+require a working WebGPU device and are opt-in.

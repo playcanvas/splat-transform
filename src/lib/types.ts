@@ -48,6 +48,12 @@ type Options = {
     /** Size of each voxel in world units for voxel output. Default: 0.05 */
     voxelResolution?: number;
 
+    /** XZ width for tiled voxel output, rounded up to whole four-voxel blocks. Default: 64. */
+    voxelTileSize?: number;
+
+    /** XZ overlap for tiled voxel output, rounded up to whole four-voxel blocks. Default: 8. */
+    voxelTileOverlap?: number;
+
     /** Opacity threshold for solid voxels - voxels below this are considered empty. Default: 0.1 */
     opacityCutoff?: number;
 

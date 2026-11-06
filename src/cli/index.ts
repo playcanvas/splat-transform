@@ -178,6 +178,8 @@ const cliOptionsConfig = {
     'spz-version': { type: 'string', default: '4' },
     unbundled: { type: 'boolean', default: false },
     'voxel-size': { type: 'string' },
+    'voxel-tile-size': { type: 'string', default: '64' },
+    'voxel-tile-overlap': { type: 'string', default: '8' },
     'voxel-opacity': { type: 'string' },
     'voxel-external-fill': { type: 'string' },
     'voxel-floor-fill': { type: 'string' },
@@ -618,6 +620,8 @@ const parseArguments = async () => {
             .map(parseInteger),
         spzVersion: spzVersion as 3 | 4,
         voxelResolution,
+        voxelTileSize: parseNumber(v['voxel-tile-size'], 0),
+        voxelTileOverlap: parseNumber(v['voxel-tile-overlap'], 0),
         opacityCutoff,
         navExteriorRadius,
         floorFill,
@@ -875,7 +879,7 @@ SUPPORTED INPUTS
     .mjs generators are local-only).
 
 SUPPORTED OUTPUTS
-    .ply   .compressed.ply   .sog   .spz   meta.json   lod-meta.json   .glb   .csv   .html   .voxel.json   .webp   null
+    .ply   .compressed.ply   .sog   .spz   meta.json   lod-meta.json   .glb   .csv   .html   .voxel.json   .voxel-tiles.json   .webp   null
 
 ACTIONS (executed in order; can be repeated)
     -t, --translate        <x,y,z>          Translate Gaussians by (x, y, z)
@@ -941,7 +945,9 @@ LOD OUTPUT (lod-meta.json)
         --lod-chunk-min    <n>              Gaussians in K below which a chunk is not split for extent. Default: 8
         --lod-file-count   <n,n,...>        Gaussians in K per LOD file, per level from finest; the last repeats. Default: --lod-chunk-count
 
-VOXEL OUTPUT (.voxel.json)
+VOXEL OUTPUT (.voxel.json or .voxel-tiles.json)
+        --voxel-tile-size  <n>              XZ tile width for .voxel-tiles.json. Default: 64
+        --voxel-tile-overlap <n>             XZ tile overlap. Default: 8 (0 allowed)
         --voxel-size       <n>              Voxel size for .voxel.json. Default: 0.05
         --voxel-opacity    <n>              Voxel opacity threshold for .voxel.json. Default: 0.1
         --voxel-external-fill [size]        Fill exterior voxels via boundary flood fill (interior scenes). Default: 1.6
