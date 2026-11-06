@@ -121,15 +121,10 @@ fn main(
     // LINEAR_OPACITY: the slot holds the true opacity A (may exceed 1)
     // rather than a logit; see render/linear-opacity.ts.
 #ifdef LINEAR_OPACITY
-    let amp = opacity;
+    var amp = opacity;
 #else
-    let amp = 1.0 / (1.0 + exp(-opacity));
+    var amp = 1.0 / (1.0 + exp(-opacity));
 #endif
-    // A > 1: draw an opaque core of radius core (0 = plain gaussian).
-    var core = 0.0;
-    if (amp > 1.0) {
-        core = plateauCore(amp);
-    }
     let fdcR = attr(11u, s);
     let fdcG = attr(12u, s);
     let fdcB = attr(13u, s);
@@ -157,8 +152,21 @@ fn main(
     #include "jacobianPinhole"
 #endif
 
+#ifdef AA_COMPENSATION
+    let detRaw = cov00 * cov11 - cov01 * cov01;
+#endif
     cov00 = cov00 + AA_DILATION_COV;
     cov11 = cov11 + AA_DILATION_COV;
+#ifdef AA_COMPENSATION
+    // Trained with anti-aliasing: the opacity pays for the dilation, so the drawn mass is the
+    // undilated gaussian's (the engine's aaFactor, applied before the over-unity profile).
+    amp = amp * sqrt(max(0.0, detRaw) / (cov00 * cov11 - cov01 * cov01));
+#endif
+    // A > 1: draw an opaque core of radius core (0 = plain gaussian).
+    var core = 0.0;
+    if (amp > 1.0) {
+        core = plateauCore(amp);
+    }
 
 #ifndef PROJECTION_EQUIRECT
     // Defocus (DoF), pinhole only. Capture detPreDoF before dilating so the

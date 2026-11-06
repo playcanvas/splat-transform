@@ -157,6 +157,7 @@ class SceneRenderer {
             groupTilesY,
             sizeClamp: options.sizeClamp,
             linearOpacity: !!linear,
+            aaCompensation: source.meta.model === 'antialiased',
             bgR: bg.r,
             bgG: bg.g,
             bgB: bg.b,

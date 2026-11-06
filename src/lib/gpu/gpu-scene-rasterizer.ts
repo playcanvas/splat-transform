@@ -105,6 +105,12 @@ type SceneRasterizerOptions = {
      * 1) rather than a logit — see `render/linear-opacity.ts`. Default false.
      */
     linearOpacity?: boolean;
+    /**
+     * The scene was trained with anti-aliasing: scale each splat's opacity by
+     * `sqrt(det Σ / det(Σ + dilation))` so it draws the undilated mass, as the
+     * engine does for antialiased resources. Default false.
+     */
+    aaCompensation?: boolean;
     /** RGBA background, each channel in [0, 1]. */
     bgR: number;
     bgG: number;
@@ -325,6 +331,7 @@ class GpuSceneRasterizer {
         if (options.numSHBands >= 4) cdefines.set('SH_BAND_4', '');
         if (options.sizeClamp === false) cdefines.set('NO_SIZE_CLAMP', '');
         if (options.linearOpacity) cdefines.set('LINEAR_OPACITY', '');
+        if (options.aaCompensation) cdefines.set('AA_COMPENSATION', '');
 
         const U = SHADERSTAGE_COMPUTE;
         const ro = (name: string) => new BindStorageBufferFormat(name, U, true);

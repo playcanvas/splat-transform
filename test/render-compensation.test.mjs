@@ -31,23 +31,24 @@ const TIERS = ['resident', 'streamed-gpu', 'streamed-cpu'];
 const W = 64;
 const SIGMA = 0.05;
 
-// One white isotropic gaussian at the origin, saturated, with excess `e`
-// (null = no column at all).
-const makeScene = async (e) => {
+// One white isotropic gaussian at the origin of std dev `sigma`, saturated
+// unless `opacity` (a logit) says otherwise, with excess `e` (null = no column
+// at all), tagged with splat model `model`.
+const makeScene = async (e, { sigma = SIGMA, opacity = 20, model = 'default' } = {}) => {
     const { Column, DataTable, dataTableToChunkSource } = await import('../src/lib/index.js');
     const { createChunkDataPool } = await import('../src/lib/chunk/index.js');
     const one = (v) => new Float32Array([v]);
     const columns = [
         new Column('x', one(0)), new Column('y', one(0)), new Column('z', one(0)),
         new Column('rot_0', one(1)), new Column('rot_1', one(0)), new Column('rot_2', one(0)), new Column('rot_3', one(0)),
-        new Column('scale_0', one(Math.log(SIGMA))), new Column('scale_1', one(Math.log(SIGMA))),
-        new Column('scale_2', one(Math.log(SIGMA))),
-        new Column('opacity', one(20)),
+        new Column('scale_0', one(Math.log(sigma))), new Column('scale_1', one(Math.log(sigma))),
+        new Column('scale_2', one(Math.log(sigma))),
+        new Column('opacity', one(opacity)),
         new Column('f_dc_0', one(0.5 / 0.28209479177387814)), new Column('f_dc_1', one(0.5 / 0.28209479177387814)),
         new Column('f_dc_2', one(0.5 / 0.28209479177387814))
     ];
     if (e !== null) columns.push(new Column('opacity_excess', one(e)));
-    return { source: dataTableToChunkSource(new DataTable(columns)), pool: createChunkDataPool() };
+    return { source: dataTableToChunkSource(new DataTable(columns), undefined, undefined, model), pool: createChunkDataPool() };
 };
 
 const render = async (scene, tier, compensation) => {
@@ -123,6 +124,31 @@ describe('rendering excess opacity', () => {
         assert.ok(at(heavy, W / 2) >= 250, `plateau core is opaque: ${at(heavy, W / 2)}`);
         assert.ok(at(heavy, W / 2 + 1) > at(plain, W / 2 + 1) + 40, `plateau edge at 0.94σ: ${at(heavy, W / 2 + 1)} vs ${at(plain, W / 2 + 1)}`);
     });
+});
+
+describe('rendering antialiased scenes', () => {
+    // A scene trained with anti-aliasing pays for the 0.3 px² dilation with opacity, as the engine's
+    // aaFactor does: it draws sqrt(det Σ / det(Σ + 0.3)) = σ² / (σ² + 0.3) of the plain splat's mass
+    // (σ in pixels), applied before the over-unity profile, which conserves mass.
+    const pxPerSigma = (sigma) => sigma / (2 / W);
+    const aaFactor = (sigma) => pxPerSigma(sigma) ** 2 / (pxPerSigma(sigma) ** 2 + 0.3);
+    const cases = [
+        ['a 1.6 px splat', { sigma: SIGMA }, null],
+        ['a 0.5 px splat', { sigma: 0.016 }, null],
+        ['a half-opaque splat', { sigma: SIGMA, opacity: 0 }, null],
+        ['an over-unity splat (A = 1.5625)', { sigma: SIGMA }, 0.5625]
+    ];
+    for (const tier of TIERS) {
+        it(`${tier}: draws the undilated mass`, async (t) => {
+            if (!device) return t.skip('no WebGPU adapter available');
+            for (const [label, opts, e] of cases) {
+                const plain = mass(await render(await makeScene(e, opts), tier, true));
+                const aa = mass(await render(await makeScene(e, { ...opts, model: 'antialiased' }), tier, true));
+                const expected = aaFactor(opts.sigma);
+                assert.ok(Math.abs(aa / plain / expected - 1) < 0.03, `${label}: ratio ${(aa / plain).toFixed(4)}, expected ${expected.toFixed(4)}`);
+            }
+        });
+    }
 });
 
 describe('plateau core', () => {
