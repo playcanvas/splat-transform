@@ -231,6 +231,11 @@ Apply when writing `.voxel.json` (sparse voxel octree for collision detection). 
 ```none
     --voxel-size       <n>              Voxel size for .voxel.json. Default: 0.05
     --voxel-opacity    <n>              Voxel opacity threshold for .voxel.json. Default: 0.1
+    --voxel-close      [size]           Close the holes and gaps in the solid voxels up to [size] wide
+                                          (world units), such as those where splats cover a surface
+                                          thinly, without moving the surfaces around them. Runs
+                                          before the fills and the carve.
+                                          Default size: 0.1
     --voxel-external-fill [size]        Seal exterior voxels via boundary flood fill (interior scenes).
                                           [size] (world units) is the dilation distance applied
                                           before the flood fill to bridge small wall gaps.
@@ -452,6 +457,9 @@ splat-transform terrain.ply \
 ```bash
 # Voxelize with custom resolution and opacity threshold
 splat-transform --voxel-size 0.1 --voxel-opacity 0.3 input.ply output.voxel.json
+
+# Close the holes up to 10cm wide in thinly covered surfaces
+splat-transform --voxel-close 0.1 input.ply output.voxel.json
 
 # Custom carve capsule (height, radius)
 splat-transform --seed-pos 1,0,0 --voxel-carve 2.0,0.3 input.ply output.voxel.json
