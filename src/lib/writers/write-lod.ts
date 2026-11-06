@@ -8,6 +8,7 @@ import type { FileSystem } from '../io/write';
 import { bakeTransform, permuteSource, sortMortonColumns } from '../ops';
 import type { BTreeNode } from '../spatial';
 import { BTree } from '../spatial';
+import type { SplatModel } from '../splat-model';
 import type { DeviceCreator } from '../types';
 import { logger, Transform } from '../utils';
 import type { SogBlindTexture } from '../utils/sog-blind';
@@ -52,6 +53,8 @@ type LodMeta = {
         chunkMinGaussians: number;
     };
     count: number;
+    /** How the scene was trained, for all its files; omitted for `default`, as in SOG `meta.json`. */
+    model?: SplatModel;
     counts: number[];
     lodLevels: number;
     environment?: string;
@@ -639,6 +642,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
             chunkMinGaussians: binMin
         },
         count: counts.reduce((acc, curr) => acc + curr, 0),
+        ...(mainSource.meta.model === 'default' ? {} : { model: mainSource.meta.model }),
         counts,
         lodLevels,
         ...(hasEnv ? { environment: 'env/meta.json' } : {}),
