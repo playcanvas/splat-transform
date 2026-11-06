@@ -853,8 +853,7 @@ const finishSogWrite = async (
                   quats: { files: ['quats.webp'] },
                   sh0: { codebook: colorsCodebook, files: ['sh0.webp'] },
                   ...(shN ? { shN } : {}),
-                  ...(state.extras !== undefined ? { extras: state.extras } : {}),
-                  ...(state.comments?.length ? { comments: state.comments } : {})
+                  ...(state.extras !== undefined ? { extras: state.extras } : {})
               };
         const metaJson = new TextEncoder().encode(JSON.stringify(metaObj));
         const metaFilename = zipFs ? 'meta.json' : outputFilename;

@@ -386,6 +386,18 @@ describe('producer comments', () => {
         assert.match(cply, /comment Postshot v1\.1\.69\ncomment postshot\.color\.eotf=sRGB\n/);
     });
 
+    it('are a SOG v3 addition: v2 meta.json and a v2 streamed scene\'s lod-meta.json have none', async () => {
+        const { source, pool } = await openPly(createTestDataTable(16), POSTSHOT);
+        const fs = new MemoryFileSystem();
+        await writeSource({ filename: 'meta.json', outputFormat: 'sog', source, pool, options: { sogVersion: 2 } }, fs);
+        assert.ok(!('comments' in JSON.parse(Buffer.from(fs.results.get('meta.json')).toString())), 'v2 meta.json has no comments');
+
+        const { source: s2 } = await openPly(createTestDataTable(16), POSTSHOT);
+        const lfs = new MemoryFileSystem();
+        await writeLodSource({ filename: '/scene/lod-meta.json', mainSource: s2, envSource: null, iterations: 1, chunkCount: 1, chunkExtent: 16, sogVersion: 2 }, lfs);
+        assert.ok(!('comments' in lodMetaOf(lfs.results)), 'a v2 streamed scene\'s lod-meta.json has no comments');
+    });
+
     it('store them once in lod-meta.json, not in the units, and read them back', async () => {
         const { source } = await openPly(createTestDataTable(16), POSTSHOT);
         const files = await writeLod(source);
