@@ -51,7 +51,7 @@ type MetaV2 = {
     sh0: { codebook: number[]; files: string[] };
     opacity?: { max: number };
     shN?: { count: number; bands: number; codebook: number[]; files: string[] };
-    blind?: { files: string[]; fields: { name: string; type: string; offset: number; min?: number; max?: number }[] }[];
+    blind?: { files: string[]; fields: { name: string; type: string; range?: [number, number] }[] }[];
     extras?: unknown;
 };
 
@@ -218,7 +218,7 @@ const readSogSourceV2 = async (
     const oLogit = oCode.map((a) => sigmoidInv(a));
     const oExcess = oCode.map((a) => (a > 1 ? a - 1 : 0));
 
-    // V3 blind data: each texture's fields at their byte offsets in R,G,B,A, little-endian.
+    // V3 blind data: each texture's fields packed in order into R,G,B,A, little-endian.
     const extras = extraColumnsFromMeta(meta);
     const otherL = extras.length > 0 ? otherLayout(extras) : null;
     const excessWord = otherL?.fields[OPACITY_EXCESS_COLUMN]
@@ -238,21 +238,23 @@ const readSogSourceV2 = async (
         for (const texture of meta.blind) {
             const bl = decoder.decodeRGBA(await load(texture.files[0]));
             if (bl.width * bl.height < count) throw new Error('SOG blind texture too small for count');
+            let offset = 0;
             for (const f of texture.fields) {
                 const encoding = f.type as SogBlindEncoding;
                 const bytes = BLIND_ENCODING_BYTES[encoding];
-                if (!(Number.isInteger(f.offset) && f.offset >= 0 && f.offset + bytes <= 4)) {
-                    throw new Error(`SOG blind field '${f.name}' does not fit its texture (offset ${f.offset})`);
+                if (offset + bytes > 4) {
+                    throw new Error(`SOG blind field '${f.name}' does not fit its texture (offset ${offset})`);
                 }
                 blindFields.push({
                     rgba: bl.rgba,
-                    offset: f.offset,
+                    offset,
                     bytes,
                     encoding,
-                    range: [f.min ?? 0, f.max ?? 1],
+                    range: f.range ?? [0, 1],
                     word: otherL!.fields[f.name].byteOffset >>> 2,
                     integer: isIntegerEncoding(encoding)
                 });
+                offset += bytes;
             }
         }
     }

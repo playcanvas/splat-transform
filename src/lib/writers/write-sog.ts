@@ -14,7 +14,13 @@ import type { DeviceCreator } from '../types';
 import { logger, sigmoid, Transform } from '../utils';
 import { decodeOpacityByte, encodeOpacityByte, OPACITY_MAX } from '../utils/opacity';
 import { encodeQuatExpMap } from '../utils/quat-expmap';
-import { BLIND_ENCODING_BYTES, encodeBlindValue, integerEncodingFor, isBlindEncoding } from '../utils/sog-blind';
+import {
+    BLIND_ENCODING_BYTES,
+    blindFieldId,
+    encodeBlindValue,
+    integerEncodingFor,
+    isBlindEncoding
+} from '../utils/sog-blind';
 import type { SogBlindEncoding, SogBlindTexture } from '../utils/sog-blind';
 import { version as version_ } from '../version';
 import { runEncodeWebp, runQuantize1dColumns } from '../workers';
@@ -236,18 +242,28 @@ const encodeOpacityBytes = (opacity: Float32Array, excess: Float32Array | null):
 
 /**
  * Check the requested blind textures' shape: known encodings, ranges only on
- * unorm fields, at most 4 bytes per texture and each column used once.
+ * unorm fields, at most 4 bytes per texture and each column used once under
+ * a distinct, non-empty shader identifier.
  *
  * @param textures - The requested textures.
  */
 const validateBlindTextures = (textures: SogBlindTexture[]): void => {
-    const seen = new Set<string>();
+    const seen = new Map<string, string>();
     for (const fields of textures) {
         if (fields.length === 0) throw new Error('SOG blind data: a blind texture needs at least one field');
         let bytes = 0;
         for (const f of fields) {
-            if (seen.has(f.column)) throw new Error(`SOG blind data: column '${f.column}' is stored more than once`);
-            seen.add(f.column);
+            // the engine reads each field through getBlind_<id>(), id derived from the name
+            const id = blindFieldId(f.column);
+            if (!id) {
+                throw new Error(`SOG blind data: column '${f.column}' has no letters, digits or '_'`);
+            }
+            const other = seen.get(id);
+            if (other === f.column) throw new Error(`SOG blind data: column '${f.column}' is stored more than once`);
+            if (other !== undefined) {
+                throw new Error(`SOG blind data: columns '${other}' and '${f.column}' share the shader name '${id}'`);
+            }
+            seen.set(id, f.column);
             if (f.encoding !== undefined && !isBlindEncoding(f.encoding)) {
                 throw new Error(`SOG blind data: unknown encoding '${f.encoding as string}' for column '${f.column}'`);
             }
@@ -305,7 +321,7 @@ const resolveBlindTextures = (textures: SogBlindTexture[], columns: Float64Array
 
 type ShNMeta = { count: number; bands: number; codebook: number[]; files: string[] };
 
-type BlindFieldMeta = { name: string; type: SogBlindEncoding; offset: number; min?: number; max?: number };
+type BlindFieldMeta = { name: string; type: SogBlindEncoding; range?: [number, number] };
 
 type BlindMeta = { files: string[]; fields: BlindFieldMeta[] };
 
@@ -795,8 +811,7 @@ const finishSogWrite = async (
                 fields: fields.map((f) => ({
                     name: f.name,
                     type: f.encoding,
-                    offset: f.offset,
-                    ...(f.range ? { min: f.range[0], max: f.range[1] } : {})
+                    ...(f.range ? { range: f.range } : {})
                 }))
             });
         }

@@ -140,8 +140,8 @@ describe('CLI parsing', () => {
             assert.strictEqual(result.code, 0, result.stderr);
             const meta = JSON.parse(await readFile(join(dir, 'out', 'meta.json'), 'utf8'));
             assert.deepStrictEqual(meta.blind, [
-                { files: ['blind_0.webp'], fields: [{ name: 'a', type: 'unorm8', offset: 0 }, { name: 'depth', type: 'unorm8', offset: 1, min: 1, max: 16 }] },
-                { files: ['blind_1.webp'], fields: [{ name: 'id', type: 'u16', offset: 0 }] }
+                { files: ['blind_0.webp'], fields: [{ name: 'a', type: 'unorm8' }, { name: 'depth', type: 'unorm8', range: [1, 16] }] },
+                { files: ['blind_1.webp'], fields: [{ name: 'id', type: 'u16' }] }
             ]);
         } finally {
             await rm(dir, { recursive: true, force: true });

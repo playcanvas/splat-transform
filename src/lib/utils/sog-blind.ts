@@ -41,6 +41,16 @@ const isBlindEncoding = (s: string): s is SogBlindEncoding => Object.hasOwn(BLIN
 /** Whether the encoding decodes to an unsigned integer (else a float). */
 const isIntegerEncoding = (e: SogBlindEncoding): boolean => e[0] === 'u' && !e.startsWith('unorm');
 
+/**
+ * The shader identifier suffix the engine derives from a field name (it reads
+ * the field through `getBlind_<id>()`): characters outside [A-Za-z0-9_] become
+ * '_', runs of '_' collapse to one and leading / trailing '_' are dropped.
+ *
+ * @param name - The field name.
+ * @returns The identifier suffix, empty when the name has nothing to keep.
+ */
+const blindFieldId = (name: string): string => name.replace(/\W/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+
 /** The unsigned integer encoding with the fewest bytes that holds `max`. */
 const integerEncodingFor = (max: number): SogBlindEncoding => {
     return max < 0x100 ? 'u8' : max < 0x10000 ? 'u16' : max < 0x1000000 ? 'u24' : 'u32';
@@ -165,6 +175,7 @@ const decodeBlindValue = (bits: number, encoding: SogBlindEncoding, range: [numb
 
 export {
     BLIND_ENCODING_BYTES,
+    blindFieldId,
     decodeBlindValue,
     encodeBlindValue,
     floatToHalfBits,

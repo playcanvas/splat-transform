@@ -240,7 +240,7 @@ describe('SOG v3 blind data', () => {
             const values = Array.from({ length: 300 }, (_, i) => (i === 0 ? 0 : i === 1 ? max : Math.floor(r() * max)));
             const dt = withColumns(values.length, { segment: Uint32Array.from(values) });
             const { meta, table } = await roundTrip(dt, { blind: [[{ column: 'segment' }]] });
-            assert.deepStrictEqual(meta.blind, [{ files: ['blind_0.webp'], fields: [{ name: 'segment', type, offset: 0 }] }]);
+            assert.deepStrictEqual(meta.blind, [{ files: ['blind_0.webp'], fields: [{ name: 'segment', type }] }]);
             const rows = sourceRows(dt, table);
             const out = table.getColumnByName('segment').data;
             for (let j = 0; j < table.numRows; j++) assert.strictEqual(out[j], values[rows[j]]);
@@ -253,8 +253,7 @@ describe('SOG v3 blind data', () => {
         const cols = Object.fromEntries(['a', 'b', 'c', 'd'].map((k) => [k, Float32Array.from({ length: n }, (_, i) => (i === 0 ? 0 : i === 1 ? 1 : r()))]));
         const dt = withColumns(n, cols);
         const { meta, table } = await roundTrip(dt, { blind: [['a', 'b', 'c', 'd'].map((column) => ({ column, encoding: 'unorm8' }))] });
-        assert.deepStrictEqual(meta.blind[0].fields.map((f) => [f.name, f.type, f.offset]), [['a', 'unorm8', 0], ['b', 'unorm8', 1], ['c', 'unorm8', 2], ['d', 'unorm8', 3]]);
-        assert.strictEqual(meta.blind[0].fields[0].min, undefined, 'the default [0, 1] range is not stored');
+        assert.deepStrictEqual(meta.blind[0].fields, ['a', 'b', 'c', 'd'].map((name) => ({ name, type: 'unorm8' })), 'packed in order; the default [0, 1] range is not stored');
         const rows = sourceRows(dt, table);
         for (const k of ['a', 'b', 'c', 'd']) {
             const out = table.getColumnByName(k).data;
@@ -269,7 +268,7 @@ describe('SOG v3 blind data', () => {
         const values = Float32Array.from([0.1, 5, 42]);
         const dt = withColumns(3, { depth: values });
         const { meta, table } = await roundTrip(dt, { blind: [[{ column: 'depth', encoding: 'unorm16', range: [0.1, 42] }]] });
-        assert.deepStrictEqual(meta.blind[0].fields[0], { name: 'depth', type: 'unorm16', offset: 0, min: 0.1, max: 42 });
+        assert.deepStrictEqual(meta.blind[0].fields[0], { name: 'depth', type: 'unorm16', range: [0.1, 42] });
         const rows = sourceRows(dt, table);
         const out = table.getColumnByName('depth').data;
         for (let j = 0; j < 3; j++) assert.ok(Math.abs(out[j] - values[rows[j]]) <= (41.9 / 65535) * 0.5 + 1e-6);
@@ -283,7 +282,7 @@ describe('SOG v3 blind data', () => {
         const dt = withColumns(6, { f, h, id });
         const { meta, table } = await roundTrip(dt, { blind: [[{ column: 'f', encoding: 'f32' }], [{ column: 'h', encoding: 'f16' }, { column: 'id', encoding: 'u16' }]] });
         assert.deepStrictEqual(meta.blind.map((t) => t.files[0]), ['blind_0.webp', 'blind_1.webp']);
-        assert.deepStrictEqual(meta.blind[1].fields.map((x) => [x.name, x.type, x.offset]), [['h', 'f16', 0], ['id', 'u16', 2]]);
+        assert.deepStrictEqual(meta.blind[1].fields, [{ name: 'h', type: 'f16' }, { name: 'id', type: 'u16' }]);
         const rows = sourceRows(dt, table);
         for (let j = 0; j < 6; j++) {
             const i = rows[j];
@@ -300,6 +299,8 @@ describe('SOG v3 blind data', () => {
             [[[{ column: 'nope' }]], /column 'nope' not found/],
             [[[{ column: 'a', encoding: 'u32' }, { column: 'b', encoding: 'u8' }]], /need 5 bytes; a blind texture holds 4/],
             [[[{ column: 'a' }], [{ column: 'a' }]], /stored more than once/],
+            [[[{ column: 'a-b' }, { column: 'a_b' }]], /columns 'a-b' and 'a_b' share the shader name 'a_b'/],
+            [[[{ column: '--' }]], /no letters, digits or '_'/],
             [[[{ column: 'a', encoding: 'u16', range: [0, 1] }]], /range applies only to unorm8/],
             [[[{ column: 'b', encoding: 'unorm8', range: [1, 1] }]], /invalid range/],
             [[[{ column: 'a', encoding: 'u8' }]], /u8 stores unsigned integers 0 to 255/],
