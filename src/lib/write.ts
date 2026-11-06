@@ -133,6 +133,7 @@ const writeImageSource = async (
             frames: options.renderFrames,
             residentBudget: options.renderResidentBudget,
             compensation: options.renderCompensation,
+            antiAliasFilterSize: options.renderAntiAliasFilterSize,
             createDevice
         },
         fs

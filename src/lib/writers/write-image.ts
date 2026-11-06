@@ -191,6 +191,15 @@ type WriteImageOptions = {
      */
     compensation?: boolean;
 
+    /**
+     * Screen-space filter, in pixels², that scenes trained with anti-aliasing
+     * (splat model `antialiased`) were trained with. They are filtered with it
+     * instead of the 0.3 px² dilation, with their opacity scaled so each splat
+     * draws its unfiltered mass, as the engine's `antiAliasFilterSize`. Other
+     * scenes ignore it. Default: 0.1 (Mip-Splatting's, and the engine's).
+     */
+    antiAliasFilterSize?: number;
+
     /** Function returning a GraphicsDevice. Required — rasterization runs on GPU. */
     createDevice?: DeviceCreator;
 };
@@ -240,12 +249,16 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         webpEffort,
         residentBudget,
         compensation,
+        antiAliasFilterSize,
         createDevice
     } = options;
     let { near = 0.2, focusDistance, sensorSize = 0.024 } = options;
 
     if (!createDevice) {
         throw new Error('writeImage requires a createDevice function for GPU rasterization');
+    }
+    if (antiAliasFilterSize !== undefined && !(antiAliasFilterSize > 0 && Number.isFinite(antiAliasFilterSize))) {
+        throw new Error(`Invalid aa-filter-size: ${antiAliasFilterSize}. Must be > 0.`);
     }
 
     let { fov, width, height } = options;
@@ -475,7 +488,8 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         height: height!,
         background,
         residentBudget,
-        compensation
+        compensation,
+        antiAliasFilterSize
     });
     const tierNote: Record<SceneTier, string> = {
         resident: 'scene resident on GPU',

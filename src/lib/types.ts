@@ -205,6 +205,13 @@ type Options = {
      * column were absent, for debugging and A/B comparison.
      */
     renderCompensation?: boolean;
+
+    /**
+     * Screen-space filter, in pixels², of scenes trained with anti-aliasing
+     * (splat model `antialiased`), used in place of the 0.3 px² dilation.
+     * Default 0.1.
+     */
+    renderAntiAliasFilterSize?: number;
 };
 
 /**

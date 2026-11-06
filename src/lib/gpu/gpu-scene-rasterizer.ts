@@ -19,6 +19,7 @@ import { colorStride, SH_REST_COUNTS } from '../chunk';
 import type { ChunkData, ChunkDataPool, ChunkLayer, ChunkSource, ReadRequest, SHBands } from '../chunk';
 import type { CameraBasis, Projection } from '../render/camera';
 import {
+    AA_FILTER_COV,
     PAIR_BUFFER_BUDGET_BYTES,
     PAIR_BUFFER_TOTAL_BYTES_PER_ELEMENT,
     TILE_SIZE,
@@ -106,11 +107,14 @@ type SceneRasterizerOptions = {
      */
     linearOpacity?: boolean;
     /**
-     * The scene was trained with anti-aliasing: scale each splat's opacity by
-     * `sqrt(det Σ / det(Σ + dilation))` so it draws the undilated mass, as the
+     * The scene was trained with anti-aliasing: filter each splat with
+     * `antiAliasFilterSize` instead of the dilation and scale its opacity by
+     * `sqrt(det Σ / det(Σ + filter))` so it draws the unfiltered mass, as the
      * engine does for antialiased resources. Default false.
      */
     aaCompensation?: boolean;
+    /** The filter of `aaCompensation`, in pixels². Default `AA_FILTER_COV` (0.1). */
+    antiAliasFilterSize?: number;
     /** RGBA background, each channel in [0, 1]. */
     bgR: number;
     bgG: number;
@@ -362,7 +366,7 @@ class GpuSceneRasterizer {
             rw('sortKeys'),
             rw('visibleCount')
         ]);
-        this.projectCompute = mk('scene-project', projectWgsl(coeffs), [
+        this.projectCompute = mk('scene-project', projectWgsl(coeffs, options.antiAliasFilterSize ?? AA_FILTER_COV), [
             ro('position'),
             rw('projected'),
             rw('coverage'),

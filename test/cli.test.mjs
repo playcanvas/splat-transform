@@ -114,6 +114,14 @@ describe('CLI parsing', () => {
         assert.match(result.stderr, /Must be >= 0, or -1/);
     });
 
+    it('rejects --aa-filter-size values that are not positive', async () => {
+        for (const value of ['0', '-0.1', 'abc']) {
+            const result = await runCli(['--gpu', 'cpu', 'test/fixtures/splat/minimal.splat', '--aa-filter-size', value, 'null']);
+            assert.notStrictEqual(result.code, 0, `CLI should reject --aa-filter-size ${value}`);
+            assert.match(result.stderr, /aa-filter-size|Invalid number value|Value must be/);
+        }
+    });
+
     it('rejects --sog-version values other than 2 or 3', async () => {
         const result = await runCli(['--gpu', 'cpu', 'test/fixtures/splat/minimal.splat', '--sog-version', '4', 'null']);
 

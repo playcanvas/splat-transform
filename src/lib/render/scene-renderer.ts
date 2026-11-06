@@ -62,6 +62,8 @@ type SceneRendererOptions = {
     tier?: SceneTier;
     /** Draw excess opacity with the over-unity profile; default true. */
     compensation?: boolean;
+    /** Screen-space filter, in pixels², of scenes trained with anti-aliasing; default `AA_FILTER_COV` (0.1). */
+    antiAliasFilterSize?: number;
 };
 
 /**
@@ -158,6 +160,7 @@ class SceneRenderer {
             sizeClamp: options.sizeClamp,
             linearOpacity: !!linear,
             aaCompensation: source.meta.model === 'antialiased',
+            antiAliasFilterSize: options.antiAliasFilterSize,
             bgR: bg.r,
             bgG: bg.g,
             bgB: bg.b,

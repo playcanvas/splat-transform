@@ -19,11 +19,12 @@ import { wgslF32 } from './chunks/constants';
  * construction time (see `cincludes` in the rasterizer ctor).
  *
  * @param coeffsPerChannel - Per-channel SH coefficient count (0/3/8/15/24).
+ * @param aaFilterCov - Screen-space filter of antialiased scenes, in pixels² (used with AA_COMPENSATION).
  * @returns WGSL source for the project compute shader.
  */
 const PLATEAU_CORE = plateauCoreConstants(SIGMA_CUTOFF);
 
-const projectWgsl = (coeffsPerChannel: number) => /* wgsl */ `
+const projectWgsl = (coeffsPerChannel: number, aaFilterCov: number) => /* wgsl */ `
 #include "uniformsStruct"
 #include "constants"
 
@@ -76,6 +77,7 @@ const SH_C4_7: f32 = -1.7701307697799304;
 const SH_C4_8: f32 = 0.6258357354491761;
 
 const COEFFS_PER_CHANNEL: u32 = ${coeffsPerChannel}u;
+const AA_FILTER_COV: f32 = ${wgslF32(aaFilterCov)};
 
 // Over-unity opacity is drawn with peak 1 as an opaque core of radius u0 (a fraction of SIGMA_CUTOFF)
 // with the plain gaussian's falloff stretched over the rest, so it ends at SIGMA_CUTOFF like a plain
@@ -153,14 +155,16 @@ fn main(
 #endif
 
 #ifdef AA_COMPENSATION
+    // Trained with anti-aliasing: filtered with the training filter instead of the dilation, and
+    // the opacity pays for it, so the drawn mass is the unfiltered gaussian's (the engine's
+    // aaFactor, applied before the over-unity profile).
     let detRaw = cov00 * cov11 - cov01 * cov01;
-#endif
+    cov00 = cov00 + AA_FILTER_COV;
+    cov11 = cov11 + AA_FILTER_COV;
+    amp = amp * sqrt(max(0.0, detRaw) / (cov00 * cov11 - cov01 * cov01));
+#else
     cov00 = cov00 + AA_DILATION_COV;
     cov11 = cov11 + AA_DILATION_COV;
-#ifdef AA_COMPENSATION
-    // Trained with anti-aliasing: the opacity pays for the dilation, so the drawn mass is the
-    // undilated gaussian's (the engine's aaFactor, applied before the over-unity profile).
-    amp = amp * sqrt(max(0.0, detRaw) / (cov00 * cov11 - cov01 * cov01));
 #endif
     // A > 1: draw an opaque core of radius core (0 = plain gaussian).
     var core = 0.0;

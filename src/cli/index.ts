@@ -200,6 +200,7 @@ const cliOptionsConfig = {
     'camera-fov': { type: 'string' },
     resolution: { type: 'string' },
     'camera-near': { type: 'string' },
+    'aa-filter-size': { type: 'string' },
     background: { type: 'string' },
     'f-stop': { type: 'string' },
     'dof-samples': { type: 'string' },
@@ -546,6 +547,11 @@ const parseArguments = async () => {
         renderHeight = parseInteger(m[2]);
     }
     const renderNear = v['camera-near'] !== undefined ? parseNumber(v['camera-near'], 0) : undefined;
+    const renderAntiAliasFilterSize =
+        v['aa-filter-size'] !== undefined ? parseNumber(v['aa-filter-size'], 0) : undefined;
+    if (renderAntiAliasFilterSize !== undefined && renderAntiAliasFilterSize <= 0) {
+        throw new Error(`Invalid --aa-filter-size value: ${v['aa-filter-size']}. Must be > 0.`);
+    }
     const renderFStop = v['f-stop'] !== undefined ? parseNumber(v['f-stop'], 0) : undefined;
     if (renderFStop !== undefined && renderFStop <= 0) {
         throw new Error(`Invalid --f-stop value: ${v['f-stop']}. Must be > 0.`);
@@ -654,6 +660,7 @@ const parseArguments = async () => {
         // in-memory table on unified-memory machines, so bound it the same way.
         renderResidentBudget: Math.min(48 * 2 ** 30, Math.floor(totalmem() / 2)),
         renderCompensation: v.compensation !== false,
+        renderAntiAliasFilterSize,
         lodSelect: v['select-lod']
             .split(',')
             .filter((v) => !!v)
@@ -1030,6 +1037,8 @@ IMAGE OUTPUT (.webp) — lossless WebP rendered via GPU rasterizer
         --background       <r,g,b[,a]>      Background color in [0,1]. Default: 0,0,0,1
         --no-compensation                   Ignore excess opacity (opacity_excess from decimation) and draw every
                                               gaussian at opacity <= 1. For debugging and A/B comparison.
+        --aa-filter-size   <px²>            Screen-space filter of scenes trained with anti-aliasing (splat model
+                                              antialiased), used in place of the 0.3 px² dilation. Default: 0.1
         --f-stop           <N>              Aperture as a photographic f-stop (e.g. 2.8, 5.6, 11). Enables defocus blur;
                                             smaller = more blur. Pinhole only. Default: disabled (no defocus).
         --focus-distance   <n>              Camera-space Z of the focus plane (world units). Default: distance to --camera-target.

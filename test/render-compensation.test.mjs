@@ -51,11 +51,11 @@ const makeScene = async (e, { sigma = SIGMA, opacity = 20, model = 'default' } =
     return { source: dataTableToChunkSource(new DataTable(columns), undefined, undefined, model), pool: createChunkDataPool() };
 };
 
-const render = async (scene, tier, compensation) => {
+const render = async (scene, tier, compensation, antiAliasFilterSize) => {
     const { Vec3 } = await import('playcanvas');
     const { SceneRenderer } = await import('../src/lib/render/index.js');
     const renderer = new SceneRenderer(device, scene.source, scene.pool, {
-        projection: 'pinhole', width: W, height: W, background: { r: 0, g: 0, b: 0, a: 1 }, tier, compensation
+        projection: 'pinhole', width: W, height: W, background: { r: 0, g: 0, b: 0, a: 1 }, tier, compensation, antiAliasFilterSize
     });
     await renderer.upload();
     try {
@@ -127,9 +127,10 @@ describe('rendering excess opacity', () => {
 });
 
 describe('rendering antialiased scenes', () => {
-    // A scene trained with anti-aliasing pays for the 0.3 px² dilation with opacity, as the engine's
-    // aaFactor does: it draws sqrt(det Σ / det(Σ + 0.3)) = σ² / (σ² + 0.3) of the plain splat's mass
-    // (σ in pixels), applied before the over-unity profile, which conserves mass.
+    // A scene trained with anti-aliasing is filtered with its training filter instead of the
+    // 0.3 px² dilation and pays for it with opacity, as the engine's aaFactor does, so it draws the
+    // unfiltered mass: σ² / (σ² + 0.3) of the plain splat's (σ in pixels), whatever the filter size.
+    // This is applied before the over-unity profile, which conserves mass.
     const pxPerSigma = (sigma) => sigma / (2 / W);
     const aaFactor = (sigma) => pxPerSigma(sigma) ** 2 / (pxPerSigma(sigma) ** 2 + 0.3);
     const cases = [
@@ -149,6 +150,38 @@ describe('rendering antialiased scenes', () => {
             }
         });
     }
+
+    it('filters with Mip-Splatting\'s 0.1 px² rather than the 0.3 px² dilation', async (t) => {
+        if (!device) return t.skip('no WebGPU adapter available');
+        // a 0.512 px splat at the image centre: the four central pixel centres are 0.5 px² from it,
+        // where a unit-peak splat filtered with f draws aa · (exp(-0.25 / (σ² + f)) - floor)
+        const sigma = 0.016;
+        const s2 = pxPerSigma(sigma) ** 2;
+        const floor = Math.exp(-0.5 * SIGMA_CUTOFF * SIGMA_CUTOFF);
+        const centre = (f, aa) => 255 * aa * (Math.exp(-0.25 / (s2 + f)) - floor);
+        const peak = (image) => image[((W / 2) * W + W / 2) * 4];
+        const plain = peak(await render(await makeScene(null, { sigma }), 'resident', true));
+        const aa = peak(await render(await makeScene(null, { sigma, model: 'antialiased' }), 'resident', true));
+        assert.ok(Math.abs(plain - centre(0.3, 1)) <= 2, `plain: ${plain} vs ${centre(0.3, 1).toFixed(1)}`);
+        const at01 = centre(0.1, s2 / (s2 + 0.1)), at03 = centre(0.3, s2 / (s2 + 0.3));
+        assert.ok(Math.abs(aa - at01) <= 2, `antialiased: ${aa} vs ${at01.toFixed(1)} at 0.1 px² (${at03.toFixed(1)} at 0.3)`);
+    });
+
+    it('filters with antiAliasFilterSize when given', async (t) => {
+        if (!device) return t.skip('no WebGPU adapter available');
+        const sigma = 0.016;
+        const s2 = pxPerSigma(sigma) ** 2;
+        const floor = Math.exp(-0.5 * SIGMA_CUTOFF * SIGMA_CUTOFF);
+        const peak = (image) => image[((W / 2) * W + W / 2) * 4];
+        for (const f of [0.3, 0.05]) {
+            const expected = 255 * (s2 / (s2 + f)) * (Math.exp(-0.25 / (s2 + f)) - floor);
+            const aa = peak(await render(await makeScene(null, { sigma, model: 'antialiased' }), 'resident', true, f));
+            assert.ok(Math.abs(aa - expected) <= 2, `antiAliasFilterSize ${f}: ${aa} vs ${expected.toFixed(1)}`);
+        }
+        // a scene not trained with anti-aliasing keeps the 0.3 px² dilation
+        const plain = peak(await render(await makeScene(null, { sigma }), 'resident', true, 0.05));
+        assert.ok(Math.abs(plain - 255 * (Math.exp(-0.25 / (s2 + 0.3)) - floor)) <= 2, `plain: ${plain}`);
+    });
 });
 
 describe('plateau core', () => {

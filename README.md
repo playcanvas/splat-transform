@@ -266,6 +266,8 @@ Apply when writing `.webp` (lossless WebP rendered via GPU rasterizer).
     --resolution       <WxH>            Output resolution, e.g. 1920x1080. Default: 1280x720 (pinhole) or 2048x1024 (equirect)
     --camera-near      <n>              Near clip distance. Default: 0.2 (matches reference 3DGS)
     --background       <r,g,b[,a]>      Background color in [0,1]. Default: 0,0,0,1
+    --aa-filter-size   <px²>            Screen-space filter of scenes trained with anti-aliasing (splat model
+                                          antialiased), used in place of the 0.3 px² dilation. Default: 0.1
     --f-stop           <N>              Aperture as a photographic f-stop (e.g. 2.8, 5.6, 11). Enables defocus blur;
                                         smaller = more blur. Pinhole only. Default: disabled (no defocus).
     --focus-distance   <n>              Camera-space Z of the focus plane (world units). Default: distance to --camera-target.
