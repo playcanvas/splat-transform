@@ -56,14 +56,12 @@ type MetaV2 = {
     comments?: string[];
 };
 
-// The `other`-layer columns a V3 meta implies: the true opacity when its stored
-// opacity reaches above 1, and each blind field under its recorded name (integer
-// encodings as uint32, the rest as float32).
+// The `other`-layer columns a V3 meta implies: each blind field under its recorded
+// name (integer encodings as uint32, the rest as float32), then the true opacity
+// when its stored opacity reaches above 1 — last, where withOpacityLinear appends
+// it, so sources with and without it line up when combined.
 const extraColumnsFromMeta = (meta: MetaV2): ExtraColumn[] => {
     const extras: ExtraColumn[] = [];
-    if (meta.version === 3 && (meta.opacity?.max ?? 1) > 1) {
-        extras.push({ name: OPACITY_LINEAR_COLUMN, type: 'float32' });
-    }
     if (meta.version === 3 && meta.blind) {
         for (const texture of meta.blind) {
             for (const f of texture.fields) {
@@ -72,6 +70,9 @@ const extraColumnsFromMeta = (meta: MetaV2): ExtraColumn[] => {
                 extras.push({ name: f.name, type: isIntegerEncoding(f.type) ? 'uint32' : 'float32' });
             }
         }
+    }
+    if (meta.version === 3 && (meta.opacity?.max ?? 1) > 1) {
+        extras.push({ name: OPACITY_LINEAR_COLUMN, type: 'float32' });
     }
     return extras;
 };

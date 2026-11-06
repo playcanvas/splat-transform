@@ -1,8 +1,10 @@
+import { OPACITY_LINEAR_COLUMN } from '../chunk';
 import type { ChunkDataPool, ChunkSource } from '../chunk';
 import { withComments } from '../comments';
 import { withExtras } from '../extras';
 import { dirname, join, readFile } from '../io/read';
 import type { ReadFileSystem } from '../io/read';
+import { withOpacityLinear } from '../ops';
 import { isSplatModel } from '../splat-model';
 import type { SplatModel } from '../splat-model';
 import type { Options } from '../types';
@@ -10,7 +12,7 @@ import { logger } from '../utils';
 
 import { containerSource } from './container-source';
 import type { ContainerSegment } from './container-source';
-import { readSogSource } from './read-sog';
+import { readSogSource, statSogSource } from './read-sog';
 
 type LodReference = {
     file: number;
@@ -168,17 +170,29 @@ const readLodSource = async (
     }
 
     const filesByLod = collectFilesByLod(meta, filename);
+    const filesOf = (lod: number) => [...(filesByLod.get(lod)?.entries() ?? [])].sort(([a], [b]) => a - b);
+
+    // Units carry opacity_linear only when they hold opacity above 1, but the container takes one
+    // layout for all of them: when any selected unit has the column, every unit is given it (the
+    // rest read as sigmoid(opacity)). Only each unit's meta.json is read to find out.
+    const paths = [...new Set(inputLods.flatMap((lod) => filesOf(lod).map(([file]) => related(meta.filenames[file]))))];
+    let anyLinear = false;
+    for (let i = 0; i < paths.length && !anyLinear; i += 16) {
+        const stats = await Promise.all(paths.slice(i, i + 16).map((path) => statSogSource(fileSystem, path)));
+        anyLinear = stats.some((stat) => stat?.extraColumns.some((c) => c.name === OPACITY_LINEAR_COLUMN));
+    }
+
     const segmentsByLod = inputLods.map((lod): ContainerSegment[] => {
-        const files = filesByLod.get(lod);
-        return [...(files?.entries() ?? [])]
-            .sort(([a], [b]) => a - b)
-            .map(([file, count]) => {
-                const path = related(meta.filenames[file]);
-                return {
-                    count,
-                    decode: () => readSogSource(fileSystem, path, pool, { logging: 'silent' })
-                };
-            });
+        return filesOf(lod).map(([file, count]) => {
+            const path = related(meta.filenames[file]);
+            return {
+                count,
+                decode: async () => {
+                    const source = await readSogSource(fileSystem, path, pool, { logging: 'silent' });
+                    return anyLinear ? withOpacityLinear(source, pool) : source;
+                }
+            };
+        });
     });
 
     // the scene's extras and comments live in lod-meta.json, not in its units; the model recorded

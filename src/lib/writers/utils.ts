@@ -1,5 +1,6 @@
 import { extname } from 'pathe';
 
+import { producerComments } from '../comments';
 import type { SplatModel } from '../splat-model';
 import { fmtBytes, logger } from '../utils';
 
@@ -24,14 +25,16 @@ const splatModelComment = (model: SplatModel): string | null => {
 };
 
 /**
- * A scene's comments as PLY header lines. A header line cannot hold a line
- * break, so any (from a SOG meta.json, say) becomes a space.
+ * A scene's comments as PLY header lines, without model tags or a generator
+ * line (see {@link producerComments}): the writer's own model tag decides the
+ * model. A header line cannot hold a line break, so any (from a SOG meta.json,
+ * say) becomes a space.
  *
  * @param comments - The scene's comments.
  * @returns The `comment ...` header lines.
  */
 const plyCommentLines = (comments: readonly string[] | undefined): string[] => {
-    return (comments ?? []).map((c) => `comment ${c.replace(/[\r\n]+/g, ' ')}`);
+    return producerComments((comments ?? []).map((c) => c.replace(/[\r\n]+/g, ' '))).map((c) => `comment ${c}`);
 };
 
 /**

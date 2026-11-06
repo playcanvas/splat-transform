@@ -658,7 +658,8 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
         if (mainSource.meta.comments?.length) meta.comments = mainSource.meta.comments;
     }
 
-    // write the meta file with float precision quantization (approx. 32-bit float => ~7 significant digits)
+    // the meta file's own floats are quantized (approx. 32-bit float => ~7 significant digits); the
+    // application's extras are written as given
     const replacer = (_key: string, value: unknown) => {
         if (typeof value === 'number') {
             if (!Number.isFinite(value)) return value;
@@ -666,6 +667,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
         }
         return value;
     };
+    const quantize = <T>(value: T): T => JSON.parse(JSON.stringify(value, replacer));
 
     const writingGroup = logger.group('Writing');
 
@@ -727,7 +729,9 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     }
 
     // write lod-meta.json
-    const metaJson = new TextEncoder().encode(JSON.stringify(meta, replacer));
+    const metaJson = new TextEncoder().encode(
+        JSON.stringify({ ...meta, asset: quantize(meta.asset), tree: quantize(meta.tree) })
+    );
     const writer = await fs.createWriter(filename);
     await writer.write(metaJson);
     await writer.close();

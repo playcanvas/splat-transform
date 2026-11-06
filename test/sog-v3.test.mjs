@@ -441,3 +441,68 @@ describe('SOG v3 SH palette', () => {
         await assert.rejects(roundTrip(makeData(), { version: 2, paletteSize: 80000 }), /palette size/);
     });
 });
+
+describe('opacity_linear across SOG sources', () => {
+    // A SOG of `n` gaussians with blind column `id`, and opacity above 1 when `over`; plus its files.
+    const openSog = async (n, over, pool) => {
+        const dt = createTestDataTable(n);
+        dt.addColumn(new Column('id', Uint32Array.from({ length: n }, (_, i) => i)));
+        if (over) dt.addColumn(new Column('opacity_linear', new Float32Array(n).fill(1.5)));
+        const fs = new MemoryFileSystem();
+        await writeSogSource(await plySource(dt, pool), pool, {
+            filename: 'out.sog', bundle: true, iterations: 3, logging: 'silent', blind: [[{ column: 'id', encoding: 'u16' }]]
+        }, fs);
+        const rfs = new MemoryReadFileSystem();
+        rfs.set('out.sog', fs.results.get('out.sog'));
+        return readSogSource(new ZipReadFileSystem(await rfs.createSource('out.sog')), 'meta.json', pool);
+    };
+
+    it('reads the column after the blind fields, where withOpacityLinear adds it, so combining accepts both', async () => {
+        const { concatSource, stackLods } = await import('../src/lib/ops/index.js');
+        const pool = createChunkDataPool();
+        const a = await openSog(64, true, pool);
+        const b = await openSog(32, false, pool);
+        const names = (s) => s.meta.extraColumns.map((c) => c.name);
+        assert.deepStrictEqual(names(a), ['id', 'opacity_linear']);
+        assert.deepStrictEqual(names(concatSource([a, b], pool)), ['id', 'opacity_linear']);
+        assert.deepStrictEqual(names(stackLods([b, a], pool)), ['id', 'opacity_linear']);
+    });
+});
+
+describe('opacity_linear in streamed scenes', () => {
+    it('keeps opacity above 1 in a level whose units have it when the first level\'s do not', async () => {
+        const { stackLods } = await import('../src/lib/ops/index.js');
+        const { dataTableToChunkSource } = await import('../src/lib/compat/data-table.js');
+        const { writeLodSource } = await import('../src/lib/writers/write-lod.js');
+        const { readLodSource } = await import('../src/lib/readers/read-lod.js');
+        const pool = createChunkDataPool();
+        const fine = dataTableToChunkSource(createTestDataTable(64), pool.chunkSize);
+        const coarseTable = createTestDataTable(16);
+        coarseTable.addColumn(new Column('opacity_linear', new Float32Array(16).fill(1.5)));
+        const coarse = dataTableToChunkSource(coarseTable, pool.chunkSize);
+
+        const fs = new MemoryFileSystem();
+        await writeLodSource({
+            filename: '/scene/lod-meta.json', mainSource: stackLods([fine, coarse], pool), envSource: null,
+            iterations: 1, chunkCount: 1, chunkExtent: 16
+        }, fs);
+        const rfs = new MemoryReadFileSystem();
+        for (const [path, bytes] of fs.results) rfs.set(path, bytes);
+        const lod = await readLodSource(rfs, '/scene/lod-meta.json', {}, pool);
+
+        const field = lod.meta.layouts.other?.fields.opacity_linear;
+        assert.ok(field, 'the scene carries opacity_linear');
+        const sw = lod.meta.layouts.other.stride >> 2;
+        const readLinear = async (level, count) => {
+            const o = pool.acquire('other', lod.meta.layouts.other, count);
+            await lod.read({ chunkIndex: 0, lod: level, other: o });
+            const w = new Float32Array(o.data, 0, count * sw);
+            const values = Array.from({ length: count }, (_, i) => w[i * sw + (field.byteOffset >> 2)]);
+            o.release();
+            return values;
+        };
+        assert.ok((await readLinear(1, 16)).every((a) => Math.abs(a - decodeOpacityByte(encodeOpacityByte(1.5))) < 1e-6), 'level 1 keeps A = 1.5');
+        assert.ok((await readLinear(0, 64)).every((a) => a > 0 && a <= 1), 'level 0 reads its own opacity');
+        await lod.close();
+    });
+});
