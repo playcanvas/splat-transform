@@ -132,6 +132,9 @@ Actions execute in the order specified and can be repeated. Any action may appea
                                           second invocation). A deep target on a huge scene needs
                                           --scratch-dir for its intermediate levels; nothing is
                                           written to disk without it.
+    --decimate-adaptive <n|n%>          Simplify, allocating removal by local error (adaptive).
+                                          Much better on mixed-scale content such as skies.
+                                          Either must be the final action, with a .ply output
     --scratch-dir      <path>           Directory for decimation intermediates (explicit only)
 -F, --filter-floaters  [size,op,min]    Remove Gaussians not contributing to any solid voxel.
                                           Evaluates each Gaussian at occupied voxel centers.
@@ -175,6 +178,8 @@ Used by SOG compression and GPU voxelization (`--filter-cluster`, `--filter-floa
 -g, --gpu              <n|cpu>          Device for GPU operations: GPU adapter index | 'cpu'
                                           ('cpu' disables GPU and is incompatible with
                                           GPU-only features like --filter-cluster)
+    --gpu-backend      <name>           Force the WebGPU backend: vulkan | d3d12 | metal. Default: platform default
+                                          (e.g. vulkan works around Dawn D3D12 bugs on Windows)
 ```
 
 ### SOG Compression Options
@@ -186,6 +191,16 @@ Apply when writing `.sog`, `meta.json`, `lod-meta.json`, or `.html` outputs.
     --sh-palette-size  <n>              SH palette entries for .sog / meta.json (more=better, slower). Up to 262144
                                           with SOG v3, 65536 with v2. Default: one per 1024 gaussians, at most 65536
     --max-workers      <n>              Worker threads for SOG encoding (0 = inline/serial). Default: 4
+    --sog-version      <2|3>            SOG format version to write. 2 is for older viewers: it drops excess
+                                          opacity, blind data and a 4th SH band. Default: 3 (.html always embeds 2)
+    --sog-blind        <field>[,...]    Store columns as per-gaussian blind data (v3): one blind texture per flag,
+                                          its fields filling 4 bytes (R,G,B,A) in order. field = <col>[:<enc>]
+                                          enc: u8 u16 u24 u32 (unsigned integers), f16 f32 (float bits),
+                                          unorm8 unorm16 (float in [0,1], or unorm8[min,max]). Default: the
+                                          fewest-byte uint that fits. Repeatable, e.g. --sog-blind id
+                                          --sog-blind a:unorm8,b:unorm8,depth:f16
+    --sog-extras       <file.json>      Store this JSON as the output's extras (meta.json / lod-meta.json),
+                                          application-defined data as in glTF. Default: the input's extras, if any
 ```
 
 ### SPZ Output Options
@@ -224,6 +239,7 @@ Apply when writing `lod-meta.json` (multi-LOD streaming SOG bundle).
     --lod-chunk-count  <n>              Approximate number of Gaussians per LOD chunk in K. Default: 512
     --lod-chunk-extent <n>              Approximate size of an LOD chunk in world units (m). Default: 16
     --lod-chunk-min    <n>              Gaussians in K below which a chunk is not split for extent. Default: 8
+    --lod-file-count   <n,n,...>        Gaussians in K per LOD file, per level from finest; the last repeats. Default: --lod-chunk-count
 ```
 
 A chunk is split when it holds more than `--lod-chunk-count` Gaussians, or when it is wider than `--lod-chunk-extent` and holds more than `--lod-chunk-min`. The minimum keeps sparse regions such as sky or distant background from being cut into thousands of near-empty chunks: below it a region stays one chunk however wide it is. Dense regions are unaffected.
@@ -270,6 +286,8 @@ Apply when writing `.webp` (lossless WebP rendered via GPU rasterizer).
     --resolution       <WxH>            Output resolution, e.g. 1920x1080. Default: 1280x720 (pinhole) or 2048x1024 (equirect)
     --camera-near      <n>              Near clip distance. Default: 0.2 (matches reference 3DGS)
     --background       <r,g,b[,a]>      Background color in [0,1]. Default: 0,0,0,1
+    --no-compensation                   Ignore excess opacity (opacity_excess from decimation) and draw every
+                                          gaussian at opacity <= 1. For debugging and A/B comparison.
     --aa-filter-size   <px²>            Screen-space filter of scenes trained with anti-aliasing (splat model
                                           antialiased), used in place of the 0.3 px² dilation. Default: 0.1
     --f-stop           <N>              Aperture as a photographic f-stop (e.g. 2.8, 5.6, 11). Enables defocus blur;
