@@ -45,6 +45,13 @@ type ChunkSourceMetadata = {
      * passed through and written back. Absent when the scene has none.
      */
     readonly extras?: unknown;
+    /**
+     * Free-form producer comments carried by the scene (PLY header `comment` lines,
+     * SOG `meta.json` / `lod-meta.json` `comments`), e.g. `Postshot v1.1.69` or
+     * `postshot.color.eotf=sRGB`. Passed through verbatim and written back; ones that
+     * describe coordinates are not updated by transforms. Absent when there are none.
+     */
+    readonly comments?: readonly string[];
 };
 
 /**

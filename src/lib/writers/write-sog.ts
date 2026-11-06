@@ -189,6 +189,11 @@ type WriteSogSourceOptions = {
      */
     extras?: unknown;
     /**
+     * Producer comments for meta.json's `comments` (e.g. a PLY's header comments).
+     * Undefined writes the source's comments, if any; null writes none.
+     */
+    comments?: readonly string[] | null;
+    /**
      * SH palette entries. Default: about one per 1024 gaussians, at most 65536. Above 65536 needs
      * v3 (24-bit labels), up to {@link MAX_SH_PALETTE}.
      */
@@ -358,6 +363,8 @@ type SogWriteState = {
     blind: ResolvedBlindTexture[];
     /** meta.json `extras`, or undefined for none. */
     extras: unknown;
+    /** meta.json `comments`, or undefined for none. */
+    comments: readonly string[] | undefined;
     // k-means iterations completed so far, and where to report further ones
     progress: { done: number; report: ((done: number) => void) | null };
 };
@@ -379,7 +386,7 @@ const startSogWrite = async (
     pool: ChunkDataPool,
     options: Pick<
         WriteSogSourceOptions,
-        'iterations' | 'createDevice' | 'indices' | 'version' | 'blind' | 'extras' | 'paletteSize'
+        'iterations' | 'createDevice' | 'indices' | 'version' | 'blind' | 'extras' | 'comments' | 'paletteSize'
     >
 ): Promise<SogWriteState> => {
     const { iterations, createDevice } = options;
@@ -516,6 +523,7 @@ const startSogWrite = async (
         shCluster,
         blind,
         extras: options.extras === null ? undefined : (options.extras ?? meta.extras),
+        comments: options.comments === null ? undefined : (options.comments ?? meta.comments),
         progress
     };
 };
@@ -831,7 +839,8 @@ const finishSogWrite = async (
                   ...(opacityMax > 1 ? { opacity: { max: opacityMax } } : {}),
                   ...(shN ? { shN } : {}),
                   ...(blindMeta.length > 0 ? { blind: blindMeta } : {}),
-                  ...(state.extras !== undefined ? { extras: state.extras } : {})
+                  ...(state.extras !== undefined ? { extras: state.extras } : {}),
+                  ...(state.comments?.length ? { comments: state.comments } : {})
               }
             : {
                   version: 2,
@@ -844,7 +853,8 @@ const finishSogWrite = async (
                   quats: { files: ['quats.webp'] },
                   sh0: { codebook: colorsCodebook, files: ['sh0.webp'] },
                   ...(shN ? { shN } : {}),
-                  ...(state.extras !== undefined ? { extras: state.extras } : {})
+                  ...(state.extras !== undefined ? { extras: state.extras } : {}),
+                  ...(state.comments?.length ? { comments: state.comments } : {})
               };
         const metaJson = new TextEncoder().encode(JSON.stringify(metaObj));
         const metaFilename = zipFs ? 'meta.json' : outputFilename;

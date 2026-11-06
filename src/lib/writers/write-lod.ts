@@ -61,6 +61,7 @@ type LodMeta = {
     filenames: string[];
     tree: MetaNode;
     extras?: unknown;
+    comments?: readonly string[];
 };
 
 const boundUnion = (result: Aabb, a: Aabb, b: Aabb) => {
@@ -651,6 +652,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     };
     const lodExtras = extras === null ? undefined : (extras ?? mainSource.meta.extras);
     if (lodExtras !== undefined) meta.extras = lodExtras;
+    if (mainSource.meta.comments?.length) meta.comments = mainSource.meta.comments;
 
     // write the meta file with float precision quantization (approx. 32-bit float => ~7 significant digits)
     const replacer = (_key: string, value: unknown) => {
@@ -708,8 +710,9 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
                             fields.filter((f) => envSource!.meta.extraColumns.some((c) => c.name === f.column))
                         )
                         .filter((fields) => fields.length > 0),
-                    // the scene's extras live in lod-meta.json only
+                    // the scene's extras and comments live in lod-meta.json only
                     extras: null,
+                    comments: null,
                     logging: 'flat'
                 },
                 fs
@@ -774,7 +777,8 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
                 indices: identity,
                 version: sogVersion,
                 blind: sogBlind,
-                extras: null
+                extras: null,
+                comments: null
             })
         };
     };

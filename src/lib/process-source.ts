@@ -1,4 +1,5 @@
 import type { ChunkDataPool, ChunkSource } from './chunk';
+import { withComments } from './comments';
 import { dataTableToChunkSource, materializeToDataTable } from './compat/data-table';
 import { withExtras } from './extras';
 import {
@@ -170,10 +171,13 @@ const processSourceBridged = async (
             // the run on the table, and re-bridge back to a source to keep going.
             const dt = await materializeToDataTable(src, pool);
             await src.close();
-            // the table carries no extras; re-attach the scene's
-            src = withExtras(
-                dataTableToChunkSource(await processDataTable(dt, run, options), pool.chunkSize),
-                src.meta.extras
+            // the table carries no extras or comments; re-attach the scene's
+            src = withComments(
+                withExtras(
+                    dataTableToChunkSource(await processDataTable(dt, run, options), pool.chunkSize),
+                    src.meta.extras
+                ),
+                src.meta.comments
             );
         }
         i = j;

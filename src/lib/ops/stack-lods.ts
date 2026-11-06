@@ -1,5 +1,6 @@
 import { OPACITY_EXCESS_COLUMN } from '../chunk';
 import type { ChunkDataPool, ChunkLayer, ChunkSource, ChunkSourceMetadata, ReadRequest } from '../chunk';
+import { resolveComments } from '../comments';
 import { resolveExtras } from '../extras';
 
 import { withOpacityExcess } from './opacity-excess-source';
@@ -70,10 +71,12 @@ const stackLods = (inputs: ChunkSource[], pool?: ChunkDataPool): ChunkSource => 
 
     const lodCounts = sources.map((s) => s.meta.numGaussians);
     const extras = resolveExtras(sources);
-    const { extras: _refExtras, ...refMeta } = ref;
+    const comments = resolveComments(sources);
+    const { extras: _refExtras, comments: _refComments, ...refMeta } = ref;
     const meta: ChunkSourceMetadata = {
         ...refMeta,
         ...(extras !== undefined ? { extras } : {}),
+        ...(comments?.length ? { comments } : {}),
         numGaussians: lodCounts[0],
         numLods: sources.length,
         lodCounts,

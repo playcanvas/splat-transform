@@ -449,7 +449,8 @@ const decimateSource = async (input: ChunkSource, pool: ChunkDataPool, opts: Dec
                 availableLayers: src.meta.availableLayers,
                 layouts: src.meta.layouts,
                 // generations can spill through PLY, which has no extras: carry the input's
-                ...(input.meta.extras !== undefined ? { extras: input.meta.extras } : {})
+                ...(input.meta.extras !== undefined ? { extras: input.meta.extras } : {}),
+                ...(input.meta.comments !== undefined ? { comments: input.meta.comments } : {})
             };
 
             const isFinal = outCount <= targetCount;

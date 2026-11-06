@@ -1,4 +1,5 @@
 import type { ChunkDataPool, ChunkSource } from '../chunk';
+import { withComments } from '../comments';
 import { withExtras } from '../extras';
 import { dirname, join, readFile } from '../io/read';
 import type { ReadFileSystem } from '../io/read';
@@ -32,6 +33,7 @@ type LodMeta = {
     filenames: string[];
     tree: LodNode;
     extras?: unknown;
+    comments?: string[];
 };
 
 // An unrecognized model reads as 'default', as in SOG meta.json.
@@ -179,15 +181,18 @@ const readLodSource = async (
             });
     });
 
-    // the scene's extras live in lod-meta.json, not in its units; the model recorded for the whole
-    // tree wins over the files' own, and without one the files decide
-    return withExtras(
-        await containerSource(
-            segmentsByLod,
-            pool,
-            meta.model === undefined ? {} : { model: modelFromLodMeta(meta.model) }
+    // the scene's extras and comments live in lod-meta.json, not in its units; the model recorded
+    // for the whole tree wins over the files' own, and without one the files decide
+    return withComments(
+        withExtras(
+            await containerSource(
+                segmentsByLod,
+                pool,
+                meta.model === undefined ? {} : { model: modelFromLodMeta(meta.model) }
+            ),
+            meta.extras
         ),
-        meta.extras
+        Array.isArray(meta.comments) ? meta.comments.map(String) : undefined
     );
 };
 

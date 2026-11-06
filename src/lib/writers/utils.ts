@@ -24,6 +24,17 @@ const splatModelComment = (model: SplatModel): string | null => {
 };
 
 /**
+ * A scene's comments as PLY header lines. A header line cannot hold a line
+ * break, so any (from a SOG meta.json, say) becomes a space.
+ *
+ * @param comments - The scene's comments.
+ * @returns The `comment ...` header lines.
+ */
+const plyCommentLines = (comments: readonly string[] | undefined): string[] => {
+    return (comments ?? []).map((c) => `comment ${c.replace(/[\r\n]+/g, ' ')}`);
+};
+
+/**
  * Emit a single `Writing`-group entry as `<filename> (<formatted size>)`.
  *
  * Lives here (rather than in `io/write/`) so the low-level I/O layer stays
@@ -53,4 +64,4 @@ const frameFilename = (filename: string, frame: number, lastFrame: number): stri
     return `${filename.slice(0, filename.length - ext.length)}.${String(frame).padStart(digits, '0')}${ext}`;
 };
 
-export { frameFilename, logWrittenFile, splatModelComment };
+export { frameFilename, logWrittenFile, plyCommentLines, splatModelComment };

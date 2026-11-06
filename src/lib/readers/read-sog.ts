@@ -53,6 +53,7 @@ type MetaV2 = {
     shN?: { count: number; bands: number; codebook: number[]; files: string[] };
     blind?: { files: string[]; fields: { name: string; type: string; range?: [number, number] }[] }[];
     extras?: unknown;
+    comments?: string[];
 };
 
 // The `other`-layer columns a V3 meta implies: excess opacity when its stored
@@ -311,7 +312,8 @@ const readSogSourceV2 = async (
         transform: Transform.PLY.clone(),
         availableLayers,
         layouts,
-        ...(meta.extras !== undefined ? { extras: meta.extras } : {})
+        ...(meta.extras !== undefined ? { extras: meta.extras } : {}),
+        ...(Array.isArray(meta.comments) && meta.comments.length > 0 ? { comments: meta.comments.map(String) } : {})
     };
 
     // Expand source gaussian `g` into output row `r` of the requested layers.

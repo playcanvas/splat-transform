@@ -4,7 +4,7 @@ import type { FileSystem } from '../io/write';
 import { bakeTransform } from '../ops';
 import { logger, Transform } from '../utils';
 
-import { splatModelComment } from './utils';
+import { plyCommentLines, splatModelComment } from './utils';
 
 const GEOMETRIC_COLS = ['rot_0', 'rot_1', 'rot_2', 'rot_3', 'scale_0', 'scale_1', 'scale_2', 'opacity'];
 
@@ -119,12 +119,13 @@ const writePlyStreaming = async (
         c = e;
     }
 
-    // Header: the model tag (when any), then a single vertex element.
+    // Header: the model tag (when any) and the scene's comments, then a single vertex element.
     const modelComment = splatModelComment(meta.model);
     const header = [
         'ply',
         'format binary_little_endian 1.0',
         ...(modelComment ? [`comment ${modelComment}`] : []),
+        ...plyCommentLines(meta.comments),
         `element vertex ${N}`,
         ...columns.map((c) => `property ${plyType(c.uint)} ${c.name}`),
         'end_header'

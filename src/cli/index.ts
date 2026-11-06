@@ -53,6 +53,7 @@ import type {
 // CLI-only internals (deliberately off the public lib surface): the LOD-path
 // level resolver and the container source readers the LOD writer drives
 // directly (single-scene callers get these via readFile).
+import { resolveComments, withComments } from '../lib/comments';
 import { resolveExtras, withExtras } from '../lib/extras';
 import { resolveLodLevels } from '../lib/ops';
 import { readLccSource, readLccEnvironmentSource } from '../lib/readers/read-lcc';
@@ -1460,9 +1461,12 @@ const main = async () => {
                     dts.push(await materializeToDataTable(s, pool));
                     await s.close();
                 }
-                return withExtras(
-                    dataTableToChunkSource(combine(dts), pool.chunkSize, undefined, model),
-                    resolveExtras(sources)
+                return withComments(
+                    withExtras(
+                        dataTableToChunkSource(combine(dts), pool.chunkSize, undefined, model),
+                        resolveExtras(sources)
+                    ),
+                    resolveComments(sources)
                 );
             };
 

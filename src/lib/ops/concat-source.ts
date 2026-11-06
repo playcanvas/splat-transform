@@ -1,5 +1,6 @@
 import { OPACITY_EXCESS_COLUMN } from '../chunk';
 import type { ChunkData, ChunkDataPool, ChunkLayer, ReadRequest, ChunkSource, ChunkSourceMetadata } from '../chunk';
+import { resolveComments } from '../comments';
 import { resolveExtras } from '../extras';
 import { resolveSplatModel } from '../splat-model';
 import { logger } from '../utils';
@@ -105,10 +106,12 @@ const concatSource = (inputs: ChunkSource[], pool: ChunkDataPool): ChunkSource =
     }
 
     const extras = resolveExtras(sources);
-    const { extras: _refExtras, ...refMeta } = ref;
+    const comments = resolveComments(sources);
+    const { extras: _refExtras, comments: _refComments, ...refMeta } = ref;
     const meta: ChunkSourceMetadata = {
         ...refMeta,
         ...(extras !== undefined ? { extras } : {}),
+        ...(comments?.length ? { comments } : {}),
         model,
         numGaussians: total,
         numLods: 1,
