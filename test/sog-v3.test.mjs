@@ -347,10 +347,11 @@ describe('SOG extras', () => {
         return { zip, meta: JSON.parse(new TextDecoder().decode(await readRawFile(zip, 'meta.json'))) };
     };
 
-    it('writes the source extras, an explicit value, or none (null), in v3 and v2', async () => {
+    it('writes the source extras, an explicit value, or none (null), in v3 only', async () => {
         const { src, pool } = await sourceWith(extras);
         assert.deepStrictEqual((await write(src, pool)).meta.extras, extras);
-        assert.deepStrictEqual((await write(src, pool, { version: 2 })).meta.extras, extras);
+        assert.strictEqual('extras' in (await write(src, pool, { version: 2 })).meta, false, 'v2 output stays as released');
+        assert.strictEqual('extras' in (await write(src, pool, { version: 2, extras: { other: true } })).meta, false, 'even when given');
         assert.deepStrictEqual((await write(src, pool, { extras: { other: true } })).meta.extras, { other: true });
         assert.strictEqual((await write(src, pool, { extras: null })).meta.extras, undefined);
         const plain = await sourceWith(undefined);

@@ -24,6 +24,7 @@ import {
     resolveSplatModel, writeSource
 } from '../src/lib/index.js';
 import { withComments } from '../src/lib/comments.js';
+import { withExtras } from '../src/lib/extras.js';
 import { concatSource } from '../src/lib/ops/index.js';
 import { readLodSource } from '../src/lib/readers/read-lod.js';
 import { readPly, splatModelFromComments } from '../src/lib/readers/read-ply.js';
@@ -386,16 +387,18 @@ describe('producer comments', () => {
         assert.match(cply, /comment Postshot v1\.1\.69\ncomment postshot\.color\.eotf=sRGB\n/);
     });
 
-    it('are a SOG v3 addition: v2 meta.json and a v2 streamed scene\'s lod-meta.json have none', async () => {
+    it('are, like extras, a SOG v3 addition: v2 meta.json and a v2 streamed scene\'s lod-meta.json have neither', async () => {
         const { source, pool } = await openPly(createTestDataTable(16), POSTSHOT);
         const fs = new MemoryFileSystem();
-        await writeSource({ filename: 'meta.json', outputFormat: 'sog', source, pool, options: { sogVersion: 2 } }, fs);
-        assert.ok(!('comments' in JSON.parse(Buffer.from(fs.results.get('meta.json')).toString())), 'v2 meta.json has no comments');
+        await writeSource({ filename: 'meta.json', outputFormat: 'sog', source: withExtras(source, { app: 1 }), pool, options: { sogVersion: 2 } }, fs);
+        const meta = JSON.parse(Buffer.from(fs.results.get('meta.json')).toString());
+        assert.ok(!('comments' in meta) && !('extras' in meta), 'v2 meta.json has no comments or extras');
 
         const { source: s2 } = await openPly(createTestDataTable(16), POSTSHOT);
         const lfs = new MemoryFileSystem();
-        await writeLodSource({ filename: '/scene/lod-meta.json', mainSource: s2, envSource: null, iterations: 1, chunkCount: 1, chunkExtent: 16, sogVersion: 2 }, lfs);
-        assert.ok(!('comments' in lodMetaOf(lfs.results)), 'a v2 streamed scene\'s lod-meta.json has no comments');
+        await writeLodSource({ filename: '/scene/lod-meta.json', mainSource: withExtras(s2, { app: 1 }), envSource: null, iterations: 1, chunkCount: 1, chunkExtent: 16, sogVersion: 2 }, lfs);
+        const lodMeta = lodMetaOf(lfs.results);
+        assert.ok(!('comments' in lodMeta) && !('extras' in lodMeta), 'a v2 streamed scene\'s lod-meta.json has no comments or extras');
     });
 
     it('store them once in lod-meta.json, not in the units, and read them back', async () => {

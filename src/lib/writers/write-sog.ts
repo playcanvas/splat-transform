@@ -185,12 +185,12 @@ type WriteSogSourceOptions = {
     blind?: SogBlindTexture[];
     /**
      * Application-defined JSON for meta.json's `extras` (as in glTF). Undefined
-     * writes the source's extras, if any; null writes none.
+     * writes the source's extras, if any; null writes none. v3 only.
      */
     extras?: unknown;
     /**
      * Producer comments for meta.json's `comments` (e.g. a PLY's header comments).
-     * Undefined writes the source's comments, if any; null writes none.
+     * Undefined writes the source's comments, if any; null writes none. v3 only.
      */
     comments?: readonly string[] | null;
     /**
@@ -852,8 +852,8 @@ const finishSogWrite = async (
                   scales: { codebook: scalesCodebook, files: ['scales.webp'] },
                   quats: { files: ['quats.webp'] },
                   sh0: { codebook: colorsCodebook, files: ['sh0.webp'] },
-                  ...(shN ? { shN } : {}),
-                  ...(state.extras !== undefined ? { extras: state.extras } : {})
+                  // extras and comments are v3 additions: v2 output stays as released
+                  ...(shN ? { shN } : {})
               };
         const metaJson = new TextEncoder().encode(JSON.stringify(metaObj));
         const metaFilename = zipFs ? 'meta.json' : outputFilename;

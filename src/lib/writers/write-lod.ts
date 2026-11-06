@@ -446,7 +446,8 @@ type WriteLodSourceOptions = {
     sogBlind?: SogBlindTexture[];
     /**
      * Application-defined JSON for lod-meta.json's `extras` (as in glTF). Undefined writes
-     * the main source's extras, if any; null writes none. Units never carry extras.
+     * the main source's extras, if any; null writes none. Units never carry extras. Written
+     * only with SOG v3 units.
      */
     extras?: unknown;
     chunkCount: number;
@@ -650,10 +651,12 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
         filenames,
         tree
     };
-    const lodExtras = extras === null ? undefined : (extras ?? mainSource.meta.extras);
-    if (lodExtras !== undefined) meta.extras = lodExtras;
-    // comments are a SOG v3 addition: a scene written as v2 keeps the v2-era lod-meta.json
-    if ((sogVersion ?? 3) === 3 && mainSource.meta.comments?.length) meta.comments = mainSource.meta.comments;
+    // extras and comments are SOG v3 additions: a scene written as v2 keeps the v2-era lod-meta.json
+    if ((sogVersion ?? 3) === 3) {
+        const lodExtras = extras === null ? undefined : (extras ?? mainSource.meta.extras);
+        if (lodExtras !== undefined) meta.extras = lodExtras;
+        if (mainSource.meta.comments?.length) meta.comments = mainSource.meta.comments;
+    }
 
     // write the meta file with float precision quantization (approx. 32-bit float => ~7 significant digits)
     const replacer = (_key: string, value: unknown) => {

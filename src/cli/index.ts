@@ -997,8 +997,9 @@ SOG COMPRESSION (.sog, meta.json, lod-meta.json, .html outputs)
                                               unorm8 unorm16 (float in [0,1], or unorm8[min,max]). Default: the
                                               fewest-byte uint that fits. Repeatable, e.g. --sog-blind id
                                               --sog-blind a:unorm8,b:unorm8,depth:f16
-        --sog-extras       <file.json>      Store this JSON as the output's extras (meta.json / lod-meta.json),
-                                              application-defined data as in glTF. Default: the input's extras, if any
+        --sog-extras       <file.json>      Store this JSON as the output's extras (meta.json / lod-meta.json,
+                                              SOG v3 only), application-defined data as in glTF. Default: the input's
+                                              extras, if any
 
 SPZ OUTPUT (.spz)
         --spz-version      <3|4>            The SPZ format version to write. Default: 4
