@@ -44,12 +44,10 @@ const readLayers = async (src, pool, wanted) => {
     return out;
 };
 
-const sigmoid = x => 1 / (1 + Math.exp(-x));
-
 const stats = (geo, n) => {
     let opSum = 0, opSq = 0, scSum = 0;
     for (let i = 0; i < n; i++) {
-        const op = sigmoid(geo[i * 8 + 7]);
+        const op = geo[i * 8 + 7]; // true opacity
         opSum += op;
         opSq += op * op;
         scSum += (geo[i * 8 + 4] + geo[i * 8 + 5] + geo[i * 8 + 6]) / 3;
@@ -74,7 +72,7 @@ describe('decimateSourceAdaptive', () => {
             assert.ok(Math.abs(qn - 1) < 1e-3, `row ${i} quat unit (${qn})`);
             for (let c = 0; c < 8; c++) assert.ok(Number.isFinite(geo[i * 8 + c]), `row ${i} geo[${c}] finite`);
             for (let c = 0; c < 3; c++) assert.ok(Number.isFinite(pos[i * 3 + c]), `row ${i} pos[${c}] finite`);
-            assert.ok(sigmoid(geo[i * 8 + 7]) <= 1 + 1e-9, `row ${i} opacity <= 1`);
+            assert.ok(geo[i * 8 + 7] >= 0, `row ${i} opacity >= 0`); // merges may exceed 1
         }
     });
 
@@ -137,11 +135,11 @@ describe('decimateSourceAdaptive', () => {
             extraColumns: [{ name: 'tag', type: 'uint32' }]
         });
         const out = await decimateSourceAdaptive(source, pool, { targetCount: 600 });
-        // merges also write their true opacity, above 1 too
-        assert.deepStrictEqual([...out.meta.extraColumns.map(e => e.name)], ['tag', 'opacity_linear']);
+        assert.deepStrictEqual([...out.meta.extraColumns.map(e => e.name)], ['tag']);
+        assert.strictEqual(out.meta.opacityAboveOne, true, 'merges may exceed opacity 1');
         const { other } = await readLayers(out, pool, ["other"]);
         await out.close();
-        assert.strictEqual(other.length, 600 * 2);
+        assert.strictEqual(other.length, 600);
     });
 
     it('target >= N passes the source through; invalid inputs throw', async () => {

@@ -1,3 +1,4 @@
+import { OPACITY_LINEAR_COLUMN } from '../chunk';
 import { logger, Transform } from '../utils';
 
 import type { TypedArray } from './data-table';
@@ -9,7 +10,8 @@ import { convertToSpace } from './transform';
  *
  * Merges rows from all input tables. Columns are matched by name and type;
  * columns that don't exist in all tables will have undefined values for
- * rows from tables lacking that column.
+ * rows from tables lacking that column, except `opacity_linear`, which is
+ * filled from those rows' `opacity` (`sigmoid(opacity)`, what its absence means).
  *
  * If tables have differing source transforms, all data is first converted
  * to engine coordinate space (identity transform) before combining.
@@ -83,6 +85,19 @@ const combine = (dataTables: DataTable[]): DataTable => {
         }
 
         rowOffset += dataTable.numRows;
+    }
+
+    // opacity_linear's absence means sigmoid(opacity), not the zero a missing column is left at
+    const linear = result.getColumnByName(OPACITY_LINEAR_COLUMN)?.data;
+    if (linear) {
+        let start = 0;
+        for (const dataTable of tables) {
+            const opacity = dataTable.getColumnByName('opacity')?.data;
+            if (!dataTable.hasColumn(OPACITY_LINEAR_COLUMN) && opacity) {
+                for (let r = 0; r < dataTable.numRows; r++) linear[start + r] = 1 / (1 + Math.exp(-opacity[r]));
+            }
+            start += dataTable.numRows;
+        }
     }
 
     return result;

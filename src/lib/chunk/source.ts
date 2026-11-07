@@ -40,6 +40,13 @@ type ChunkSourceMetadata = {
     /** Per-layer stride + field map. Keyed by layer; only present for available layers. */
     readonly layouts: Readonly<Partial<Record<ChunkLayer, LayerLayout>>>;
     /**
+     * Some gaussian's opacity may exceed 1 (decimated scenes, SOG v3 / PLY `opacity_linear`
+     * input). A hint for writers that must choose their output before seeing the data (the
+     * streaming PLY writer writes `opacity_linear` instead of `opacity`); absent means no
+     * opacity exceeds 1. Combined sources carry it when any input does.
+     */
+    readonly opacityAboveOne?: boolean;
+    /**
      * Application-defined JSON carried by the scene's container (SOG `meta.json` /
      * `lod-meta.json` `extras`, as in glTF). No meaning to splat-transform: read,
      * passed through and written back. Absent when the scene has none.

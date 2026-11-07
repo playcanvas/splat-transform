@@ -8,7 +8,6 @@ import type { SceneView, SortedOrder, StreamedRange } from '../gpu/gpu-scene-ras
 import { buildCameraBasis } from './camera';
 import type { Projection, RenderCamera } from './camera';
 import { TILE_SIZE, storageBindingLimit } from './config';
-import { withLinearOpacity } from './linear-opacity';
 import { SortScratch, sortCandidatesByDepth } from './preprocess';
 
 /**
@@ -60,7 +59,7 @@ type SceneRendererOptions = {
     residentBudget?: number;
     /** Use this tier regardless of fit (tests); default picks the first that fits. */
     tier?: SceneTier;
-    /** Draw opacity above 1 (`opacity_linear`) with the over-unity profile; default true. */
+    /** Draw opacity above 1 with the over-unity profile; default true (false clamps it to 1). */
     compensation?: boolean;
     /** Screen-space filter, in pixels², of scenes trained with anti-aliasing; default `AA_FILTER_COV` (0.1). */
     antiAliasFilterSize?: number;
@@ -126,10 +125,7 @@ class SceneRenderer {
 
     constructor(device: GraphicsDevice, source: ChunkSource, pool: ChunkDataPool, options: SceneRendererOptions) {
         this.device = device;
-        // opacity_linear reaches the GPU in the opacity slot; without
-        // compensation it is clamped to 1
-        const linear = withLinearOpacity(source, pool, options.compensation === false ? 1 : Infinity);
-        this.source = linear ?? source;
+        this.source = source;
         this.pool = pool;
         this.options = options;
         this.numSplats = source.meta.lodCounts[0];
@@ -159,7 +155,7 @@ class SceneRenderer {
             groupTilesX,
             groupTilesY,
             sizeClamp: options.sizeClamp,
-            linearOpacity: !!linear,
+            clampOpacity: options.compensation === false,
             aaCompensation: source.meta.model === 'antialiased',
             antiAliasFilterSize: options.antiAliasFilterSize,
             bgR: bg.r,

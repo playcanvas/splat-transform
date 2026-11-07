@@ -1,7 +1,7 @@
 import type { ChunkDataPool, ChunkLayer, ChunkSource } from './chunk';
 import { materializeToDataTable } from './compat/data-table';
 import type { FileSystem } from './io/write';
-import { bakeOpacityLinear, reduceBandsSource } from './ops';
+import { reduceBandsSource } from './ops';
 import type { DeviceCreator, Options } from './types';
 import { logger } from './utils';
 import { writeCsv, writeGlb, writeHtml, writeImage, writeSogSource, writeSpz, writeVoxel } from './writers';
@@ -189,17 +189,12 @@ type WriteSourceOptions = {
  * @param fs - File system abstraction for writing files.
  */
 const writeSource = async (writeSourceOptions: WriteSourceOptions, fs: FileSystem): Promise<void> => {
-    const { filename, outputFormat, source: input, pool, options, createDevice } = writeSourceOptions;
-    const { model } = input.meta;
-    // PLY and CSV keep opacity_linear as a column, and the SOG writer and renderer read it; every
-    // other format stores only the logit, so it is baked in from the column, which always wins
-    const source = ['ply', 'csv', 'sog', 'sog-bundle', 'image', 'html', 'html-bundle'].includes(outputFormat)
-        ? input
-        : bakeOpacityLinear(input, pool);
+    const { filename, outputFormat, source, pool, options, createDevice } = writeSourceOptions;
+    const { model } = source.meta;
 
     switch (outputFormat) {
         case 'ply':
-            await writePlyStreaming(source, pool, { filename }, fs);
+            await writePlyStreaming(source, pool, { filename, logitOpacity: options.plyLogitOpacity }, fs);
             break;
         case 'sog':
         case 'sog-bundle':

@@ -158,9 +158,7 @@ const taskHandlers = {
     // Decimation merge stream: n-ary moment match of packed member-major
     // groups. Inputs are member-major (pos 3 / geo 8 / color colorDim floats
     // per member, groups back to back per `sizes`); outputs are group-major.
-    // `other` columns (when present) copy from the dominant-mass member, except
-    // the true-opacity word (`linearWord`), which is read as each member's
-    // mass and written with the merged true opacity.
+    // `other` columns (when present) copy from the dominant-mass member.
     mergeGroups: (args: {
         pos: Float32Array;
         geo: Float32Array;
@@ -169,30 +167,19 @@ const taskHandlers = {
         colorDim: number;
         other?: Uint32Array;
         otherDim?: number;
-        linearWord?: number;
     }): TaskOutput<{ pos: Float32Array; geo: Float32Array; color: Float32Array; other?: Uint32Array }> => {
         const { sizes, colorDim } = args;
         const g = sizes.length;
         const otherDim = args.otherDim ?? 0;
-        const linearWord = args.other && args.linearWord !== undefined ? args.linearWord : -1;
-        let linearOpacity: Float32Array | undefined;
-        if (linearWord >= 0) {
-            const words = new Float32Array(args.other!.buffer, args.other!.byteOffset, args.other!.length);
-            const n = args.geo.length / 8;
-            linearOpacity = new Float32Array(n);
-            for (let i = 0; i < n; i++) linearOpacity[i] = words[i * otherDim + linearWord];
-        }
-        const view = { pos: args.pos, geo: args.geo, color: args.color, colorDim, linearOpacity };
+        const view = { pos: args.pos, geo: args.geo, color: args.color, colorDim };
         const outPos = new Float32Array(g * 3);
         const outGeo = new Float32Array(g * 8);
         const outColor = new Float32Array(g * colorDim);
         const outOther = args.other && otherDim > 0 ? new Uint32Array(g * otherDim) : undefined;
-        const outOtherF32 = outOther ? new Float32Array(outOther.buffer) : undefined;
         const merged = {
             pos: new Float64Array(3),
             geo: new Float64Array(8),
-            color: new Float64Array(colorDim),
-            linearOpacity: 0
+            color: new Float64Array(colorDim)
         };
         const scratch = createMergeScratch();
         const members: number[] = [];
@@ -209,7 +196,7 @@ const taskHandlers = {
                 let dominant = base,
                     best = -Infinity;
                 for (let m = 0; m < size; m++) {
-                    const mass = splatMass(args.geo, base + m, linearOpacity);
+                    const mass = splatMass(args.geo, base + m);
                     if (mass > best) {
                         best = mass;
                         dominant = base + m;
@@ -218,7 +205,6 @@ const taskHandlers = {
                 for (let c = 0; c < otherDim; c++) {
                     outOther[gi * otherDim + c] = args.other![dominant * otherDim + c];
                 }
-                if (linearWord >= 0) outOtherF32![gi * otherDim + linearWord] = merged.linearOpacity;
             }
             base += size;
         }

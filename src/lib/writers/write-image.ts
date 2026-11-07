@@ -185,7 +185,7 @@ type WriteImageOptions = {
     residentBudget?: number;
 
     /**
-     * Draw opacity above 1 (`opacity_linear`, kept by decimation) with the
+     * Draw opacity above 1 (kept by decimation) with the
      * over-unity plateau profile. Default true; false clamps it to 1
      * (debugging, A/B).
      */

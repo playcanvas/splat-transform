@@ -1,4 +1,3 @@
-import { OPACITY_LINEAR_COLUMN } from '../chunk';
 import { WorkerQueue } from '../workers';
 
 import type { DestBuffers } from './block-producer';
@@ -47,8 +46,6 @@ async function* mergeStream(
     const colorDim = layouts.color!.stride >> 2;
     const hasOther = availableLayers.has('other') && (layouts.other?.stride ?? 0) > 0;
     const otherDim = hasOther ? layouts.other!.stride >> 2 : 0;
-    const linearField = hasOther ? layouts.other!.fields[OPACITY_LINEAR_COLUMN] : undefined;
-    const linearWord = linearField ? linearField.byteOffset >> 2 : undefined;
 
     let rows = 0;
     let emitted = 0;
@@ -130,8 +127,7 @@ async function* mergeStream(
                     sizes,
                     colorDim,
                     other: mOther,
-                    otherDim,
-                    linearWord
+                    otherDim
                 },
                 transfer
             );

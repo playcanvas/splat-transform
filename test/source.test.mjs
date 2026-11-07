@@ -20,6 +20,7 @@ import {
     positionFields,
     geometricFields
 } from '../src/lib/chunk/index.js';
+import { assertColumnEqual } from './helpers/test-utils.mjs';
 
 function assertTablesEqual(actual, expected, msg) {
     const aNames = [...actual.columnNames].sort();
@@ -29,7 +30,8 @@ function assertTablesEqual(actual, expected, msg) {
     for (const name of eNames) {
         const a = actual.getColumnByName(name).data;
         const e = expected.getColumnByName(name).data;
-        assert.deepStrictEqual(a, e, `${msg}: column '${name}' differs`);
+        if (name === 'opacity') assertColumnEqual(name, a, e, `${msg}: column '${name}'`);
+        else assert.deepStrictEqual(a, e, `${msg}: column '${name}' differs`);
     }
 }
 

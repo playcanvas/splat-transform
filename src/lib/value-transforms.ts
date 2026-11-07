@@ -4,8 +4,10 @@
  * filter passes so the two stay byte-for-byte in agreement.
  *
  * - `opacity`, `scale_*`, `f_dc_*` are exposed to users in linear / 0-1 space
- *   but stored in logit / log / SH-DC space. `inverseTransforms` maps a
- *   user-friendly value to raw; `forwardTransforms` maps raw back for display.
+ *   but stored in logit / log / SH-DC space in PLY files and DataTables.
+ *   `inverseTransforms` maps a user-friendly value to that raw space;
+ *   `forwardTransforms` maps a source's stored value back for display (a
+ *   `ChunkSource` stores true opacity, so opacity needs no transform there).
  * - `rawColumnMap` resolves a `*_raw` column name to its underlying column
  *   (compare the stored value directly, skipping the user-friendly conversion).
  * - `isTransformColumn` reports whether a column's stored value is affected by a
@@ -26,9 +28,9 @@ const inverseTransforms: Record<string, (v: number) => number> = {
     f_dc_2: (v) => (v - 0.5) / SH_C0
 };
 
-// Forward transforms: convert raw PLY values to user-friendly space (for summary display).
+// Forward transforms: convert a source's stored values to user-friendly space (for summary
+// display). Opacity has none: a source stores true opacity, not the PLY logit.
 const forwardTransforms: Record<string, (v: number) => number> = {
-    opacity: (v) => 1 / (1 + Math.exp(-v)),
     scale_0: Math.exp,
     scale_1: Math.exp,
     scale_2: Math.exp,

@@ -340,8 +340,9 @@ const processDataTable = async (
             case 'filterNaN': {
                 const g = logger.group('Filter NaN');
                 const prev = result;
+                // an infinite opacity logit is opacity 1 or 0, as a source reads it
                 const infOk = new Set(['opacity']);
-                const negInfOk = new Set(['scale_0', 'scale_1', 'scale_2']);
+                const negInfOk = new Set(['scale_0', 'scale_1', 'scale_2', 'opacity']);
                 const columnNames = result.columnNames;
                 const hasRotation = ['rot_0', 'rot_1', 'rot_2', 'rot_3'].every((c) => columnNames.includes(c));
 

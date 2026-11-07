@@ -46,6 +46,13 @@ type Options = {
     /** SPZ format version to write. Default: 4. */
     spzVersion?: 3 | 4;
 
+    /**
+     * Write PLY opacity as the standard `opacity` logit even when some gaussian's opacity
+     * exceeds 1 (it is clamped to 1), instead of `opacity_linear`, for tools that don't read
+     * `opacity_linear`. Default false.
+     */
+    plyLogitOpacity?: boolean;
+
     /** SOG format version to write (SOG, SOG bundle and LOD output). Default: 3. HTML output always embeds v2. */
     sogVersion?: 2 | 3;
 
@@ -200,7 +207,7 @@ type Options = {
     renderResidentBudget?: number;
 
     /**
-     * Draw opacity above 1 (`opacity_linear`, kept by decimation) with the
+     * Draw opacity above 1 (kept by decimation) with the
      * over-unity plateau profile. Default true; false clamps it to 1, for
      * debugging and A/B comparison.
      */

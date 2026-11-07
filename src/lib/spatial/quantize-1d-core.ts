@@ -167,7 +167,7 @@ const quantizeFinite = (
  * the most pixels).
  *
  * Non-finite values: `±Infinity` is a valid pipeline value (`scale_*` may be
- * `-Infinity` for flat splats, `opacity` `+Infinity` — see `filterNaN`), but a
+ * `-Infinity` for flat splats — see `filterNaN`), but a
  * single one pooled into the histogram poisons vMin/vRange and NaN-cascades
  * into an all-NaN codebook (serialized as JSON nulls). So the histogram/DP
  * runs over the finite values only, and each infinity present earns a

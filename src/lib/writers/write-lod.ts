@@ -194,9 +194,9 @@ const invalidGaussian = (lod: number, row: number, what: string): Error =>
  * downstream may then assume finite input rather than each stage carrying its own
  * opinion about invalid data. {@link assertFiniteColor} does the same for the colour layer.
  *
- * The rules mirror `filterNaNRows`, including its two deliberate exceptions
- * (`scale_*` may be `-Infinity`, `opacity` may be `+Infinity`, both harmless
- * here), so anything `--filter-nan` keeps is accepted.
+ * The rules mirror `filterNaNRows`, including its deliberate exception
+ * (`scale_*` may be `-Infinity`, harmless here), so anything `--filter-nan`
+ * keeps is accepted.
  *
  * @param pos - Packed xyz for the batch.
  * @param geo - Packed 8-float geometric records for the batch.
@@ -234,8 +234,7 @@ const assertFiniteGeometry = (
             const v = geo[o + e];
             if (!isFinite(v) && v !== -Infinity) reject(i, 'a non-finite scale');
         }
-        const opacity = geo[o + 7];
-        if (!isFinite(opacity) && opacity !== Infinity) reject(i, 'a non-finite opacity');
+        if (!isFinite(geo[o + 7])) reject(i, 'a non-finite opacity');
     }
 };
 

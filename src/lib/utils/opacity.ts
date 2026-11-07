@@ -1,5 +1,5 @@
 /**
- * True opacity `A` (`opacity_linear`, else `sigmoid(opacity)`) is stored and drawn up to this value,
+ * True opacity `A` (a source's opacity slot) is stored and drawn up to this value,
  * `(255 / 204)^2 = 1.25^2`, the top of the 8-bit encoding. Merges can owe far more (the
  * moment-matched mass double-counts children that overlap along a view), but on five scenes at deep
  * LOD levels the render improves as `A` is capped, down to ~1.55, and the decimator's own cascade is
@@ -79,4 +79,24 @@ const plateauCore = (a: number, cutoff: number): number => {
     return Math.sqrt(r0 * r0 + q * t) - r0;
 };
 
-export { OPACITY_MAX, encodeOpacityByte, decodeOpacityByte, plateauCoreConstants, plateauCore };
+// How far opacityToLogit keeps opacity above 1 from 1: logit 16.1.
+const LOGIT_EPSILON = 1e-7;
+
+/**
+ * The PLY `opacity` logit for true opacity `A`, as standard (logit) PLY output and
+ * DataTables store it: `logit(A)`, with `A` exactly 1 as `+Infinity` and exactly 0 (or
+ * below) as `-Infinity`, so infinite logits round-trip (in f32 every logit above ~17.3
+ * reads as `A = 1`, and every one below ~-104 as `A = 0`), and `A` above 1 clamped to
+ * the largest finite logit the clamp allows. NaN stays NaN.
+ *
+ * @param a - True opacity.
+ * @returns The logit.
+ */
+const opacityToLogit = (a: number): number => {
+    if (a === 1) return Infinity;
+    if (a <= 0) return -Infinity;
+    const p = Math.min(a, 1 - LOGIT_EPSILON);
+    return Math.log(p / (1 - p));
+};
+
+export { OPACITY_MAX, encodeOpacityByte, decodeOpacityByte, opacityToLogit, plateauCoreConstants, plateauCore };

@@ -1,11 +1,8 @@
-import { OPACITY_LINEAR_COLUMN } from '../chunk';
 import type { ChunkData, ChunkDataPool, ChunkLayer, ReadRequest, ChunkSource, ChunkSourceMetadata } from '../chunk';
 import { resolveComments } from '../comments';
 import { resolveExtras } from '../extras';
 import { resolveSplatModel } from '../splat-model';
 import { logger } from '../utils';
-
-import { withOpacityLinear } from './opacity-linear-source';
 
 const LAYERS: ChunkLayer[] = ['position', 'geometric', 'color', 'other'];
 
@@ -25,9 +22,7 @@ type MutableRowReadRequest = { indices: Uint32Array; indexOffset: number; count:
  * SH bands, available layers, extra columns) and on the pending coordinate-space
  * **transform** — concatenating data in mismatched spaces is silently wrong, so
  * a transform mismatch throws (the caller must bake to a common space first).
- * The one tolerated extra-column difference is `opacity_linear`: a decimated
- * input carries it and a raw one does not, and its absence means
- * `sigmoid(opacity)`, so inputs without it are given that column.
+ * The result carries `opacityAboveOne` when any input does.
  *
  * Single-LOD only. Reads stitch contiguous row ranges: an output chunk is filled
  * by block-copying the overlapping span out of each contributing source chunk
@@ -39,15 +34,10 @@ type MutableRowReadRequest = { indices: Uint32Array; indexOffset: number; count:
  * @param pool - Pool for the temporary source read buffers; `chunkSize` must match the sources'.
  * @returns A derived source serving the concatenated gaussians chunk-by-chunk.
  */
-const concatSource = (inputs: ChunkSource[], pool: ChunkDataPool): ChunkSource => {
-    if (inputs.length === 0) {
+const concatSource = (allSources: ChunkSource[], pool: ChunkDataPool): ChunkSource => {
+    if (allSources.length === 0) {
         throw new Error('concatSource: at least one source is required');
     }
-
-    const hasLinear = (s: ChunkSource) => s.meta.extraColumns.some((e) => e.name === OPACITY_LINEAR_COLUMN);
-    const allSources = inputs.some(hasLinear)
-        ? inputs.map((s) => (hasLinear(s) ? s : withOpacityLinear(s, pool)))
-        : inputs;
 
     const ref = allSources[0].meta;
     const layerKey = (m: ChunkSourceMetadata) => LAYERS.filter((l) => m.availableLayers.has(l)).join(',');
@@ -107,11 +97,12 @@ const concatSource = (inputs: ChunkSource[], pool: ChunkDataPool): ChunkSource =
 
     const extras = resolveExtras(sources);
     const comments = resolveComments(sources);
-    const { extras: _refExtras, comments: _refComments, ...refMeta } = ref;
+    const { extras: _refExtras, comments: _refComments, opacityAboveOne: _refAboveOne, ...refMeta } = ref;
     const meta: ChunkSourceMetadata = {
         ...refMeta,
         ...(extras !== undefined ? { extras } : {}),
         ...(comments?.length ? { comments } : {}),
+        ...(sources.some((s) => s.meta.opacityAboveOne) ? { opacityAboveOne: true } : {}),
         model,
         numGaussians: total,
         numLods: 1,

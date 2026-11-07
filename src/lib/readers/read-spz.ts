@@ -467,10 +467,8 @@ const readSpz = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
             geoOut[o + 5] = scales.getUint8(s * 3 + 1) / 16.0 - 10.0;
             geoOut[o + 6] = scales.getUint8(s * 3 + 2) / 16.0 - 10.0;
 
-            // opacity: u8 -> inverse sigmoid (logit), clamped off the asymptotes
-            const eps = 1e-6;
-            const a = Math.max(eps, Math.min(1 - eps, alphas.getUint8(s) / 255.0));
-            geoOut[o + 7] = Math.log(a / (1 - a));
+            // opacity: u8 -> true opacity
+            geoOut[o + 7] = alphas.getUint8(s) / 255.0;
         }
 
         if (colOut) {

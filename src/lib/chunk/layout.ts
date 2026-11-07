@@ -2,7 +2,7 @@
  * ChunkLayer identifiers — the disjoint storage tiers of a gaussian source.
  *
  * - `position`        - xyz (vec3<f32>)
- * - `geometric`       - rotation quaternion + scale + opacity
+ * - `geometric`       - rotation quaternion + log scale + true (linear) opacity
  * - `color`           - DC + spherical harmonics rest coefficients
  * - `other`           - user-defined extra columns (e.g. blind data)
  */
@@ -79,6 +79,7 @@ const positionFields = (): ChunkFieldMap => ({
 const geometricFields = (): ChunkFieldMap => ({
     rotation: { byteOffset: 0, components: 4, type: 'float32' },
     scale: { byteOffset: 16, components: 3, type: 'float32' },
+    // true opacity A, linear (not a logit): 0 to 1, above 1 for merged gaussians
     opacity: { byteOffset: 28, components: 1, type: 'float32' }
 });
 
@@ -126,11 +127,11 @@ type ExtraColumn = {
 };
 
 /**
- * Name of the `other`-layer column holding each gaussian's true opacity `A`,
- * linear and unclamped, which the plain 0..1 `opacity` logit cannot carry above
- * 1. Written by decimation (`opacity` then holds `logit(min(A, 1))` for readers
- * that don't know the column). When present it always wins: `A = opacity_linear`,
- * whatever `opacity` says; when absent, `A = sigmoid(opacity)`.
+ * Name of the PLY property (and DataTable column) holding true opacity `A`,
+ * linear and unclamped, in place of the `opacity` logit, which cannot carry
+ * opacity above 1. A PLY file carries one or the other; a reader finding
+ * `opacity_linear` uses it. Inside a `ChunkSource` there is no such
+ * column: the geometric layer's opacity slot holds `A` itself.
  */
 const OPACITY_LINEAR_COLUMN = 'opacity_linear';
 

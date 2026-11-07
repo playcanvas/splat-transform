@@ -45,10 +45,8 @@ const decodeGeometric = (dv: DataView, u8: Uint8Array, o: number, geo: Float32Ar
     geo[g + 4] = Math.log(dv.getFloat32(o + 12, true));
     geo[g + 5] = Math.log(dv.getFloat32(o + 16, true));
     geo[g + 6] = Math.log(dv.getFloat32(o + 20, true));
-    // opacity: u8 -> inverse sigmoid (logit), clamped off the asymptotes
-    const eps = 1e-6;
-    const a = Math.max(eps, Math.min(1 - eps, u8[o + 27] / 255));
-    geo[g + 7] = Math.log(a / (1 - a));
+    // opacity: u8 -> true opacity
+    geo[g + 7] = u8[o + 27] / 255;
 };
 
 const decodeColor = (u8: Uint8Array, o: number, col: Float32Array, i: number): void => {
@@ -263,7 +261,9 @@ const decodeSplatToDataTable = async (source: ReadSource): Promise<DataTable> =>
         s0[i] = geo[4];
         s1[i] = geo[5];
         s2[i] = geo[6];
-        op[i] = geo[7];
+        // the DataTable holds the PLY logit; the shared decoder gives true opacity
+        const a = Math.max(1e-6, Math.min(1 - 1e-6, geo[7]));
+        op[i] = Math.log(a / (1 - a));
         c0[i] = col[0];
         c1[i] = col[1];
         c2[i] = col[2];

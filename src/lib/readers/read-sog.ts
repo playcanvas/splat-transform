@@ -1,7 +1,6 @@
 import {
     POSITION_STRIDE,
     GEOMETRIC_STRIDE,
-    OPACITY_LINEAR_COLUMN,
     SH_REST_COUNTS,
     colorStride,
     positionFields,
@@ -57,9 +56,7 @@ type MetaV2 = {
 };
 
 // The `other`-layer columns a V3 meta implies: each blind field under its recorded
-// name (integer encodings as uint32, the rest as float32), then the true opacity
-// when its stored opacity reaches above 1 — last, where withOpacityLinear appends
-// it, so sources with and without it line up when combined.
+// name (integer encodings as uint32, the rest as float32).
 const extraColumnsFromMeta = (meta: MetaV2): ExtraColumn[] => {
     const extras: ExtraColumn[] = [];
     if (meta.version === 3 && meta.blind) {
@@ -71,11 +68,11 @@ const extraColumnsFromMeta = (meta: MetaV2): ExtraColumn[] => {
             }
         }
     }
-    if (meta.version === 3 && (meta.opacity?.max ?? 1) > 1) {
-        extras.push({ name: OPACITY_LINEAR_COLUMN, type: 'float32' });
-    }
     return extras;
 };
+
+// V3 records `opacity.max` exactly when some stored opacity exceeds 1.
+const opacityAboveOneFromMeta = (meta: MetaV2): boolean => meta.version === 3 && (meta.opacity?.max ?? 1) > 1;
 
 // SH band count from shN.bands, or 0 when absent / out of range.
 const bandsFromMeta = (meta: MetaV2): SHBands => {
@@ -136,11 +133,6 @@ const unpackQuat = (px: number, py: number, pz: number, tag: number): void => {
     // reconstruct max component to make unit length with positive sign
     const t = 1 - (a * a + b * b + c * c);
     tmpQuat[maxComp] = Math.sqrt(Math.max(0, t));
-};
-
-const sigmoidInv = (y: number) => {
-    const e = Math.min(1 - 1e-6, Math.max(1e-6, y));
-    return Math.log(e / (1 - e));
 };
 
 /**
@@ -215,16 +207,10 @@ const readSogSourceV2 = async (
     const cCode = new Float32Array(meta.sh0.codebook);
     const oCode = new Float32Array(256);
     for (let i = 0; i < 256; i++) oCode[i] = v3 ? decodeOpacityByte(i) : i / 255;
-    // Precomputed per code: the stored logit (of the clamped opacity); the
-    // true opacity itself is oCode.
-    const oLogit = oCode.map((a) => sigmoidInv(a));
 
     // V3 blind data: each texture's fields packed in order into R,G,B,A, little-endian.
     const extras = extraColumnsFromMeta(meta);
     const otherL = extras.length > 0 ? otherLayout(extras) : null;
-    const linearWord = otherL?.fields[OPACITY_LINEAR_COLUMN]
-        ? otherL.fields[OPACITY_LINEAR_COLUMN].byteOffset >>> 2
-        : -1;
     const otherSw = otherL ? otherL.stride >>> 2 : 0;
     const blindFields: {
         rgba: Uint8Array;
@@ -312,6 +298,7 @@ const readSogSourceV2 = async (
         transform: Transform.PLY.clone(),
         availableLayers,
         layouts,
+        ...(opacityAboveOneFromMeta(meta) ? { opacityAboveOne: true } : {}),
         ...(meta.extras !== undefined ? { extras: meta.extras } : {}),
         ...(Array.isArray(meta.comments) && meta.comments.length > 0 ? { comments: meta.comments.map(String) } : {})
     };
@@ -359,16 +346,11 @@ const readSogSourceV2 = async (
             geoOut[o + 4] = sCode[sl[o4]];
             geoOut[o + 5] = sCode[sl[o4 + 1]];
             geoOut[o + 6] = sCode[sl[o4 + 2]];
-            geoOut[o + 7] = oLogit[c0[o4 + 3]];
+            geoOut[o + 7] = oCode[c0[o4 + 3]];
         }
 
         if (othOut) {
             const o = r * otherSw;
-            if (linearWord >= 0) {
-                // reinterpret: the other layer is word-typed per field
-                f32View[0] = oCode[c0[o4 + 3]];
-                othOut[o + linearWord] = u32View[0];
-            }
             for (const f of blindFields) {
                 const b = f.rgba;
                 const t = o4 + f.offset;
@@ -460,7 +442,7 @@ const fetchSogMeta = async (fileSystem: ReadFileSystem, filename: string) => {
  * Header-only SOG peek: parse `meta.json` and report the metadata a file-info
  * summary needs — gaussian count, SH bands, splat model and available layers — **without**
  * decoding any WebP texture. SOG always carries position/geometric/color; V3 adds
- * `opacity_linear` and blind-data extras when its meta declares them. V2/V3 only;
+ * blind-data extras (and `opacityAboveOne`) when its meta declares them. V2/V3 only;
  * legacy V1 (no `version`) returns `null` so the caller can fall back to a full read.
  *
  * @param fileSystem - The file system to read meta.json from.
@@ -472,7 +454,14 @@ const statSogSource = async (
     filename: string
 ): Promise<Pick<
     ChunkSourceMetadata,
-    'numGaussians' | 'numLods' | 'lodCounts' | 'shBands' | 'model' | 'availableLayers' | 'extraColumns'
+    | 'numGaussians'
+    | 'numLods'
+    | 'lodCounts'
+    | 'shBands'
+    | 'model'
+    | 'availableLayers'
+    | 'extraColumns'
+    | 'opacityAboveOne'
 > | null> => {
     const { rawMeta } = await fetchSogMeta(fileSystem, filename);
     if (rawMeta.version !== 2 && rawMeta.version !== 3) return null;
@@ -488,7 +477,8 @@ const statSogSource = async (
         shBands: bandsFromMeta(meta),
         model: modelFromMeta(meta.model),
         availableLayers,
-        extraColumns
+        extraColumns,
+        ...(opacityAboveOneFromMeta(meta) ? { opacityAboveOne: true } : {})
     };
 };
 

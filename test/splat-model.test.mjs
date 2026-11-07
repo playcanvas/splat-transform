@@ -15,7 +15,7 @@ import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { createTestDataTable, encodePlyBinary } from './helpers/test-utils.mjs';
+import { assertColumnEqual, assertColumnValue, createTestDataTable, encodePlyBinary } from './helpers/test-utils.mjs';
 import { createChunkDataPool } from '../src/lib/chunk/index.js';
 import { materializeToDataTable } from '../src/lib/compat/data-table.js';
 import {
@@ -171,7 +171,7 @@ describe('2dgs scenes', () => {
             assert.strictEqual(scale2[i], -Infinity, `row ${i} scale_2`);
             // the columns either side of the gap still land in their own slots
             assert.strictEqual(scale1[i], reference.getColumnByName('scale_1').data[i], `row ${i} scale_1`);
-            assert.strictEqual(opacity[i], reference.getColumnByName('opacity').data[i], `row ${i} opacity`);
+            assertColumnValue('opacity', opacity[i], reference.getColumnByName('opacity').data[i], `row ${i} opacity`);
         }
     });
 
@@ -214,11 +214,7 @@ describe('2dgs scenes', () => {
             await readPly(await sourceFromBytes(bytes), pool2), pool2
         );
         for (const name of ['rot_3', 'scale_0', 'scale_1', 'opacity', 'f_dc_0']) {
-            assert.deepStrictEqual(
-                Array.from(table.getColumnByName(name).data),
-                Array.from(reference.getColumnByName(name).data),
-                name
-            );
+            assertColumnEqual(name, table.getColumnByName(name).data, reference.getColumnByName(name).data, name);
         }
         // re-reading the output re-materializes the column
         assert.strictEqual(table.getColumnByName('scale_2').data[0], -Infinity);

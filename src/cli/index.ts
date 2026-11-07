@@ -53,10 +53,9 @@ import type {
 // CLI-only internals (deliberately off the public lib surface): the LOD-path
 // level resolver and the container source readers the LOD writer drives
 // directly (single-scene callers get these via readFile).
-import { OPACITY_LINEAR_COLUMN } from '../lib/chunk';
 import { resolveComments, withComments } from '../lib/comments';
 import { resolveExtras, withExtras } from '../lib/extras';
-import { resolveLodLevels, withOpacityLinear } from '../lib/ops';
+import { resolveLodLevels } from '../lib/ops';
 import { readLccSource, readLccEnvironmentSource } from '../lib/readers/read-lcc';
 import { readLcc2Source, readLcc2EnvironmentSource } from '../lib/readers/read-lcc2';
 import { readLodSource, readLodEnvironmentSource } from '../lib/readers/read-lod';
@@ -181,6 +180,7 @@ const cliOptionsConfig = {
     'lod-chunk-min': { type: 'string', default: '8' },
     'lod-file-count': { type: 'string', default: '' },
     'spz-version': { type: 'string', default: '4' },
+    'ply-logit-opacity': { type: 'boolean', default: false },
     'sog-version': { type: 'string', default: '3' },
     'sog-blind': { type: 'string', multiple: true },
     'sog-extras': { type: 'string' },
@@ -677,6 +677,7 @@ const parseArguments = async () => {
             .filter((v) => !!v)
             .map(parseInteger),
         spzVersion: spzVersion as 3 | 4,
+        plyLogitOpacity: v['ply-logit-opacity'],
         sogVersion: sogVersion as 2 | 3,
         sogBlind,
         ...(v['sog-extras'] !== undefined ? { sogExtras: await readJsonFile(v['sog-extras']) } : {}),
@@ -1005,6 +1006,11 @@ SOG COMPRESSION (.sog, meta.json, lod-meta.json, .html outputs)
 SPZ OUTPUT (.spz)
         --spz-version      <3|4>            The SPZ format version to write. Default: 4
 
+PLY OUTPUT (.ply)
+        --ply-logit-opacity                 Write the standard opacity logit even when some gaussian's opacity
+                                              exceeds 1 (clamped to 1), instead of opacity_linear. For tools that
+                                              don't read opacity_linear
+
 HTML VIEWER OUTPUT (.html)
         --viewer-settings  <settings.json>  HTML viewer settings JSON file
         --unbundled                         Generate unbundled HTML viewer with separate files
@@ -1038,7 +1044,7 @@ IMAGE OUTPUT (.webp) — lossless WebP rendered via GPU rasterizer
         --resolution       <WxH>            Output resolution, e.g. 1920x1080. Default: 1280x720 (pinhole) or 2048x1024 (equirect)
         --camera-near      <n>              Near clip distance. Default: 0.2 (matches reference 3DGS)
         --background       <r,g,b[,a]>      Background color in [0,1]. Default: 0,0,0,1
-        --no-compensation                   Clamp opacity above 1 (opacity_linear from decimation) and draw every
+        --no-compensation                   Clamp opacity above 1 (from decimation) to 1 and draw every
                                               gaussian at opacity <= 1. For debugging and A/B comparison.
         --aa-filter-size   <px²>            Screen-space filter of scenes trained with anti-aliasing (splat model
                                               antialiased), used in place of the 0.3 px² dilation. Default: 0.1
@@ -1439,13 +1445,8 @@ const main = async () => {
 
             // Stitch inputs: uniform layout -> concatSource (transforms unified as
             // combine() does); mixed layout -> bridge through the DataTable combine().
-            const combineSources = async (inputs: ChunkSource[]): Promise<ChunkSource> => {
-                if (inputs.length === 1) return inputs[0];
-                // opacity_linear's absence means sigmoid(opacity), not the 0 combine() would fill
-                const hasLinear = (s: ChunkSource) => s.meta.extraColumns.some((e) => e.name === OPACITY_LINEAR_COLUMN);
-                const sources = inputs.some(hasLinear)
-                    ? inputs.map((s) => (hasLinear(s) ? s : withOpacityLinear(s, pool)))
-                    : inputs;
+            const combineSources = async (sources: ChunkSource[]): Promise<ChunkSource> => {
+                if (sources.length === 1) return sources[0];
                 const sig = (m: ChunkSourceMetadata) =>
                     `${m.shBands}|${[...m.availableLayers].sort().join(',')}|${m.extraColumns.map((e) => `${e.name}:${e.type}`).join(',')}`;
                 if (sources.every((s) => sig(s.meta) === sig(sources[0].meta))) {
@@ -1663,7 +1664,7 @@ const main = async () => {
                     perLevel = perLevel.map((s) => bakeTransform(s, Transform.IDENTITY));
                 }
             }
-            const mainSource = perLevel.length === 1 ? perLevel[0] : stackLods(perLevel, pool);
+            const mainSource = perLevel.length === 1 ? perLevel[0] : stackLods(perLevel);
             const total = mainSource.meta.lodCounts.reduce((a, c) => a + c, 0);
             if (total === 0) {
                 throw new Error('No Gaussians to write');

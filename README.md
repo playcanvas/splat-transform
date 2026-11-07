@@ -212,6 +212,16 @@ Apply when writing `.spz` outputs.
     --spz-version      <3|4>            The SPZ format version to write. Default: 4
 ```
 
+### PLY Output Options
+
+Apply when writing `.ply` outputs.
+
+```none
+    --ply-logit-opacity                 Write the standard opacity logit even when some gaussian's opacity
+                                          exceeds 1 (clamped to 1), instead of opacity_linear. For tools that
+                                          don't read opacity_linear
+```
+
 ### HTML Viewer Output Options
 
 Apply when writing `.html` outputs.
@@ -287,7 +297,7 @@ Apply when writing `.webp` (lossless WebP rendered via GPU rasterizer).
     --resolution       <WxH>            Output resolution, e.g. 1920x1080. Default: 1280x720 (pinhole) or 2048x1024 (equirect)
     --camera-near      <n>              Near clip distance. Default: 0.2 (matches reference 3DGS)
     --background       <r,g,b[,a]>      Background color in [0,1]. Default: 0,0,0,1
-    --no-compensation                   Clamp opacity above 1 (opacity_linear from decimation) and draw every
+    --no-compensation                   Clamp opacity above 1 (from decimation) to 1 and draw every
                                           gaussian at opacity <= 1. For debugging and A/B comparison.
     --aa-filter-size   <px²>            Screen-space filter of scenes trained with anti-aliasing (splat model
                                           antialiased), used in place of the 0.3 px² dilation. Default: 0.1

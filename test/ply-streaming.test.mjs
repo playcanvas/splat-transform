@@ -18,7 +18,7 @@ import { describe, it } from 'node:test';
 
 import { Vec3 } from 'playcanvas';
 
-import { encodePlyBinary } from './helpers/test-utils.mjs';
+import { encodePlyBinary, assertColumnEqual } from './helpers/test-utils.mjs';
 import { NodeReadFileSystem } from '../src/cli/node-file-system.js';
 import {
     Column, DataTable, Transform,
@@ -155,7 +155,7 @@ describe('streaming PLY pipeline (chunked read -> transform -> streaming write)'
         assert.strictEqual(out.numRows, dt.numRows);
         assert.deepStrictEqual([...out.columnNames].sort(), [...dt.columnNames].sort());
         for (const name of dt.columnNames) {
-            assert.deepStrictEqual(out.getColumnByName(name).data, dt.getColumnByName(name).data, `column '${name}' value mismatch`);
+            assertColumnEqual(name, out.getColumnByName(name).data, dt.getColumnByName(name).data, `column '${name}'`);
         }
     });
 

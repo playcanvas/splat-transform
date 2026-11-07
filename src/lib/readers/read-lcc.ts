@@ -868,7 +868,7 @@ const readLccSource = async (
                 geo[o + 4] = invLinearScale(mix(sMinX, sMaxX, u16[hi + 8] / 65535.0));
                 geo[o + 5] = invLinearScale(mix(sMinY, sMaxY, u16[hi + 9] / 65535.0));
                 geo[o + 6] = invLinearScale(mix(sMinZ, sMaxZ, u16[hi + 10] / 65535.0));
-                geo[o + 7] = invSigmoid(u8[bi + 15] / 255.0);
+                geo[o + 7] = u8[bi + 15] / 255.0; // true opacity
             }
             if (col) {
                 const bi = srcIdx << 5;

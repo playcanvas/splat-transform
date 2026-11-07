@@ -5,11 +5,10 @@ import type { TypedArray } from '../data-table';
 import { Column, DataTable } from '../data-table';
 import type { ReadFileSystem, ReadSource } from '../io/read';
 import { basename, dirname, join, readFile, ZipReadFileSystem } from '../io/read';
-import { withOpacityLinear } from '../ops';
 import type { Options } from '../types';
 import { logger, Transform } from '../utils';
 
-import { anyUnitHasOpacityLinear, containerSource } from './container-source';
+import { anyUnitOpacityAboveOne, containerSource } from './container-source';
 import type { ContainerSegment } from './container-source';
 import { readSog, readSogSource, statSogSource } from './read-sog';
 import { readSpz, readSpzHeader } from './read-spz';
@@ -836,29 +835,20 @@ const readLcc2Source = async (
         );
     }
 
-    // when any selected SOG chunk has opacity_linear every chunk is given it; only each meta.json is read
-    if (splatType === '.sog') {
-        const paths = segmentsByLod.flatMap((segs) => segs.map((seg) => chunkPaths.get(seg)!));
-        const anyLinear = await anyUnitHasOpacityLinear(paths, async (path) => {
+    // whether any selected SOG chunk holds opacity above 1; only each chunk's meta.json is read
+    const paths = segmentsByLod.flatMap((segs) => segs.map((seg) => chunkPaths.get(seg)!));
+    const opacityAboveOne =
+        splatType === '.sog' &&
+        (await anyUnitOpacityAboveOne(paths, async (path) => {
             const zipFs = new ZipReadFileSystem(await openChunkSource(fileSystem, path));
             try {
-                const stat = await statSogSource(zipFs, 'meta.json');
-                return !!stat?.extraColumns.some((c) => c.name === OPACITY_LINEAR_COLUMN);
+                return !!(await statSogSource(zipFs, 'meta.json'))?.opacityAboveOne;
             } finally {
                 zipFs.close();
             }
-        });
-        if (anyLinear) {
-            for (const segs of segmentsByLod) {
-                for (const seg of segs) {
-                    const decode = seg.decode;
-                    seg.decode = async () => withOpacityLinear(await decode(), pool);
-                }
-            }
-        }
-    }
+        }));
 
-    return containerSource(segmentsByLod, pool, { transform: LCC2_TRANSFORM() });
+    return containerSource(segmentsByLod, pool, { transform: LCC2_TRANSFORM(), opacityAboveOne });
 };
 
 /**

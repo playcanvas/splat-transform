@@ -1,9 +1,6 @@
-import { OPACITY_LINEAR_COLUMN } from '../chunk';
-import type { ChunkDataPool, ChunkLayer, ChunkSource, ChunkSourceMetadata, ReadRequest } from '../chunk';
+import type { ChunkLayer, ChunkSource, ChunkSourceMetadata, ReadRequest } from '../chunk';
 import { resolveComments } from '../comments';
 import { resolveExtras } from '../extras';
-
-import { withOpacityLinear } from './opacity-linear-source';
 
 const LAYERS: ChunkLayer[] = ['position', 'geometric', 'color', 'other'];
 
@@ -19,22 +16,16 @@ const LAYERS: ChunkLayer[] = ['position', 'geometric', 'color', 'other'];
  * is a structural axis here; no source carries a per-gaussian LOD tag.
  *
  * All inputs must share layout (chunk size, SH bands, layers, extras, transform)
- * and be single-LOD; the stacked metadata is inherited from `sources[0]`. The one
- * tolerated extra-column difference is `opacity_linear`: decimated levels carry
- * it and the original level does not, and its absence means `sigmoid(opacity)`,
- * so with a `pool` the levels without it are given that column.
+ * and be single-LOD; the stacked metadata is inherited from `sources[0]`, and
+ * carries `opacityAboveOne` when any level does.
  *
- * @param inputs - The per-LOD single-LOD sources, in output-LOD order.
- * @param pool - Pool for the filled-in `opacity_linear` views; without it the levels must match exactly.
+ * @param sources - The per-LOD single-LOD sources, in output-LOD order.
  * @returns A multi-LOD source dispatching by LOD to the inputs.
  */
-const stackLods = (inputs: ChunkSource[], pool?: ChunkDataPool): ChunkSource => {
-    if (inputs.length === 0) {
+const stackLods = (sources: ChunkSource[]): ChunkSource => {
+    if (sources.length === 0) {
         throw new Error('stackLods: at least one source is required');
     }
-    const hasLinear = (s: ChunkSource) => s.meta.extraColumns.some((e) => e.name === OPACITY_LINEAR_COLUMN);
-    const sources =
-        pool && inputs.some(hasLinear) ? inputs.map((s) => (hasLinear(s) ? s : withOpacityLinear(s, pool))) : inputs;
     const ref = sources[0].meta;
     const layerKey = (m: ChunkSourceMetadata) => LAYERS.filter((l) => m.availableLayers.has(l)).join(',');
     const extraKey = (m: ChunkSourceMetadata) => m.extraColumns.map((e) => `${e.name}:${e.type}`).join(',');
@@ -72,11 +63,12 @@ const stackLods = (inputs: ChunkSource[], pool?: ChunkDataPool): ChunkSource => 
     const lodCounts = sources.map((s) => s.meta.numGaussians);
     const extras = resolveExtras(sources);
     const comments = resolveComments(sources);
-    const { extras: _refExtras, comments: _refComments, ...refMeta } = ref;
+    const { extras: _refExtras, comments: _refComments, opacityAboveOne: _refAboveOne, ...refMeta } = ref;
     const meta: ChunkSourceMetadata = {
         ...refMeta,
         ...(extras !== undefined ? { extras } : {}),
         ...(comments?.length ? { comments } : {}),
+        ...(sources.some((s) => s.meta.opacityAboveOne) ? { opacityAboveOne: true } : {}),
         numGaussians: lodCounts[0],
         numLods: sources.length,
         lodCounts,

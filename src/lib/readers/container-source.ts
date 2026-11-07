@@ -37,12 +37,13 @@ type ContainerSegment = {
  * @param opts.cacheSize - Max resident decoded sub-files (default 3, min 2 so a chunk straddling two segments can be served).
  * @param opts.transform - Override the reported pending transform (sub-files decode to their own space; e.g. LCC2 relabels to `LCC2_TRANSFORM`). The sub-file data is unchanged — this only sets `meta.transform`.
  * @param opts.model - Override the reported splat model (e.g. the one a `lod-meta.json` records for all its files). Only sets `meta.model`.
+ * @param opts.opacityAboveOne - Some unit may hold opacity above 1 (see {@link anyUnitOpacityAboveOne}); sets `meta.opacityAboveOne`.
  * @returns A lazy multi-LOD source over the container.
  */
 const containerSource = async (
     segmentsByLod: ContainerSegment[][],
     pool: ChunkDataPool,
-    opts: { cacheSize?: number; transform?: Transform; model?: SplatModel } = {}
+    opts: { cacheSize?: number; transform?: Transform; model?: SplatModel; opacityAboveOne?: boolean } = {}
 ): Promise<ChunkSource> => {
     const cacheSize = Math.max(2, opts.cacheSize ?? 3);
     const cache = new Map<ContainerSegment, Promise<ChunkSource>>();
@@ -107,8 +108,10 @@ const containerSource = async (
 
     const perLod = segmentsByLod.map((segs) => (segs.length > 0 ? concatSource(segs.map(proxy), pool) : null));
 
+    const { opacityAboveOne: _firstAboveOne, ...firstLayout } = layout;
     const meta: ChunkSourceMetadata = {
-        ...layout,
+        ...firstLayout,
+        ...(opts.opacityAboveOne ? { opacityAboveOne: true } : {}),
         transform: opts.transform ?? layout.transform,
         model: opts.model ?? layout.model,
         numGaussians: lodCounts[0] ?? 0,
@@ -138,17 +141,16 @@ const containerSource = async (
 };
 
 /**
- * Whether any of a container's units carries `opacity_linear`, judged by a
+ * Whether any of a container's units may hold opacity above 1, judged by a
  * header-only `peek` of each, 16 at a time, stopping at the first that does.
- * Units carry the column only when they hold opacity above 1, but a container
- * takes one layout for all of them, so when any has it every unit must be given
- * it (see `withOpacityLinear`; the rest then read as `sigmoid(opacity)`).
+ * The container's `opacityAboveOne` must cover every unit, but only the first
+ * is decoded up front.
  *
  * @param units - The units to check.
- * @param peek - Reports whether one unit carries `opacity_linear`.
- * @returns True when any unit carries it.
+ * @param peek - Reports whether one unit may hold opacity above 1.
+ * @returns True when any unit may.
  */
-const anyUnitHasOpacityLinear = async <T>(
+const anyUnitOpacityAboveOne = async <T>(
     units: readonly T[],
     peek: (unit: T) => Promise<boolean>
 ): Promise<boolean> => {
@@ -159,4 +161,4 @@ const anyUnitHasOpacityLinear = async <T>(
     return false;
 };
 
-export { anyUnitHasOpacityLinear, containerSource, type ContainerSegment };
+export { anyUnitOpacityAboveOne, containerSource, type ContainerSegment };

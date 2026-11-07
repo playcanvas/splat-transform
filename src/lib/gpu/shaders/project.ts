@@ -120,12 +120,11 @@ fn main(
     let lsY = attr(8u, s);
     let lsZ = attr(9u, s);
     let opacity = attr(10u, s);
-    // LINEAR_OPACITY: the slot holds the true opacity A (may exceed 1)
-    // rather than a logit; see render/linear-opacity.ts.
-#ifdef LINEAR_OPACITY
-    var amp = opacity;
+    // the slot holds true opacity A (it may exceed 1); CLAMP_OPACITY draws at most 1
+#ifdef CLAMP_OPACITY
+    var amp = min(opacity, 1.0);
 #else
-    var amp = 1.0 / (1.0 + exp(-opacity));
+    var amp = opacity;
 #endif
     let fdcR = attr(11u, s);
     let fdcG = attr(12u, s);

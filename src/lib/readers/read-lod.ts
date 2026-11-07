@@ -1,16 +1,14 @@
-import { OPACITY_LINEAR_COLUMN } from '../chunk';
 import type { ChunkDataPool, ChunkSource } from '../chunk';
 import { withComments } from '../comments';
 import { withExtras } from '../extras';
 import { dirname, join, readFile } from '../io/read';
 import type { ReadFileSystem } from '../io/read';
-import { withOpacityLinear } from '../ops';
 import { isSplatModel } from '../splat-model';
 import type { SplatModel } from '../splat-model';
 import type { Options } from '../types';
 import { logger } from '../utils';
 
-import { anyUnitHasOpacityLinear, containerSource } from './container-source';
+import { anyUnitOpacityAboveOne, containerSource } from './container-source';
 import type { ContainerSegment } from './container-source';
 import { readSogSource, statSogSource } from './read-sog';
 
@@ -172,23 +170,17 @@ const readLodSource = async (
     const filesByLod = collectFilesByLod(meta, filename);
     const filesOf = (lod: number) => [...(filesByLod.get(lod)?.entries() ?? [])].sort(([a], [b]) => a - b);
 
-    // when any selected unit has opacity_linear every unit is given it; only each unit's meta.json is read
+    // whether any selected unit holds opacity above 1; only each unit's meta.json is read
     const paths = [...new Set(inputLods.flatMap((lod) => filesOf(lod).map(([file]) => related(meta.filenames[file]))))];
-    const anyLinear = await anyUnitHasOpacityLinear(paths, async (path) => {
-        const stat = await statSogSource(fileSystem, path);
-        return !!stat?.extraColumns.some((c) => c.name === OPACITY_LINEAR_COLUMN);
-    });
+    const opacityAboveOne = await anyUnitOpacityAboveOne(
+        paths,
+        async (path) => !!(await statSogSource(fileSystem, path))?.opacityAboveOne
+    );
 
     const segmentsByLod = inputLods.map((lod): ContainerSegment[] => {
         return filesOf(lod).map(([file, count]) => {
             const path = related(meta.filenames[file]);
-            return {
-                count,
-                decode: async () => {
-                    const source = await readSogSource(fileSystem, path, pool, { logging: 'silent' });
-                    return anyLinear ? withOpacityLinear(source, pool) : source;
-                }
-            };
+            return { count, decode: () => readSogSource(fileSystem, path, pool, { logging: 'silent' }) };
         });
     });
 
@@ -196,11 +188,10 @@ const readLodSource = async (
     // for the whole tree wins over the files' own, and without one the files decide
     return withComments(
         withExtras(
-            await containerSource(
-                segmentsByLod,
-                pool,
-                meta.model === undefined ? {} : { model: modelFromLodMeta(meta.model) }
-            ),
+            await containerSource(segmentsByLod, pool, {
+                opacityAboveOne,
+                ...(meta.model === undefined ? {} : { model: modelFromLodMeta(meta.model) })
+            }),
             meta.extras
         ),
         Array.isArray(meta.comments) ? meta.comments.map(String) : undefined

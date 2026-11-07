@@ -101,11 +101,8 @@ type SceneRasterizerOptions = {
     groupTilesY: number;
     /** Clamp frame-filling splats to the image (see `SIZE_CLAMP_FRAC`); default true. */
     sizeClamp?: boolean;
-    /**
-     * The geometric layer's opacity slot holds linear true opacity (may exceed
-     * 1) rather than a logit — see `render/linear-opacity.ts`. Default false.
-     */
-    linearOpacity?: boolean;
+    /** Draw opacity above 1 as 1 (no over-unity profile). Default false. */
+    clampOpacity?: boolean;
     /**
      * The scene was trained with anti-aliasing: filter each splat with
      * `antiAliasFilterSize` instead of the dilation and scale its opacity by
@@ -334,7 +331,7 @@ class GpuSceneRasterizer {
         if (options.numSHBands >= 3) cdefines.set('SH_BAND_3', '');
         if (options.numSHBands >= 4) cdefines.set('SH_BAND_4', '');
         if (options.sizeClamp === false) cdefines.set('NO_SIZE_CLAMP', '');
-        if (options.linearOpacity) cdefines.set('LINEAR_OPACITY', '');
+        if (options.clampOpacity) cdefines.set('CLAMP_OPACITY', '');
         if (options.aaCompensation) cdefines.set('AA_COMPENSATION', '');
 
         const U = SHADERSTAGE_COMPUTE;

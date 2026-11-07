@@ -12,7 +12,6 @@ import {
     EPS_COV,
     LOG2PI,
     logAddExp,
-    sigmoid,
     ellipsoidArea,
     quatToRotmat,
     sigmaFromRotVar,
@@ -36,7 +35,7 @@ type CostCache = {
 };
 
 const buildCostCache = (view: SplatView): CostCache => {
-    const { geo, linearOpacity } = view;
+    const { geo } = view;
     const n = geo.length / 8;
     const R = new Float32Array(n * 9);
     const v = new Float32Array(n * 3);
@@ -50,7 +49,7 @@ const buildCostCache = (view: SplatView): CostCache => {
         const i8 = 8 * i;
         const i9 = 9 * i;
 
-        const linAlpha = sigmoid(geo[i8 + 7]);
+        const linAlpha = geo[i8 + 7];
         const sx = Math.max(Math.exp(geo[i8 + 4]), 1e-12);
         const sy = Math.max(Math.exp(geo[i8 + 5]), 1e-12);
         const sz = Math.max(Math.exp(geo[i8 + 6]), 1e-12);
@@ -81,7 +80,7 @@ const buildCostCache = (view: SplatView): CostCache => {
         quatToRotmat(qw, qx, qy, qz, R, i9);
         sigmaFromRotVar(R, i9, vx, vy, vz, sigma, i9);
 
-        mass[i] = (linearOpacity ? linearOpacity[i] : linAlpha) * ellipsoidArea(sx, sy, sz) + 1e-12;
+        mass[i] = linAlpha * ellipsoidArea(sx, sy, sz) + 1e-12;
     }
 
     return { R, v, invdiag, logdet, sigma, mass };

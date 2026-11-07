@@ -16,6 +16,7 @@ import { readLcc, readLccSource, readLccEnvironmentSource } from '../src/lib/rea
 import { materializeToDataTable } from '../src/lib/compat/data-table.js';
 import { permuteSource } from '../src/lib/ops/index.js';
 import { createChunkDataPool } from '../src/lib/chunk/index.js';
+import { assertColumnValue } from './helpers/test-utils.mjs';
 
 // One quadtree unit, two LODs: LOD 0 = 3 splats, LOD 1 = 2 splats. data.bin
 // lays the 5 splats out contiguously (LOD 0 at offset 0, LOD 1 at offset 96);
@@ -103,7 +104,7 @@ describe('readLccSource (chunked) vs readLcc (eager)', () => {
                 const e = eager.getColumnByName(name).data;
                 const f = flat.getColumnByName(name).data;
                 for (let i = 0; i < eager.numRows; i++) {
-                    assert.strictEqual(f[i], e[i], `column '${name}' row ${i}`);
+                    assertColumnValue(name, f[i], e[i], `column '${name}' row ${i}`);
                 }
             }
         });
@@ -140,7 +141,8 @@ describe('readLccSource (chunked) vs readLcc (eager)', () => {
         for (let j = 0; j < count; j++) {
             const e = idx[j];
             assert.strictEqual(pos[j * 3], eager1.getColumnByName('x').data[e], `x out-row ${j}`);
-            assert.strictEqual(op[j], eager1.getColumnByName('opacity').data[e], `opacity out-row ${j}`);
+            // the source holds true opacity; the eager table its logit
+            assert.ok(Math.abs(op[j] - 1 / (1 + Math.exp(-eager1.getColumnByName('opacity').data[e]))) < 1e-6, `opacity out-row ${j}`);
             assert.strictEqual(dc[j * 3], eager1.getColumnByName('f_dc_0').data[e], `f_dc_0 out-row ${j}`);
             assert.strictEqual(nx[j], eager1.getColumnByName('nx').data[e], `nx out-row ${j}`);
         }
@@ -235,7 +237,7 @@ describe('readLccSource: multi-unit, non-contiguous offsets', () => {
                 const e = eager.getColumnByName(name).data;
                 const f = flat.getColumnByName(name).data;
                 for (let i = 0; i < eager.numRows; i++) {
-                    assert.strictEqual(f[i], e[i], `column '${name}' row ${i}`);
+                    assertColumnValue(name, f[i], e[i], `column '${name}' row ${i}`);
                 }
             }
         });
@@ -257,7 +259,7 @@ describe('readLccSource: multi-unit, non-contiguous offsets', () => {
             const e = eager.getColumnByName(name).data;
             const g = gathered.getColumnByName(name).data;
             for (let j = 0; j < order.length; j++) {
-                assert.strictEqual(g[j], e[order[j]], `column '${name}' out-row ${j}`);
+                assertColumnValue(name, g[j], e[order[j]], `column '${name}' out-row ${j}`);
             }
         }
     });
