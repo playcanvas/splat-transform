@@ -53,24 +53,20 @@ const rawColumnMap: Record<string, string> = {
 };
 
 /**
- * The `opacity` logit a standard PLY stores for true opacity `a`, as f32: what
- * `opacity_raw` compares. A source keeps true opacity (f32), not the logit it was
- * read from, so this is the read logit to within f32 rounding of that opacity.
+ * The value `opacity_raw` compares for true opacity `a` against threshold `v`: the
+ * `opacity` logit a standard PLY stores for `a` (f32; opacity above 1 as its clamped
+ * logit), or `v` itself when `v` is a logit that reads as exactly `a` (`a` below 1).
+ * A source keeps true opacity, not the logit it was read from, so a read logit comes
+ * back only within f32 rounding of its opacity; matching it this way keeps a logit
+ * equal to itself after a read (`opacity_raw eq 1` holds for a logit of exactly 1)
+ * while every other comparison is against the exact stored logit.
  *
  * @param a - True opacity.
- * @returns The stored logit.
- */
-const opacityRaw = (a: number): number => Math.fround(opacityToLogit(a));
-
-/**
- * An `opacity_raw` threshold as compared against {@link opacityRaw} values: the
- * logit read as f32 true opacity and back, so a logit compares equal to itself
- * after a read (`opacity_raw eq 1` holds for a logit of exactly 1).
- *
  * @param v - The threshold logit.
- * @returns The threshold, rounded as a read logit is.
+ * @returns The value to compare with `v`.
  */
-const opacityRawThreshold = (v: number): number => opacityRaw(Math.fround(1 / (1 + Math.exp(-v))));
+const opacityRaw = (a: number, v: number): number =>
+    a < 1 && a === Math.fround(1 / (1 + Math.exp(-v))) ? v : Math.fround(opacityToLogit(a));
 
 const transformColumnNames = new Set([
     'x',
@@ -92,12 +88,4 @@ const transformColumnNames = new Set([
  */
 const isTransformColumn = (name: string): boolean => transformColumnNames.has(name) || /^f_rest_\d+$/.test(name);
 
-export {
-    SH_C0,
-    inverseTransforms,
-    forwardTransforms,
-    rawColumnMap,
-    isTransformColumn,
-    opacityRaw,
-    opacityRawThreshold
-};
+export { SH_C0, inverseTransforms, forwardTransforms, rawColumnMap, isTransformColumn, opacityRaw };

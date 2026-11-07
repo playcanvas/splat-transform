@@ -219,8 +219,24 @@ describe('opacity_raw', () => {
         const src = sourceWith([1.5], true);
         const rows = async (comparator, value) =>
             Array.from(await filterByValueRows(src, pool, { columnName: 'opacity_raw', comparator, value }));
+        const stored = Math.fround(opacityToLogit(1.5)); // 16.11809539794922
         assert.deepStrictEqual(await rows('gt', 20), [], 'its stored logit is ~16.12, not above 20');
+        assert.deepStrictEqual(await rows('gt', 16.2), [], 'nor above 16.2');
         assert.deepStrictEqual(await rows('gt', 16), [0]);
+        assert.deepStrictEqual(await rows('eq', stored), [0], 'equal to its exact stored logit');
+        assert.deepStrictEqual(await rows('gte', stored), [0]);
+        assert.deepStrictEqual(await rows('gt', stored), []);
+    });
+
+    it('compares the same way on a DataTable carrying opacity_linear', async () => {
+        const { processDataTable } = await import('../src/lib/index.js');
+        const table = await materializeToDataTable(sourceWith([1.5], true), createChunkDataPool());
+        const keep = async (comparator, value) =>
+            (await processDataTable(table, [{ kind: 'filterByValue', columnName: 'opacity_raw', comparator, value }])).numRows;
+        const stored = Math.fround(opacityToLogit(1.5));
+        assert.strictEqual(await keep('gt', 16.2), 0);
+        assert.strictEqual(await keep('gt', 16), 1);
+        assert.strictEqual(await keep('eq', stored), 1);
     });
 
     it('compares a read logit equal to itself', async () => {

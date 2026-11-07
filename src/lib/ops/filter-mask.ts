@@ -3,13 +3,7 @@ import { Vec3 } from 'playcanvas';
 import { SH_REST_COUNTS } from '../chunk';
 import type { ChunkData, ChunkDataPool, ChunkLayer, ChunkSource, ChunkSourceMetadata } from '../chunk';
 import { Transform } from '../utils';
-import {
-    inverseTransforms,
-    isTransformColumn,
-    opacityRaw,
-    opacityRawThreshold,
-    rawColumnMap
-} from '../value-transforms';
+import { inverseTransforms, isTransformColumn, opacityRaw, rawColumnMap } from '../value-transforms';
 
 import { bakeTransform } from './bake-transform';
 
@@ -204,12 +198,12 @@ const filterByValueRows = (src: ChunkSource, pool: ChunkDataPool, params: ByValu
     let columnName = params.columnName;
     let value = params.value;
     // opacity_raw compares each gaussian's stored logit, from its true opacity
-    let toRaw: ((v: number) => number) | null = null;
+    let toRaw: ((a: number) => number) | null = null;
 
     if (columnName === 'opacity_raw') {
         columnName = 'opacity';
-        value = opacityRawThreshold(value);
-        toRaw = opacityRaw;
+        const threshold = value;
+        toRaw = (a) => opacityRaw(a, threshold);
     } else if (rawColumnMap[columnName]) {
         columnName = rawColumnMap[columnName];
     } else if (columnName !== 'opacity' && inverseTransforms[columnName]) {

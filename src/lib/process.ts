@@ -11,13 +11,7 @@ import { formatSourceInfo, formatSourceStats } from './source-info';
 import type { DeviceCreator } from './types';
 import { fmtCount, logger, Transform } from './utils';
 import type { Group } from './utils';
-import {
-    inverseTransforms,
-    rawColumnMap,
-    isTransformColumn,
-    opacityRaw,
-    opacityRawThreshold
-} from './value-transforms';
+import { inverseTransforms, rawColumnMap, isTransformColumn, opacityRaw } from './value-transforms';
 import { filterCluster as filterClusterFn } from './voxel/filter-cluster';
 import { filterFloaters as filterFloatersFn } from './voxel/filter-floaters';
 
@@ -391,8 +385,8 @@ const processDataTable = async (
                     if (columnName === 'opacity') {
                         get = linear ? (_, i) => linear[i] : (_, i) => Math.fround(1 / (1 + Math.exp(-logit![i])));
                     } else if (linear) {
-                        get = (_, i) => opacityRaw(linear[i]);
-                        value = opacityRawThreshold(value);
+                        const threshold = value;
+                        get = (_, i) => opacityRaw(linear[i], threshold);
                     } else {
                         get = (_, i) => logit![i];
                     }
