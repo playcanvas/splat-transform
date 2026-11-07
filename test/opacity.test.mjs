@@ -228,3 +228,21 @@ describe('a DataTable with an inconsistent logit', () => {
         assert.deepStrictEqual(await opacitySlot(dataTableToChunkSource(dt, pool.chunkSize), pool), [0.25]);
     });
 });
+
+describe('DataTable writers called directly', () => {
+    it('write opacity_linear, which wins over a stale opacity logit', async () => {
+        const { writeCompressedPly, writeSpz } = await import('../src/lib/index.js');
+        for (const [filename, write] of [['a.compressed.ply', writeCompressedPly], ['a.spz', writeSpz]]) {
+            const pool = createChunkDataPool();
+            const dt = createTestDataTable(8);
+            dt.getColumnByName('opacity').data.fill(20); // the logit says opaque
+            dt.addColumn(new Column('opacity_linear', new Float32Array(8).fill(0.25)));
+            const fs = new MemoryFileSystem();
+            await write({ filename, dataTable: dt }, fs);
+            const rfs = new MemoryReadFileSystem();
+            rfs.set(filename, fs.results.get(filename));
+            const [src] = await readFile({ filename, inputFormat: getInputFormat(filename), fileSystem: rfs, pool });
+            for (const v of await opacitySlot(src, pool)) assert.ok(Math.abs(v - 0.25) <= 1 / 255, `${filename}: ${v}`);
+        }
+    });
+});
