@@ -56,17 +56,21 @@ type MetaV2 = {
 };
 
 // The `other`-layer columns a V3 meta implies: each blind field under its recorded
-// name (integer encodings as uint32, the rest as float32).
+// name (integer encodings as uint32, the rest as float32), tagged with how it was stored.
 const extraColumnsFromMeta = (meta: MetaV2): ExtraColumn[] => {
     const extras: ExtraColumn[] = [];
     if (meta.version === 3 && meta.blind) {
-        for (const texture of meta.blind) {
+        meta.blind.forEach((texture, t) => {
             for (const f of texture.fields) {
                 if (!isBlindEncoding(f.type))
                     throw new Error(`SOG blind field '${f.name}' has unknown type '${f.type}'`);
-                extras.push({ name: f.name, type: isIntegerEncoding(f.type) ? 'uint32' : 'float32' });
+                extras.push({
+                    name: f.name,
+                    type: isIntegerEncoding(f.type) ? 'uint32' : 'float32',
+                    sogBlind: { texture: t, encoding: f.type, ...(f.range ? { range: f.range } : {}) }
+                });
             }
-        }
+        });
     }
     return extras;
 };

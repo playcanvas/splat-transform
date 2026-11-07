@@ -156,6 +156,35 @@ describe('CLI parsing', () => {
         }
     });
 
+    it('keeps a SOG input\'s blind data by default, and drops it with --sog-blind none', async () => {
+        const { Column } = await import('../src/lib/index.js');
+        const { createTestDataTable, encodePlyBinary } = await import('./helpers/test-utils.mjs');
+        const dt = createTestDataTable(16);
+        dt.addColumn(new Column('depth', Float32Array.from({ length: 16 }, (_, i) => 1 + i)));
+        dt.addColumn(new Column('id', Uint32Array.from({ length: 16 }, (_, i) => i * 1000)));
+        const dir = await mkdtemp(join(tmpdir(), 'st-blind-keep-'));
+        try {
+            await writeFile(join(dir, 'in.ply'), encodePlyBinary(dt));
+            const first = await runCli(['--gpu', 'cpu', join(dir, 'in.ply'), '--sog-blind', 'depth:unorm8[1,16],id', join(dir, 'a.sog')]);
+            assert.strictEqual(first.code, 0, first.stderr);
+            await mkdir(join(dir, 'kept'));
+            const kept = await runCli(['--gpu', 'cpu', join(dir, 'a.sog'), join(dir, 'kept', 'meta.json')]);
+            assert.strictEqual(kept.code, 0, kept.stderr);
+            assert.deepStrictEqual(JSON.parse(await readFile(join(dir, 'kept', 'meta.json'), 'utf8')).blind, [
+                { files: ['blind_0.webp'], fields: [{ name: 'depth', type: 'unorm8', range: [1, 16] }, { name: 'id', type: 'u16' }] }
+            ]);
+            await mkdir(join(dir, 'dropped'));
+            const dropped = await runCli(['--gpu', 'cpu', join(dir, 'a.sog'), '--sog-blind', 'none', join(dir, 'dropped', 'meta.json')]);
+            assert.strictEqual(dropped.code, 0, dropped.stderr);
+            assert.strictEqual(JSON.parse(await readFile(join(dir, 'dropped', 'meta.json'), 'utf8')).blind, undefined);
+            const mixed = await runCli(['--gpu', 'cpu', join(dir, 'a.sog'), '--sog-blind', 'none', '--sog-blind', 'id', 'null']);
+            assert.notStrictEqual(mixed.code, 0);
+            assert.match(mixed.stderr, /none cannot be combined/);
+        } finally {
+            await rm(dir, { recursive: true, force: true });
+        }
+    });
+
     it('rejects a malformed --sog-blind', async () => {
         for (const value of [':u8', 'id:5', 'id:u8:u8', 'id:unorm8[0]', 'a,,b', 'id:u9']) {
             const result = await runCli(['--gpu', 'cpu', 'test/fixtures/splat/minimal.splat', '--sog-blind', value, 'null']);

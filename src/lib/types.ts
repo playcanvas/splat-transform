@@ -56,7 +56,10 @@ type Options = {
     /** SOG format version to write (SOG, SOG bundle and LOD output). Default: 3. HTML output always embeds v2. */
     sogVersion?: 2 | 3;
 
-    /** Per-gaussian SOG blind data (v3 only): source columns packed into blind textures, one entry per texture. */
+    /**
+     * Per-gaussian SOG blind data (v3 only): source columns packed into blind textures, one entry per texture.
+     * Undefined stores the columns read from SOG blind data as they were stored; an empty list stores none.
+     */
     sogBlind?: SogBlindTexture[];
 
     /** JSON to store as the SOG / LOD output's `extras` (application-defined, as in glTF). Default: the source's extras. */

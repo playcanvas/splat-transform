@@ -3,6 +3,7 @@ import { resolveComments } from '../comments';
 import { resolveExtras } from '../extras';
 import { resolveSplatModel } from '../splat-model';
 import { logger } from '../utils';
+import { combineBlindOrigins } from '../utils/sog-blind';
 
 const LAYERS: ChunkLayer[] = ['position', 'geometric', 'color', 'other'];
 
@@ -103,6 +104,7 @@ const concatSource = (allSources: ChunkSource[], pool: ChunkDataPool): ChunkSour
         ...(extras !== undefined ? { extras } : {}),
         ...(comments?.length ? { comments } : {}),
         ...(sources.some((s) => s.meta.opacityAboveOne) ? { opacityAboveOne: true } : {}),
+        extraColumns: combineBlindOrigins(sources.map((s) => s.meta.extraColumns)),
         model,
         numGaussians: total,
         numLods: 1,

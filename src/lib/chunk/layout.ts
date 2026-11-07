@@ -1,3 +1,5 @@
+import type { SogBlindOrigin } from '../utils/sog-blind';
+
 /**
  * ChunkLayer identifiers — the disjoint storage tiers of a gaussian source.
  *
@@ -124,6 +126,8 @@ const hasGaussianLayers = (layers: ReadonlySet<ChunkLayer>): boolean => {
 type ExtraColumn = {
     readonly name: string;
     readonly type: 'float32' | 'uint32';
+    /** How the SOG file it was read from stored it as blind data; a SOG write stores it the same way by default. */
+    readonly sogBlind?: SogBlindOrigin;
 };
 
 /**

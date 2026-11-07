@@ -17,6 +17,7 @@ import { encodeQuatExpMap } from '../utils/quat-expmap';
 import {
     BLIND_ENCODING_BYTES,
     blindFieldId,
+    blindTexturesOf,
     encodeBlindValue,
     integerEncodingFor,
     isBlindEncoding
@@ -172,6 +173,8 @@ type WriteSogSourceOptions = {
      * Per-gaussian blind data (v3 only): source columns packed into blind
      * textures, one entry per texture. Each texture's fields fill its 4 bytes
      * (R, G, B, A) in order; see {@link SogBlindEncoding} for the encodings.
+     * Undefined stores the columns the source read from SOG blind data as
+     * they were stored; an empty list stores none.
      */
     blind?: SogBlindTexture[];
     /**
@@ -390,7 +393,8 @@ const startSogWrite = async (
             );
         }
     }
-    const blindTextures = options.blind ?? [];
+    // by default, store the columns read from SOG blind data as they were stored
+    const blindTextures = options.blind ?? blindTexturesOf(source.meta.extraColumns);
     validateBlindTextures(blindTextures);
 
     let baked = bakeTransform(source, Transform.PLY);

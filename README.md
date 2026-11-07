@@ -208,7 +208,8 @@ Apply when writing `.sog`, `meta.json`, `lod-meta.json`, or `.html` outputs.
                                           enc: u8 u16 u24 u32 (unsigned integers), f16 f32 (float bits),
                                           unorm8 unorm16 (float in [0,1], or unorm8[min,max]). Default: the
                                           fewest-byte uint that fits. Repeatable, e.g. --sog-blind id
-                                          --sog-blind a:unorm8,b:unorm8,depth:f16
+                                          --sog-blind a:unorm8,b:unorm8,depth:f16. Without the flag, columns read
+                                          from SOG blind data are stored as they were; --sog-blind none stores none
     --sog-extras       <file.json>      Store this JSON as the output's extras (meta.json / lod-meta.json,
                                           SOG v3 only), application-defined data as in glTF. Default: the input's
                                           extras, if any

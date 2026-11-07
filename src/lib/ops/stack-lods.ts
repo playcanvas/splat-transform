@@ -1,6 +1,7 @@
 import type { ChunkLayer, ChunkSource, ChunkSourceMetadata, ReadRequest } from '../chunk';
 import { resolveComments } from '../comments';
 import { resolveExtras } from '../extras';
+import { combineBlindOrigins } from '../utils/sog-blind';
 
 const LAYERS: ChunkLayer[] = ['position', 'geometric', 'color', 'other'];
 
@@ -69,6 +70,7 @@ const stackLods = (sources: ChunkSource[]): ChunkSource => {
         ...(extras !== undefined ? { extras } : {}),
         ...(comments?.length ? { comments } : {}),
         ...(sources.some((s) => s.meta.opacityAboveOne) ? { opacityAboveOne: true } : {}),
+        extraColumns: combineBlindOrigins(sources.map((s) => s.meta.extraColumns)),
         numGaussians: lodCounts[0],
         numLods: sources.length,
         lodCounts,

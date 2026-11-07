@@ -1,3 +1,7 @@
+import type { ChunkSource, ExtraColumn } from '../chunk';
+
+import { logger } from './logger';
+
 /**
  * SOG v3 blind data encodings: how one source column is stored in the bytes
  * of a blind texture. Each blind texture holds up to 4 bytes per gaussian
@@ -23,6 +27,18 @@ type SogBlindField = {
 
 /** One SOG blind texture: fields filling its 4 bytes (R, G, B, A) in order. */
 type SogBlindTexture = SogBlindField[];
+
+/**
+ * How a SOG file stored an extra column as blind data: its texture (the index
+ * in the file's `blind` list), encoding and unorm range. The SOG reader tags
+ * the columns it reads with it, so a SOG write stores them the same way by
+ * default.
+ */
+type SogBlindOrigin = {
+    readonly texture: number;
+    readonly encoding: SogBlindEncoding;
+    readonly range?: readonly [number, number];
+};
 
 /** Bytes each encoding occupies. */
 const BLIND_ENCODING_BYTES: Readonly<Record<SogBlindEncoding, number>> = {
@@ -176,8 +192,92 @@ const decodeBlindValue = (bits: number, encoding: SogBlindEncoding, range: [numb
     }
 };
 
+const isUnorm = (e: SogBlindEncoding): boolean => e.startsWith('unorm');
+
+/**
+ * The blind textures that store the tagged extra columns as the SOG file
+ * they came from did: grouped by texture, fields in column order.
+ *
+ * @param columns - The source's extra columns.
+ * @returns The blind textures; empty when no column is tagged.
+ */
+const blindTexturesOf = (columns: readonly ExtraColumn[]): SogBlindTexture[] => {
+    const textures = new Map<number, SogBlindTexture>();
+    for (const { name, sogBlind } of columns) {
+        if (!sogBlind) continue;
+        const { texture, encoding, range } = sogBlind;
+        let fields = textures.get(texture);
+        if (!fields) textures.set(texture, (fields = []));
+        fields.push({ column: name, encoding, ...(range ? { range: [range[0], range[1]] } : {}) });
+    }
+    return [...textures.keys()].sort((a, b) => a - b).map((t) => textures.get(t)!);
+};
+
+/**
+ * The extra columns of a combined scene (whose inputs share column names and
+ * types), with each column's blind origin merged: unorm ranges widen to hold
+ * every input's values, and where inputs stored a column with different
+ * encodings or textures the first input's is kept, with a warning.
+ *
+ * @param lists - Each input's extra columns.
+ * @returns The combined scene's extra columns.
+ */
+const combineBlindOrigins = (lists: readonly (readonly ExtraColumn[])[]): readonly ExtraColumn[] => {
+    let conflict = false;
+    const combined = lists[0].map((column, i) => {
+        let origin: SogBlindOrigin | undefined;
+        for (const list of lists) {
+            const o = list[i].sogBlind;
+            if (!o) continue;
+            if (!origin) {
+                origin = o;
+                continue;
+            }
+            if (o.texture !== origin.texture || o.encoding !== origin.encoding) conflict = true;
+            if (isUnorm(o.encoding) && isUnorm(origin.encoding)) {
+                const [min, max] = origin.range ?? [0, 1];
+                const [oMin, oMax] = o.range ?? [0, 1];
+                if (oMin < min || oMax > max) {
+                    origin = { ...origin, range: [Math.min(min, oMin), Math.max(max, oMax)] };
+                }
+            }
+        }
+        return origin === column.sogBlind ? column : { ...column, sogBlind: origin };
+    });
+    if (conflict) {
+        logger.warn("inputs store blind data with different encodings; the combined scene keeps the first input's");
+    }
+    return combined;
+};
+
+/**
+ * The same source with its extra columns' blind origins taken from `columns`
+ * (matched by name and type), for a source rebuilt from a DataTable, which
+ * cannot carry them. Reads are untouched.
+ *
+ * @param source - The source.
+ * @param columns - The extra columns carrying the origins.
+ * @returns A source whose extra columns carry the origins.
+ */
+const withBlindOrigins = (source: ChunkSource, columns: readonly ExtraColumn[]): ChunkSource => {
+    if (!columns.some((c) => c.sogBlind)) return source;
+    const extraColumns = source.meta.extraColumns.map((column) => {
+        const sogBlind = columns.find((c) => c.name === column.name && c.type === column.type)?.sogBlind;
+        return sogBlind ? { ...column, sogBlind } : column;
+    });
+    // delegate rather than spread: sources may be class instances
+    return {
+        meta: { ...source.meta, extraColumns },
+        read: (request) => source.read(request),
+        close: () => source.close()
+    };
+};
+
 export {
     BLIND_ENCODING_BYTES,
+    blindTexturesOf,
+    combineBlindOrigins,
+    withBlindOrigins,
     blindFieldId,
     decodeBlindValue,
     encodeBlindValue,
@@ -188,5 +288,6 @@ export {
     isIntegerEncoding,
     type SogBlindEncoding,
     type SogBlindField,
+    type SogBlindOrigin,
     type SogBlindTexture
 };

@@ -18,6 +18,7 @@ import { processDataTable } from './process';
 import type { ProcessAction, ProcessOptions } from './process';
 import { formatSourceInfo, formatSourceStats } from './source-info';
 import { logger, Transform } from './utils';
+import { withBlindOrigins } from './utils/sog-blind';
 
 /**
  * The `ProcessAction` kinds `processSource` can apply natively on the streaming
@@ -171,13 +172,16 @@ const processSourceBridged = async (
             // the run on the table, and re-bridge back to a source to keep going.
             const dt = await materializeToDataTable(src, pool);
             await src.close();
-            // the table carries no extras or comments; re-attach the scene's
-            src = withComments(
-                withExtras(
-                    dataTableToChunkSource(await processDataTable(dt, run, options), pool.chunkSize),
-                    src.meta.extras
+            // the table carries no extras, comments or blind origins; re-attach the scene's
+            src = withBlindOrigins(
+                withComments(
+                    withExtras(
+                        dataTableToChunkSource(await processDataTable(dt, run, options), pool.chunkSize),
+                        src.meta.extras
+                    ),
+                    src.meta.comments
                 ),
-                src.meta.comments
+                src.meta.extraColumns
             );
         }
         i = j;
