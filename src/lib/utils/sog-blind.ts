@@ -1,7 +1,5 @@
 import type { ChunkSource, ExtraColumn } from '../chunk';
 
-import { logger } from './logger';
-
 /**
  * SOG v3 blind data encodings: how one source column is stored in the bytes
  * of a blind texture. Each blind texture holds up to 4 bytes per gaussian
@@ -196,35 +194,62 @@ const isUnorm = (e: SogBlindEncoding): boolean => e.startsWith('unorm');
 
 /**
  * The blind textures that store the tagged extra columns as the SOG file
- * they came from did: grouped by texture, fields in column order.
+ * they came from did: grouped by texture, fields in column order. A group
+ * that no longer fits one texture's 4 bytes (a combined scene widened an
+ * encoding) continues in the next.
  *
  * @param columns - The source's extra columns.
  * @returns The blind textures; empty when no column is tagged.
  */
 const blindTexturesOf = (columns: readonly ExtraColumn[]): SogBlindTexture[] => {
-    const textures = new Map<number, SogBlindTexture>();
-    for (const { name, sogBlind } of columns) {
-        if (!sogBlind) continue;
-        const { texture, encoding, range } = sogBlind;
-        let fields = textures.get(texture);
-        if (!fields) textures.set(texture, (fields = []));
-        fields.push({ column: name, encoding, ...(range ? { range: [range[0], range[1]] } : {}) });
+    const groups = new Map<number, ExtraColumn[]>();
+    for (const column of columns) {
+        if (!column.sogBlind) continue;
+        const group = groups.get(column.sogBlind.texture);
+        if (group) group.push(column);
+        else groups.set(column.sogBlind.texture, [column]);
     }
-    return [...textures.keys()].sort((a, b) => a - b).map((t) => textures.get(t)!);
+    const textures: SogBlindTexture[] = [];
+    for (const t of [...groups.keys()].sort((a, b) => a - b)) {
+        let fields: SogBlindTexture = [];
+        let bytes = 0;
+        for (const { name, sogBlind } of groups.get(t)!) {
+            const { encoding, range } = sogBlind!;
+            if (bytes + BLIND_ENCODING_BYTES[encoding] > 4) {
+                textures.push(fields);
+                fields = [];
+                bytes = 0;
+            }
+            fields.push({ column: name, encoding, ...(range ? { range: [range[0], range[1]] } : {}) });
+            bytes += BLIND_ENCODING_BYTES[encoding];
+        }
+        textures.push(fields);
+    }
+    return textures;
+};
+
+/**
+ * The narrowest encoding that holds every value of both: the wider unsigned
+ * integer, unorm16 for two unorms, else f32, which holds any decoded float.
+ */
+const widerEncoding = (a: SogBlindEncoding, b: SogBlindEncoding): SogBlindEncoding => {
+    if (a === b) return a;
+    if (isIntegerEncoding(a) && isIntegerEncoding(b)) return BLIND_ENCODING_BYTES[a] >= BLIND_ENCODING_BYTES[b] ? a : b;
+    if (isUnorm(a) && isUnorm(b)) return 'unorm16';
+    return 'f32';
 };
 
 /**
  * The extra columns of a combined scene (whose inputs share column names and
- * types), with each column's blind origin merged: unorm ranges widen to hold
- * every input's values, and where inputs stored a column with different
- * encodings or textures the first input's is kept, with a warning.
+ * types), with each column's blind origin merged to hold every input's
+ * values: encodings widen (see {@link widerEncoding}), unorm ranges widen to
+ * their union, and the first input's texture is kept.
  *
  * @param lists - Each input's extra columns.
  * @returns The combined scene's extra columns.
  */
 const combineBlindOrigins = (lists: readonly (readonly ExtraColumn[])[]): readonly ExtraColumn[] => {
-    let conflict = false;
-    const combined = lists[0].map((column, i) => {
+    return lists[0].map((column, i) => {
         let origin: SogBlindOrigin | undefined;
         for (const list of lists) {
             const o = list[i].sogBlind;
@@ -233,21 +258,20 @@ const combineBlindOrigins = (lists: readonly (readonly ExtraColumn[])[]): readon
                 origin = o;
                 continue;
             }
-            if (o.texture !== origin.texture || o.encoding !== origin.encoding) conflict = true;
-            if (isUnorm(o.encoding) && isUnorm(origin.encoding)) {
+            const encoding = widerEncoding(origin.encoding, o.encoding);
+            let range: readonly [number, number] | undefined;
+            if (isUnorm(encoding)) {
                 const [min, max] = origin.range ?? [0, 1];
                 const [oMin, oMax] = o.range ?? [0, 1];
-                if (oMin < min || oMax > max) {
-                    origin = { ...origin, range: [Math.min(min, oMin), Math.max(max, oMax)] };
-                }
+                range = [Math.min(min, oMin), Math.max(max, oMax)];
+                if (range[0] === 0 && range[1] === 1) range = undefined;
+            }
+            if (encoding !== origin.encoding || range?.[0] !== origin.range?.[0] || range?.[1] !== origin.range?.[1]) {
+                origin = { texture: origin.texture, encoding, ...(range ? { range } : {}) };
             }
         }
         return origin === column.sogBlind ? column : { ...column, sogBlind: origin };
     });
-    if (conflict) {
-        logger.warn("inputs store blind data with different encodings; the combined scene keeps the first input's");
-    }
-    return combined;
 };
 
 /**

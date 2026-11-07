@@ -1,7 +1,8 @@
-import type { ChunkDataPool, ReadRequest, ChunkSource, ChunkSourceMetadata } from '../chunk';
+import type { ChunkDataPool, ReadRequest, ChunkSource, ChunkSourceMetadata, ExtraColumn } from '../chunk';
 import { concatSource } from '../ops';
 import type { SplatModel } from '../splat-model';
 import type { Transform } from '../utils';
+import { combineBlindOrigins } from '../utils/sog-blind';
 
 /**
  * One contiguous run of gaussians within a LOD, backed by a sub-file that is
@@ -37,13 +38,20 @@ type ContainerSegment = {
  * @param opts.cacheSize - Max resident decoded sub-files (default 3, min 2 so a chunk straddling two segments can be served).
  * @param opts.transform - Override the reported pending transform (sub-files decode to their own space; e.g. LCC2 relabels to `LCC2_TRANSFORM`). The sub-file data is unchanged — this only sets `meta.transform`.
  * @param opts.model - Override the reported splat model (e.g. the one a `lod-meta.json` records for all its files). Only sets `meta.model`.
- * @param opts.opacityAboveOne - Some unit may hold opacity above 1 (see {@link anyUnitOpacityAboveOne}); sets `meta.opacityAboveOne`.
+ * @param opts.opacityAboveOne - Some unit may hold opacity above 1 (see {@link summarizeUnits}); sets `meta.opacityAboveOne`.
+ * @param opts.extraColumns - The extra columns of every unit combined (see {@link summarizeUnits}), so their SOG blind origins cover the whole container; used when the names and types match the first unit's.
  * @returns A lazy multi-LOD source over the container.
  */
 const containerSource = async (
     segmentsByLod: ContainerSegment[][],
     pool: ChunkDataPool,
-    opts: { cacheSize?: number; transform?: Transform; model?: SplatModel; opacityAboveOne?: boolean } = {}
+    opts: {
+        cacheSize?: number;
+        transform?: Transform;
+        model?: SplatModel;
+        opacityAboveOne?: boolean;
+        extraColumns?: readonly ExtraColumn[];
+    } = {}
 ): Promise<ChunkSource> => {
     const cacheSize = Math.max(2, opts.cacheSize ?? 3);
     const cache = new Map<ContainerSegment, Promise<ChunkSource>>();
@@ -112,6 +120,9 @@ const containerSource = async (
     const meta: ChunkSourceMetadata = {
         ...firstLayout,
         ...(opts.opacityAboveOne ? { opacityAboveOne: true } : {}),
+        ...(opts.extraColumns && columnsKey(opts.extraColumns) === columnsKey(layout.extraColumns)
+            ? { extraColumns: opts.extraColumns }
+            : {}),
         transform: opts.transform ?? layout.transform,
         model: opts.model ?? layout.model,
         numGaussians: lodCounts[0] ?? 0,
@@ -140,25 +151,36 @@ const containerSource = async (
     return { meta, read, close };
 };
 
+const columnsKey = (columns: readonly ExtraColumn[]) => columns.map((e) => `${e.name}:${e.type}`).join(',');
+
+/** What a header-only peek of one container unit reports. */
+type UnitSummary = Partial<Pick<ChunkSourceMetadata, 'opacityAboveOne' | 'extraColumns'>>;
+
 /**
- * Whether any of a container's units may hold opacity above 1, judged by a
- * header-only `peek` of each, 16 at a time, stopping at the first that does.
- * The container's `opacityAboveOne` must cover every unit, but only the first
- * is decoded up front.
+ * Summarize a container's units by a header-only `peek` of each, 16 at a
+ * time: whether any may hold opacity above 1, and their extra columns with
+ * the SOG blind origins combined (see {@link combineBlindOrigins}), so a
+ * range or encoding covers every unit's values. The container must describe
+ * every unit, but only the first is decoded up front.
  *
- * @param units - The units to check.
- * @param peek - Reports whether one unit may hold opacity above 1.
- * @returns True when any unit may.
+ * @param units - The units to summarize.
+ * @param peek - Reports one unit's summary, or null when it has none to give.
+ * @returns The container's summary.
  */
-const anyUnitOpacityAboveOne = async <T>(
+const summarizeUnits = async <T>(
     units: readonly T[],
-    peek: (unit: T) => Promise<boolean>
-): Promise<boolean> => {
+    peek: (unit: T) => Promise<UnitSummary | null>
+): Promise<UnitSummary> => {
+    const summaries: UnitSummary[] = [];
     for (let i = 0; i < units.length; i += 16) {
-        const found = await Promise.all(units.slice(i, i + 16).map(peek));
-        if (found.some(Boolean)) return true;
+        for (const s of await Promise.all(units.slice(i, i + 16).map(peek))) if (s) summaries.push(s);
     }
-    return false;
+    const lists = summaries.flatMap((s) => (s.extraColumns ? [s.extraColumns] : []));
+    const matching = lists.filter((l) => columnsKey(l) === columnsKey(lists[0]));
+    return {
+        ...(summaries.some((s) => s.opacityAboveOne) ? { opacityAboveOne: true } : {}),
+        ...(matching.length > 0 ? { extraColumns: combineBlindOrigins(matching) } : {})
+    };
 };
 
-export { anyUnitOpacityAboveOne, containerSource, type ContainerSegment };
+export { containerSource, summarizeUnits, type ContainerSegment };

@@ -435,26 +435,87 @@ describe('SOG blind data from a SOG input', () => {
         await src.close();
     });
 
-    it('combines inputs: widens unorm ranges, keeps the first encoding with a warning', async () => {
+    it('combines inputs: widens unorm ranges and encodings, without a warning', async () => {
         const { concatSource, stackLods } = await import('../src/lib/ops/index.js');
         const pool = createChunkDataPool();
         const a = await sogInput(pool);
         const wider = await sogInput(pool, [blind[0], [{ column: 'depth', encoding: 'unorm16', range: [0, 50] }, blind[1][1]]]);
+        const other = await sogInput(pool, [blind[0], [{ column: 'depth', encoding: 'f16' }, blind[1][1]]]);
         const depth = (src) => src.meta.extraColumns.find((c) => c.name === 'depth').sogBlind;
-        let warnings = await captureWarnings(async () => {
+        const warnings = await captureWarnings(async () => {
             assert.deepStrictEqual(depth(concatSource([a.src, wider.src], pool)), { texture: 1, encoding: 'unorm16', range: [0, 50] });
             assert.deepStrictEqual(depth(stackLods([a.src, wider.src])), { texture: 1, encoding: 'unorm16', range: [0, 50] });
+            assert.deepStrictEqual(depth(concatSource([a.src, other.src], pool)), { texture: 1, encoding: 'f32' }, 'unorm16 and f16 widen to f32');
         });
         assert.deepStrictEqual(warnings, []);
-        const other = await sogInput(pool, [blind[0], [{ column: 'depth', encoding: 'f16' }, blind[1][1]]]);
-        warnings = await captureWarnings(async () => {
-            assert.deepStrictEqual(depth(concatSource([a.src, other.src], pool)), { texture: 1, encoding: 'unorm16', range: [0.1, 42] });
-        });
-        assert.ok(warnings.some((w) => /different encodings/.test(w)), warnings.join('\n'));
         // the widened range holds both inputs' values
         const { meta } = await writeSog(concatSource([a.src, wider.src], pool), pool);
         assert.deepStrictEqual(meta.blind[1].fields[0], { name: 'depth', type: 'unorm16', range: [0, 50] });
         for (const s of [a.src, wider.src, other.src]) await s.close();
+    });
+
+    it('widens integer encodings in either order, continuing an overfull texture in the next', async () => {
+        const { concatSource } = await import('../src/lib/ops/index.js');
+        const { dataTableToChunkSource } = await import('../src/lib/compat/data-table.js');
+        const { withBlindOrigins } = await import('../src/lib/utils/sog-blind.js');
+        const pool = createChunkDataPool();
+        const tagged = (ids, idEncoding) => {
+            const dt = createTestDataTable(ids.length);
+            dt.addColumn(new Column('id', Uint32Array.from(ids)));
+            for (const k of ['a', 'b', 'c']) dt.addColumn(new Column(k, new Float32Array(ids.length).fill(0.5)));
+            const src = dataTableToChunkSource(dt, pool.chunkSize);
+            return withBlindOrigins(src, src.meta.extraColumns.map((c) => ({
+                ...c, sogBlind: { texture: 0, encoding: c.name === 'id' ? idEncoding : 'unorm8' }
+            })));
+        };
+        const ids = (from) => Array.from({ length: 50 }, (_, i) => from + i);
+        for (const [first, second] of [[tagged(ids(0), 'u8'), tagged(ids(1000), 'u16')], [tagged(ids(1000), 'u16'), tagged(ids(0), 'u8')]]) {
+            const { meta, read } = await writeSog(concatSource([first, second], pool), pool);
+            assert.deepStrictEqual(meta.blind.map((t) => t.fields), [
+                [{ name: 'id', type: 'u16' }, { name: 'a', type: 'unorm8' }, { name: 'b', type: 'unorm8' }],
+                [{ name: 'c', type: 'unorm8' }]
+            ]);
+            const out = await read();
+            const table = await materializeToDataTable(out, pool);
+            assert.deepStrictEqual(Array.from(table.getColumnByName('id').data).sort((x, y) => x - y), [...ids(0), ...ids(1000)]);
+            await out.close();
+        }
+    });
+
+    it('covers every unit of a streamed scene', async () => {
+        const { stackLods, selectLod } = await import('../src/lib/ops/index.js');
+        const { dataTableToChunkSource } = await import('../src/lib/compat/data-table.js');
+        const { withBlindOrigins } = await import('../src/lib/utils/sog-blind.js');
+        const { writeLodSource } = await import('../src/lib/writers/write-lod.js');
+        const { readLodSource } = await import('../src/lib/readers/read-lod.js');
+        const pool = createChunkDataPool();
+        const level = (count) => {
+            const dt = createTestDataTable(count);
+            dt.addColumn(new Column('w', Float32Array.from({ length: count }, (_, i) => i / (count - 1))));
+            const src = dataTableToChunkSource(dt, pool.chunkSize);
+            return withBlindOrigins(src, [{ name: 'w', type: 'float32', sogBlind: { texture: 0, encoding: 'unorm8' } }]);
+        };
+        const fs = new MemoryFileSystem();
+        await writeLodSource({
+            filename: '/scene/lod-meta.json', mainSource: stackLods([level(64), level(16)]), envSource: null,
+            iterations: 1, chunkCount: 1, chunkExtent: 16
+        }, fs);
+        const rfs = new MemoryReadFileSystem();
+        for (const [path, bytes] of fs.results) {
+            const text = path.endsWith('/meta.json') && JSON.parse(new TextDecoder().decode(bytes));
+            if (text && text.count === 16) {
+                // the coarse unit stores w over [0, 10]: its values read 10x larger
+                text.blind[0].fields[0].range = [0, 10];
+                rfs.set(path, new TextEncoder().encode(JSON.stringify(text)));
+            } else {
+                rfs.set(path, bytes);
+            }
+        }
+        const lod = await readLodSource(rfs, '/scene/lod-meta.json', {}, pool);
+        assert.deepStrictEqual(lod.meta.extraColumns, [{ name: 'w', type: 'float32', sogBlind: { texture: 0, encoding: 'unorm8', range: [0, 10] } }]);
+        const { meta } = await writeSog(selectLod(lod, 1), pool);
+        assert.deepStrictEqual(meta.blind[0].fields, [{ name: 'w', type: 'unorm8', range: [0, 10] }]);
+        await lod.close();
     });
 
     it('keeps the tags across a DataTable round-trip', async () => {

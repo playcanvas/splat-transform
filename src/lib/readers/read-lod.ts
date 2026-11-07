@@ -8,7 +8,7 @@ import type { SplatModel } from '../splat-model';
 import type { Options } from '../types';
 import { logger } from '../utils';
 
-import { anyUnitOpacityAboveOne, containerSource } from './container-source';
+import { containerSource, summarizeUnits } from './container-source';
 import type { ContainerSegment } from './container-source';
 import { readSogSource, statSogSource } from './read-sog';
 
@@ -170,12 +170,9 @@ const readLodSource = async (
     const filesByLod = collectFilesByLod(meta, filename);
     const filesOf = (lod: number) => [...(filesByLod.get(lod)?.entries() ?? [])].sort(([a], [b]) => a - b);
 
-    // whether any selected unit holds opacity above 1; only each unit's meta.json is read
+    // whether any selected unit holds opacity above 1, and their blind origins; only each unit's meta.json is read
     const paths = [...new Set(inputLods.flatMap((lod) => filesOf(lod).map(([file]) => related(meta.filenames[file]))))];
-    const opacityAboveOne = await anyUnitOpacityAboveOne(
-        paths,
-        async (path) => !!(await statSogSource(fileSystem, path))?.opacityAboveOne
-    );
+    const units = await summarizeUnits(paths, (path) => statSogSource(fileSystem, path));
 
     const segmentsByLod = inputLods.map((lod): ContainerSegment[] => {
         return filesOf(lod).map(([file, count]) => {
@@ -189,7 +186,7 @@ const readLodSource = async (
     return withComments(
         withExtras(
             await containerSource(segmentsByLod, pool, {
-                opacityAboveOne,
+                ...units,
                 ...(meta.model === undefined ? {} : { model: modelFromLodMeta(meta.model) })
             }),
             meta.extras

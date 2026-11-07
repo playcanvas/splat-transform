@@ -8,7 +8,7 @@ import { basename, dirname, join, readFile, ZipReadFileSystem } from '../io/read
 import type { Options } from '../types';
 import { logger, Transform } from '../utils';
 
-import { anyUnitOpacityAboveOne, containerSource } from './container-source';
+import { containerSource, summarizeUnits } from './container-source';
 import type { ContainerSegment } from './container-source';
 import { readSog, readSogSource, statSogSource } from './read-sog';
 import { readSpz, readSpzHeader } from './read-spz';
@@ -835,20 +835,21 @@ const readLcc2Source = async (
         );
     }
 
-    // whether any selected SOG chunk holds opacity above 1; only each chunk's meta.json is read
+    // whether any selected SOG chunk holds opacity above 1, and their blind origins; only each chunk's meta.json is read
     const paths = segmentsByLod.flatMap((segs) => segs.map((seg) => chunkPaths.get(seg)!));
-    const opacityAboveOne =
-        splatType === '.sog' &&
-        (await anyUnitOpacityAboveOne(paths, async (path) => {
-            const zipFs = new ZipReadFileSystem(await openChunkSource(fileSystem, path));
-            try {
-                return !!(await statSogSource(zipFs, 'meta.json'))?.opacityAboveOne;
-            } finally {
-                zipFs.close();
-            }
-        }));
+    const units =
+        splatType === '.sog'
+            ? await summarizeUnits(paths, async (path) => {
+                  const zipFs = new ZipReadFileSystem(await openChunkSource(fileSystem, path));
+                  try {
+                      return await statSogSource(zipFs, 'meta.json');
+                  } finally {
+                      zipFs.close();
+                  }
+              })
+            : {};
 
-    return containerSource(segmentsByLod, pool, { transform: LCC2_TRANSFORM(), opacityAboveOne });
+    return containerSource(segmentsByLod, pool, { transform: LCC2_TRANSFORM(), ...units });
 };
 
 /**
