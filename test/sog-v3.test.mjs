@@ -282,6 +282,16 @@ describe('SOG v3 blind data', () => {
         await assert.rejects(roundTrip(dt, { blind: [[{ column: 'depth', encoding: 'unorm8' }]] }), /outside its unorm8 range \[0, 1\]/);
     });
 
+    it('accepts an endpoint value stored as f32 just outside its range', async () => {
+        // 0.1 stores as 0.10000000149011612, just above the range's 0.1
+        const values = Float32Array.from([0, 0.05, 0.1]);
+        const dt = withColumns(3, { weight: values });
+        const { table } = await roundTrip(dt, { blind: [[{ column: 'weight', encoding: 'unorm8', range: [0, 0.1] }]] });
+        const rows = sourceRows(dt, table);
+        const out = table.getColumnByName('weight').data;
+        for (let j = 0; j < 3; j++) assert.ok(Math.abs(out[j] - values[rows[j]]) <= (0.1 / 255) * 0.5 + 1e-6, `row ${j}: ${out[j]}`);
+    });
+
     it('stores f32 bits exactly and f16 rounded to nearest, mixed with an integer field', async () => {
         const f = Float32Array.from([0, -1.5, 3.14159, 1e-30, -65504, 123456.789]);
         const h = Float32Array.from([0, -1.5, 3.14159, 1e-5, -65504, 0.333]);

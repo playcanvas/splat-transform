@@ -1,3 +1,5 @@
+import { opacityToLogit } from './utils/opacity';
+
 /**
  * Conversions between user-friendly ("transformed") column values and raw PLY
  * storage values, shared by the `DataTable` process path and the `ChunkSource`
@@ -50,6 +52,26 @@ const rawColumnMap: Record<string, string> = {
     f_dc_2_raw: 'f_dc_2'
 };
 
+/**
+ * The `opacity` logit a standard PLY stores for true opacity `a`, as f32: what
+ * `opacity_raw` compares. A source keeps true opacity (f32), not the logit it was
+ * read from, so this is the read logit to within f32 rounding of that opacity.
+ *
+ * @param a - True opacity.
+ * @returns The stored logit.
+ */
+const opacityRaw = (a: number): number => Math.fround(opacityToLogit(a));
+
+/**
+ * An `opacity_raw` threshold as compared against {@link opacityRaw} values: the
+ * logit read as f32 true opacity and back, so a logit compares equal to itself
+ * after a read (`opacity_raw eq 1` holds for a logit of exactly 1).
+ *
+ * @param v - The threshold logit.
+ * @returns The threshold, rounded as a read logit is.
+ */
+const opacityRawThreshold = (v: number): number => opacityRaw(Math.fround(1 / (1 + Math.exp(-v))));
+
 const transformColumnNames = new Set([
     'x',
     'y',
@@ -70,4 +92,12 @@ const transformColumnNames = new Set([
  */
 const isTransformColumn = (name: string): boolean => transformColumnNames.has(name) || /^f_rest_\d+$/.test(name);
 
-export { SH_C0, inverseTransforms, forwardTransforms, rawColumnMap, isTransformColumn };
+export {
+    SH_C0,
+    inverseTransforms,
+    forwardTransforms,
+    rawColumnMap,
+    isTransformColumn,
+    opacityRaw,
+    opacityRawThreshold
+};

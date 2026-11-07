@@ -213,6 +213,48 @@ describe('opacity filters', () => {
     });
 });
 
+describe('opacity_raw', () => {
+    it('compares the logit a standard PLY stores: opacity above 1 as its clamped logit', async () => {
+        const pool = createChunkDataPool();
+        const src = sourceWith([1.5], true);
+        const rows = async (comparator, value) =>
+            Array.from(await filterByValueRows(src, pool, { columnName: 'opacity_raw', comparator, value }));
+        assert.deepStrictEqual(await rows('gt', 20), [], 'its stored logit is ~16.12, not above 20');
+        assert.deepStrictEqual(await rows('gt', 16), [0]);
+    });
+
+    it('compares a read logit equal to itself', async () => {
+        const pool = createChunkDataPool();
+        const dt = createTestDataTable(2);
+        dt.getColumnByName('opacity').data.set([1, -2]);
+        const src = await readPlyBytes(encodePlyBinary(dt), pool);
+        const rows = async (comparator, value) =>
+            Array.from(await filterByValueRows(src, pool, { columnName: 'opacity_raw', comparator, value }));
+        assert.deepStrictEqual(await rows('eq', 1), [0]);
+        assert.deepStrictEqual(await rows('gt', 1), []);
+        assert.deepStrictEqual(await rows('lt', 1), [1]);
+    });
+});
+
+describe('processDataTable opacity filters', () => {
+    it('compare true opacity, with opacity_linear winning, as the source filters do', async () => {
+        const { processDataTable } = await import('../src/lib/index.js');
+        const pool = createChunkDataPool();
+        const table = await materializeToDataTable(sourceWith([0.25, 0.75, 1.5], true), pool);
+        const keep = async (columnName, comparator, value) =>
+            (await processDataTable(table, [{ kind: 'filterByValue', columnName, comparator, value }])).numRows;
+        assert.strictEqual(await keep('opacity', 'gt', 1), 1, 'opacity above 1 is comparable');
+        assert.strictEqual(await keep('opacity', 'lt', 0.5), 1);
+        assert.strictEqual(await keep('opacity_raw', 'gt', 20), 0, 'opacity above 1 as its clamped logit');
+        // a stale logit loses to opacity_linear
+        const stale = createTestDataTable(2);
+        stale.getColumnByName('opacity').data.fill(20);
+        stale.addColumn(new Column('opacity_linear', Float32Array.from([0.25, 0.75])));
+        const out = await processDataTable(stale, [{ kind: 'filterByValue', columnName: 'opacity', comparator: 'lt', value: 0.5 }]);
+        assert.deepStrictEqual(Array.from(out.getColumnByName('opacity_linear').data), [0.25]);
+    });
+});
+
 describe('a DataTable with an inconsistent logit', () => {
     it('is not a case the bridge can be wrong about: opacity_linear wins', async () => {
         const pool = createChunkDataPool();

@@ -129,13 +129,16 @@ const encodeBlindValue = (v: number, encoding: SogBlindEncoding, range: [number,
         case 'unorm8':
         case 'unorm16': {
             const [min, max] = range;
-            if (!(v >= min && v <= max)) {
+            // columns hold f32, so an endpoint value may be stored just outside the range
+            // (0.1 as 0.10000000149011612): accept the f32 endpoints too, then clamp
+            if (!(v >= Math.min(min, Math.fround(min)) && v <= Math.max(max, Math.fround(max)))) {
                 throw new Error(
                     `SOG blind data: column '${column}' holds ${v}, outside its ${encoding} range [${min}, ${max}]`
                 );
             }
             const steps = encoding === 'unorm8' ? 255 : 65535;
-            return Math.round(((v - min) / (max - min)) * steps);
+            const t = (Math.min(Math.max(v, min), max) - min) / (max - min);
+            return Math.round(t * steps);
         }
         default: {
             const limit = 2 ** (8 * BLIND_ENCODING_BYTES[encoding]) - 1;

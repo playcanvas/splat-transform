@@ -3,7 +3,13 @@ import { Vec3 } from 'playcanvas';
 import { SH_REST_COUNTS } from '../chunk';
 import type { ChunkData, ChunkDataPool, ChunkLayer, ChunkSource, ChunkSourceMetadata } from '../chunk';
 import { Transform } from '../utils';
-import { inverseTransforms, isTransformColumn, rawColumnMap } from '../value-transforms';
+import {
+    inverseTransforms,
+    isTransformColumn,
+    opacityRaw,
+    opacityRawThreshold,
+    rawColumnMap
+} from '../value-transforms';
 
 import { bakeTransform } from './bake-transform';
 
@@ -197,11 +203,13 @@ const filterByValueRows = (src: ChunkSource, pool: ChunkDataPool, params: ByValu
     const { meta } = src;
     let columnName = params.columnName;
     let value = params.value;
+    // opacity_raw compares each gaussian's stored logit, from its true opacity
+    let toRaw: ((v: number) => number) | null = null;
 
     if (columnName === 'opacity_raw') {
-        // logit comparisons map to true opacity (sigmoid is monotonic)
         columnName = 'opacity';
-        value = 1 / (1 + Math.exp(-value));
+        value = opacityRawThreshold(value);
+        toRaw = opacityRaw;
     } else if (rawColumnMap[columnName]) {
         columnName = rawColumnMap[columnName];
     } else if (columnName !== 'opacity' && inverseTransforms[columnName]) {
@@ -231,6 +239,10 @@ const filterByValueRows = (src: ChunkSource, pool: ChunkDataPool, params: ByValu
         const buf = buffers[loc.layer]!;
         if (loc.type === 'float32') {
             const f = new Float32Array(buf);
+            if (toRaw) {
+                const raw = toRaw;
+                return (r: number) => compare(raw(f[r * stride32 + loc.elem]), value);
+            }
             return (r: number) => compare(f[r * stride32 + loc.elem], value);
         }
         const u = new Uint32Array(buf);
