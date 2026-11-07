@@ -482,6 +482,31 @@ describe('SOG blind data from a SOG input', () => {
         }
     });
 
+    it('widens a column some input does not tag to hold any value of its type', async () => {
+        const { concatSource, stackLods } = await import('../src/lib/ops/index.js');
+        const { dataTableToChunkSource } = await import('../src/lib/compat/data-table.js');
+        const { withBlindOrigins } = await import('../src/lib/utils/sog-blind.js');
+        const pool = createChunkDataPool();
+        const withIds = (ids) => {
+            const dt = createTestDataTable(ids.length);
+            dt.addColumn(new Column('id', Uint32Array.from(ids)));
+            return dataTableToChunkSource(dt, pool.chunkSize);
+        };
+        const sog = withBlindOrigins(withIds([1, 2, 3]), [{ name: 'id', type: 'uint32', sogBlind: { texture: 0, encoding: 'u8' } }]);
+        const ply = withIds([1000, 2000, 3000]);
+        const id = (src) => src.meta.extraColumns[0].sogBlind;
+        assert.deepStrictEqual(id(concatSource([sog, ply], pool)), { texture: 0, encoding: 'u32' });
+        assert.deepStrictEqual(id(concatSource([ply, sog], pool)), { texture: 0, encoding: 'u32' });
+        assert.deepStrictEqual(id(stackLods([sog, ply])), { texture: 0, encoding: 'u32' });
+        assert.strictEqual(id(concatSource([ply, withIds([4])], pool)), undefined, 'no input tags it');
+        const { meta, read } = await writeSog(concatSource([sog, ply], pool), pool);
+        assert.deepStrictEqual(meta.blind[0].fields, [{ name: 'id', type: 'u32' }]);
+        const out = await read();
+        const table = await materializeToDataTable(out, pool);
+        assert.deepStrictEqual(Array.from(table.getColumnByName('id').data).sort((x, y) => x - y), [1, 2, 3, 1000, 2000, 3000]);
+        await out.close();
+    });
+
     it('covers every unit of a streamed scene', async () => {
         const { stackLods, selectLod } = await import('../src/lib/ops/index.js');
         const { dataTableToChunkSource } = await import('../src/lib/compat/data-table.js');

@@ -9,6 +9,7 @@ import { bakeTransform } from '../ops';
 import { readPly } from '../readers/read-ply';
 import type { DeviceCreator } from '../types';
 import { fmtBytes, fmtCount, logger, Transform } from '../utils';
+import { attachBlindOrigins } from '../utils/sog-blind';
 import { writePlyStreaming } from '../writers/write-ply-streaming';
 
 import { allocatePlanPrefixes } from './block-allocation';
@@ -445,7 +446,8 @@ const decimateSource = async (
                 numChunks: [Math.ceil(outCount / src.meta.chunkSize)],
                 shBands: src.meta.shBands,
                 model: src.meta.model,
-                extraColumns: src.meta.extraColumns,
+                // a PLY spill drops the columns' blind origins: carry the input's
+                extraColumns: attachBlindOrigins(src.meta.extraColumns, source.meta.extraColumns),
                 transform: src.meta.transform,
                 availableLayers: src.meta.availableLayers,
                 layouts: src.meta.layouts,

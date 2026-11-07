@@ -239,38 +239,70 @@ const widerEncoding = (a: SogBlindEncoding, b: SogBlindEncoding): SogBlindEncodi
     return 'f32';
 };
 
+/** The merge of two blind origins: holds both's values, in the first's texture. */
+const mergeOrigins = (a: SogBlindOrigin, b: SogBlindOrigin): SogBlindOrigin => {
+    const encoding = widerEncoding(a.encoding, b.encoding);
+    let range: readonly [number, number] | undefined;
+    if (isUnorm(encoding)) {
+        const [min, max] = a.range ?? [0, 1];
+        const [bMin, bMax] = b.range ?? [0, 1];
+        range = [Math.min(min, bMin), Math.max(max, bMax)];
+        if (range[0] === 0 && range[1] === 1) range = undefined;
+    }
+    if (encoding === a.encoding && range?.[0] === a.range?.[0] && range?.[1] === a.range?.[1]) return a;
+    return { texture: a.texture, encoding, ...(range ? { range } : {}) };
+};
+
 /**
- * The extra columns of a combined scene (whose inputs share column names and
- * types), with each column's blind origin merged to hold every input's
- * values: encodings widen (see {@link widerEncoding}), unorm ranges widen to
- * their union, and the first input's texture is kept.
+ * A combined scene's extra columns, each with the blind origins of the inputs
+ * merged (matched by name and type) to hold every input's values: encodings
+ * widen (see {@link widerEncoding}), unorm ranges widen to their union, and
+ * the first tagged input's texture is kept. An input whose column is untagged
+ * or missing may hold any value of its type, so a column some input lacks a
+ * tag for widens to u32 or f32. A column no input tags stays untagged.
  *
  * @param lists - Each input's extra columns.
- * @returns The combined scene's extra columns.
+ * @param columns - The combined scene's extra columns. Default: the first input's.
+ * @returns The combined scene's extra columns, with merged origins.
  */
-const combineBlindOrigins = (lists: readonly (readonly ExtraColumn[])[]): readonly ExtraColumn[] => {
-    return lists[0].map((column, i) => {
+const combineBlindOrigins = (
+    lists: readonly (readonly ExtraColumn[])[],
+    columns: readonly ExtraColumn[] = lists[0]
+): readonly ExtraColumn[] => {
+    return columns.map((column) => {
         let origin: SogBlindOrigin | undefined;
+        let untagged = false;
         for (const list of lists) {
-            const o = list[i].sogBlind;
-            if (!o) continue;
-            if (!origin) {
-                origin = o;
-                continue;
-            }
-            const encoding = widerEncoding(origin.encoding, o.encoding);
-            let range: readonly [number, number] | undefined;
-            if (isUnorm(encoding)) {
-                const [min, max] = origin.range ?? [0, 1];
-                const [oMin, oMax] = o.range ?? [0, 1];
-                range = [Math.min(min, oMin), Math.max(max, oMax)];
-                if (range[0] === 0 && range[1] === 1) range = undefined;
-            }
-            if (encoding !== origin.encoding || range?.[0] !== origin.range?.[0] || range?.[1] !== origin.range?.[1]) {
-                origin = { texture: origin.texture, encoding, ...(range ? { range } : {}) };
-            }
+            const o = list.find((c) => c.name === column.name && c.type === column.type)?.sogBlind;
+            if (!o) untagged = true;
+            else origin = origin ? mergeOrigins(origin, o) : o;
         }
-        return origin === column.sogBlind ? column : { ...column, sogBlind: origin };
+        if (origin && untagged) {
+            origin = mergeOrigins(origin, {
+                texture: origin.texture,
+                encoding: column.type === 'uint32' ? 'u32' : 'f32'
+            });
+        }
+        if (origin === column.sogBlind) return column;
+        const { sogBlind: _, ...rest } = column;
+        return origin ? { ...rest, sogBlind: origin } : rest;
+    });
+};
+
+/**
+ * Extra columns with the blind origins of `from` (matched by name and type)
+ * attached, for columns rebuilt where origins cannot travel (a DataTable, a
+ * PLY spill).
+ *
+ * @param columns - The rebuilt columns.
+ * @param from - The columns carrying the origins.
+ * @returns The rebuilt columns with origins.
+ */
+const attachBlindOrigins = (columns: readonly ExtraColumn[], from: readonly ExtraColumn[]): readonly ExtraColumn[] => {
+    if (!from.some((c) => c.sogBlind)) return columns;
+    return columns.map((column) => {
+        const sogBlind = from.find((c) => c.name === column.name && c.type === column.type)?.sogBlind;
+        return sogBlind ? { ...column, sogBlind } : column;
     });
 };
 
@@ -285,13 +317,9 @@ const combineBlindOrigins = (lists: readonly (readonly ExtraColumn[])[]): readon
  */
 const withBlindOrigins = (source: ChunkSource, columns: readonly ExtraColumn[]): ChunkSource => {
     if (!columns.some((c) => c.sogBlind)) return source;
-    const extraColumns = source.meta.extraColumns.map((column) => {
-        const sogBlind = columns.find((c) => c.name === column.name && c.type === column.type)?.sogBlind;
-        return sogBlind ? { ...column, sogBlind } : column;
-    });
     // delegate rather than spread: sources may be class instances
     return {
-        meta: { ...source.meta, extraColumns },
+        meta: { ...source.meta, extraColumns: attachBlindOrigins(source.meta.extraColumns, columns) },
         read: (request) => source.read(request),
         close: () => source.close()
     };
@@ -300,6 +328,7 @@ const withBlindOrigins = (source: ChunkSource, columns: readonly ExtraColumn[]):
 export {
     BLIND_ENCODING_BYTES,
     blindTexturesOf,
+    attachBlindOrigins,
     combineBlindOrigins,
     withBlindOrigins,
     blindFieldId,

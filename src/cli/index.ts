@@ -62,7 +62,7 @@ import { readLodSource, readLodEnvironmentSource } from '../lib/readers/read-lod
 import { loadCameraTrack } from '../lib/render/camera-track';
 import type { CameraTrack } from '../lib/render/camera-track';
 import { formatFileInfo } from '../lib/source-info';
-import { isBlindEncoding } from '../lib/utils/sog-blind';
+import { combineBlindOrigins, isBlindEncoding, withBlindOrigins } from '../lib/utils/sog-blind';
 import { frameFilename } from '../lib/writers/utils';
 
 import { createDevice, enumerateAdapters, getPeakGpuMemory } from './node-device';
@@ -1474,11 +1474,14 @@ const main = async () => {
                     dts.push(await materializeToDataTable(s, pool));
                     await s.close();
                 }
+                const combined = dataTableToChunkSource(combine(dts), pool.chunkSize, undefined, model);
+                // a DataTable carries no blind origins: merge the inputs' by column name
+                const extraColumns = combineBlindOrigins(
+                    sources.map((s) => s.meta.extraColumns),
+                    combined.meta.extraColumns
+                );
                 return withComments(
-                    withExtras(
-                        dataTableToChunkSource(combine(dts), pool.chunkSize, undefined, model),
-                        resolveExtras(sources)
-                    ),
+                    withExtras(withBlindOrigins(combined, extraColumns), resolveExtras(sources)),
                     resolveComments(sources)
                 );
             };

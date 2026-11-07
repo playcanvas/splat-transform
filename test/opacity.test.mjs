@@ -219,10 +219,10 @@ describe('opacity_raw', () => {
         const src = sourceWith([1.5], true);
         const rows = async (comparator, value) =>
             Array.from(await filterByValueRows(src, pool, { columnName: 'opacity_raw', comparator, value }));
-        const stored = Math.fround(opacityToLogit(1.5)); // 16.11809539794922
-        assert.deepStrictEqual(await rows('gt', 20), [], 'its stored logit is ~16.12, not above 20');
-        assert.deepStrictEqual(await rows('gt', 16.2), [], 'nor above 16.2');
-        assert.deepStrictEqual(await rows('gt', 16), [0]);
+        const stored = Math.fround(opacityToLogit(1.5)); // 16.635532...
+        assert.deepStrictEqual(await rows('gt', 20), [], 'its stored logit is ~16.64, not above 20');
+        assert.deepStrictEqual(await rows('gt', 16.7), [], 'nor above 16.7');
+        assert.deepStrictEqual(await rows('gt', 16.6), [0]);
         assert.deepStrictEqual(await rows('eq', stored), [0], 'equal to its exact stored logit');
         assert.deepStrictEqual(await rows('gte', stored), [0]);
         assert.deepStrictEqual(await rows('gt', stored), []);
@@ -234,8 +234,8 @@ describe('opacity_raw', () => {
         const keep = async (comparator, value) =>
             (await processDataTable(table, [{ kind: 'filterByValue', columnName: 'opacity_raw', comparator, value }])).numRows;
         const stored = Math.fround(opacityToLogit(1.5));
-        assert.strictEqual(await keep('gt', 16.2), 0);
-        assert.strictEqual(await keep('gt', 16), 1);
+        assert.strictEqual(await keep('gt', 16.7), 0);
+        assert.strictEqual(await keep('gt', 16.6), 1);
         assert.strictEqual(await keep('eq', stored), 1);
     });
 
@@ -249,6 +249,22 @@ describe('opacity_raw', () => {
         assert.deepStrictEqual(await rows('eq', 1), [0]);
         assert.deepStrictEqual(await rows('gt', 1), []);
         assert.deepStrictEqual(await rows('lt', 1), [1]);
+    });
+});
+
+describe('opacity just below 1', () => {
+    it('keeps its own logit: compared by opacity_raw and written back unclamped', async () => {
+        const pool = createChunkDataPool();
+        const dt = createTestDataTable(1);
+        dt.getColumnByName('opacity').data[0] = 16.5; // reads as f32 opacity 0.99999994
+        const src = await readPlyBytes(encodePlyBinary(dt), pool);
+        const [a] = await opacitySlot(src, pool);
+        assert.ok(a < 1, `${a}`);
+        assert.deepStrictEqual(Array.from(await filterByValueRows(src, pool, { columnName: 'opacity_raw', comparator: 'gt', value: 16.2 })), [0]);
+        const logit = (await writeAndRead(src, pool)).stored.getColumnByName('opacity').data[0];
+        assert.ok(logit > 16.2, `written back as ${logit}`);
+        assert.strictEqual(Math.fround(sigmoid(logit)), a, 'reads back as the same opacity');
+        assert.ok(opacityToLogit(1.5) >= opacityToLogit(a), 'opacity above 1 never logs lower than opacity below it');
     });
 });
 

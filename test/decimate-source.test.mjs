@@ -128,6 +128,35 @@ describe('decimateSourceAdaptive', () => {
         await rm(scratchDir, { recursive: true, force: true });
     });
 
+    it('keeps the SOG blind origins of extra columns across spilled generations', async () => {
+        const { decimateSource } = await import('../src/lib/decimate-uniform/index.js');
+        const { NodeFileSystem, NodeReadFileSystem } = await import('../src/cli/node-file-system.js');
+        const extraColumns = [{ name: 'tag', type: 'uint32', sogBlind: { texture: 0, encoding: 'u32' } }];
+        for (const decimate of [decimateSourceAdaptive, decimateSource]) {
+            const { source, pool } = await makeSyntheticSource(3000, 0, 31, { chunkSize: 512, extraColumns });
+            const scratchDir = await mkdtemp(join(tmpdir(), 'decimate-blind-'));
+            let spilled = false;
+            const out = await decimate(source, pool, {
+                targetCount: 400,
+                memoryBudgetBytes: 1,
+                spill: {
+                    writeFs: new NodeFileSystem(),
+                    readFs: new NodeReadFileSystem(),
+                    scratchDir,
+                    remove: async (path) => {
+                        spilled = true;
+                        await unlink(path);
+                    }
+                }
+            });
+            assert.deepStrictEqual(out.meta.extraColumns, extraColumns);
+            await readLayers(out, pool, ['position']);
+            await out.close();
+            assert.ok(spilled, 'a generation spilled through PLY');
+            await rm(scratchDir, { recursive: true, force: true });
+        }
+    });
+
     it('extra columns survive decimation', async () => {
         const n = 1000;
         const { source, pool } = await makeSyntheticSource(n, 0, 37, {

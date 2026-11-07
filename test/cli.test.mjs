@@ -185,6 +185,32 @@ describe('CLI parsing', () => {
         }
     });
 
+    it('keeps blind data when combining inputs of different layouts', async () => {
+        const { Column } = await import('../src/lib/index.js');
+        const { createTestDataTable, encodePlyBinary } = await import('./helpers/test-utils.mjs');
+        const sogInput = createTestDataTable(16);
+        sogInput.addColumn(new Column('id', Uint32Array.from({ length: 16 }, (_, i) => i)));
+        const plyInput = createTestDataTable(16);
+        plyInput.addColumn(new Column('id', Uint32Array.from({ length: 16 }, (_, i) => 1000 + i)));
+        plyInput.addColumn(new Column('weight', new Float32Array(16).fill(0.5)));
+        const dir = await mkdtemp(join(tmpdir(), 'st-blind-mixed-'));
+        try {
+            await writeFile(join(dir, 'a.ply'), encodePlyBinary(sogInput));
+            await writeFile(join(dir, 'b.ply'), encodePlyBinary(plyInput));
+            const first = await runCli(['--gpu', 'cpu', join(dir, 'a.ply'), '--sog-blind', 'id:u8', join(dir, 'a.sog')]);
+            assert.strictEqual(first.code, 0, first.stderr);
+            await mkdir(join(dir, 'out'));
+            const result = await runCli(['--gpu', 'cpu', join(dir, 'a.sog'), join(dir, 'b.ply'), join(dir, 'out', 'meta.json')]);
+            assert.strictEqual(result.code, 0, result.stderr);
+            // the PLY input's ids are untagged, so id widens to hold any uint32
+            assert.deepStrictEqual(JSON.parse(await readFile(join(dir, 'out', 'meta.json'), 'utf8')).blind, [
+                { files: ['blind_0.webp'], fields: [{ name: 'id', type: 'u32' }] }
+            ]);
+        } finally {
+            await rm(dir, { recursive: true, force: true });
+        }
+    });
+
     it('rejects a malformed --sog-blind', async () => {
         for (const value of [':u8', 'id:5', 'id:u8:u8', 'id:unorm8[0]', 'a,,b', 'id:u9']) {
             const result = await runCli(['--gpu', 'cpu', 'test/fixtures/splat/minimal.splat', '--sog-blind', value, 'null']);
