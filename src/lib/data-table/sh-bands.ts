@@ -1,4 +1,4 @@
-import type { DataTable } from './data-table';
+import { Column, DataTable } from './data-table';
 
 const shRestNames = new Array(72).fill('').map((_, i) => `f_rest_${i}`);
 
@@ -22,4 +22,32 @@ const getSHBands = (dataTable: DataTable): number => {
     return ({ '9': 1, '24': 2, '45': 3, '-1': 4 } as Record<string, number>)[String(idx)] ?? 0;
 };
 
-export { getSHBands, shRestNames };
+/**
+ * The table with at most `bands` SH bands: higher-band coefficients are dropped
+ * and the kept ones renamed to their channel-major positions for the smaller
+ * band count. Returns the table itself when it has no more than `bands`.
+ *
+ * @param dataTable - The DataTable to reduce.
+ * @param bands - The most SH bands to keep (0-3).
+ * @returns A DataTable sharing the kept columns' data.
+ */
+const keepSHBands = (dataTable: DataTable, bands: number): DataTable => {
+    const inputBands = getSHBands(dataTable);
+    if (inputBands <= bands) return dataTable;
+    const inputCoeffs = [0, 3, 8, 15, 24][inputBands];
+    const outputCoeffs = [0, 3, 8, 15, 24][bands];
+    const rename = new Map<string, string | null>();
+    for (let i = 0; i < inputCoeffs; ++i) {
+        for (let j = 0; j < 3; ++j) {
+            rename.set(`f_rest_${i + j * inputCoeffs}`, i < outputCoeffs ? `f_rest_${i + j * outputCoeffs}` : null);
+        }
+    }
+    const columns: Column[] = [];
+    for (const column of dataTable.columns) {
+        if (!rename.has(column.name)) columns.push(column);
+        else if (rename.get(column.name)) columns.push(new Column(rename.get(column.name)!, column.data));
+    }
+    return new DataTable(columns, dataTable.transform);
+};
+
+export { getSHBands, keepSHBands, shRestNames };

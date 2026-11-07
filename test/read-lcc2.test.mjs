@@ -969,3 +969,53 @@ describe('readLcc2Source (chunked) vs readLcc2 (eager)', () => {
         assert.strictEqual(none, null, 'no env declared -> null');
     });
 });
+
+describe('LCC2 chunks with and without opacity_linear', () => {
+    // LOD 0 holds a plain SOG chunk (file 2) followed by one with opacity above 1 (file 3).
+    const makeScene = async () => {
+        const { Column } = await import('../src/lib/index.js');
+        const heavy = createTestDataTable(4);
+        heavy.addColumn(new Column('opacity_linear', new Float32Array(4).fill(1.5)));
+        const writeFs = new MemoryFileSystem();
+        await writeSog({ filename: 'chunk.sog', dataTable: heavy, bundle: true, iterations: 5 }, writeFs);
+        const fs = new MemoryReadFileSystem();
+        fs.set('chunk1.sog', await makeSogBytes(5));
+        fs.set('chunk2.sog', await makeSogBytes(3));
+        fs.set('chunk3.sog', writeFs.results.get('chunk.sog'));
+        const meta = {
+            totalSplats: 12,
+            lodSplats: [7, 5],
+            totalLevels: 2,
+            splatType: '.sog',
+            root: {
+                splatFiles: ['', 'chunk1.sog', 'chunk2.sog', 'chunk3.sog'],
+                child: [{ data: { '3dgs': { name: 1 } }, child: [{ data: { '3dgs': { name: 2 } } }, { data: { '3dgs': { name: 3 } } }] }]
+            }
+        };
+        fs.set('meta.lcc2', new TextEncoder().encode(JSON.stringify(meta)));
+        return fs;
+    };
+
+    // The plain chunk's rows read as sigmoid(opacity); the other's keep A = 1.5 (on the SOG v3 byte lattice).
+    const check = (table) => {
+        const linear = table.getColumnByName('opacity_linear')?.data;
+        assert.ok(linear, 'the scene carries opacity_linear');
+        const opacity = table.getColumnByName('opacity').data;
+        for (let r = 0; r < 3; r++) {
+            assert.ok(Math.abs(linear[r] - 1 / (1 + Math.exp(-opacity[r]))) < 1e-6, `plain row ${r}: ${linear[r]}`);
+        }
+        for (let r = 3; r < 7; r++) assert.ok(linear[r] > 1.49 && linear[r] < 1.51, `heavy row ${r}: ${linear[r]}`);
+    };
+
+    it('eager readLcc2 fills the plain chunk with sigmoid(opacity)', async () => {
+        const [merged] = await readLcc2(await makeScene(), 'meta.lcc2', opts([0]));
+        check(merged);
+    });
+
+    it('readLcc2Source gives every chunk the column', async () => {
+        const pool = createChunkDataPool();
+        const source = await readLcc2Source(await makeScene(), 'meta.lcc2', opts([0]), pool);
+        check(await materializeToDataTable(source, pool));
+        await source.close();
+    });
+});

@@ -3,7 +3,7 @@ import { basename } from 'pathe';
 import type { ChunkSource, ChunkDataPool } from '../chunk';
 import { materializeToDataTable } from '../compat/data-table';
 import type { DataTable, Row } from '../data-table';
-import { sortMortonOrder, convertToSpace, getSHBands, shRestNames } from '../data-table';
+import { sortMortonOrder, convertToSpace, getSHBands, keepSHBands, shRestNames } from '../data-table';
 import type { FileSystem } from '../io/write';
 import type { SplatModel } from '../splat-model';
 import { logger, Transform } from '../utils';
@@ -61,7 +61,8 @@ type WriteCompressedPlyOptions = {
  */
 const writeCompressedPly = async (options: WriteCompressedPlyOptions, fs: FileSystem) => {
     const { filename } = options;
-    const dataTable = convertToSpace(options.dataTable, Transform.PLY);
+    if (getSHBands(options.dataTable) > 3) logger.warn('compressed PLY cannot store a 4th SH band; writing 3 bands');
+    const dataTable = convertToSpace(keepSHBands(options.dataTable, 3), Transform.PLY);
 
     const shBands = getSHBands(dataTable);
     const outputSHCoeffs = [0, 3, 8, 15][shBands];

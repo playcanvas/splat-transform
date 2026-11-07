@@ -137,4 +137,26 @@ const containerSource = async (
     return { meta, read, close };
 };
 
-export { containerSource, type ContainerSegment };
+/**
+ * Whether any of a container's units carries `opacity_linear`, judged by a
+ * header-only `peek` of each, 16 at a time, stopping at the first that does.
+ * Units carry the column only when they hold opacity above 1, but a container
+ * takes one layout for all of them, so when any has it every unit must be given
+ * it (see `withOpacityLinear`; the rest then read as `sigmoid(opacity)`).
+ *
+ * @param units - The units to check.
+ * @param peek - Reports whether one unit carries `opacity_linear`.
+ * @returns True when any unit carries it.
+ */
+const anyUnitHasOpacityLinear = async <T>(
+    units: readonly T[],
+    peek: (unit: T) => Promise<boolean>
+): Promise<boolean> => {
+    for (let i = 0; i < units.length; i += 16) {
+        const found = await Promise.all(units.slice(i, i + 16).map(peek));
+        if (found.some(Boolean)) return true;
+    }
+    return false;
+};
+
+export { anyUnitHasOpacityLinear, containerSource, type ContainerSegment };

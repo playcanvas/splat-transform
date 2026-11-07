@@ -10,7 +10,7 @@ import type { SplatModel } from '../splat-model';
 import type { Options } from '../types';
 import { logger } from '../utils';
 
-import { containerSource } from './container-source';
+import { anyUnitHasOpacityLinear, containerSource } from './container-source';
 import type { ContainerSegment } from './container-source';
 import { readSogSource, statSogSource } from './read-sog';
 
@@ -172,15 +172,12 @@ const readLodSource = async (
     const filesByLod = collectFilesByLod(meta, filename);
     const filesOf = (lod: number) => [...(filesByLod.get(lod)?.entries() ?? [])].sort(([a], [b]) => a - b);
 
-    // Units carry opacity_linear only when they hold opacity above 1, but the container takes one
-    // layout for all of them: when any selected unit has the column, every unit is given it (the
-    // rest read as sigmoid(opacity)). Only each unit's meta.json is read to find out.
+    // when any selected unit has opacity_linear every unit is given it; only each unit's meta.json is read
     const paths = [...new Set(inputLods.flatMap((lod) => filesOf(lod).map(([file]) => related(meta.filenames[file]))))];
-    let anyLinear = false;
-    for (let i = 0; i < paths.length && !anyLinear; i += 16) {
-        const stats = await Promise.all(paths.slice(i, i + 16).map((path) => statSogSource(fileSystem, path)));
-        anyLinear = stats.some((stat) => stat?.extraColumns.some((c) => c.name === OPACITY_LINEAR_COLUMN));
-    }
+    const anyLinear = await anyUnitHasOpacityLinear(paths, async (path) => {
+        const stat = await statSogSource(fileSystem, path);
+        return !!stat?.extraColumns.some((c) => c.name === OPACITY_LINEAR_COLUMN);
+    });
 
     const segmentsByLod = inputLods.map((lod): ContainerSegment[] => {
         return filesOf(lod).map(([file, count]) => {

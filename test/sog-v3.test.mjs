@@ -528,3 +528,34 @@ describe('opacity_linear in formats that store only the logit', () => {
         }
     });
 });
+
+describe('SH4 in the DataTable writers', () => {
+    // channel-major f_rest_(i + nj): coefficient i of channel j; band-4 coefficients (i >= 15) are 9
+    const table = (bands) => {
+        const n = [0, 3, 8, 15, 24][bands];
+        const dt = createTestDataTable(16);
+        for (let k = 0; k < 3 * n; k++) {
+            const i = k % n;
+            dt.addColumn(new Column(`f_rest_${k}`, new Float32Array(16).fill(i < 15 ? (i + 1 + 15 * Math.floor(k / n)) / 64 : 9)));
+        }
+        return dt;
+    };
+
+    it('writeCompressedPly and writeGlb write an SH4 table as its first 3 bands', async () => {
+        const { writeCompressedPly, writeGlb } = await import('../src/lib/index.js');
+        const write = async (dt) => {
+            const fs = new MemoryFileSystem();
+            await writeCompressedPly({ filename: 'out.compressed.ply', dataTable: dt }, fs);
+            await writeGlb({ filename: 'out.glb', dataTable: dt }, fs);
+            return fs.results;
+        };
+        let sh4;
+        const warnings = await captureWarnings(async () => {
+            sh4 = await write(table(4));
+        });
+        assert.ok(warnings.some((w) => /4th SH band/.test(w)), warnings.join('\n'));
+        const sh3 = await write(table(3));
+        assert.deepStrictEqual(sh4.get('out.compressed.ply'), sh3.get('out.compressed.ply'), 'compressed PLY');
+        assert.deepStrictEqual(sh4.get('out.glb'), sh3.get('out.glb'), 'GLB');
+    });
+});

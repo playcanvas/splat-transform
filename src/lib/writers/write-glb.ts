@@ -1,7 +1,7 @@
 import { basename } from 'pathe';
 
 import type { DataTable } from '../data-table';
-import { convertToSpace, getSHBands, shRestNames } from '../data-table';
+import { convertToSpace, getSHBands, keepSHBands, shRestNames } from '../data-table';
 import type { FileSystem } from '../io/write';
 import { logger, Transform, sigmoid } from '../utils';
 import { version } from '../version';
@@ -284,7 +284,8 @@ const buildBinaryBuffer = (dataTable: DataTable, numSplats: number, shBands: num
  */
 const writeGlb = async (options: WriteGlbOptions, fs: FileSystem) => {
     const { filename } = options;
-    const dataTable = convertToSpace(options.dataTable, Transform.IDENTITY);
+    if (getSHBands(options.dataTable) > 3) logger.warn('GLB cannot store a 4th SH band; writing 3 bands');
+    const dataTable = convertToSpace(keepSHBands(options.dataTable, 3), Transform.IDENTITY);
     const numSplats = dataTable.numRows;
     const shBands = getSHBands(dataTable);
 
