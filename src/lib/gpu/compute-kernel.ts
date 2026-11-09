@@ -57,9 +57,12 @@ const makeKernel = (
         computeBindGroupFormat: bindGroupFormat
     });
 
+    const compute = new Compute(device, shader, name);
+
     return {
-        compute: new Compute(device, shader, name),
+        compute,
         destroy: () => {
+            compute.destroy();
             shader.destroy();
             bindGroupFormat.destroy();
         }

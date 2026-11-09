@@ -211,6 +211,7 @@ class GpuSceneRasterizer {
     private options: SceneRasterizerOptions;
     private shaders: Shader[] = [];
     private bgFormats: BindGroupFormat[] = [];
+    private computes: Compute[] = [];
     private radixSort: ComputeRadixSort;
     private sortKeyBits: number;
     /** Depth sort over the scene; separate from the tile sort so neither rebuilds its passes. */
@@ -355,7 +356,9 @@ class GpuSceneRasterizer {
             });
             this.shaders.push(shader);
             this.bgFormats.push(bgFormat);
-            return new Compute(device, shader, name);
+            const compute = new Compute(device, shader, name);
+            this.computes.push(compute);
+            return compute;
         };
 
         this.depthKeysCompute = mk('scene-depth-keys', depthKeysWgsl(), [
@@ -1181,6 +1184,7 @@ class GpuSceneRasterizer {
         this.accumBuffer?.destroy();
         this.radixSort.destroy();
         this.depthSort.destroy();
+        for (const c of this.computes) c.destroy();
         for (const s of this.shaders) s.destroy();
         for (const f of this.bgFormats) f.destroy();
     }

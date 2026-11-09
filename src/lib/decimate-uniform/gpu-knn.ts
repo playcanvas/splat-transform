@@ -334,6 +334,7 @@ class GpuKnn {
             nPositionsBuf.destroy();
             nChildrenBuf.destroy();
             outBuf.destroy();
+            compute.destroy();
             shader.destroy();
             bindGroupFormat.destroy();
         };

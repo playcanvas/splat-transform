@@ -12,7 +12,7 @@
 
 import assert from 'node:assert';
 import { dirname, join } from 'node:path';
-import { describe, it } from 'node:test';
+import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { compareSummaries, computeStatsView } from './helpers/summary-compare.mjs';
@@ -264,5 +264,35 @@ describe('writeSogSource: indices ordering contract', () => {
         await writeSogSource(src, pool,
             { filename: 'out.sog', bundle: true, iterations: 5, logging: 'silent', indices: order }, fs);
         assert.ok(fs.results.get('out.sog'), 'wrote the bundled sog');
+    });
+});
+
+describe('writeSogSource: GPU resources', () => {
+    // created in before() so registration never blocks; skips when the
+    // environment has no usable WebGPU adapter
+    let device = null;
+    before(async () => {
+        try {
+            const { createDevice } = await import('../src/cli/node-device.js');
+            device = await createDevice();
+        } catch {
+            device = null;
+        }
+    });
+    after(() => device?.destroy());
+
+    it('releases every Compute it creates on a cached device', async (t) => {
+        if (!device) return t.skip('no WebGPU adapter available');
+
+        // SH bands so the palette k-means runs on the GPU
+        const dt = createTestDataTable(4096, { includeSH: true, shBands: 3 });
+        const pool = createChunkDataPool();
+        const src = await readPly(await sourceFromBytes(encodePlyBinary(dt)), pool);
+        const computes = device._computes.size;
+        await writeSogSource(src, pool,
+            { filename: 'out.sog', bundle: false, iterations: 2, logging: 'silent', createDevice: async () => device },
+            new MemoryFileSystem());
+        await src.close();
+        assert.strictEqual(device._computes.size, computes, 'leaked Compute objects on the device');
     });
 });
