@@ -102,6 +102,12 @@ const containerSource = async (
                     `containerSource: sub-file SH band mismatch (${src.meta.shBands} vs ${layout.shBands})`
                 );
             }
+            // the unit fills the first unit's layout: a different set or order of extra columns would misplace values
+            if (columnsKey(src.meta.extraColumns) !== columnsKey(layout.extraColumns)) {
+                throw new Error(
+                    `containerSource: sub-file extra-column mismatch ([${columnsKey(src.meta.extraColumns)}] vs [${columnsKey(layout.extraColumns)}])`
+                );
+            }
             // A short decode (e.g. a malformed sub-file that no-ops) would
             // otherwise leave stale pool-buffer bytes in the unread rows.
             if (src.meta.numGaussians !== seg.count) {
@@ -161,11 +167,13 @@ type UnitSummary = Partial<Pick<ChunkSourceMetadata, 'opacityAboveOne' | 'extraC
  * time: whether any may hold opacity above 1, and their extra columns with
  * the SOG blind origins combined (see {@link combineBlindOrigins}), so a
  * range or encoding covers every unit's values. The container must describe
- * every unit, but only the first is decoded up front.
+ * every unit, but only the first is decoded up front. Units must carry the
+ * same extra columns in the same order, since each fills the first's layout.
  *
  * @param units - The units to summarize.
  * @param peek - Reports one unit's summary, or null when it has none to give.
  * @returns The container's summary.
+ * @throws When units carry different extra columns.
  */
 const summarizeUnits = async <T>(
     units: readonly T[],
@@ -176,10 +184,15 @@ const summarizeUnits = async <T>(
         for (const s of await Promise.all(units.slice(i, i + 16).map(peek))) if (s) summaries.push(s);
     }
     const lists = summaries.flatMap((s) => (s.extraColumns ? [s.extraColumns] : []));
-    const matching = lists.filter((l) => columnsKey(l) === columnsKey(lists[0]));
+    const mismatch = lists.find((l) => columnsKey(l) !== columnsKey(lists[0]));
+    if (mismatch) {
+        throw new Error(
+            `containerSource: units carry different extra columns ([${columnsKey(lists[0])}] vs [${columnsKey(mismatch)}])`
+        );
+    }
     return {
         ...(summaries.some((s) => s.opacityAboveOne) ? { opacityAboveOne: true } : {}),
-        ...(matching.length > 0 ? { extraColumns: combineBlindOrigins(matching) } : {})
+        ...(lists.length > 0 ? { extraColumns: combineBlindOrigins(lists) } : {})
     };
 };
 

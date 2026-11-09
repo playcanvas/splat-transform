@@ -543,6 +543,55 @@ describe('SOG blind data from a SOG input', () => {
         await lod.close();
     });
 
+    it('rejects a streamed scene whose units carry different blind fields', async () => {
+        const { stackLods } = await import('../src/lib/ops/index.js');
+        const { dataTableToChunkSource } = await import('../src/lib/compat/data-table.js');
+        const { withBlindOrigins } = await import('../src/lib/utils/sog-blind.js');
+        const { writeLodSource } = await import('../src/lib/writers/write-lod.js');
+        const { readLodSource } = await import('../src/lib/readers/read-lod.js');
+        const pool = createChunkDataPool();
+        const level = (count) => {
+            const dt = createTestDataTable(count);
+            dt.addColumn(new Column('w', new Float32Array(count).fill(0.5)));
+            const src = dataTableToChunkSource(dt, pool.chunkSize);
+            return withBlindOrigins(src, [{ name: 'w', type: 'float32', sogBlind: { texture: 0, encoding: 'unorm8' } }]);
+        };
+        const fs = new MemoryFileSystem();
+        await writeLodSource({
+            filename: '/scene/lod-meta.json', mainSource: stackLods([level(64), level(16)]), envSource: null,
+            iterations: 1, chunkCount: 1, chunkExtent: 16
+        }, fs);
+        const rfs = new MemoryReadFileSystem();
+        for (const [path, bytes] of fs.results) {
+            const text = path.endsWith('/meta.json') && JSON.parse(new TextDecoder().decode(bytes));
+            if (text && text.count === 16) {
+                text.blind[0].fields[0].name = 'v'; // the coarse unit stores another column
+                rfs.set(path, new TextEncoder().encode(JSON.stringify(text)));
+            } else {
+                rfs.set(path, bytes);
+            }
+        }
+        await assert.rejects(readLodSource(rfs, '/scene/lod-meta.json', {}, pool), /units carry different extra columns \(\[w:float32\] vs \[v:float32\]\)/);
+    });
+
+    it('rejects reading a container unit whose columns differ from the first', async () => {
+        const { dataTableToChunkSource } = await import('../src/lib/compat/data-table.js');
+        const { containerSource } = await import('../src/lib/readers/container-source.js');
+        const pool = createChunkDataPool();
+        const unit = (columns) => {
+            const dt = createTestDataTable(8);
+            for (const name of columns) dt.addColumn(new Column(name, new Float32Array(8)));
+            return { count: 8, decode: async () => dataTableToChunkSource(dt, pool.chunkSize) };
+        };
+        for (const second of [['b', 'a'], []]) {
+            const src = await containerSource([[unit(['a', 'b']), unit(second)]], pool);
+            const other = pool.acquire('other', src.meta.layouts.other, 16);
+            await assert.rejects(src.read({ chunkIndex: 0, other }), /sub-file extra-column mismatch/);
+            other.release();
+            await src.close();
+        }
+    });
+
     it('keeps the tags across a DataTable round-trip', async () => {
         const { dataTableToChunkSource } = await import('../src/lib/compat/data-table.js');
         const { withBlindOrigins } = await import('../src/lib/utils/sog-blind.js');
