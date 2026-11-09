@@ -9,6 +9,7 @@ import { bakeTransform } from '../ops';
 import { readPly } from '../readers/read-ply';
 import type { DeviceCreator } from '../types';
 import { fmtBytes, fmtCount, logger, Transform } from '../utils';
+import { attachBlindOrigins } from '../utils/sog-blind';
 import { writePlyStreaming } from '../writers/write-ply-streaming';
 
 import { allocatePlanPrefixes } from './block-allocation';
@@ -445,10 +446,16 @@ const decimateSource = async (
                 numChunks: [Math.ceil(outCount / src.meta.chunkSize)],
                 shBands: src.meta.shBands,
                 model: src.meta.model,
-                extraColumns: src.meta.extraColumns,
+                // a PLY spill drops the columns' blind origins: carry the input's
+                extraColumns: attachBlindOrigins(src.meta.extraColumns, source.meta.extraColumns),
                 transform: src.meta.transform,
                 availableLayers: src.meta.availableLayers,
-                layouts: src.meta.layouts
+                layouts: src.meta.layouts,
+                // merges keep their full mass, so opacity may exceed 1
+                opacityAboveOne: true,
+                // generations can spill through PLY, which has no extras: carry the input's
+                ...(source.meta.extras !== undefined ? { extras: source.meta.extras } : {}),
+                ...(source.meta.comments !== undefined ? { comments: source.meta.comments } : {})
             };
 
             const isFinal = outCount <= targetCount;

@@ -1,7 +1,9 @@
 import type { ChunkDataPool, ChunkLayer, ChunkSource } from './chunk';
 import { materializeToDataTable } from './compat/data-table';
 import type { FileSystem } from './io/write';
+import { reduceBandsSource } from './ops';
 import type { DeviceCreator, Options } from './types';
+import { logger } from './utils';
 import { writeCsv, writeGlb, writeHtml, writeImage, writeSogSource, writeSpz, writeVoxel } from './writers';
 import { writeCompressedPlySource } from './writers/write-compressed-ply';
 import { writePlyStreaming } from './writers/write-ply-streaming';
@@ -130,10 +132,27 @@ const writeImageSource = async (
             cameraTrack: options.renderCameraTrack,
             frames: options.renderFrames,
             residentBudget: options.renderResidentBudget,
+            compensation: options.renderCompensation,
+            antiAliasFilterSize: options.renderAntiAliasFilterSize,
             createDevice
         },
         fs
     );
+};
+
+/**
+ * Formats whose SH model stops at band 3 (compressed PLY, GLB) take the low 3
+ * bands of a 4-band source, with a warning.
+ *
+ * @param source - The source to write.
+ * @param pool - Pool for the reduced view's temporaries.
+ * @param format - Format name for the warning.
+ * @returns The source, reduced to at most 3 bands.
+ */
+const atMostThreeBands = (source: ChunkSource, pool: ChunkDataPool, format: string): ChunkSource => {
+    if (source.meta.shBands <= 3) return source;
+    logger.warn(`${format} cannot store a 4th SH band; writing 3 bands`);
+    return reduceBandsSource(source, 3, pool);
 };
 
 /**
@@ -175,7 +194,7 @@ const writeSource = async (writeSourceOptions: WriteSourceOptions, fs: FileSyste
 
     switch (outputFormat) {
         case 'ply':
-            await writePlyStreaming(source, pool, { filename }, fs);
+            await writePlyStreaming(source, pool, { filename, logitOpacity: options.plyLogitOpacity }, fs);
             break;
         case 'sog':
         case 'sog-bundle':
@@ -187,13 +206,17 @@ const writeSource = async (writeSourceOptions: WriteSourceOptions, fs: FileSyste
                     bundle: outputFormat === 'sog-bundle',
                     iterations: options.iterations ?? 10,
                     webpEffort: options.webpEffort,
-                    createDevice
+                    createDevice,
+                    version: options.sogVersion,
+                    blind: options.sogBlind,
+                    extras: options.sogExtras,
+                    paletteSize: options.sogPaletteSize
                 },
                 fs
             );
             break;
         case 'compressed-ply':
-            await writeCompressedPlySource(source, pool, { filename }, fs);
+            await writeCompressedPlySource(atMostThreeBands(source, pool, 'compressed PLY'), pool, { filename }, fs);
             break;
         case 'splat':
             await writeSplatStreaming(source, pool, { filename }, fs);
@@ -245,7 +268,10 @@ const writeSource = async (writeSourceOptions: WriteSourceOptions, fs: FileSyste
             );
             break;
         case 'glb':
-            await writeGlb({ filename, dataTable: await materializeToDataTable(source, pool) }, fs);
+            await writeGlb(
+                { filename, dataTable: await materializeToDataTable(atMostThreeBands(source, pool, 'GLB'), pool) },
+                fs
+            );
             break;
         case 'html':
         case 'html-bundle':

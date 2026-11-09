@@ -12,6 +12,10 @@ import { logger, toBase64 } from '../utils';
 import { logWrittenFile } from './utils';
 import { writeSog } from './write-sog';
 
+// The bundled viewer's engine predates SOG v3, so HTML output embeds v2 until a
+// viewer release reads v3.
+const VIEWER_SOG_VERSION = 2;
+
 type WriteHtmlOptions = {
     filename: string;
     dataTable: DataTable;
@@ -58,6 +62,7 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
                 iterations,
                 webpEffort,
                 createDevice,
+                version: VIEWER_SOG_VERSION,
                 logging: 'silent'
             },
             memoryFs
@@ -101,6 +106,7 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
                 iterations,
                 webpEffort,
                 createDevice,
+                version: VIEWER_SOG_VERSION,
                 logging: 'flat'
             },
             fs

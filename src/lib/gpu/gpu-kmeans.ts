@@ -1,4 +1,4 @@
-import type { GraphicsDevice } from 'playcanvas';
+import type { Compute, GraphicsDevice } from 'playcanvas';
 import { BUFFERUSAGE_COPY_DST, BUFFERUSAGE_COPY_SRC, FloatPacking, StorageBuffer } from 'playcanvas';
 
 import { makeKernel } from './compute-kernel';
@@ -362,6 +362,11 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 // accumulate in shared memory and land in sums[] with plain (non-atomic)
 // adds — dispatch ordering serializes the per-chunk accumulation. Points
 // outside the bound chunk are skipped and picked up by that chunk's dispatch.
+// Columns per cross-thread reduction pass: 64 threads x 48 f32 = 12KB of
+// workgroup storage, inside the 16KB WebGPU minimum for any column count
+// (72 columns at SH band 4 would need 18KB in one pass).
+const REDUCE_COLUMN_BLOCK = 48;
+
 const reduceWgsl = (floatType: string, numColumns: number) => /* wgsl */ `
 ${floatType === 'f16' ? 'enable f16;' : ''}
 
@@ -379,8 +384,9 @@ struct Uniforms {
 @group(0) @binding(5) var<storage, read_write> sums: array<f32>;
 
 const numColumns = ${numColumns}u;
+const block = ${Math.min(numColumns, REDUCE_COLUMN_BLOCK)}u;
 
-var<workgroup> partials: array<f32, ${numColumns * 64}>;
+var<workgroup> partials: array<f32, ${Math.min(numColumns, REDUCE_COLUMN_BLOCK) * 64}>;
 
 @compute @workgroup_size(64)
 fn main(
@@ -408,18 +414,22 @@ fn main(
             }
         }
     }
-    for (var j = 0u; j < numColumns; j++) {
-        partials[local_id * numColumns + j] = acc[j];
-    }
-    workgroupBarrier();
-
-    // cross-thread reduce: thread j serially sums column j over the 64 partials
-    for (var j = local_id; j < numColumns; j += 64u) {
-        var s = 0.0;
-        for (var t = 0u; t < 64u; t++) {
-            s += partials[t * numColumns + j];
+    // cross-thread reduce, one column block at a time: thread j serially sums
+    // column j of the block over the 64 partials
+    for (var b = 0u; b < numColumns; b += block) {
+        let w = min(block, numColumns - b);
+        for (var j = 0u; j < w; j++) {
+            partials[local_id * block + j] = acc[b + j];
         }
-        sums[cluster * numColumns + j] += s;
+        workgroupBarrier();
+        for (var j = local_id; j < w; j += 64u) {
+            var s = 0.0;
+            for (var t = 0u; t < 64u; t++) {
+                s += partials[t * block + j];
+            }
+            sums[cluster * numColumns + b + j] += s;
+        }
+        workgroupBarrier();
     }
 }
 `;
@@ -438,11 +448,13 @@ struct Uniforms {
 const numColumns = ${numColumns}u;
 
 @compute @workgroup_size(256)
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-    if (gid.x < uniforms.numCentroids * numColumns) {
-        let count = counts[gid.x / numColumns];
+fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) num_workgroups: vec3u) {
+    // 2D dispatch for large palettes (see dispatchFlat)
+    let i = gid.x + gid.y * num_workgroups.x * 256u;
+    if (i < uniforms.numCentroids * numColumns) {
+        let count = counts[i / numColumns];
         if (count > 0u) {
-            centroids[gid.x] = sums[gid.x] / f32(count);
+            centroids[i] = sums[i] / f32(count);
         }
     }
 }
@@ -505,12 +517,28 @@ struct Uniforms {
 @group(0) @binding(2) var<storage, read_write> centroidsF16: array<f16>;
 
 @compute @workgroup_size(256)
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-    if (gid.x < uniforms.totalElems) {
-        centroidsF16[gid.x] = f16(centroids[gid.x]);
+fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) num_workgroups: vec3u) {
+    // 2D dispatch for large palettes (see dispatchFlat)
+    let i = gid.x + gid.y * num_workgroups.x * 256u;
+    if (i < uniforms.totalElems) {
+        centroidsF16[i] = f16(centroids[i]);
     }
 }
 `;
+
+/**
+ * Dispatches `threads` invocations of a 256-wide kernel that reads its flat index as
+ * x + y * width, splitting into rows when one dimension would exceed WebGPU's 65535
+ * workgroups (e.g. a 262144-entry palette of 72 SH coefficients).
+ *
+ * @param compute - The compute to dispatch.
+ * @param threads - Total invocations needed.
+ */
+const dispatchFlat = (compute: Compute, threads: number) => {
+    const groups = Math.ceil(threads / 256);
+    const rows = Math.ceil(groups / 65535);
+    compute.setupDispatch(Math.ceil(groups / rows), rows);
+};
 
 class GpuKmeans {
     /**
@@ -563,7 +591,12 @@ class GpuKmeans {
         const wgStorage: number = wgpuLimits?.maxComputeWorkgroupStorageSize ?? 16384;
         const tileBudget = Math.min(wgStorage, 12 * 1024);
         const tileRowBytes = useF16 ? numColumns * 2 : roundUp(numColumns, 4) * 4;
-        const tileSize = Math.max(64, Math.min(128, Math.floor(tileBudget / (tileRowBytes * 64)) * 64));
+        // the f16 kernel loads tileSize/64 rows per thread, so its tile is a
+        // multiple of 64; the f32 kernel strides its load and may go below 64
+        // rows when a row is wide (SH band 4: 72 columns)
+        const tileSize = useF16
+            ? Math.max(64, Math.min(128, Math.floor(tileBudget / (tileRowBytes * 64)) * 64))
+            : Math.max(16, Math.min(128, Math.floor(tileBudget / (tileRowBytes * 16)) * 16));
         const ppt = pptForColumns(numColumns);
         // the f32 assign benched fastest at 128 threads on an A10G (vs 64)
         const assignWorkgroupSize = useF16 ? 64 : 128;
@@ -788,7 +821,7 @@ class GpuKmeans {
 
                 const dispatchConvert = () => {
                     if (convert) {
-                        convert.compute.setupDispatch(Math.ceil((numCentroids * numColumns) / 256));
+                        dispatchFlat(convert.compute, numCentroids * numColumns);
                         device.computeDispatch([convert.compute], 'kmeans-convert');
                     }
                 };
@@ -882,7 +915,7 @@ class GpuKmeans {
                         device.computeDispatch([reseed.compute], 'kmeans-reseed');
                         submit();
                     }
-                    divide.compute.setupDispatch(Math.ceil((numCentroids * numColumns) / 256));
+                    dispatchFlat(divide.compute, numCentroids * numColumns);
                     device.computeDispatch([divide.compute], 'kmeans-divide');
                     dispatchConvert();
                     submit();

@@ -1,4 +1,4 @@
-import { createChunkDataPool } from '../chunk';
+import { createChunkDataPool, OPACITY_LINEAR_COLUMN } from '../chunk';
 import type { ChunkDataPool, ChunkSource } from '../chunk';
 import { dataTableToChunkSource, materializeToDataTable } from '../compat/data-table';
 import type { TypedArray } from '../data-table';
@@ -8,9 +8,9 @@ import { basename, dirname, join, readFile, ZipReadFileSystem } from '../io/read
 import type { Options } from '../types';
 import { logger, Transform } from '../utils';
 
-import { containerSource } from './container-source';
+import { containerSource, summarizeUnits } from './container-source';
 import type { ContainerSegment } from './container-source';
-import { readSog, readSogSource } from './read-sog';
+import { readSog, readSogSource, statSogSource } from './read-sog';
 import { readSpz, readSpzHeader } from './read-spz';
 
 // Bounded concurrency for chunk decoding. SOG/SPZ decoding is heavier than
@@ -485,7 +485,7 @@ const readChunkCount = async (fileSystem: ReadFileSystem, splatType: string, ful
                 const count =
                     version === undefined
                         ? sogMeta.means?.shape?.[0] // V1: texture shape
-                        : version === 2
+                        : version === 2 || version === 3
                           ? sogMeta.count
                           : undefined;
                 if (!Number.isInteger(count) || count < 0) {
@@ -630,6 +630,8 @@ const readLcc2 = async (fileSystem: ReadFileSystem, filename: string, options: O
     type OutputColumn = { data: TypedArray; task: number; pos: number };
     const outputs = new Map<string, OutputColumn>();
     const lodData = new Float32Array(totalRows);
+    // chunks without opacity_linear, whose rows read as sigmoid(opacity) when another chunk has it
+    const lacksLinear: number[] = [];
 
     // 7) Bounded-concurrency decode pool: decode each chunk, validate its row
     // count against the expected count, copy it into the output arrays at its
@@ -651,6 +653,7 @@ const readLcc2 = async (fileSystem: ReadFileSystem, filename: string, options: O
                     `LCC2 chunk splat count mismatch for ${fullPath}: expected ${counts[i]}, decoded ${dt.numRows}`
                 );
             }
+            if (!dt.hasColumn(OPACITY_LINEAR_COLUMN)) lacksLinear.push(i);
             for (let pos = 0; pos < dt.columns.length; pos++) {
                 const column = dt.columns[pos];
                 let output = outputs.get(column.name);
@@ -671,6 +674,15 @@ const readLcc2 = async (fileSystem: ReadFileSystem, filename: string, options: O
         }
     };
     await Promise.all(Array.from({ length: Math.min(LOAD_CONCURRENCY, tasks.length) }, () => worker()));
+
+    // opacity_linear's absence means sigmoid(opacity), not the zero a missing column is left at
+    const linear = outputs.get(OPACITY_LINEAR_COLUMN)?.data;
+    const opacity = outputs.get('opacity')?.data;
+    if (linear && opacity) {
+        for (const i of lacksLinear) {
+            for (let r = offsets[i]; r < offsets[i] + counts[i]; r++) linear[r] = 1 / (1 + Math.exp(-opacity[r]));
+        }
+    }
 
     // 8) Assemble the merged table, columns ordered by first sighting.
     const columns = [...outputs.entries()]
@@ -789,6 +801,7 @@ const readLcc2Source = async (
     // one is resolved by a cheap header read (no decode).
     const byLevel = collectChunksByLevel(tree, totalLevels, envFileIndex);
     const segmentsByLod: ContainerSegment[][] = [];
+    const chunkPaths = new Map<ContainerSegment, string>();
     let total = 0;
     for (let outputLod = 0; outputLod < inputLods.length; outputLod++) {
         const files = byLevel.get(inputLods[outputLod]);
@@ -808,7 +821,9 @@ const readLcc2Source = async (
             const fullPath = related(splatFiles[fileIndex]);
             const metaCount = files!.get(fileIndex);
             const count = metaCount ?? (await readChunkCount(fileSystem, splatType, fullPath));
-            segs.push({ count, decode: () => decodeChunkSource(fileSystem, splatType, fullPath, pool) });
+            const seg = { count, decode: () => decodeChunkSource(fileSystem, splatType, fullPath, pool) };
+            chunkPaths.set(seg, fullPath);
+            segs.push(seg);
             total += count;
         }
         segmentsByLod.push(segs);
@@ -820,7 +835,21 @@ const readLcc2Source = async (
         );
     }
 
-    return containerSource(segmentsByLod, pool, { transform: LCC2_TRANSFORM() });
+    // whether any selected SOG chunk holds opacity above 1, and their blind origins; only each chunk's meta.json is read
+    const paths = segmentsByLod.flatMap((segs) => segs.map((seg) => chunkPaths.get(seg)!));
+    const units =
+        splatType === '.sog'
+            ? await summarizeUnits(paths, async (path) => {
+                  const zipFs = new ZipReadFileSystem(await openChunkSource(fileSystem, path));
+                  try {
+                      return await statSogSource(zipFs, 'meta.json');
+                  } finally {
+                      zipFs.close();
+                  }
+              })
+            : {};
+
+    return containerSource(segmentsByLod, pool, { transform: LCC2_TRANSFORM(), ...units });
 };
 
 /**

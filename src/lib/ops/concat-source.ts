@@ -1,6 +1,9 @@
 import type { ChunkData, ChunkDataPool, ChunkLayer, ReadRequest, ChunkSource, ChunkSourceMetadata } from '../chunk';
+import { resolveComments } from '../comments';
+import { resolveExtras } from '../extras';
 import { resolveSplatModel } from '../splat-model';
 import { logger } from '../utils';
+import { combineBlindOrigins } from '../utils/sog-blind';
 
 const LAYERS: ChunkLayer[] = ['position', 'geometric', 'color', 'other'];
 
@@ -20,6 +23,7 @@ type MutableRowReadRequest = { indices: Uint32Array; indexOffset: number; count:
  * SH bands, available layers, extra columns) and on the pending coordinate-space
  * **transform** — concatenating data in mismatched spaces is silently wrong, so
  * a transform mismatch throws (the caller must bake to a common space first).
+ * The result carries `opacityAboveOne` when any input does.
  *
  * Single-LOD only. Reads stitch contiguous row ranges: an output chunk is filled
  * by block-copying the overlapping span out of each contributing source chunk
@@ -92,8 +96,15 @@ const concatSource = (allSources: ChunkSource[], pool: ChunkDataPool): ChunkSour
         total += c;
     }
 
+    const extras = resolveExtras(sources);
+    const comments = resolveComments(sources);
+    const { extras: _refExtras, comments: _refComments, opacityAboveOne: _refAboveOne, ...refMeta } = ref;
     const meta: ChunkSourceMetadata = {
-        ...ref,
+        ...refMeta,
+        ...(extras !== undefined ? { extras } : {}),
+        ...(comments?.length ? { comments } : {}),
+        ...(sources.some((s) => s.meta.opacityAboveOne) ? { opacityAboveOne: true } : {}),
+        extraColumns: combineBlindOrigins(sources.map((s) => s.meta.extraColumns)),
         model,
         numGaussians: total,
         numLods: 1,

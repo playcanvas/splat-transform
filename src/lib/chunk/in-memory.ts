@@ -191,6 +191,8 @@ const createInMemoryChunkSource = (params: {
     extraColumns?: readonly ExtraColumn[];
     /** How the scene was trained; untagged sources are `default`. */
     model?: SplatModel;
+    /** Some gaussian's opacity may exceed 1 (see `ChunkSourceMetadata.opacityAboveOne`). */
+    opacityAboveOne?: boolean;
     transform: Transform;
     /** Gaussians per LOD. `lodCounts[0]` must equal `numGaussians`. */
     lodCounts: readonly number[];
@@ -258,7 +260,8 @@ const createInMemoryChunkSource = (params: {
         extraColumns: extras,
         transform,
         availableLayers,
-        layouts
+        layouts,
+        ...(params.opacityAboveOne ? { opacityAboveOne: true } : {})
     };
 
     return new InMemoryChunkSource(meta, buffers);

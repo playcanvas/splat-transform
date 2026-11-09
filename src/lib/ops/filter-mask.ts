@@ -3,7 +3,7 @@ import { Vec3 } from 'playcanvas';
 import { SH_REST_COUNTS } from '../chunk';
 import type { ChunkData, ChunkDataPool, ChunkLayer, ChunkSource, ChunkSourceMetadata } from '../chunk';
 import { Transform } from '../utils';
-import { inverseTransforms, isTransformColumn, rawColumnMap } from '../value-transforms';
+import { inverseTransforms, isTransformColumn, opacityRaw, rawColumnMap } from '../value-transforms';
 
 import { bakeTransform } from './bake-transform';
 
@@ -88,8 +88,8 @@ const selectRows = async (
 
 /**
  * Remove gaussians containing NaN or Infinity. Mirrors `processDataTable`'s
- * `filterNaN`: any non-finite value drops the row, except `opacity` may be
- * `+Infinity` and `scale_*` may be `-Infinity`. Rows whose rotation quaternion
+ * `filterNaN`: any non-finite value drops the row, except `scale_*` may be
+ * `-Infinity` (true opacity is always finite; a `+Infinity` PLY logit reads as 1). Rows whose rotation quaternion
  * is all-zero are also dropped: a zero-norm quaternion cannot be normalized,
  * so the gaussian is unrenderable (seen in zero-padded exporter output, where
  * whole rows of zeros otherwise survive as visible alpha-0.5 splats at the
@@ -128,8 +128,7 @@ const filterNaNRows = (src: ChunkSource, pool: ChunkDataPool): Promise<Uint32Arr
                     const v = geoF[o + e];
                     if (!isFinite(v) && v !== -Infinity) return false; // scale: -Inf ok
                 }
-                const op = geoF[o + 7];
-                if (!isFinite(op) && op !== Infinity) return false; // opacity: +Inf ok
+                if (!isFinite(geoF[o + 7])) return false; // true opacity
             }
             if (colF) {
                 const o = r * colStride32;
@@ -184,9 +183,10 @@ type ByValueParams = { columnName: string; comparator: string; value: number };
 
 /**
  * Keep gaussians matching a column comparison. Mirrors `processDataTable`'s
- * `filterByValue`: `*_raw` compares the stored value directly; otherwise an
- * `opacity`/`scale_*`/`f_dc_*` value is converted from user-friendly to raw
- * space first. If the source has a pending transform and the column is affected
+ * `filterByValue`: `*_raw` compares the stored value directly; otherwise a
+ * `scale_*`/`f_dc_*` value is converted from user-friendly to raw space first.
+ * `opacity` compares true opacity, which the source stores as is (it may exceed
+ * 1), and `opacity_raw` the logit a standard PLY would store. If the source has a pending transform and the column is affected
  * by it, the column is baked (via {@link bakeTransform}) before comparison.
  * @param src - The source to filter (LOD 0).
  * @param pool - Pool for the temporary read buffers.
@@ -197,13 +197,16 @@ const filterByValueRows = (src: ChunkSource, pool: ChunkDataPool, params: ByValu
     const { meta } = src;
     let columnName = params.columnName;
     let value = params.value;
+    // opacity_raw compares each gaussian's stored logit, from its true opacity
+    let toRaw: ((a: number) => number) | null = null;
 
-    if (rawColumnMap[columnName]) {
+    if (columnName === 'opacity_raw') {
+        columnName = 'opacity';
+        const threshold = value;
+        toRaw = (a) => opacityRaw(a, threshold);
+    } else if (rawColumnMap[columnName]) {
         columnName = rawColumnMap[columnName];
-    } else if (inverseTransforms[columnName]) {
-        if (columnName === 'opacity' && (value <= 0 || value >= 1)) {
-            throw new Error(`filterByValue: opacity value must be between 0 and 1 (exclusive), got ${value}`);
-        }
+    } else if (columnName !== 'opacity' && inverseTransforms[columnName]) {
         value = inverseTransforms[columnName](value);
     }
 
@@ -230,6 +233,10 @@ const filterByValueRows = (src: ChunkSource, pool: ChunkDataPool, params: ByValu
         const buf = buffers[loc.layer]!;
         if (loc.type === 'float32') {
             const f = new Float32Array(buf);
+            if (toRaw) {
+                const raw = toRaw;
+                return (r: number) => compare(raw(f[r * stride32 + loc.elem]), value);
+            }
             return (r: number) => compare(f[r * stride32 + loc.elem], value);
         }
         const u = new Uint32Array(buf);

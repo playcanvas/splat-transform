@@ -13,7 +13,7 @@
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
 
-import { createTestDataTable } from './helpers/test-utils.mjs';
+import { createTestDataTable, assertColumnValue } from './helpers/test-utils.mjs';
 import { combine, Transform } from '../src/lib/index.js';
 import { dataTableToChunkSource, materializeToDataTable } from '../src/lib/compat/data-table.js';
 import { concatSource, filterSource, permuteSource, stackLods } from '../src/lib/ops/index.js';
@@ -27,7 +27,7 @@ const assertSameRows = (out, expected) => {
         const o = out.getColumnByName(name).data;
         const e = expected.getColumnByName(name).data;
         for (let i = 0; i < expected.numRows; i++) {
-            assert.strictEqual(o[i], e[i], `column '${name}' row ${i}`);
+            assertColumnValue(name, o[i], e[i], `column '${name}' row ${i}`);
         }
     }
 };
@@ -52,7 +52,7 @@ describe('combinators: filterSource', () => {
             const inCol = dt.getColumnByName(name).data;
             const outCol = out.getColumnByName(name).data;
             for (let i = 0; i < indices.length; i++) {
-                assert.strictEqual(outCol[i], inCol[indices[i]], `column '${name}' row ${i}`);
+                assertColumnValue(name, outCol[i], inCol[indices[i]], `column '${name}' row ${i}`);
             }
         }
     });
@@ -180,7 +180,7 @@ describe('combinators: concatSource', () => {
             const g = gathered.getColumnByName(name).data;
             const e = expected.getColumnByName(name).data;
             for (let i = 0; i < order.length; i++) {
-                assert.strictEqual(g[i], e[order[i]], `column '${name}' row ${i} (src ${order[i]})`);
+                assertColumnValue(name, g[i], e[order[i]], `column '${name}' row ${i} (src ${order[i]})`);
             }
         }
     });

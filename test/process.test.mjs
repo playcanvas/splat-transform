@@ -71,32 +71,17 @@ describe('processDataTable', function () {
             );
         });
 
-        it('should throw for opacity value of 0', async function () {
-            const dataTable = createTestDataTable(4);
+        it('accepts opacity thresholds of 0 and 1 (true opacity may exceed 1)', async function () {
+            const dataTable = createTestDataTable(4); // opacity 0.9 throughout
+            const keep = async (value) => (await processDataTable(dataTable, [{
+                kind: 'filterByValue',
+                columnName: 'opacity',
+                comparator: 'gt',
+                value
+            }])).numRows;
 
-            await assert.rejects(
-                processDataTable(dataTable, [{
-                    kind: 'filterByValue',
-                    columnName: 'opacity',
-                    comparator: 'gt',
-                    value: 0
-                }]),
-                /opacity value must be between 0 and 1/
-            );
-        });
-
-        it('should throw for opacity value of 1', async function () {
-            const dataTable = createTestDataTable(4);
-
-            await assert.rejects(
-                processDataTable(dataTable, [{
-                    kind: 'filterByValue',
-                    columnName: 'opacity',
-                    comparator: 'gt',
-                    value: 1
-                }]),
-                /opacity value must be between 0 and 1/
-            );
+            assert.strictEqual(await keep(0), 4);
+            assert.strictEqual(await keep(1), 0);
         });
 
         it('should accept valid opacity values', async function () {

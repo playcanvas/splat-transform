@@ -27,6 +27,14 @@ import type { GraphicsDevice } from 'playcanvas';
 export const AA_DILATION_COV = 0.3;
 
 /**
+ * Screen-space filter, in pixels², that scenes trained with anti-aliasing (model `antialiased`)
+ * were trained with. It replaces {@link AA_DILATION_COV} for them, and their opacity is scaled by
+ * `sqrt(det Σ / det(Σ + filter))` so each splat draws its undilated mass. 0.1 is Mip-Splatting's
+ * value, which Brush, LichtFeld Studio and Spirula train with; the engine defaults to it too.
+ */
+export const AA_FILTER_COV = 0.1;
+
+/**
  * Maximum tan(half-FOV) factor that the EWA Jacobian's `(cx/cz, cy/cz)`
  * is clamped to before forming the projection. Splats outside this cone
  * use a distorted Jacobian. Matches the INRIA reference (`1.3 × half-FOV`).
