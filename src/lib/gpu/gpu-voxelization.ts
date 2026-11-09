@@ -601,6 +601,7 @@ class GpuVoxelization {
             slot.indexBuffer.destroy();
             slot.resultsBuffer.destroy();
             slot.batchInfoBuffer.destroy();
+            slot.compute.destroy();
         }
         this.shader.destroy();
         this.bindGroupFormat.destroy();

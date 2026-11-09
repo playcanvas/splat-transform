@@ -284,6 +284,48 @@ for (const precision of ['default', 'f32']) describe(`GpuKmeans (GPU path, ${pre
         }
     });
 
+    it('splits a large codebook into centroid ranges and keeps exact labels', async (t) => {
+        if (!device) return t.skip('no WebGPU adapter available');
+
+        // 64K points × 16000 centroids × 45 columns exceeds one assign
+        // command buffer's work budget, so the argmin carries across centroid
+        // ranges. Centroid i sits at 8 × (bits of i) in the first 14 columns:
+        // any two differ by 8 in at least one column, so jitter of at most 1
+        // per column (f16-exact quarter steps) leaves each point's generating
+        // centroid as its unique nearest. 16000 is not a whole number of
+        // tiles, so the last range is partial.
+        const rand = mulberry32(7);
+        const numColumns = 45;
+        const k = 16000;
+        const numRows = 65536;
+        const centroids = new Float32Array(k * numColumns);
+        for (let i = 0; i < k; i++) {
+            for (let j = 0; j < 14; j++) centroids[i * numColumns + j] = ((i >> j) & 1) * 8;
+        }
+        const points = new Float32Array(numRows * numColumns);
+        const expected = new Uint32Array(numRows);
+        for (let i = 0; i < numRows; i++) {
+            // most points belong to centroids past the first range
+            const c = k - 1 - (i % k);
+            expected[i] = c;
+            for (let j = 0; j < numColumns; j++) {
+                points[i * numColumns + j] = centroids[c * numColumns + j] + Math.round((rand() * 2 - 1) * 4) * 0.25;
+            }
+        }
+
+        const computes = device._computes.size;
+        const gpu = new GpuKmeans(device, numColumns, k);
+        try {
+            const labels = new Uint32Array(numRows);
+            await gpu.run(points, numRows, centroids, labels, 1);
+            const wrong = labels.findIndex((l, i) => l !== expected[i]);
+            assert.strictEqual(wrong, -1, `point ${wrong}: label ${labels[wrong]}, expected ${expected[wrong]}`);
+        } finally {
+            gpu.destroy();
+        }
+        assert.strictEqual(device._computes.size, computes, 'GpuKmeans.destroy must release its computes');
+    });
+
     it('reseeds empty clusters to real points', async (t) => {
         if (!device) return t.skip('no WebGPU adapter available');
 

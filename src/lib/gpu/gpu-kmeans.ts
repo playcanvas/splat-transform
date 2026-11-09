@@ -28,6 +28,17 @@ const roundUp = (value: number, multiple: number) => {
     return Math.ceil(value / multiple) * multiple;
 };
 
+// Each assign sub-dispatch is its own command buffer, and macOS kills command
+// buffers that run too long (the GPU watchdog). A sub-dispatch covers up to
+// ASSIGN_SUB points (enough workgroups to fill a large GPU) against a range of
+// centroids sized so points × centroids × columns stays within ASSIGN_WORK:
+// ~10 ms on an M4 Max (measured ~3.6e12 per second at 64K × 45), roughly 50 ms
+// on an 8-core M1. Splitting the centroids rather than the points keeps the
+// GPU occupied (fewer points per dispatch measured 2× slower on an M4 Max).
+// Small codebooks cover all centroids in one range.
+const ASSIGN_WORK = 2 ** 35;
+const ASSIGN_SUB = 512 * 1024;
+
 // FlashAssign: streaming online argmin over centroid tiles staged through
 // workgroup shared memory; the N×K distance matrix is never materialized.
 // Threads are strided so the p-th point of the whole workgroup block is
@@ -41,13 +52,16 @@ struct Uniforms {
     localOffset: u32,       // first point of this dispatch, chunk-relative
     globalOffset: u32,      // first point of this dispatch, global (labels index)
     count: u32,             // points in this dispatch
-    numCentroids: u32
+    numCentroids: u32,
+    centroidBegin: u32,     // centroid range of this dispatch, tile aligned
+    centroidEnd: u32
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var<storage, read> points: array<${floatType}>;
 @group(0) @binding(2) var<storage, read> centroids: array<${floatType}>;
 @group(0) @binding(3) var<storage, read_write> labels: array<u32>;
+@group(0) @binding(4) var<storage, read_write> bestDist: array<f32>;    // carried between centroid ranges
 
 const numColumns = ${numColumns}u;
 const tileSize = ${tileSize}u;          // centroid rows per shared-memory tile, multiple of 64
@@ -76,24 +90,30 @@ fn main(
         }
     }
 
+    // resume the argmin from the previous centroid range
     var mind: array<f32, ${ppt}>;
     var mini: array<u32, ${ppt}>;
     for (var p = 0u; p < ppt; p++) {
         mind[p] = F32_MAX;
         mini[p] = 0u;
+        let pi = blockBase + p * 64u + local_id;
+        if (uniforms.centroidBegin > 0u && pi < uniforms.count) {
+            mind[p] = bestDist[uniforms.globalOffset + pi];
+            mini[p] = labels[uniforms.globalOffset + pi];
+        }
     }
 
-    // work through the centroids in shared memory tiles
-    let numTiles = (uniforms.numCentroids + tileSize - 1u) / tileSize;
+    // work through this dispatch's centroids in shared memory tiles
+    let numTiles = (uniforms.centroidEnd - uniforms.centroidBegin + tileSize - 1u) / tileSize;
     for (var t = 0u; t < numTiles; t++) {
-        let tileBase = t * tileSize;
+        let tileBase = uniforms.centroidBegin + t * tileSize;
 
         // cooperative load: each thread copies tileSize/64 consecutive rows
         let rowsPerThread = tileSize / 64u;
         for (var r = 0u; r < rowsPerThread; r++) {
             let localRow = local_id * rowsPerThread + r;
             let srcRow = tileBase + localRow;
-            if (srcRow < uniforms.numCentroids) {
+            if (srcRow < uniforms.centroidEnd) {
                 let src = srcRow * numColumns;
                 let dst = localRow * numColumns;
                 for (var j = 0u; j < numColumns; j++) {
@@ -104,7 +124,7 @@ fn main(
         workgroupBarrier();
 
         // online argmin: each centroid row is reused across all ppt points
-        let cnt = min(tileSize, uniforms.numCentroids - tileBase);
+        let cnt = min(tileSize, uniforms.centroidEnd - tileBase);
         for (var c = 0u; c < cnt; c++) {
             let cb = c * numColumns;
             for (var p = 0u; p < ppt; p++) {
@@ -127,6 +147,9 @@ fn main(
         let pi = blockBase + p * 64u + local_id;
         if (pi < uniforms.count) {
             labels[uniforms.globalOffset + pi] = mini[p];
+            if (uniforms.centroidEnd < uniforms.numCentroids) {
+                bestDist[uniforms.globalOffset + pi] = mind[p];
+            }
         }
     }
 }
@@ -146,7 +169,9 @@ struct Uniforms {
     localOffset: u32,       // first point of this dispatch, chunk-relative
     globalOffset: u32,      // first point of this dispatch, global (labels index)
     count: u32,             // points in this dispatch
-    numCentroids: u32
+    numCentroids: u32,
+    centroidBegin: u32,     // centroid range of this dispatch, tile aligned
+    centroidEnd: u32
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -154,6 +179,7 @@ struct Uniforms {
 @group(0) @binding(2) var<storage, read> centroids: array<f32>;
 @group(0) @binding(3) var<storage, read_write> labels: array<u32>;
 @group(0) @binding(4) var<storage, read> center: array<vec4f>;  // zero-padded reference row
+@group(0) @binding(5) var<storage, read_write> bestDist: array<f32>;    // carried between centroid ranges
 
 const numColumns = ${numColumns}u;
 const quads = ${Math.ceil(numColumns / 4)}u;    // vec4s per padded row
@@ -209,22 +235,28 @@ fn main(
         }
     }
 
+    // resume the argmin from the previous centroid range
     var mind: array<f32, ${ppt}>;
     var mini: array<u32, ${ppt}>;
     for (var p = 0u; p < ppt; p++) {
         mind[p] = F32_MAX;
         mini[p] = 0u;
+        let pi = blockBase + p * workgroupSize + local_id;
+        if (uniforms.centroidBegin > 0u && pi < uniforms.count) {
+            mind[p] = bestDist[uniforms.globalOffset + pi];
+            mini[p] = labels[uniforms.globalOffset + pi];
+        }
     }
 
-    let numTiles = (uniforms.numCentroids + tileSize - 1u) / tileSize;
+    let numTiles = (uniforms.centroidEnd - uniforms.centroidBegin + tileSize - 1u) / tileSize;
     for (var t = 0u; t < numTiles; t++) {
-        let tileBase = t * tileSize;
+        let tileBase = uniforms.centroidBegin + t * tileSize;
 
         // stage the tile one row per thread, summing |c|² on the way
         for (var r = local_id; r < tileSize; r += workgroupSize) {
             let row = tileBase + r;
             var norm = 0.0;
-            if (row < uniforms.numCentroids) {
+            if (row < uniforms.centroidEnd) {
                 let src = row * numColumns;
                 for (var q = 0u; q < quads; q++) {
                     let c = centroidQuad(src, q);
@@ -236,7 +268,7 @@ fn main(
         }
         workgroupBarrier();
 
-        let cnt = min(tileSize, uniforms.numCentroids - tileBase);
+        let cnt = min(tileSize, uniforms.centroidEnd - tileBase);
         for (var c = 0u; c < cnt; c++) {
             let cb = c * quads;
             let norm = tileNorm[c];
@@ -260,6 +292,9 @@ fn main(
         let pi = blockBase + p * workgroupSize + local_id;
         if (pi < uniforms.count) {
             labels[uniforms.globalOffset + pi] = mini[p];
+            if (uniforms.centroidEnd < uniforms.numCentroids) {
+                bestDist[uniforms.globalOffset + pi] = mind[p];
+            }
         }
     }
 }
@@ -608,12 +643,13 @@ class GpuKmeans {
                 useF16
                     ? assignWgsl(floatType, numColumns, tileSize, ppt)
                     : assignVec4Wgsl(numColumns, tileSize, ppt, assignWorkgroupSize),
-                ['localOffset', 'globalOffset', 'count', 'numCentroids'],
+                ['localOffset', 'globalOffset', 'count', 'numCentroids', 'centroidBegin', 'centroidEnd'],
                 [
                     ['points', true],
                     ['centroids', true],
                     ['labels', false],
-                    ...(useF16 ? [] : [['center', true] as [string, boolean]])
+                    ...(useF16 ? [] : [['center', true] as [string, boolean]]),
+                    ['bestDist', false]
                 ]
             ),
             histogram: makeKernel(
@@ -762,6 +798,15 @@ class GpuKmeans {
                 ? new StorageBuffer(device, roundUp(numCentroids * numColumns, 2) * 2, 0)
                 : null;
             const labelsBuf = new StorageBuffer(device, numPoints * 4, BUFFERUSAGE_COPY_SRC);
+            // assign centroid range per sub-dispatch of `count` points: a
+            // whole number of tiles, so the tiling matches the unsplit loop
+            const assignRange = (count: number) => {
+                return Math.max(tileSize, Math.floor(ASSIGN_WORK / (count * numColumns * tileSize)) * tileSize);
+            };
+            // the running best distance between centroid ranges is only needed
+            // when the largest sub-dispatch splits (smaller ones split less)
+            const splits = assignRange(Math.min(ASSIGN_SUB, chunkCap, numPoints)) < numCentroids;
+            const bestDistBuf = new StorageBuffer(device, splits ? numPoints * 4 : 4, 0);
             const sortedIdxBuf = new StorageBuffer(device, numPoints * 4, 0);
             const countsBuf = new StorageBuffer(device, numCentroids * 4, BUFFERUSAGE_COPY_DST);
             const offsetsBuf = new StorageBuffer(device, numCentroids * 4, 0);
@@ -776,6 +821,7 @@ class GpuKmeans {
                 const { assign, histogram, scan, scatter, reduce, divide, reseed, convert } = kernels;
                 assign.compute.setParameter('centroids', useF16 ? centroidsF16Buf! : centroidsBuf);
                 assign.compute.setParameter('labels', labelsBuf);
+                assign.compute.setParameter('bestDist', bestDistBuf);
                 assign.compute.setParameter('numCentroids', numCentroids);
                 if (centerBuf) {
                     // the f32 assign's reference row: the seeds' mean (the
@@ -835,10 +881,6 @@ class GpuKmeans {
                     }
                 }
 
-                // assign sub-dispatch size: keeps each command buffer's GPU time
-                // modest (watchdog margin) without any CPU synchronization
-                const assignSub = 512 * 1024;
-
                 // streaming-mode staging bound (see the iteration-boundary sync
                 // below); 8 bytes keeps every mapAsync alignment rule satisfied
                 const syncScratch = new Float32Array(2);
@@ -856,15 +898,23 @@ class GpuKmeans {
                             uploadChunk(buf, c);
                         }
                         const rows = chunkRows(c);
-                        for (let s = 0; s < rows; s += assignSub) {
-                            const count = Math.min(assignSub, rows - s);
-                            assign.compute.setParameter('points', buf);
-                            assign.compute.setParameter('localOffset', s);
-                            assign.compute.setParameter('globalOffset', c * chunkCap + s);
-                            assign.compute.setParameter('count', count);
-                            assign.compute.setupDispatch(Math.ceil(count / (assignWorkgroupSize * ppt)));
-                            device.computeDispatch([assign.compute], 'kmeans-assign');
-                            submit();
+                        // one submit per sub-dispatch (uniform changes only take
+                        // effect across a submit, see the NOTE below), which
+                        // also keeps each command buffer under the watchdog
+                        for (let s = 0; s < rows; s += ASSIGN_SUB) {
+                            const count = Math.min(ASSIGN_SUB, rows - s);
+                            const range = assignRange(count);
+                            for (let begin = 0; begin < numCentroids; begin += range) {
+                                assign.compute.setParameter('points', buf);
+                                assign.compute.setParameter('localOffset', s);
+                                assign.compute.setParameter('globalOffset', c * chunkCap + s);
+                                assign.compute.setParameter('count', count);
+                                assign.compute.setParameter('centroidBegin', begin);
+                                assign.compute.setParameter('centroidEnd', Math.min(numCentroids, begin + range));
+                                assign.compute.setupDispatch(Math.ceil(count / (assignWorkgroupSize * ppt)));
+                                device.computeDispatch([assign.compute], 'kmeans-assign');
+                                submit();
+                            }
                         }
                     }
 
@@ -948,6 +998,7 @@ class GpuKmeans {
                 centroidsBuf.destroy();
                 centroidsF16Buf?.destroy();
                 labelsBuf.destroy();
+                bestDistBuf.destroy();
                 sortedIdxBuf.destroy();
                 countsBuf.destroy();
                 offsetsBuf.destroy();

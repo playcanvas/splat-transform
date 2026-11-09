@@ -496,6 +496,7 @@ class GpuEdgeCost {
             edgesIBuf.destroy();
             edgesJBuf.destroy();
             outBuf.destroy();
+            compute.destroy();
             shader.destroy();
             bindGroupFormat.destroy();
         };
