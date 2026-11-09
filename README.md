@@ -120,7 +120,7 @@ Actions execute in the order specified and can be repeated. Any action may appea
 -t, --translate        <x,y,z>          Translate Gaussians by (x, y, z)
 -r, --rotate           <x,y,z>          Rotate Gaussians by Euler angles (x, y, z), in degrees
 -s, --scale            <factor>         Uniformly scale Gaussians by factor
--H, --filter-harmonics <0|1|2|3>        Remove spherical harmonic bands > n
+-H, --filter-harmonics <0|1|2|3|4>      Remove spherical harmonic bands > n
 -N, --filter-nan                        Remove Gaussians with NaN values, most Inf values, or a
                                           zero-norm (unrenderable) rotation quaternion;
                                           retains -Infinity in scale_*
