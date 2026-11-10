@@ -1,12 +1,12 @@
 import type { GraphicsDevice } from 'playcanvas';
 
 import type { ChunkData, ChunkDataPool, ChunkSource } from '../chunk';
-import { createMergeScratch, makeGaussianSamples, sigmoid, ellipsoidArea } from '../decimate/moment-match';
+import { createMergeScratch, makeGaussianSamples, ellipsoidArea } from '../decimate/moment-match';
 import type { SplatView } from '../decimate/moment-match';
 import { WorkerQueue } from '../workers';
 
 import { buildCostCache, computeEdgeCostView } from './edge-cost-cpu';
-import { APP_CHUNK, GpuEdgeCost } from './gpu-edge-cost';
+import { appChunkWidth, GpuEdgeCost } from './gpu-edge-cost';
 import type { EdgeCostCache } from './gpu-edge-cost';
 import { GpuKnn } from './gpu-knn';
 import { collectBlock, verifyAndFixKnn, toGlobalNeighbors, KNN_FIXED } from './knn-blocks';
@@ -155,7 +155,7 @@ const indexOfSorted = (sorted: Uint32Array, g: number): number => {
 
 // Pack the block view into the GpuEdgeCost cache layout (legacy packing:
 // posScalars 8-wide, rotR from normalized quats, appearance in ≤APP_CHUNK
-// column chunks with live-width strides).
+// column chunks (appChunkWidth) with live-width strides).
 const packGpuCache = (view: SplatView): EdgeCostCache => {
     const { pos, geo, color, colorDim } = view;
     const n = geo.length / 8;
@@ -166,7 +166,7 @@ const packGpuCache = (view: SplatView): EdgeCostCache => {
     for (let i = 0; i < n; i++) {
         const i8 = i * 8;
         const o = i * 8;
-        const linAlpha = sigmoid(geo[i8 + 7]);
+        const linAlpha = geo[i8 + 7];
         const sx = Math.max(Math.exp(geo[i8 + 4]), 1e-12);
         const sy = Math.max(Math.exp(geo[i8 + 5]), 1e-12);
         const sz = Math.max(Math.exp(geo[i8 + 6]), 1e-12);
@@ -213,11 +213,12 @@ const packGpuCache = (view: SplatView): EdgeCostCache => {
         rotR.set(rot, i * 9);
     }
 
-    const numChunks = Math.ceil(colorDim / APP_CHUNK);
+    const chunkWidth = appChunkWidth(colorDim);
+    const numChunks = Math.ceil(colorDim / chunkWidth);
     const appChunks: Float32Array[] = [];
     for (let ch = 0; ch < numChunks; ch++) {
-        const kStart = ch * APP_CHUNK;
-        const width = Math.min(APP_CHUNK, colorDim - kStart);
+        const kStart = ch * chunkWidth;
+        const width = Math.min(chunkWidth, colorDim - kStart);
         const chunk = new Float32Array(n * width);
         for (let s = 0; s < n; s++) {
             const dst = s * width;

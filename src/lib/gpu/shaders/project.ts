@@ -1,3 +1,8 @@
+import { SIGMA_CUTOFF } from '../../render/config';
+import { OPACITY_MAX, plateauCoreConstants } from '../../utils/opacity';
+
+import { wgslF32 } from './chunks/constants';
+
 /**
  * WGSL source for the project compute. Reads raw splat fields from the
  * per-slot input buffer, evaluates SH for view-dependent color, computes
@@ -11,12 +16,15 @@
  * in the projection-specific chunks (screen mapping + Jacobian + tile
  * AABB). The per-render `MAX_COVERAGE_PER_SPLAT` cap is similarly
  * embedded by the tile-AABB chunk via JS-template substitution at
- * construction time (see `sharedCincludes` in the rasterizer ctor).
+ * construction time (see `cincludes` in the rasterizer ctor).
  *
- * @param coeffsPerChannel - Per-channel SH coefficient count (0/3/8/15).
+ * @param coeffsPerChannel - Per-channel SH coefficient count (0/3/8/15/24).
+ * @param aaFilterCov - Screen-space filter of antialiased scenes, in pixels² (used with AA_COMPENSATION).
  * @returns WGSL source for the project compute shader.
  */
-const projectWgsl = (coeffsPerChannel: number) => /* wgsl */ `
+const PLATEAU_CORE = plateauCoreConstants(SIGMA_CUTOFF);
+
+const projectWgsl = (coeffsPerChannel: number, aaFilterCov: number) => /* wgsl */ `
 #include "uniformsStruct"
 #include "constants"
 
@@ -24,13 +32,9 @@ const projectWgsl = (coeffsPerChannel: number) => /* wgsl */ `
 @group(0) @binding(2) var<storage, read_write> projected: array<vec4<f32>>;
 @group(0) @binding(3) var<storage, read_write> coverage: array<u32>;
 
-// Splat attribute access. The chunked path uploads an interleaved record
-// per gaussian (\`splats\`, stride \`splatStride\`); the scene rasterizer holds
-// the source's layers as they are stored (\`position\` 3, \`geometric\` 8 and
-// \`color\` 3 + SH floats per gaussian) and processes gaussians in the
-// depth-sorted \`order\`. Both resolve to the same f32 values, so the two
-// paths render identically.
-#ifdef SCENE
+// Splat attribute access. The source's layers are held as they are stored
+// (\`position\` 3, \`geometric\` 8 and \`color\` 3 + SH floats per gaussian)
+// and gaussians are processed in the depth-sorted \`order\`.
 @group(0) @binding(1) var<storage, read> position: array<f32>;
 @group(0) @binding(4) var<storage, read> geometric: array<f32>;
 @group(0) @binding(5) var<storage, read> color: array<f32>;
@@ -47,17 +51,6 @@ fn attr(c: u32, s: u32) -> f32 {
 fn shc(k: u32, s: u32) -> f32 {
     return color[s * COLOR_STRIDE_F32 + 3u + k];
 }
-#else
-@group(0) @binding(1) var<storage, read> splats: array<f32>;
-
-fn attr(c: u32, s: u32) -> f32 {
-    return splats[s * uniforms.splatStride + c];
-}
-
-fn shc(k: u32, s: u32) -> f32 {
-    return splats[s * uniforms.splatStride + 14u + k];
-}
-#endif
 
 const SH_C0: f32 = 0.28209479177387814;
 const SH_C1: f32 = 0.4886025119029199;
@@ -73,8 +66,28 @@ const SH_C3_3: f32 = 0.3731763325901154;
 const SH_C3_4: f32 = -0.4570457994644658;
 const SH_C3_5: f32 = 1.445305721320277;
 const SH_C3_6: f32 = -0.5900435899266435;
+const SH_C4_0: f32 = 2.5033429417967046;
+const SH_C4_1: f32 = -1.7701307697799304;
+const SH_C4_2: f32 = 0.9461746957575601;
+const SH_C4_3: f32 = -0.6690465435572892;
+const SH_C4_4: f32 = 0.10578554691520431;
+const SH_C4_5: f32 = -0.6690465435572892;
+const SH_C4_6: f32 = 0.47308734787878004;
+const SH_C4_7: f32 = -1.7701307697799304;
+const SH_C4_8: f32 = 0.6258357354491761;
 
 const COEFFS_PER_CHANNEL: u32 = ${coeffsPerChannel}u;
+const AA_FILTER_COV: f32 = ${wgslF32(aaFilterCov)};
+
+// Over-unity opacity is drawn with peak 1 as an opaque core of radius u0 (a fraction of SIGMA_CUTOFF)
+// with the plain gaussian's falloff stretched over the rest, so it ends at SIGMA_CUTOFF like a plain
+// gaussian; u0 draws exactly its mass (see plateauCore in utils/opacity.ts).
+const OPACITY_MAX: f32 = ${wgslF32(OPACITY_MAX)};
+
+fn plateauCore(amp: f32) -> f32 {
+    let t = min(amp, OPACITY_MAX) - 1.0;
+    return sqrt(${wgslF32(PLATEAU_CORE.r0 * PLATEAU_CORE.r0)} + ${wgslF32(PLATEAU_CORE.q)} * t) - ${wgslF32(PLATEAU_CORE.r0)};
+}
 
 fn writeInvalid(idx: u32) {
     projected[idx * 3u + 0u] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
@@ -90,15 +103,11 @@ fn main(
     @builtin(local_invocation_id) lid: vec3<u32>
 ) {
     // Dispatches past the per-dimension workgroup limit are tiled in 2-D;
-    // linearise so the chunked (1-D) and resident paths index alike.
+    // linearise them.
     let i = (wgId.y * numWg.x + wgId.x) * 64u + lid.x;
     if (i >= uniforms.chunkSize) { return; }
 
-#ifdef SCENE
     let s = order[i];
-#else
-    let s = i;
-#endif
 
     let posX = attr(0u, s);
     let posY = attr(1u, s);
@@ -111,6 +120,12 @@ fn main(
     let lsY = attr(8u, s);
     let lsZ = attr(9u, s);
     let opacity = attr(10u, s);
+    // the slot holds true opacity A (it may exceed 1); CLAMP_OPACITY draws at most 1
+#ifdef CLAMP_OPACITY
+    var amp = min(opacity, 1.0);
+#else
+    var amp = opacity;
+#endif
     let fdcR = attr(11u, s);
     let fdcG = attr(12u, s);
     let fdcB = attr(13u, s);
@@ -138,8 +153,23 @@ fn main(
     #include "jacobianPinhole"
 #endif
 
+#ifdef AA_COMPENSATION
+    // Trained with anti-aliasing: filtered with the training filter instead of the dilation, and
+    // the opacity pays for it, so the drawn mass is the unfiltered gaussian's (the engine's
+    // aaFactor, applied before the over-unity profile).
+    let detRaw = cov00 * cov11 - cov01 * cov01;
+    cov00 = cov00 + AA_FILTER_COV;
+    cov11 = cov11 + AA_FILTER_COV;
+    amp = amp * sqrt(max(0.0, detRaw) / (cov00 * cov11 - cov01 * cov01));
+#else
     cov00 = cov00 + AA_DILATION_COV;
     cov11 = cov11 + AA_DILATION_COV;
+#endif
+    // A > 1: draw an opaque core of radius core (0 = plain gaussian).
+    var core = 0.0;
+    if (amp > 1.0) {
+        core = plateauCore(amp);
+    }
 
 #ifndef PROJECTION_EQUIRECT
     // Defocus (DoF), pinhole only. Capture detPreDoF before dilating so the
@@ -157,6 +187,7 @@ fn main(
     if (detU <= 0.0) { writeInvalid(i); return; }
     let mid = 0.5 * (cov00 + cov11);
     let disc = sqrt(max(DISCRIMINANT_FLOOR, mid * mid - detU));
+    // The over-unity profile ends at SIGMA_CUTOFF too (see rasterize-binned.ts).
     var radiusRaw = SIGMA_CUTOFF * sqrt(mid + disc);
 
     // Size clamp: a splat whose radius exceeds SIZE_CLAMP_FRAC of the
@@ -222,6 +253,9 @@ fn main(
 #ifdef SH_BAND_3
     #include "shBand3"
 #endif
+#ifdef SH_BAND_4
+    #include "shBand4"
+#endif
 
     let colR = max(0.0, cR + 0.5);
     let colG = max(0.0, cG + 0.5);
@@ -235,9 +269,10 @@ fn main(
     let dofAlphaScale = 1.0;
 #endif
 
-    let alpha = (1.0 / (1.0 + exp(-opacity))) * dofAlphaScale;
+    // the over-unity profile peaks at 1 by construction
+    let alpha = select(amp, 1.0, core > 0.0) * dofAlphaScale;
 
-    projected[i * 3u + 0u] = vec4<f32>(screenX, screenY, radius, 0.0);
+    projected[i * 3u + 0u] = vec4<f32>(screenX, screenY, radius, core);
     projected[i * 3u + 1u] = vec4<f32>(covInvA, covInvB, covInvC, alpha);
     projected[i * 3u + 2u] = vec4<f32>(colR, colG, colB, 0.0);
 

@@ -10,7 +10,7 @@
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
 
-import { createTestDataTable, encodePlyBinary } from './helpers/test-utils.mjs';
+import { createTestDataTable, encodePlyBinary, assertColumnValue } from './helpers/test-utils.mjs';
 import { dataTableToChunkSource, materializeToDataTable } from '../src/lib/compat/data-table.js';
 import { sortMortonOrder } from '../src/lib/data-table/morton-order.js';
 import { readPly } from '../src/lib/readers/read-ply.js';
@@ -80,7 +80,7 @@ describe('ops: mortonOrder + permuteSource', () => {
             const inCol = dt.getColumnByName(name).data;
             const outCol = out.getColumnByName(name).data;
             for (let i = 0; i < n; i++) {
-                assert.strictEqual(outCol[i], inCol[order[i]], `column '${name}' row ${i}`);
+                assertColumnValue(name, outCol[i], inCol[order[i]], `column '${name}' row ${i}`);
             }
         }
     });
@@ -100,7 +100,7 @@ describe('ops: mortonOrder + permuteSource', () => {
             const inCol = dt.getColumnByName(name).data;
             const outCol = out.getColumnByName(name).data;
             for (let i = 0; i < order.length; i++) {
-                assert.strictEqual(outCol[i], inCol[order[i]], `column '${name}' row ${i}`);
+                assertColumnValue(name, outCol[i], inCol[order[i]], `column '${name}' row ${i}`);
             }
         }
     });
@@ -134,7 +134,7 @@ describe('ops: mortonOrder + permuteSource', () => {
             const d = fromDisk.getColumnByName(name).data;
             const r = fromResident.getColumnByName(name).data;
             for (let i = 0; i < order.length; i++) {
-                assert.strictEqual(d[i], r[i], `column '${name}' row ${i} (src ${order[i]})`);
+                assertColumnValue(name, d[i], r[i], `column '${name}' row ${i} (src ${order[i]})`);
             }
         }
         await diskSrc.close();
@@ -165,7 +165,7 @@ describe('ops: mortonOrder + permuteSource', () => {
         for (let j = 0; j < count; j++) {
             const e = order[sel[j]];
             assert.strictEqual(px[j * 3], x[e], `x out-row ${j}`);
-            assert.strictEqual(op[j], opF[e], `opacity out-row ${j}`);
+            assert.ok(Math.abs(op[j] - 1 / (1 + Math.exp(-opF[e]))) < 1e-6, `opacity out-row ${j}`); // true opacity
         }
         for (const layer of ['position', 'geometric', 'color']) acq[layer].release();
     });
@@ -195,11 +195,11 @@ describe('ops: selectLod', () => {
         assert.strictEqual(out1.numRows, 60);
         for (const name of dt0.columnNames) {
             const a = out0.getColumnByName(name).data, e = dt0.getColumnByName(name).data;
-            for (let i = 0; i < 100; i++) assert.strictEqual(a[i], e[i], `lvl0 '${name}' row ${i}`);
+            for (let i = 0; i < 100; i++) assertColumnValue(name, a[i], e[i], `lvl0 '${name}' row ${i}`);
         }
         for (const name of dt1.columnNames) {
             const a = out1.getColumnByName(name).data, e = dt1.getColumnByName(name).data;
-            for (let i = 0; i < 60; i++) assert.strictEqual(a[i], e[i], `lvl1 '${name}' row ${i}`);
+            for (let i = 0; i < 60; i++) assertColumnValue(name, a[i], e[i], `lvl1 '${name}' row ${i}`);
         }
         assert.throws(() => selectLod(multi, 2), /out of range/);
         await multi.close();

@@ -2,6 +2,8 @@
  * Test utility functions for splat-transform tests.
  */
 
+import assert from 'node:assert';
+
 import { Column, DataTable } from '../../src/lib/index.js';
 
 /**
@@ -168,4 +170,38 @@ function encodePlyBinary(dataTable, comments = []) {
     return result;
 }
 
-export { createTestDataTable, createMinimalTestData, encodePlyBinary };
+/**
+ * Assert one value of a DataTable column matches. Exact for every column except
+ * `opacity`: a source stores true opacity, so a logit that has been through a
+ * source comes back within f32 rounding of the opacity it encodes (and a logit
+ * above ~17 as `+Infinity`), so `opacity` compares as opacity, within 1e-6.
+ *
+ * @param {string} name - Column name.
+ * @param {number} actual - The value under test.
+ * @param {number} expected - The expected value.
+ * @param {string} message - Assertion message.
+ */
+function assertColumnValue(name, actual, expected, message) {
+    if (name !== 'opacity') {
+        assert.strictEqual(actual, expected, message);
+        return;
+    }
+    const sigmoid = v => 1 / (1 + Math.exp(-v));
+    const a = sigmoid(actual), e = sigmoid(expected);
+    assert.ok(Math.abs(a - e) <= 1e-6 || (Number.isNaN(a) && Number.isNaN(e)), `${message}: opacity ${a} vs ${e}`);
+}
+
+/**
+ * Assert two DataTable columns match value by value (see {@link assertColumnValue}).
+ *
+ * @param {string} name - Column name.
+ * @param {ArrayLike<number>} actual - The column under test.
+ * @param {ArrayLike<number>} expected - The expected column.
+ * @param {string} message - Assertion message.
+ */
+function assertColumnEqual(name, actual, expected, message) {
+    assert.strictEqual(actual.length, expected.length, `${message}: length`);
+    for (let i = 0; i < actual.length; i++) assertColumnValue(name, actual[i], expected[i], `${message} row ${i}`);
+}
+
+export { createTestDataTable, createMinimalTestData, encodePlyBinary, assertColumnValue, assertColumnEqual };

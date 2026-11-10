@@ -1,7 +1,7 @@
 /**
  * Splat model (default / antialiased / 2dgs) detection and propagation.
  *
- *  - comment parsing: Brush's `SplatRenderMode:` and Postshot's `antialiased N`;
+ *  - comment parsing: Brush's `SplatRenderMode:` and Postshot's `postshot.anti_aliasing=N`;
  *  - PLY / compressed-PLY / SOG / SPZ outputs carry the tag (PLY always in
  *    Brush's spelling, whichever form it was read from);
  *  - a 2DGS PLY (no scale_2) reads with a full geometric layer and writes back
@@ -15,7 +15,7 @@ import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { createTestDataTable, encodePlyBinary } from './helpers/test-utils.mjs';
+import { assertColumnEqual, assertColumnValue, createTestDataTable, encodePlyBinary } from './helpers/test-utils.mjs';
 import { createChunkDataPool } from '../src/lib/chunk/index.js';
 import { materializeToDataTable } from '../src/lib/compat/data-table.js';
 import {
@@ -23,9 +23,13 @@ import {
     MemoryFileSystem, MemoryReadFileSystem,
     resolveSplatModel, writeSource
 } from '../src/lib/index.js';
+import { withComments } from '../src/lib/comments.js';
+import { withExtras } from '../src/lib/extras.js';
 import { concatSource } from '../src/lib/ops/index.js';
+import { readLodSource } from '../src/lib/readers/read-lod.js';
 import { readPly, splatModelFromComments } from '../src/lib/readers/read-ply.js';
 import { splatModelComment } from '../src/lib/writers/utils.js';
+import { writeLodSource } from '../src/lib/writers/write-lod.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 WebPCodec.wasmUrl = join(__dirname, '..', 'lib', 'webp.wasm');
@@ -69,9 +73,15 @@ describe('splatModelFromComments', () => {
         assert.strictEqual(splatModelFromComments(['SplatRenderMode: 2dgs']), '2dgs');
     });
 
-    it('reads Postshot\'s antialiased flag', () => {
-        assert.strictEqual(splatModelFromComments(['antialiased 1']), 'antialiased');
-        assert.strictEqual(splatModelFromComments(['antialiased 0']), 'default');
+    it('reads Postshot\'s anti-aliasing flag', () => {
+        // the header comments of a Postshot v1.1.69 export trained with anti-aliasing
+        const postshot = ['Postshot v1.1.69', 'postshot.anti_aliasing=1', 'postshot.color.primaries=sRGB', 'postshot.color.eotf=sRGB'];
+        assert.strictEqual(splatModelFromComments(postshot), 'antialiased');
+        // without anti-aliasing Postshot omits the line
+        assert.strictEqual(splatModelFromComments(['Postshot v1.1.69', 'postshot.color.primaries=sRGB']), 'default');
+        assert.strictEqual(splatModelFromComments(['postshot.anti_aliasing=0']), 'default');
+        // no producer writes `antialiased 1`; it is not a flag
+        assert.strictEqual(splatModelFromComments(['antialiased 1']), 'default');
     });
 
     it('ignores case, surrounding whitespace and unrelated comments', () => {
@@ -85,8 +95,8 @@ describe('splatModelFromComments', () => {
     });
 
     it('takes the last match across both forms', () => {
-        assert.strictEqual(splatModelFromComments(['antialiased 1', 'SplatRenderMode: default']), 'default');
-        assert.strictEqual(splatModelFromComments(['SplatRenderMode: default', 'antialiased 1']), 'antialiased');
+        assert.strictEqual(splatModelFromComments(['postshot.anti_aliasing=1', 'SplatRenderMode: default']), 'default');
+        assert.strictEqual(splatModelFromComments(['SplatRenderMode: default', 'postshot.anti_aliasing=1']), 'antialiased');
     });
 
     it('emits Brush\'s spelling, and nothing for default', () => {
@@ -108,7 +118,7 @@ describe('antialiased scenes', () => {
     });
 
     it('retags a Postshot-tagged PLY in Brush\'s spelling', async () => {
-        const { source, pool } = await openPly(createTestDataTable(16), ['antialiased 1']);
+        const { source, pool } = await openPly(createTestDataTable(16), ['postshot.anti_aliasing=1']);
         assert.strictEqual(source.meta.model, 'antialiased');
 
         const header = plyHeaderText((await writeChunked(source, pool, 'out.ply', 'ply')).get('out.ply'));
@@ -117,7 +127,7 @@ describe('antialiased scenes', () => {
     });
 
     it('tags compressed PLY output', async () => {
-        const { source, pool } = await openPly(createTestDataTable(16), ['antialiased 1']);
+        const { source, pool } = await openPly(createTestDataTable(16), ['postshot.anti_aliasing=1']);
         const out = await writeChunked(source, pool, 'out.compressed.ply', 'compressed-ply');
         assert.match(plyHeaderText(out.get('out.compressed.ply')), /comment SplatRenderMode: mip/);
     });
@@ -161,7 +171,7 @@ describe('2dgs scenes', () => {
             assert.strictEqual(scale2[i], -Infinity, `row ${i} scale_2`);
             // the columns either side of the gap still land in their own slots
             assert.strictEqual(scale1[i], reference.getColumnByName('scale_1').data[i], `row ${i} scale_1`);
-            assert.strictEqual(opacity[i], reference.getColumnByName('opacity').data[i], `row ${i} opacity`);
+            assertColumnValue('opacity', opacity[i], reference.getColumnByName('opacity').data[i], `row ${i} opacity`);
         }
     });
 
@@ -204,11 +214,7 @@ describe('2dgs scenes', () => {
             await readPly(await sourceFromBytes(bytes), pool2), pool2
         );
         for (const name of ['rot_3', 'scale_0', 'scale_1', 'opacity', 'f_dc_0']) {
-            assert.deepStrictEqual(
-                Array.from(table.getColumnByName(name).data),
-                Array.from(reference.getColumnByName(name).data),
-                name
-            );
+            assertColumnEqual(name, table.getColumnByName(name).data, reference.getColumnByName(name).data, name);
         }
         // re-reading the output re-materializes the column
         assert.strictEqual(table.getColumnByName('scale_2').data[0], -Infinity);
@@ -248,20 +254,77 @@ describe('2dgs scenes', () => {
 describe('combining sources', () => {
     it('keeps a shared model', async () => {
         const pool = createChunkDataPool();
-        const a = await readPly(await sourceFromBytes(encodePlyBinary(createTestDataTable(16), ['antialiased 1'])), pool);
+        const a = await readPly(await sourceFromBytes(encodePlyBinary(createTestDataTable(16), ['postshot.anti_aliasing=1'])), pool);
         const b = await readPly(await sourceFromBytes(encodePlyBinary(createTestDataTable(16), ['SplatRenderMode: mip'])), pool);
         assert.strictEqual(concatSource([a, b], pool).meta.model, 'antialiased');
     });
 
     it('falls back to default when models disagree', async () => {
         const pool = createChunkDataPool();
-        const aa = await readPly(await sourceFromBytes(encodePlyBinary(createTestDataTable(16), ['antialiased 1'])), pool);
+        const aa = await readPly(await sourceFromBytes(encodePlyBinary(createTestDataTable(16), ['postshot.anti_aliasing=1'])), pool);
         const plain = await readPly(await sourceFromBytes(encodePlyBinary(createTestDataTable(16))), pool);
         assert.strictEqual(concatSource([aa, plain], pool).meta.model, 'default');
 
         assert.strictEqual(resolveSplatModel(['2dgs', 'default']), 'default');
         assert.strictEqual(resolveSplatModel(['antialiased', '2dgs']), 'default');
         assert.strictEqual(resolveSplatModel([]), 'default');
+    });
+});
+
+// Write a streamed LOD scene (lod-meta.json + SOG units) and return its files.
+const writeLod = async (source) => {
+    const fs = new MemoryFileSystem();
+    await writeLodSource({
+        filename: '/scene/lod-meta.json',
+        mainSource: source,
+        envSource: null,
+        iterations: 1,
+        chunkCount: 1,
+        chunkExtent: 16
+    }, fs);
+    return fs.results;
+};
+
+const lodMetaOf = files => JSON.parse(Buffer.from(files.get('/scene/lod-meta.json')).toString());
+
+// Open written LOD files, with lod-meta.json optionally replaced, as a source.
+const readLod = async (files, lodMeta) => {
+    const rfs = new MemoryReadFileSystem();
+    for (const [path, bytes] of files) rfs.set(path, bytes);
+    if (lodMeta) rfs.set('/scene/lod-meta.json', new TextEncoder().encode(JSON.stringify(lodMeta)));
+    return readLodSource(rfs, '/scene/lod-meta.json', {}, createChunkDataPool());
+};
+
+describe('streamed LOD scenes', () => {
+    it('tag lod-meta.json once for all their files', async () => {
+        const { source } = await openPly(createTestDataTable(16), ['SplatRenderMode: mip']);
+        const files = await writeLod(source);
+        const meta = lodMetaOf(files);
+        assert.strictEqual(meta.model, 'antialiased');
+
+        // the files carry the tag too, and the scene reads back as antialiased
+        for (const name of meta.filenames) {
+            const unit = JSON.parse(Buffer.from(files.get(`/scene/${name}`)).toString());
+            assert.strictEqual(unit.model, 'antialiased');
+        }
+        assert.strictEqual((await readLod(files)).meta.model, 'antialiased');
+    });
+
+    it('add no model key for an untagged scene', async () => {
+        const { source } = await openPly(createTestDataTable(16));
+        const files = await writeLod(source);
+        assert.ok(!('model' in lodMetaOf(files)), 'no model key for an untagged scene');
+        assert.strictEqual((await readLod(files)).meta.model, 'default');
+    });
+
+    it('read the lod-meta.json model over the files\' own', async () => {
+        const { source } = await openPly(createTestDataTable(16));
+        const files = await writeLod(source);
+        const tagged = { ...lodMetaOf(files), model: 'antialiased' };
+        assert.strictEqual((await readLod(files, tagged)).meta.model, 'antialiased');
+
+        const unknown = { ...lodMetaOf(files), model: 'future-model' };
+        assert.strictEqual((await readLod(files, unknown)).meta.model, 'default');
     });
 });
 
@@ -277,5 +340,107 @@ describe('untagged scenes', () => {
         const sog = await writeChunked(s2, p2, 'meta.json', 'sog');
         const meta = JSON.parse(Buffer.from(sog.get('meta.json')).toString());
         assert.ok(!('model' in meta), 'no model key for an untagged scene');
+    });
+});
+
+describe('producer comments', () => {
+    // a Postshot export's header, plus a stale splat-transform generator line
+    const POSTSHOT = ['Postshot v1.1.69', 'postshot.anti_aliasing=1', 'postshot.color.eotf=sRGB', 'Generated by splat-transform 3.9.0'];
+    const KEPT = ['Postshot v1.1.69', 'postshot.color.eotf=sRGB'];
+
+    it('keeps PLY header comments, minus the model tags and splat-transform\'s generator line', async () => {
+        const { source } = await openPly(createTestDataTable(16), POSTSHOT);
+        assert.deepStrictEqual(source.meta.comments, KEPT);
+        assert.strictEqual(source.meta.model, 'antialiased');
+        const { source: none } = await openPly(createTestDataTable(16), ['SplatRenderMode: mip']);
+        assert.ok(!('comments' in none.meta), 'no comments key when only tags were present');
+    });
+
+    it('writes them back to PLY once, after the model tag, and reads them back', async () => {
+        const { source, pool } = await openPly(createTestDataTable(16), POSTSHOT);
+        const bytes = (await writeChunked(source, pool, 'out.ply', 'ply')).get('out.ply');
+        const header = plyHeaderText(bytes);
+        assert.match(header, /comment SplatRenderMode: mip\ncomment Postshot v1\.1\.69\ncomment postshot\.color\.eotf=sRGB\n/);
+        const again = await readPly(await sourceFromBytes(bytes), createChunkDataPool());
+        assert.deepStrictEqual(again.meta.comments, KEPT, 'a second round trip adds nothing');
+    });
+
+    it('stores them in SOG meta.json and compressed PLY, and reads SOG back', async () => {
+        const { source, pool } = await openPly(createTestDataTable(16), POSTSHOT);
+        const sog = await writeChunked(source, pool, 'out.sog', 'sog-bundle');
+        const rfs = new MemoryReadFileSystem();
+        rfs.set('out.sog', sog.get('out.sog'));
+        const { readFile, getInputFormat } = await import('../src/lib/index.js');
+        const [back] = await readFile({ filename: 'out.sog', inputFormat: getInputFormat('out.sog'), fileSystem: rfs, pool: createChunkDataPool() });
+        assert.deepStrictEqual(back.meta.comments, KEPT);
+
+        const { source: s2, pool: p2 } = await openPly(createTestDataTable(16), POSTSHOT);
+        const meta = JSON.parse(Buffer.from((await writeChunked(s2, p2, 'meta.json', 'sog')).get('meta.json')).toString());
+        assert.deepStrictEqual(meta.comments, KEPT);
+
+        const { source: s3, pool: p3 } = await openPly(createTestDataTable(16), POSTSHOT);
+        const cply = plyHeaderText((await writeChunked(s3, p3, 'out.compressed.ply', 'compressed-ply')).get('out.compressed.ply'));
+        assert.match(cply, /comment Postshot v1\.1\.69\ncomment postshot\.color\.eotf=sRGB\n/);
+    });
+
+    it('are, like extras, a SOG v3 addition: v2 meta.json and a v2 streamed scene\'s lod-meta.json have neither', async () => {
+        const { source, pool } = await openPly(createTestDataTable(16), POSTSHOT);
+        const fs = new MemoryFileSystem();
+        await writeSource({ filename: 'meta.json', outputFormat: 'sog', source: withExtras(source, { app: 1 }), pool, options: { sogVersion: 2 } }, fs);
+        const meta = JSON.parse(Buffer.from(fs.results.get('meta.json')).toString());
+        assert.ok(!('comments' in meta) && !('extras' in meta), 'v2 meta.json has no comments or extras');
+
+        const { source: s2 } = await openPly(createTestDataTable(16), POSTSHOT);
+        const lfs = new MemoryFileSystem();
+        await writeLodSource({ filename: '/scene/lod-meta.json', mainSource: withExtras(s2, { app: 1 }), envSource: null, iterations: 1, chunkCount: 1, chunkExtent: 16, sogVersion: 2 }, lfs);
+        const lodMeta = lodMetaOf(lfs.results);
+        assert.ok(!('comments' in lodMeta) && !('extras' in lodMeta), 'a v2 streamed scene\'s lod-meta.json has no comments or extras');
+    });
+
+    it('extras in lod-meta.json keep their full precision', async () => {
+        const extras = { precise: 0.123456789012345, nested: { v: [1e-17, 2.718281828459045] } };
+        const { source } = await openPly(createTestDataTable(16));
+        const files = await writeLod(withExtras(source, extras));
+        assert.deepStrictEqual(lodMetaOf(files).extras, extras);
+        assert.deepStrictEqual((await readLod(files)).meta.extras, extras);
+    });
+
+    it('store them once in lod-meta.json, not in the units, and read them back', async () => {
+        const { source } = await openPly(createTestDataTable(16), POSTSHOT);
+        const files = await writeLod(source);
+        const meta = lodMetaOf(files);
+        assert.deepStrictEqual(meta.comments, KEPT);
+        for (const name of meta.filenames) {
+            assert.ok(!('comments' in JSON.parse(Buffer.from(files.get(`/scene/${name}`)).toString())), `${name} has no comments`);
+        }
+        assert.deepStrictEqual((await readLod(files)).meta.comments, KEPT);
+    });
+
+    it('keep shared comments when combining, and drop differing ones', async () => {
+        const a = (await openPly(createTestDataTable(16), POSTSHOT)).source;
+        const b = (await openPly(createTestDataTable(16), POSTSHOT)).source;
+        assert.deepStrictEqual(concatSource([a, b]).meta.comments, KEPT);
+        const c = (await openPly(createTestDataTable(16), ['Exported from Brush'])).source;
+        assert.ok(!('comments' in concatSource([a, c]).meta), 'differing comments are dropped');
+    });
+
+    it('cannot override the model when written to PLY: model tags and generator lines are dropped', async () => {
+        const { source, pool } = await openPly(createTestDataTable(16));
+        const comments = ['postshot.anti_aliasing=1', 'SplatRenderMode: mip', 'Generated by splat-transform v0.0.0', 'keep me'];
+        for (const format of ['ply', 'compressed-ply']) {
+            const name = format === 'ply' ? 'out.ply' : 'out.compressed.ply';
+            const bytes = (await writeChunked(withComments(source, comments), pool, name, format)).get(name);
+            const header = plyHeaderText(bytes);
+            assert.ok(!/anti_aliasing|SplatRenderMode|Generated by splat-transform v0/.test(header), `${format}: ${header}`);
+            assert.match(header, /comment keep me\n/);
+        }
+        const bytes = (await writeChunked(withComments(source, comments), pool, 'out.ply', 'ply')).get('out.ply');
+        assert.strictEqual((await readPly(await sourceFromBytes(bytes), createChunkDataPool())).meta.model, 'default');
+    });
+
+    it('write a comment holding a line break on one PLY header line', async () => {
+        const { source, pool } = await openPly(createTestDataTable(16));
+        const bytes = (await writeChunked(withComments(source, ['two\nlines']), pool, 'out.ply', 'ply')).get('out.ply');
+        assert.match(plyHeaderText(bytes), /comment two lines\n/);
     });
 });

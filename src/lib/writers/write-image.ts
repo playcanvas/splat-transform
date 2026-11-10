@@ -179,10 +179,26 @@ type WriteImageOptions = {
      * Most bytes to hold GPU-resident for the scene. The resident path
      * uploads the scene once and renders every pass from it; scenes over
      * this budget, or over the device's binding limits, or that the device
-     * refuses to allocate, stream through the chunked path instead.
+     * refuses to allocate, are streamed from the source on every pass instead.
      * Default: no budget.
      */
     residentBudget?: number;
+
+    /**
+     * Draw opacity above 1 (kept by decimation) with the
+     * over-unity plateau profile. Default true; false clamps it to 1
+     * (debugging, A/B).
+     */
+    compensation?: boolean;
+
+    /**
+     * Screen-space filter, in pixels², that scenes trained with anti-aliasing
+     * (splat model `antialiased`) were trained with. They are filtered with it
+     * instead of the 0.3 px² dilation, with their opacity scaled so each splat
+     * draws its unfiltered mass, as the engine's `antiAliasFilterSize`. Other
+     * scenes ignore it. Default: 0.1 (Mip-Splatting's, and the engine's).
+     */
+    antiAliasFilterSize?: number;
 
     /** Function returning a GraphicsDevice. Required — rasterization runs on GPU. */
     createDevice?: DeviceCreator;
@@ -232,12 +248,17 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         frames,
         webpEffort,
         residentBudget,
+        compensation,
+        antiAliasFilterSize,
         createDevice
     } = options;
     let { near = 0.2, focusDistance, sensorSize = 0.024 } = options;
 
     if (!createDevice) {
         throw new Error('writeImage requires a createDevice function for GPU rasterization');
+    }
+    if (antiAliasFilterSize !== undefined && !(antiAliasFilterSize > 0 && Number.isFinite(antiAliasFilterSize))) {
+        throw new Error(`Invalid aa-filter-size: ${antiAliasFilterSize}. Must be > 0.`);
     }
 
     let { fov, width, height } = options;
@@ -466,7 +487,9 @@ const writeImage = async (options: WriteImageOptions, fs: FileSystem): Promise<v
         width: width!,
         height: height!,
         background,
-        residentBudget
+        residentBudget,
+        compensation,
+        antiAliasFilterSize
     });
     const tierNote: Record<SceneTier, string> = {
         resident: 'scene resident on GPU',

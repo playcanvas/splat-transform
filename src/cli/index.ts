@@ -47,11 +47,14 @@ import type {
     FilterCluster,
     Options as LibOptions,
     CollisionMeshShape,
-    ReadFileSystem
+    ReadFileSystem,
+    SogBlindTexture
 } from '../lib';
 // CLI-only internals (deliberately off the public lib surface): the LOD-path
 // level resolver and the container source readers the LOD writer drives
 // directly (single-scene callers get these via readFile).
+import { resolveComments, withComments } from '../lib/comments';
+import { resolveExtras, withExtras } from '../lib/extras';
 import { resolveLodLevels } from '../lib/ops';
 import { readLccSource, readLccEnvironmentSource } from '../lib/readers/read-lcc';
 import { readLcc2Source, readLcc2EnvironmentSource } from '../lib/readers/read-lcc2';
@@ -59,6 +62,7 @@ import { readLodSource, readLodEnvironmentSource } from '../lib/readers/read-lod
 import { loadCameraTrack } from '../lib/render/camera-track';
 import type { CameraTrack } from '../lib/render/camera-track';
 import { formatFileInfo } from '../lib/source-info';
+import { combineBlindOrigins, isBlindEncoding, withBlindOrigins } from '../lib/utils/sog-blind';
 import { frameFilename } from '../lib/writers/utils';
 
 import { createDevice, enumerateAdapters, getPeakGpuMemory } from './node-device';
@@ -176,7 +180,14 @@ const cliOptionsConfig = {
     'lod-chunk-min': { type: 'string', default: '8' },
     'lod-file-count': { type: 'string', default: '' },
     'spz-version': { type: 'string', default: '4' },
+    'ply-logit-opacity': { type: 'boolean', default: false },
+    'sog-version': { type: 'string', default: '3' },
+    'sog-blind': { type: 'string', multiple: true },
+    'sog-extras': { type: 'string' },
+    'sh-palette-size': { type: 'string' },
     unbundled: { type: 'boolean', default: false },
+    // negated as --no-compensation (parseArgs allowNegative)
+    compensation: { type: 'boolean' },
     'voxel-size': { type: 'string' },
     'voxel-opacity': { type: 'string' },
     'voxel-external-fill': { type: 'string' },
@@ -191,6 +202,7 @@ const cliOptionsConfig = {
     'camera-fov': { type: 'string' },
     resolution: { type: 'string' },
     'camera-near': { type: 'string' },
+    'aa-filter-size': { type: 'string' },
     background: { type: 'string' },
     'f-stop': { type: 'string' },
     'dof-samples': { type: 'string' },
@@ -347,6 +359,42 @@ const parseArguments = async () => {
         throw new Error(`Invalid collision mesh shape: ${value}. Expected smooth or faces.`);
     };
 
+    // --sog-blind <field>[,<field>...], field = <column>[:<encoding>[[min,max]]]; the
+    // range's comma sits inside brackets, so fields split on top-level commas only
+    const parseSogBlind = (value: string): SogBlindTexture => {
+        const invalid = (why: string) =>
+            new Error(`Invalid sog-blind value: ${value}. ${why} Must be <column>[:<encoding>][,...].`);
+        const parts: string[] = [];
+        let depth = 0;
+        let start = 0;
+        for (let i = 0; i < value.length; i++) {
+            if (value[i] === '[') depth++;
+            else if (value[i] === ']') depth--;
+            else if (value[i] === ',' && depth === 0) {
+                parts.push(value.slice(start, i));
+                start = i + 1;
+            }
+        }
+        parts.push(value.slice(start));
+        return parts.map((part) => {
+            const m = /^([^:[\],]+)(?::([a-z0-9]+)(?:\[([^,\]]+),([^,\]]+)\])?)?$/.exec(part.trim());
+            if (!m) throw invalid(`Malformed field '${part}'.`);
+            const [, column, name, min, max] = m;
+            let encoding: SogBlindTexture[number]['encoding'];
+            if (name !== undefined) {
+                if (!isBlindEncoding(name)) {
+                    throw invalid(`Unknown encoding '${name}' (u8, u16, u24, u32, f16, f32, unorm8, unorm16).`);
+                }
+                encoding = name;
+            }
+            return {
+                column,
+                ...(encoding !== undefined ? { encoding } : {}),
+                ...(min !== undefined ? { range: [parseNumber(min), parseNumber(max)] as [number, number] } : {})
+            };
+        });
+    };
+
     const parseComparator = (value: string): 'lt' | 'lte' | 'gt' | 'gte' | 'eq' | 'neq' => {
         switch (value) {
             case 'lt':
@@ -460,6 +508,15 @@ const parseArguments = async () => {
     if (spzVersion !== 3 && spzVersion !== 4) {
         throw new Error(`Invalid spz-version value: ${v['spz-version']}. Must be 3 or 4.`);
     }
+    const sogVersion = parseInteger(v['sog-version']);
+    if (sogVersion !== 2 && sogVersion !== 3) {
+        throw new Error(`Invalid sog-version value: ${v['sog-version']}. Must be 2 or 3.`);
+    }
+    const blindValues = v['sog-blind'];
+    if (blindValues?.includes('none') && blindValues.length > 1) {
+        throw new Error('Invalid sog-blind value: none cannot be combined with fields.');
+    }
+    const sogBlind = blindValues?.[0] === 'none' ? [] : blindValues?.map(parseSogBlind);
 
     // Image render options (apply when output is .webp).
     let renderProjection: 'pinhole' | 'equirect' | undefined;
@@ -496,6 +553,11 @@ const parseArguments = async () => {
         renderHeight = parseInteger(m[2]);
     }
     const renderNear = v['camera-near'] !== undefined ? parseNumber(v['camera-near'], 0) : undefined;
+    const renderAntiAliasFilterSize =
+        v['aa-filter-size'] !== undefined ? parseNumber(v['aa-filter-size'], 0) : undefined;
+    if (renderAntiAliasFilterSize !== undefined && renderAntiAliasFilterSize <= 0) {
+        throw new Error(`Invalid --aa-filter-size value: ${v['aa-filter-size']}. Must be > 0.`);
+    }
     const renderFStop = v['f-stop'] !== undefined ? parseNumber(v['f-stop'], 0) : undefined;
     if (renderFStop !== undefined && renderFStop <= 0) {
         throw new Error(`Invalid --f-stop value: ${v['f-stop']}. Must be > 0.`);
@@ -603,6 +665,8 @@ const parseArguments = async () => {
         // The image writer's GPU-resident copy of the scene shares RAM with the
         // in-memory table on unified-memory machines, so bound it the same way.
         renderResidentBudget: Math.min(48 * 2 ** 30, Math.floor(totalmem() / 2)),
+        renderCompensation: v.compensation !== false,
+        renderAntiAliasFilterSize,
         lodSelect: v['select-lod']
             .split(',')
             .filter((v) => !!v)
@@ -617,6 +681,11 @@ const parseArguments = async () => {
             .filter((v) => !!v)
             .map(parseInteger),
         spzVersion: spzVersion as 3 | 4,
+        plyLogitOpacity: v['ply-logit-opacity'],
+        sogVersion: sogVersion as 2 | 3,
+        sogBlind,
+        ...(v['sog-extras'] !== undefined ? { sogExtras: await readJsonFile(v['sog-extras']) } : {}),
+        ...(v['sh-palette-size'] !== undefined ? { sogPaletteSize: parseInteger(v['sh-palette-size']) } : {}),
         voxelResolution,
         opacityCutoff,
         navExteriorRadius,
@@ -698,12 +767,12 @@ const parseArguments = async () => {
                 }
                 case 'filter-harmonics': {
                     const shBands = parseInteger(t.value);
-                    if (![0, 1, 2, 3].includes(shBands)) {
-                        throw new Error(`Invalid filter-harmonics value: ${t.value}. Must be 0, 1, 2, or 3.`);
+                    if (![0, 1, 2, 3, 4].includes(shBands)) {
+                        throw new Error(`Invalid filter-harmonics value: ${t.value}. Must be 0, 1, 2, 3 or 4.`);
                     }
                     current.processActions.push({
                         kind: 'filterBands',
-                        value: shBands as 0 | 1 | 2 | 3
+                        value: shBands as 0 | 1 | 2 | 3 | 4
                     });
 
                     break;
@@ -881,7 +950,7 @@ ACTIONS (executed in order; can be repeated)
     -t, --translate        <x,y,z>          Translate Gaussians by (x, y, z)
     -r, --rotate           <x,y,z>          Rotate Gaussians by Euler angles, in degrees
     -s, --scale            <factor>         Uniformly scale Gaussians by factor
-    -H, --filter-harmonics <0|1|2|3>        Remove spherical harmonic bands > n
+    -H, --filter-harmonics <0|1|2|3|4>      Remove spherical harmonic bands > n
     -N, --filter-nan                        Remove Gaussians with NaN values, most Inf values, or a zero-norm rotation
     -B, --filter-box       <x,y,z,X,Y,Z>    Remove Gaussians outside box (min, max corners)
     -S, --filter-sphere    <x,y,z,radius>   Remove Gaussians outside sphere
@@ -923,10 +992,29 @@ GPU (used by SOG compression and GPU voxelization: --filter-cluster, --filter-fl
 
 SOG COMPRESSION (.sog, meta.json, lod-meta.json, .html outputs)
     -i, --sh-iterations    <n>              SH compression iterations (more=better). Default: 10
+        --sh-palette-size  <n>              SH palette entries for .sog / meta.json (more=better, slower). Up to 262144
+                                              with SOG v3, 65536 with v2. Default: one per 1024 gaussians, at most 65536
         --max-workers      <n>              Worker threads for SOG and image-sequence encoding (0 = inline/serial). Default: 4
+        --sog-version      <2|3>            SOG format version to write. 2 is for older viewers: it drops opacity
+                                              above 1, blind data and a 4th SH band. Default: 3 (.html always embeds 2)
+        --sog-blind        <field>[,...]    Store columns as per-gaussian blind data (v3): one blind texture per flag,
+                                              its fields filling 4 bytes (R,G,B,A) in order. field = <col>[:<enc>]
+                                              enc: u8 u16 u24 u32 (unsigned integers), f16 f32 (float bits),
+                                              unorm8 unorm16 (float in [0,1], or unorm8[min,max]). Default: the
+                                              fewest-byte uint that fits. Repeatable, e.g. --sog-blind id
+                                              --sog-blind a:unorm8,b:unorm8,depth:f16. Without the flag, columns read
+                                              from SOG blind data are stored as they were; --sog-blind none stores none
+        --sog-extras       <file.json>      Store this JSON as the output's extras (meta.json / lod-meta.json,
+                                              SOG v3 only), application-defined data as in glTF. Default: the input's
+                                              extras, if any
 
 SPZ OUTPUT (.spz)
         --spz-version      <3|4>            The SPZ format version to write. Default: 4
+
+PLY OUTPUT (.ply)
+        --ply-logit-opacity                 Write the standard opacity logit even when some gaussian's opacity
+                                              exceeds 1 (clamped to 1), instead of opacity_linear. For tools that
+                                              don't read opacity_linear
 
 HTML VIEWER OUTPUT (.html)
         --viewer-settings  <settings.json>  HTML viewer settings JSON file
@@ -961,6 +1049,10 @@ IMAGE OUTPUT (.webp) — lossless WebP rendered via GPU rasterizer
         --resolution       <WxH>            Output resolution, e.g. 1920x1080. Default: 1280x720 (pinhole) or 2048x1024 (equirect)
         --camera-near      <n>              Near clip distance. Default: 0.2 (matches reference 3DGS)
         --background       <r,g,b[,a]>      Background color in [0,1]. Default: 0,0,0,1
+        --no-compensation                   Clamp opacity above 1 (from decimation) to 1 and draw every
+                                              gaussian at opacity <= 1. For debugging and A/B comparison.
+        --aa-filter-size   <px²>            Screen-space filter of scenes trained with anti-aliasing (splat model
+                                              antialiased), used in place of the 0.3 px² dilation. Default: 0.1
         --f-stop           <N>              Aperture as a photographic f-stop (e.g. 2.8, 5.6, 11). Enables defocus blur;
                                             smaller = more blur. Pinhole only. Default: disabled (no defocus).
         --focus-distance   <n>              Camera-space Z of the focus plane (world units). Default: distance to --camera-target.
@@ -1382,7 +1474,16 @@ const main = async () => {
                     dts.push(await materializeToDataTable(s, pool));
                     await s.close();
                 }
-                return dataTableToChunkSource(combine(dts), pool.chunkSize, undefined, model);
+                const combined = dataTableToChunkSource(combine(dts), pool.chunkSize, undefined, model);
+                // a DataTable carries no blind origins: merge the inputs' by column name
+                const extraColumns = combineBlindOrigins(
+                    sources.map((s) => s.meta.extraColumns),
+                    combined.meta.extraColumns
+                );
+                return withComments(
+                    withExtras(withBlindOrigins(combined, extraColumns), resolveExtras(sources)),
+                    resolveComments(sources)
+                );
             };
 
             const phase = logger.group(`Output ${outputArg.filename}`, { index: phaseTotal, total: phaseTotal });
@@ -1589,6 +1690,9 @@ const main = async () => {
                     iterations: options.iterations,
                     webpEffort: options.webpEffort,
                     createDevice: deviceCreator,
+                    sogVersion: options.sogVersion,
+                    sogBlind: options.sogBlind,
+                    extras: options.sogExtras,
                     chunkCount: options.lodChunkCount,
                     chunkExtent: options.lodChunkExtent,
                     chunkMin: options.lodChunkMin,

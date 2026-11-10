@@ -2,6 +2,7 @@ import type { ExperienceSettings } from '@playcanvas/supersplat-viewer/settings'
 import type { GraphicsDevice } from 'playcanvas';
 
 import type { CameraTrack } from './render/camera-track';
+import type { SogBlindTexture } from './utils/sog-blind';
 
 /**
  * Collision mesh shape generated alongside voxel output.
@@ -44,6 +45,31 @@ type Options = {
 
     /** SPZ format version to write. Default: 4. */
     spzVersion?: 3 | 4;
+
+    /**
+     * Write PLY opacity as the standard `opacity` logit even when some gaussian's opacity
+     * exceeds 1 (it is clamped to 1), instead of `opacity_linear`, for tools that don't read
+     * `opacity_linear`. Default false.
+     */
+    plyLogitOpacity?: boolean;
+
+    /** SOG format version to write (SOG, SOG bundle and LOD output). Default: 3. HTML output always embeds v2. */
+    sogVersion?: 2 | 3;
+
+    /**
+     * Per-gaussian SOG blind data (v3 only): source columns packed into blind textures, one entry per texture.
+     * Undefined stores the columns read from SOG blind data as they were stored; an empty list stores none.
+     */
+    sogBlind?: SogBlindTexture[];
+
+    /** JSON to store as the SOG / LOD output's `extras` (application-defined, as in glTF). Default: the source's extras. */
+    sogExtras?: unknown;
+
+    /**
+     * SH palette entries for SOG / SOG bundle output. Default: about one per 1024 gaussians, at most
+     * 65536. v3 allows up to 262144 (24-bit labels); v2 up to 65536. LOD output keeps the default.
+     */
+    sogPaletteSize?: number;
 
     /** Size of each voxel in world units for voxel output. Default: 0.05 */
     voxelResolution?: number;
@@ -177,11 +203,25 @@ type Options = {
 
     /**
      * Most bytes the image writer may hold GPU-resident for the scene.
-     * Scenes over it, or that the device refuses to allocate, stream
-     * through the chunked path instead. Default: no limit beyond the
+     * Scenes over it, or that the device refuses to allocate, are streamed
+     * from the source on every pass instead. Default: no limit beyond the
      * device's binding limits.
      */
     renderResidentBudget?: number;
+
+    /**
+     * Draw opacity above 1 (kept by decimation) with the
+     * over-unity plateau profile. Default true; false clamps it to 1, for
+     * debugging and A/B comparison.
+     */
+    renderCompensation?: boolean;
+
+    /**
+     * Screen-space filter, in pixels², of scenes trained with anti-aliasing
+     * (splat model `antialiased`), used in place of the 0.3 px² dilation.
+     * Default 0.1.
+     */
+    renderAntiAliasFilterSize?: number;
 };
 
 /**

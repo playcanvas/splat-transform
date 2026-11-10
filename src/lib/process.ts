@@ -1,6 +1,6 @@
 import { Vec3 } from 'playcanvas';
 
-import { createChunkDataPool } from './chunk';
+import { createChunkDataPool, OPACITY_LINEAR_COLUMN } from './chunk';
 import { dataTableToChunkSource, materializeToDataTable } from './compat/data-table';
 import { Column, DataTable, sortMortonOrder, convertToSpace, getSHBands } from './data-table';
 import type { Row } from './data-table';
@@ -11,7 +11,7 @@ import { formatSourceInfo, formatSourceStats } from './source-info';
 import type { DeviceCreator } from './types';
 import { fmtCount, logger, Transform } from './utils';
 import type { Group } from './utils';
-import { inverseTransforms, rawColumnMap, isTransformColumn } from './value-transforms';
+import { inverseTransforms, rawColumnMap, isTransformColumn, opacityRaw } from './value-transforms';
 import { filterCluster as filterClusterFn } from './voxel/filter-cluster';
 import { filterFloaters as filterFloatersFn } from './voxel/filter-floaters';
 
@@ -84,8 +84,8 @@ type FilterByValue = {
 type FilterBands = {
     /** Action type identifier. */
     kind: 'filterBands';
-    /** Maximum SH band to keep (0-3). */
-    value: 0 | 1 | 2 | 3;
+    /** Maximum SH band to keep (0-4). */
+    value: 0 | 1 | 2 | 3 | 4;
 };
 
 /**
@@ -340,8 +340,9 @@ const processDataTable = async (
             case 'filterNaN': {
                 const g = logger.group('Filter NaN');
                 const prev = result;
+                // an infinite opacity logit is opacity 1 or 0, as a source reads it
                 const infOk = new Set(['opacity']);
-                const negInfOk = new Set(['scale_0', 'scale_1', 'scale_2']);
+                const negInfOk = new Set(['scale_0', 'scale_1', 'scale_2', 'opacity']);
                 const columnNames = result.columnNames;
                 const hasRotation = ['rot_0', 'rot_1', 'rot_2', 'rot_3'].every((c) => columnNames.includes(c));
 
@@ -371,33 +372,47 @@ const processDataTable = async (
                 const prev = result;
                 const { comparator } = processAction;
                 let { columnName, value } = processAction;
+                // as the source filters: opacity compares true opacity (opacity_linear, which wins,
+                // else the f32 sigmoid of the logit) and opacity_raw the stored logit
+                let get: (row: Row, i: number) => number = (row) => row[columnName];
 
-                if (rawColumnMap[columnName]) {
-                    columnName = rawColumnMap[columnName];
-                } else if (inverseTransforms[columnName]) {
-                    if (columnName === 'opacity' && (value <= 0 || value >= 1)) {
-                        throw new Error(
-                            `filterByValue: opacity value must be between 0 and 1 (exclusive), got ${value}`
-                        );
+                if (columnName === 'opacity' || columnName === 'opacity_raw') {
+                    const linear = result.getColumnByName(OPACITY_LINEAR_COLUMN)?.data;
+                    const logit = result.getColumnByName('opacity')?.data;
+                    if (!linear && !logit) {
+                        throw new Error(`filterByValue: column 'opacity' not found in DataTable`);
                     }
-                    value = inverseTransforms[columnName](value);
-                }
+                    if (columnName === 'opacity') {
+                        get = linear ? (_, i) => linear[i] : (_, i) => Math.fround(1 / (1 + Math.exp(-logit![i])));
+                    } else if (linear) {
+                        const threshold = value;
+                        get = (_, i) => opacityRaw(linear[i], threshold);
+                    } else {
+                        get = (_, i) => logit![i];
+                    }
+                } else {
+                    if (rawColumnMap[columnName]) {
+                        columnName = rawColumnMap[columnName];
+                    } else if (inverseTransforms[columnName]) {
+                        value = inverseTransforms[columnName](value);
+                    }
 
-                if (!result.hasColumn(columnName)) {
-                    throw new Error(`filterByValue: column '${columnName}' not found in DataTable`);
-                }
+                    if (!result.hasColumn(columnName)) {
+                        throw new Error(`filterByValue: column '${columnName}' not found in DataTable`);
+                    }
 
-                if (!result.transform.isIdentity() && isTransformColumn(columnName)) {
-                    result = convertToSpace(result, Transform.IDENTITY);
+                    if (!result.transform.isIdentity() && isTransformColumn(columnName)) {
+                        result = convertToSpace(result, Transform.IDENTITY);
+                    }
                 }
 
                 const Predicates = {
-                    lt: (row: Row) => row[columnName] < value,
-                    lte: (row: Row) => row[columnName] <= value,
-                    gt: (row: Row) => row[columnName] > value,
-                    gte: (row: Row) => row[columnName] >= value,
-                    eq: (row: Row) => row[columnName] === value,
-                    neq: (row: Row) => row[columnName] !== value
+                    lt: (row: Row, i: number) => get(row, i) < value,
+                    lte: (row: Row, i: number) => get(row, i) <= value,
+                    gt: (row: Row, i: number) => get(row, i) > value,
+                    gte: (row: Row, i: number) => get(row, i) >= value,
+                    eq: (row: Row, i: number) => get(row, i) === value,
+                    neq: (row: Row, i: number) => get(row, i) !== value
                 };
                 const predicate = Predicates[comparator as keyof typeof Predicates];
                 if (!predicate) {
@@ -417,8 +432,8 @@ const processDataTable = async (
                 const outputBands = processAction.value;
 
                 if (outputBands < inputBands) {
-                    const inputCoeffs = [0, 3, 8, 15][inputBands];
-                    const outputCoeffs = [0, 3, 8, 15][outputBands];
+                    const inputCoeffs = [0, 3, 8, 15, 24][inputBands];
+                    const outputCoeffs = [0, 3, 8, 15, 24][outputBands];
 
                     const map: Record<string, string | null> = {};
                     for (let i = 0; i < inputCoeffs; ++i) {

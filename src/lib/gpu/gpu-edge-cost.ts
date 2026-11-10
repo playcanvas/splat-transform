@@ -133,7 +133,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     let sqrtDetM = sqrt(detm);
 
     // Merged opacity: mass-conserving, capped — needs merged scales (eigenvalues
-    // of Σ_m, Smith's closed form for a symmetric 3×3).
+    // of Σ_m, Smith's closed form for a symmetric 3×3). Capped deliberately:
+    // see the merged-opacity note in edge-cost-cpu.ts.
     let e = eig3(sm);
     let s0 = sqrt(max(e.x, 1e-18));
     let s1 = sqrt(max(e.y, 1e-18));
@@ -287,6 +288,7 @@ class GpuEdgeCost {
             splatBuf.destroy();
             nbRowBuf.destroy();
             outBuf.destroy();
+            compute.destroy();
             shader.destroy();
             bindGroupFormat.destroy();
         };

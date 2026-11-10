@@ -15,10 +15,11 @@ import {
     Vec2
 } from 'playcanvas';
 
-import { colorStride } from '../chunk';
-import type { ChunkData, ChunkDataPool, ChunkLayer, ChunkSource, ReadRequest } from '../chunk';
+import { colorStride, SH_REST_COUNTS } from '../chunk';
+import type { ChunkData, ChunkDataPool, ChunkLayer, ChunkSource, ReadRequest, SHBands } from '../chunk';
 import type { CameraBasis, Projection } from '../render/camera';
 import {
+    AA_FILTER_COV,
     PAIR_BUFFER_BUDGET_BYTES,
     PAIR_BUFFER_TOTAL_BYTES_PER_ELEMENT,
     TILE_SIZE,
@@ -37,6 +38,7 @@ import { quatRotation } from './shaders/chunks/quat-rotation';
 import { shBand1 } from './shaders/chunks/sh-band-1';
 import { shBand2 } from './shaders/chunks/sh-band-2';
 import { shBand3 } from './shaders/chunks/sh-band-3';
+import { shBand4 } from './shaders/chunks/sh-band-4';
 import { tileAabbEquirect } from './shaders/chunks/tile-aabb-equirect';
 import { tileAabbPinhole } from './shaders/chunks/tile-aabb-pinhole';
 import { tileWalkEquirect } from './shaders/chunks/tile-walk-equirect';
@@ -83,8 +85,8 @@ class ResidentUploadError extends Error {
  * Fixed per-scene configuration of a {@link GpuSceneRasterizer}.
  */
 type SceneRasterizerOptions = {
-    /** Number of SH bands above DC (0–3). Selects the SH shader variant and sizes the colour layer. */
-    numSHBands: 0 | 1 | 2 | 3;
+    /** Number of SH bands above DC (0–4). Selects the SH shader variant and sizes the colour layer. */
+    numSHBands: SHBands;
     /** Camera projection; fixed per instance (specialises the shaders). */
     projection: Projection;
     /** Output image size in pixels. */
@@ -99,6 +101,17 @@ type SceneRasterizerOptions = {
     groupTilesY: number;
     /** Clamp frame-filling splats to the image (see `SIZE_CLAMP_FRAC`); default true. */
     sizeClamp?: boolean;
+    /** Draw opacity above 1 as 1 (no over-unity profile). Default false. */
+    clampOpacity?: boolean;
+    /**
+     * The scene was trained with anti-aliasing: filter each splat with
+     * `antiAliasFilterSize` instead of the dilation and scale its opacity by
+     * `sqrt(det Σ / det(Σ + filter))` so it draws the unfiltered mass, as the
+     * engine does for antialiased resources. Default false.
+     */
+    aaCompensation?: boolean;
+    /** The filter of `aaCompensation`, in pixels². Default `AA_FILTER_COV` (0.1). */
+    antiAliasFilterSize?: number;
     /** RGBA background, each channel in [0, 1]. */
     bgR: number;
     bgG: number;
@@ -139,7 +152,7 @@ type SortedOrder = {
 type SceneLayer = Extract<ChunkLayer, 'position' | 'geometric' | 'color'>;
 
 const numSHCoeffsPerChannel = (bands: number): number => {
-    return bands === 0 ? 0 : bands === 1 ? 3 : bands === 2 ? 8 : 15;
+    return SH_REST_COUNTS[bands as SHBands] / 3;
 };
 
 /**
@@ -192,16 +205,13 @@ const unwrapPrefixes = (prefix: Uint32Array, numBlocks: number, total: number, o
  * group, accumulating each slice's composited colour in float on the GPU and
  * packing the mean on the last, so the frame costs one readback and
  * quantizes once.
- *
- * Every shader is shared with the chunked `GpuSplatRasterizer`; the scene
- * variants only change how attributes are addressed, so both produce
- * identical pixels.
  */
 class GpuSceneRasterizer {
     private device: GraphicsDevice;
     private options: SceneRasterizerOptions;
     private shaders: Shader[] = [];
     private bgFormats: BindGroupFormat[] = [];
+    private computes: Compute[] = [];
     private radixSort: ComputeRadixSort;
     private sortKeyBits: number;
     /** Depth sort over the scene; separate from the tile sort so neither rebuilds its passes. */
@@ -311,15 +321,19 @@ class GpuSceneRasterizer {
             ['shBand1', shBand1],
             ['shBand2', shBand2],
             ['shBand3', shBand3],
+            ['shBand4', shBand4],
             ['quatRotation', quatRotation],
             ['covariance3D', covariance3D]
         ]);
-        const cdefines = new Map<string, string>([['SCENE', '']]);
+        const cdefines = new Map<string, string>();
         if (projection === 'equirect') cdefines.set('PROJECTION_EQUIRECT', '');
         if (options.numSHBands >= 1) cdefines.set('SH_BAND_1', '');
         if (options.numSHBands >= 2) cdefines.set('SH_BAND_2', '');
         if (options.numSHBands >= 3) cdefines.set('SH_BAND_3', '');
+        if (options.numSHBands >= 4) cdefines.set('SH_BAND_4', '');
         if (options.sizeClamp === false) cdefines.set('NO_SIZE_CLAMP', '');
+        if (options.clampOpacity) cdefines.set('CLAMP_OPACITY', '');
+        if (options.aaCompensation) cdefines.set('AA_COMPENSATION', '');
 
         const U = SHADERSTAGE_COMPUTE;
         const ro = (name: string) => new BindStorageBufferFormat(name, U, true);
@@ -342,7 +356,9 @@ class GpuSceneRasterizer {
             });
             this.shaders.push(shader);
             this.bgFormats.push(bgFormat);
-            return new Compute(device, shader, name);
+            const compute = new Compute(device, shader, name);
+            this.computes.push(compute);
+            return compute;
         };
 
         this.depthKeysCompute = mk('scene-depth-keys', depthKeysWgsl(), [
@@ -350,7 +366,7 @@ class GpuSceneRasterizer {
             rw('sortKeys'),
             rw('visibleCount')
         ]);
-        this.projectCompute = mk('scene-project', projectWgsl(coeffs), [
+        this.projectCompute = mk('scene-project', projectWgsl(coeffs, options.antiAliasFilterSize ?? AA_FILTER_COV), [
             ro('position'),
             rw('projected'),
             rw('coverage'),
@@ -517,7 +533,7 @@ class GpuSceneRasterizer {
      * @param rangeRows - Most gaussians per streamed range.
      * @param numSHBands - The scene's SH bands, sizing the colour range buffer.
      */
-    async prepareStreamed(numSplats: number, rangeRows: number, numSHBands: 0 | 1 | 2 | 3): Promise<void> {
+    async prepareStreamed(numSplats: number, rangeRows: number, numSHBands: SHBands): Promise<void> {
         this.releaseScene();
         await this.guardAllocation(() => {
             this.allocateRange(rangeRows, numSHBands);
@@ -977,7 +993,7 @@ class GpuSceneRasterizer {
      * @param rangeRows - Most gaussians per range.
      * @param numSHBands - Sizes the colour buffer.
      */
-    private allocateRange(rangeRows: number, numSHBands: 0 | 1 | 2 | 3): void {
+    private allocateRange(rangeRows: number, numSHBands: SHBands): void {
         const device = this.device;
         this.positionBuffer = new StorageBuffer(device, rangeRows * POSITION_F32 * 4, BUFFERUSAGE_COPY_DST);
         this.geometricBuffer = new StorageBuffer(device, rangeRows * GEOMETRIC_F32 * 4, BUFFERUSAGE_COPY_DST);
@@ -1096,7 +1112,7 @@ class GpuSceneRasterizer {
             c.setParameter('offsetY', b.offsetY ?? 0);
             c.setParameter('imageWidth', o.imageWidth);
             c.setParameter('imageHeight', o.imageHeight);
-            c.setParameter('splatStride', 0);
+            c.setParameter('_p5', 0);
             c.setParameter('chunkSize', this.capacity);
             c.setParameter('groupPixelMinX', originX);
             c.setParameter('groupPixelMinY', originY);
@@ -1168,6 +1184,7 @@ class GpuSceneRasterizer {
         this.accumBuffer?.destroy();
         this.radixSort.destroy();
         this.depthSort.destroy();
+        for (const c of this.computes) c.destroy();
         for (const s of this.shaders) s.destroy();
         for (const f of this.bgFormats) f.destroy();
     }

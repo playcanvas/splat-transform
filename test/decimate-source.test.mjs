@@ -44,12 +44,10 @@ const readLayers = async (src, pool, wanted) => {
     return out;
 };
 
-const sigmoid = x => 1 / (1 + Math.exp(-x));
-
 const stats = (geo, n) => {
     let opSum = 0, opSq = 0, scSum = 0;
     for (let i = 0; i < n; i++) {
-        const op = sigmoid(geo[i * 8 + 7]);
+        const op = geo[i * 8 + 7]; // true opacity
         opSum += op;
         opSq += op * op;
         scSum += (geo[i * 8 + 4] + geo[i * 8 + 5] + geo[i * 8 + 6]) / 3;
@@ -74,7 +72,7 @@ describe('decimateSourceAdaptive', () => {
             assert.ok(Math.abs(qn - 1) < 1e-3, `row ${i} quat unit (${qn})`);
             for (let c = 0; c < 8; c++) assert.ok(Number.isFinite(geo[i * 8 + c]), `row ${i} geo[${c}] finite`);
             for (let c = 0; c < 3; c++) assert.ok(Number.isFinite(pos[i * 3 + c]), `row ${i} pos[${c}] finite`);
-            assert.ok(sigmoid(geo[i * 8 + 7]) <= 1 + 1e-9, `row ${i} opacity <= 1`);
+            assert.ok(geo[i * 8 + 7] >= 0, `row ${i} opacity >= 0`); // merges may exceed 1
         }
     });
 
@@ -130,6 +128,35 @@ describe('decimateSourceAdaptive', () => {
         await rm(scratchDir, { recursive: true, force: true });
     });
 
+    it('keeps the SOG blind origins of extra columns across spilled generations', async () => {
+        const { decimateSource } = await import('../src/lib/decimate-uniform/index.js');
+        const { NodeFileSystem, NodeReadFileSystem } = await import('../src/cli/node-file-system.js');
+        const extraColumns = [{ name: 'tag', type: 'uint32', sogBlind: { texture: 0, encoding: 'u32' } }];
+        for (const decimate of [decimateSourceAdaptive, decimateSource]) {
+            const { source, pool } = await makeSyntheticSource(3000, 0, 31, { chunkSize: 512, extraColumns });
+            const scratchDir = await mkdtemp(join(tmpdir(), 'decimate-blind-'));
+            let spilled = false;
+            const out = await decimate(source, pool, {
+                targetCount: 400,
+                memoryBudgetBytes: 1,
+                spill: {
+                    writeFs: new NodeFileSystem(),
+                    readFs: new NodeReadFileSystem(),
+                    scratchDir,
+                    remove: async (path) => {
+                        spilled = true;
+                        await unlink(path);
+                    }
+                }
+            });
+            assert.deepStrictEqual(out.meta.extraColumns, extraColumns);
+            await readLayers(out, pool, ['position']);
+            await out.close();
+            assert.ok(spilled, 'a generation spilled through PLY');
+            await rm(scratchDir, { recursive: true, force: true });
+        }
+    });
+
     it('extra columns survive decimation', async () => {
         const n = 1000;
         const { source, pool } = await makeSyntheticSource(n, 0, 37, {
@@ -138,6 +165,7 @@ describe('decimateSourceAdaptive', () => {
         });
         const out = await decimateSourceAdaptive(source, pool, { targetCount: 600 });
         assert.deepStrictEqual([...out.meta.extraColumns.map(e => e.name)], ['tag']);
+        assert.strictEqual(out.meta.opacityAboveOne, true, 'merges may exceed opacity 1');
         const { other } = await readLayers(out, pool, ["other"]);
         await out.close();
         assert.strictEqual(other.length, 600);

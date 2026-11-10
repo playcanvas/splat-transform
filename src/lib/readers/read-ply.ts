@@ -6,7 +6,8 @@ import {
     positionFields,
     geometricFields,
     colorFields,
-    otherLayout
+    otherLayout,
+    OPACITY_LINEAR_COLUMN
 } from '../chunk';
 import type {
     ChunkData,
@@ -19,6 +20,7 @@ import type {
     LayerLayout,
     SHBands
 } from '../chunk';
+import { AA_COMMENT_KEY, MODE_COMMENT_KEY, producerComments } from '../comments';
 import { Column, DataTable } from '../data-table';
 import type { ReadSource, ReadStream } from '../io/read';
 import type { SplatModel } from '../splat-model';
@@ -57,25 +59,20 @@ type PlyData = {
 const GEOMETRIC_COLS = ['rot_0', 'rot_1', 'rot_2', 'rot_3', 'scale_0', 'scale_1', 'scale_2', 'opacity'];
 const COLOR_DC_COLS = ['f_dc_0', 'f_dc_1', 'f_dc_2'];
 const SCALE_2_WORD = GEOMETRIC_COLS.indexOf('scale_2');
+const OPACITY_WORD = GEOMETRIC_COLS.indexOf('opacity');
 // The geometric columns a 2DGS record carries (everything but the third scale).
 const GEOMETRIC_COLS_2DGS = GEOMETRIC_COLS.filter((c) => c !== 'scale_2');
 
-// Brush's `SplatRenderMode: <mode>` (brush-serde export.rs/import.rs) — the wire
-// form we also write, see `splatModelComment` in the writers.
-const MODE_COMMENT_KEY = 'splatrendermode: ';
 const MODE_TO_MODEL: Readonly<Record<string, SplatModel>> = {
     default: 'default',
     mip: 'antialiased',
     '2dgs': '2dgs'
 };
 
-// Postshot's flag.
-const AA_COMMENT_KEY = 'antialiased ';
-
 /**
  * Detect the splat model from a PLY header's comments. Two producer forms are
  * recognized: Brush's `SplatRenderMode: default | mip | 2dgs` and Postshot's
- * `antialiased 0 | 1`.
+ * `postshot.anti_aliasing=0 | 1`.
  *
  * Matching is case-insensitive and the last match wins (as Brush's own importer
  * does), so a file carrying both forms is decided by header order. Unrecognized
@@ -98,6 +95,17 @@ const splatModelFromComments = (comments: string[]): SplatModel => {
         }
     }
     return model;
+};
+
+/**
+ * The header comments a scene carries through, as metadata (see {@link producerComments}).
+ *
+ * @param comments - Header comments, without their leading `comment `.
+ * @returns `{ comments }` with the comments to keep, or `{}` when none are left.
+ */
+const commentsMeta = (comments: string[]): { comments?: string[] } => {
+    const kept = producerComments(comments);
+    return kept.length > 0 ? { comments: kept } : {};
 };
 
 const getDataType = (type: string) => {
@@ -413,9 +421,14 @@ const readCompressedChunked = (source: ReadSource, header: PlyHeader, pool: Chun
     const shBands: SHBands =
         restCount === 0
             ? 0
-            : ({ [SH_REST_COUNTS[1]]: 1, [SH_REST_COUNTS[2]]: 2, [SH_REST_COUNTS[3]]: 3 } as Record<number, SHBands>)[
-                  restCount
-              ];
+            : (
+                  {
+                      [SH_REST_COUNTS[1]]: 1,
+                      [SH_REST_COUNTS[2]]: 2,
+                      [SH_REST_COUNTS[3]]: 3,
+                      [SH_REST_COUNTS[4]]: 4
+                  } as Record<number, SHBands>
+              )[restCount];
     if (shBands === undefined) {
         throw new Error(`readPly: unrecognized compressed sh column count ${restCount}`);
     }
@@ -448,6 +461,7 @@ const readCompressedChunked = (source: ReadSource, header: PlyHeader, pool: Chun
         numChunks: [numChunks],
         shBands,
         model: splatModelFromComments(header.comments),
+        ...commentsMeta(header.comments),
         extraColumns: [],
         transform: Transform.PLY.clone(),
         availableLayers,
@@ -565,9 +579,8 @@ const readCompressedChunked = (source: ReadSource, header: PlyHeader, pool: Chun
                 geo[o + 4] = lerp(minSX![ci], maxSX![ci], unpackUnorm(ps >>> 21, 11));
                 geo[o + 5] = lerp(minSY![ci], maxSY![ci], unpackUnorm(ps >>> 11, 10));
                 geo[o + 6] = lerp(minSZ![ci], maxSZ![ci], unpackUnorm(ps, 11));
-                // opacity (alpha of packed_color)
-                const cw = unpackUnorm(v[base + pcIdx], 8);
-                geo[o + 7] = -Math.log(1 / cw - 1);
+                // opacity (alpha of packed_color), as true opacity
+                geo[o + 7] = unpackUnorm(v[base + pcIdx], 8);
             }
             if (col) {
                 const o = dstRow * sw;
@@ -710,6 +723,8 @@ type LayerPlan = {
     dstIdx: Uint32Array;
     // 2DGS only: the record has no scale_2, so the slot is filled with a constant.
     synthScale2: boolean;
+    // The opacity slot was filled from the `opacity` logit, so it is converted to true opacity.
+    logitOpacity: boolean;
 };
 
 /**
@@ -800,8 +815,12 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
     // surfel) so the rest of the pipeline sees an ordinary geometric layer.
     // Only a file that is otherwise a complete gaussian record qualifies — a
     // point cloud that happens to carry two scales is not a 2DGS scene.
-    const is2dgs = !has('scale_2') && GEOMETRIC_COLS_2DGS.every(has);
-    const geometricCols = is2dgs ? GEOMETRIC_COLS_2DGS : GEOMETRIC_COLS;
+    // The opacity slot holds true opacity: the file's `opacity_linear` when it has one (a
+    // linear PLY, whose opacity may exceed 1), else its `opacity` logit, converted on read.
+    const opacityProp = has(OPACITY_LINEAR_COLUMN) ? OPACITY_LINEAR_COLUMN : 'opacity';
+    const withOpacityProp = (cols: string[]) => cols.map((c) => (c === 'opacity' ? opacityProp : c));
+    const is2dgs = !has('scale_2') && withOpacityProp(GEOMETRIC_COLS_2DGS).every(has);
+    const geometricCols = withOpacityProp(is2dgs ? GEOMETRIC_COLS_2DGS : GEOMETRIC_COLS);
     const hasGeometric = geometricCols.every(has);
     const model = is2dgs ? '2dgs' : splatModelFromComments(header.comments);
 
@@ -815,16 +834,21 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
     const shBands: SHBands =
         restCount === 0
             ? 0
-            : ({ [SH_REST_COUNTS[1]]: 1, [SH_REST_COUNTS[2]]: 2, [SH_REST_COUNTS[3]]: 3 } as Record<number, SHBands>)[
-                  restCount
-              ];
+            : (
+                  {
+                      [SH_REST_COUNTS[1]]: 1,
+                      [SH_REST_COUNTS[2]]: 2,
+                      [SH_REST_COUNTS[3]]: 3,
+                      [SH_REST_COUNTS[4]]: 4
+                  } as Record<number, SHBands>
+              )[restCount];
     if (shBands === undefined) {
         throw new Error(`readPly: unrecognized f_rest_* count ${restCount}`);
     }
 
     // Non-standard columns become `other` extras (in file order). scale_2 stays
     // standard for 2DGS: it's absent, not extra.
-    const standard = new Set<string>(['x', 'y', 'z', ...GEOMETRIC_COLS, ...COLOR_DC_COLS]);
+    const standard = new Set<string>(['x', 'y', 'z', ...GEOMETRIC_COLS, OPACITY_LINEAR_COLUMN, ...COLOR_DC_COLS]);
     const extras: ExtraColumn[] = properties
         .filter((p) => !standard.has(p.name) && !/^f_rest_\d+$/.test(p.name))
         .map((p) => {
@@ -855,13 +879,23 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
         const fields: FillField[] = fieldNames(layer).map((name, idx) => ({
             recordOffset: recordOffset.get(name)!,
             read: reader.get(name)!,
-            dstByteOffset: (layer === 'geometric' ? GEOMETRIC_COLS.indexOf(name) : idx) * 4,
+            dstByteOffset:
+                (layer === 'geometric' ? (name === opacityProp ? OPACITY_WORD : GEOMETRIC_COLS.indexOf(name)) : idx) *
+                4,
             uint: uintByName.get(name) ?? false
         }));
         const allFloat = recordAllFloat && fields.every((f) => !f.uint);
         const srcIdx = new Uint32Array(fields.map((f) => f.recordOffset >> 2));
         const dstIdx = new Uint32Array(fields.map((f) => f.dstByteOffset >> 2));
-        return { stride, fields, allFloat, srcIdx, dstIdx, synthScale2: is2dgs && layer === 'geometric' };
+        return {
+            stride,
+            fields,
+            allFloat,
+            srcIdx,
+            dstIdx,
+            synthScale2: is2dgs && layer === 'geometric',
+            logitOpacity: opacityProp === 'opacity' && layer === 'geometric'
+        };
     };
 
     const availableLayers = new Set<ChunkLayer>();
@@ -900,10 +934,12 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
         numChunks: [numChunks],
         shBands,
         model,
+        ...commentsMeta(header.comments),
         extraColumns: extras,
         transform: Transform.PLY.clone(),
         availableLayers,
-        layouts
+        layouts,
+        ...(opacityProp === OPACITY_LINEAR_COLUMN ? { opacityAboveOne: true } : {})
     };
 
     // One whole-float record into one destination row (float offsets). Shared
@@ -924,6 +960,7 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
         for (let j = 0; j < srcIdx.length; j++) {
             dstF32[db + dstIdx[j]] = recF32[rb + srcIdx[j]];
         }
+        if (plan.logitOpacity) dstF32[db + OPACITY_WORD] = 1 / (1 + Math.exp(-dstF32[db + OPACITY_WORD]));
     };
 
     const fill = (
@@ -971,6 +1008,10 @@ const readPly = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
                 } else {
                     dst.setFloat32(dstBase + f.dstByteOffset, v, true);
                 }
+            }
+            if (plan.logitOpacity) {
+                const at = dstBase + OPACITY_WORD * 4;
+                dst.setFloat32(at, 1 / (1 + Math.exp(-dst.getFloat32(at, true))), true);
             }
         }
     };

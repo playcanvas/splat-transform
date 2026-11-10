@@ -1,10 +1,11 @@
-import { SH_REST_COUNTS } from '../chunk';
+import { OPACITY_LINEAR_COLUMN, SH_REST_COUNTS } from '../chunk';
 import type { ChunkData, ChunkLayer, ChunkSource, ChunkDataPool } from '../chunk';
 import type { FileSystem } from '../io/write';
 import { bakeTransform } from '../ops';
 import { logger, Transform } from '../utils';
+import { opacityToLogit } from '../utils/opacity';
 
-import { splatModelComment } from './utils';
+import { plyCommentLines, splatModelComment } from './utils';
 
 const GEOMETRIC_COLS = ['rot_0', 'rot_1', 'rot_2', 'rot_3', 'scale_0', 'scale_1', 'scale_2', 'opacity'];
 
@@ -12,6 +13,12 @@ const plyType = (uint: boolean): string => (uint ? 'uint' : 'float');
 
 type WritePlyStreamingOptions = {
     filename: string;
+    /**
+     * Always write the standard `opacity` logit, clamping opacity above 1, even when the
+     * source may exceed 1 (which otherwise writes `opacity_linear`). For tools that don't
+     * read `opacity_linear`. Default false.
+     */
+    logitOpacity?: boolean;
 };
 
 // One output column: which layer + byte offset to read it from, and whether
@@ -32,6 +39,10 @@ type LayerRun = { layer: ChunkLayer; srcStart: number; dstStart: number; words: 
  * in the canonical layer order (position, geometric, color, then `other`
  * extras). Peak working set is one set of layer buffers, independent of scene
  * size.
+ *
+ * Opacity is written as one property: `opacity_linear` (true opacity, which may
+ * exceed 1) when the source's `opacityAboveOne` says it may, else the standard
+ * `opacity` logit (see `opacityToLogit`).
  *
  * @param source - The source to write.
  * @param pool - Chunk-data pool for the temporary read buffers; its `chunkSize` must match the source's.
@@ -59,14 +70,19 @@ const writePlyStreaming = async (
             { name: 'z', layer: 'position', layerByteOffset: 8, uint: false }
         );
     }
+    const linearOpacity = !!meta.opacityAboveOne && !options.logitOpacity;
     if (layers.has('geometric')) {
         // 2DGS has no third scale axis: the column was materialized on read to
         // keep the layer uniform, so drop it again here.
         GEOMETRIC_COLS.forEach((name, i) => {
             if (meta.model === '2dgs' && name === 'scale_2') return;
-            columns.push({ name, layer: 'geometric', layerByteOffset: i * 4, uint: false });
+            const column = name === 'opacity' && linearOpacity ? OPACITY_LINEAR_COLUMN : name;
+            columns.push({ name: column, layer: 'geometric', layerByteOffset: i * 4, uint: false });
         });
     }
+    // the record word holding the `opacity` logit, converted from true opacity per row (-1: none)
+    const logitWord = linearOpacity ? -1 : columns.findIndex((c) => c.name === 'opacity');
+    let clamped = 0;
     if (layers.has('color')) {
         const names = [
             'f_dc_0',
@@ -119,12 +135,13 @@ const writePlyStreaming = async (
         c = e;
     }
 
-    // Header: the model tag (when any), then a single vertex element.
+    // Header: the model tag (when any) and the scene's comments, then a single vertex element.
     const modelComment = splatModelComment(meta.model);
     const header = [
         'ply',
         'format binary_little_endian 1.0',
         ...(modelComment ? [`comment ${modelComment}`] : []),
+        ...plyCommentLines(meta.comments),
         `element vertex ${N}`,
         ...columns.map((c) => `property ${plyType(c.uint)} ${c.name}`),
         'end_header'
@@ -138,6 +155,7 @@ const writePlyStreaming = async (
         const numChunks = meta.numChunks[0] ?? 0;
         const outRecord = new Uint8Array(chunkSize * recordStride);
         const outU32 = new Uint32Array(outRecord.buffer);
+        const outF32 = new Float32Array(outRecord.buffer);
 
         const bar = logger.bar('Writing', numChunks);
 
@@ -172,6 +190,13 @@ const writePlyStreaming = async (
                     for (let j = 0; j < w; j++) outU32[d + j] = src[s + j];
                 }
             }
+            if (logitWord >= 0) {
+                for (let i = 0; i < count; i++) {
+                    const a = outF32[i * recordF + logitWord];
+                    if (a > 1) clamped++;
+                    outF32[i * recordF + logitWord] = opacityToLogit(a);
+                }
+            }
 
             await writer.write(outRecord.subarray(0, count * recordStride));
 
@@ -181,6 +206,9 @@ const writePlyStreaming = async (
         }
 
         bar.end();
+        if (clamped > 0) {
+            logger.warn(`${clamped} gaussians had opacity above 1, clamped to 1 in the standard PLY opacity`);
+        }
 
         await writer.close();
     } catch (err) {

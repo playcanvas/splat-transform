@@ -113,6 +113,7 @@ export type { CameraTrack, TrackPose } from './render/camera-track';
 // Utils
 export { fmtBytes, fmtCount, fmtTime, logger, TextRenderer, Transform, WebPCodec } from './utils';
 export type { Bar, Group, LogEvent, Logger, MessageKind, Renderer, TextRendererOptions, Verbosity } from './utils';
+export type { SogBlindEncoding, SogBlindField, SogBlindTexture } from './utils/sog-blind';
 
 // Worker pool for CPU-heavy tasks
 export { WorkerQueue } from './workers';

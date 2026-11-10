@@ -8,12 +8,15 @@ import type { FileSystem } from '../io/write';
 import { bakeTransform, permuteSource, sortMortonColumns } from '../ops';
 import type { BTreeNode } from '../spatial';
 import { BTree } from '../spatial';
+import type { SplatModel } from '../splat-model';
 import type { DeviceCreator } from '../types';
 import { logger, Transform } from '../utils';
+import type { SogBlindTexture } from '../utils/sog-blind';
 import { version } from '../version';
 
 import { logWrittenFile } from './utils';
 import { finishSogWrite, startSogWrite, writeSogSource } from './write-sog.js';
+import type { SogVersion } from './write-sog.js';
 
 type Aabb = {
     min: number[];
@@ -50,11 +53,15 @@ type LodMeta = {
         chunkMinGaussians: number;
     };
     count: number;
+    /** How the scene was trained, for all its files; omitted for `default`, as in SOG `meta.json`. */
+    model?: SplatModel;
     counts: number[];
     lodLevels: number;
     environment?: string;
     filenames: string[];
     tree: MetaNode;
+    extras?: unknown;
+    comments?: readonly string[];
 };
 
 const boundUnion = (result: Aabb, a: Aabb, b: Aabb) => {
@@ -187,9 +194,9 @@ const invalidGaussian = (lod: number, row: number, what: string): Error =>
  * downstream may then assume finite input rather than each stage carrying its own
  * opinion about invalid data. {@link assertFiniteColor} does the same for the colour layer.
  *
- * The rules mirror `filterNaNRows`, including its two deliberate exceptions
- * (`scale_*` may be `-Infinity`, `opacity` may be `+Infinity`, both harmless
- * here), so anything `--filter-nan` keeps is accepted.
+ * The rules mirror `filterNaNRows`, including its deliberate exception
+ * (`scale_*` may be `-Infinity`, harmless here), so anything `--filter-nan`
+ * keeps is accepted.
  *
  * @param pos - Packed xyz for the batch.
  * @param geo - Packed 8-float geometric records for the batch.
@@ -227,8 +234,7 @@ const assertFiniteGeometry = (
             const v = geo[o + e];
             if (!isFinite(v) && v !== -Infinity) reject(i, 'a non-finite scale');
         }
-        const opacity = geo[o + 7];
-        if (!isFinite(opacity) && opacity !== Infinity) reject(i, 'a non-finite opacity');
+        if (!isFinite(geo[o + 7])) reject(i, 'a non-finite opacity');
     }
 };
 
@@ -433,6 +439,16 @@ type WriteLodSourceOptions = {
     webpEffort?: number;
     /** Supplies the GPU that SOG encoding uses. */
     createDevice?: DeviceCreator;
+    /** SOG version of every unit and the environment. Default 3. */
+    sogVersion?: SogVersion;
+    /** Per-gaussian blind data carried into every unit (v3 only). */
+    sogBlind?: SogBlindTexture[];
+    /**
+     * Application-defined JSON for lod-meta.json's `extras` (as in glTF). Undefined writes
+     * the main source's extras, if any; null writes none. Units never carry extras. Written
+     * only with SOG v3 units.
+     */
+    extras?: unknown;
     chunkCount: number;
     chunkExtent: number;
     /**
@@ -478,6 +494,9 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
         iterations,
         webpEffort,
         createDevice,
+        sogVersion,
+        sogBlind,
+        extras,
         chunkCount,
         chunkExtent,
         chunkMin = 8,
@@ -624,14 +643,22 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
             chunkMinGaussians: binMin
         },
         count: counts.reduce((acc, curr) => acc + curr, 0),
+        ...(mainSource.meta.model === 'default' ? {} : { model: mainSource.meta.model }),
         counts,
         lodLevels,
         ...(hasEnv ? { environment: 'env/meta.json' } : {}),
         filenames,
         tree
     };
+    // extras and comments are SOG v3 additions: a scene written as v2 keeps the v2-era lod-meta.json
+    if ((sogVersion ?? 3) === 3) {
+        const lodExtras = extras === null ? undefined : (extras ?? mainSource.meta.extras);
+        if (lodExtras !== undefined) meta.extras = lodExtras;
+        if (mainSource.meta.comments?.length) meta.comments = mainSource.meta.comments;
+    }
 
-    // write the meta file with float precision quantization (approx. 32-bit float => ~7 significant digits)
+    // the meta file's own floats are quantized (approx. 32-bit float => ~7 significant digits); the
+    // application's extras are written as given
     const replacer = (_key: string, value: unknown) => {
         if (typeof value === 'number') {
             if (!Number.isFinite(value)) return value;
@@ -639,6 +666,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
         }
         return value;
     };
+    const quantize = <T>(value: T): T => JSON.parse(JSON.stringify(value, replacer));
 
     const writingGroup = logger.group('Writing');
 
@@ -680,6 +708,16 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
                     iterations,
                     webpEffort,
                     createDevice: sharedCreateDevice,
+                    version: sogVersion,
+                    // the environment is a separate scene and may lack some columns: keep the fields it has
+                    blind: sogBlind
+                        ?.map((fields) =>
+                            fields.filter((f) => envSource!.meta.extraColumns.some((c) => c.name === f.column))
+                        )
+                        .filter((fields) => fields.length > 0),
+                    // the scene's extras and comments live in lod-meta.json only
+                    extras: null,
+                    comments: null,
                     logging: 'flat'
                 },
                 fs
@@ -690,7 +728,9 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
     }
 
     // write lod-meta.json
-    const metaJson = new TextEncoder().encode(JSON.stringify(meta, replacer));
+    const metaJson = new TextEncoder().encode(
+        JSON.stringify({ ...meta, asset: quantize(meta.asset), tree: quantize(meta.tree) })
+    );
     const writer = await fs.createWriter(filename);
     await writer.write(metaJson);
     await writer.close();
@@ -738,7 +778,15 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
 
         return {
             identity,
-            state: startSogWrite(unitSource, pool, { iterations, createDevice: sharedCreateDevice, indices: identity })
+            state: startSogWrite(unitSource, pool, {
+                iterations,
+                createDevice: sharedCreateDevice,
+                indices: identity,
+                version: sogVersion,
+                blind: sogBlind,
+                extras: null,
+                comments: null
+            })
         };
     };
 

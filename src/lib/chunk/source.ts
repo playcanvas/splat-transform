@@ -39,6 +39,26 @@ type ChunkSourceMetadata = {
     readonly availableLayers: ReadonlySet<ChunkLayer>;
     /** Per-layer stride + field map. Keyed by layer; only present for available layers. */
     readonly layouts: Readonly<Partial<Record<ChunkLayer, LayerLayout>>>;
+    /**
+     * Some gaussian's opacity may exceed 1 (decimated scenes, SOG v3 / PLY `opacity_linear`
+     * input). A hint for writers that must choose their output before seeing the data (the
+     * streaming PLY writer writes `opacity_linear` instead of `opacity`); absent means no
+     * opacity exceeds 1. Combined sources carry it when any input does.
+     */
+    readonly opacityAboveOne?: boolean;
+    /**
+     * Application-defined JSON carried by the scene's container (SOG `meta.json` /
+     * `lod-meta.json` `extras`, as in glTF). No meaning to splat-transform: read,
+     * passed through and written back. Absent when the scene has none.
+     */
+    readonly extras?: unknown;
+    /**
+     * Free-form producer comments carried by the scene (PLY header `comment` lines,
+     * SOG `meta.json` / `lod-meta.json` `comments`), e.g. `Postshot v1.1.69` or
+     * `postshot.color.eotf=sRGB`. Passed through verbatim and written back; ones that
+     * describe coordinates are not updated by transforms. Absent when there are none.
+     */
+    readonly comments?: readonly string[];
 };
 
 /**
@@ -93,7 +113,6 @@ type ReadRequest =
  * `ChunkDataPool`, filled by `read`, used, and released back to the pool. The
  * source itself never holds long-lived buffer memory on the caller's behalf.
  */
-// eslint-disable-next-line @typescript-eslint/consistent-type-definitions -- preserve public declaration merging
 interface ChunkSource {
     readonly meta: ChunkSourceMetadata;
 

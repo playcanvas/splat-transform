@@ -1,5 +1,6 @@
 import { extname } from 'pathe';
 
+import { producerComments } from '../comments';
 import type { SplatModel } from '../splat-model';
 import { fmtBytes, logger } from '../utils';
 
@@ -21,6 +22,19 @@ const MODEL_TO_MODE: Readonly<Record<SplatModel, string | null>> = {
 const splatModelComment = (model: SplatModel): string | null => {
     const mode = MODEL_TO_MODE[model];
     return mode && `SplatRenderMode: ${mode}`;
+};
+
+/**
+ * A scene's comments as PLY header lines, without model tags or a generator
+ * line (see {@link producerComments}): the writer's own model tag decides the
+ * model. A header line cannot hold a line break, so any (from a SOG meta.json,
+ * say) becomes a space.
+ *
+ * @param comments - The scene's comments.
+ * @returns The `comment ...` header lines.
+ */
+const plyCommentLines = (comments: readonly string[] | undefined): string[] => {
+    return producerComments((comments ?? []).map((c) => c.replace(/[\r\n]+/g, ' '))).map((c) => `comment ${c}`);
 };
 
 /**
@@ -53,4 +67,4 @@ const frameFilename = (filename: string, frame: number, lastFrame: number): stri
     return `${filename.slice(0, filename.length - ext.length)}.${String(frame).padStart(digits, '0')}${ext}`;
 };
 
-export { frameFilename, logWrittenFile, splatModelComment };
+export { frameFilename, logWrittenFile, plyCommentLines, splatModelComment };

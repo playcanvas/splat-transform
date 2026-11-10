@@ -18,7 +18,7 @@ import type { ChunkDataPool, ChunkSource, ChunkSourceMetadata, ReadRequest, SHBa
  * both chunk and gather (indices) reads.
  *
  * @param src - Parent source.
- * @param outputBands - Target SH band count (0-3).
+ * @param outputBands - Target SH band count (0-4).
  * @param pool - Pool for the parent-band color temporaries; `chunkSize` must match the parent's.
  * @returns A derived source at the reduced band count (or `src` unchanged if it isn't a reduction).
  */

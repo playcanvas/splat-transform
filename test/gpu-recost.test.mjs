@@ -67,7 +67,7 @@ const makeCache = (n, seed) => {
         geo[i * 8 + 4] = Math.log(0.02 + rand() * 0.3);
         geo[i * 8 + 5] = Math.log(0.02 + rand() * 0.3);
         geo[i * 8 + 6] = Math.log(0.02 + rand() * 0.3);
-        geo[i * 8 + 7] = rand() * 4 - 2;
+        geo[i * 8 + 7] = 1 / (1 + Math.exp(-(rand() * 4 - 2))); // true opacity
         color[i * 3] = rand() - 0.5;
         color[i * 3 + 1] = rand() - 0.5;
         color[i * 3 + 2] = rand() - 0.5;

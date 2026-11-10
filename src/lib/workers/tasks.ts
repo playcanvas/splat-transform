@@ -30,8 +30,9 @@ const taskHandlers = {
         columns: { name: string; data: TypedArray }[];
         k?: number;
         alpha?: number;
+        gamma?: number;
     }): TaskOutput<QuantizedColumns> => {
-        const result = quantize1dColumns(args.columns, args.k, args.alpha);
+        const result = quantize1dColumns(args.columns, args.k, args.alpha, args.gamma);
         return {
             result,
             transfer: [

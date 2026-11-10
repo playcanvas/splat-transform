@@ -1,7 +1,14 @@
 import { basename } from 'pathe';
 import { Vec3 } from 'playcanvas';
 
-import { Column, DataTable, computeGaussianExtents, computeWriteTransform, transformColumns } from '../data-table';
+import {
+    Column,
+    DataTable,
+    computeGaussianExtents,
+    computeWriteTransform,
+    transformColumns,
+    withOpacityLogit
+} from '../data-table';
 import type { Bounds } from '../data-table';
 import { GpuDilation, GpuVoxelization } from '../gpu';
 import { writeFile } from '../io/write';
@@ -165,7 +172,6 @@ type WriteVoxelOptions = {
 /**
  * Metadata for a voxel octree file.
  */
-// eslint-disable-next-line @typescript-eslint/consistent-type-definitions -- preserve public declaration merging
 interface VoxelMetadata {
     /** File format version */
     version: string;
@@ -420,7 +426,7 @@ const writeOctreeFiles = async (fs: FileSystem, jsonFilename: string, octree: Sp
 const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<void> => {
     const {
         filename,
-        dataTable,
+        dataTable: input,
         voxelResolution = 0.05,
         opacityCutoff = 0.1,
         createDevice,
@@ -435,6 +441,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     if (!createDevice) {
         throw new Error('writeVoxel requires a createDevice function for GPU voxelization');
     }
+    const dataTable = withOpacityLogit(input);
 
     const collisionMeshShape = (() => {
         if (collisionMesh === false || collisionMesh === undefined) return null;

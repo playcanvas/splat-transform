@@ -16,17 +16,19 @@ import { WorkerQueue } from './worker-queue';
  * @param columns - Input columns pooled into 1D.
  * @param k - Number of codebook entries.
  * @param alpha - Density weight exponent.
+ * @param gamma - Importance exponent (bin weight also scaled by exp(gamma * value)).
  * @returns Centroids (k Float32 codebook) and per-column Uint8 labels.
  * @ignore
  */
 const runQuantize1dColumns = async (
     columns: { name: string; data: TypedArray }[],
     k?: number,
-    alpha?: number
+    alpha?: number,
+    gamma?: number
 ): Promise<QuantizedColumns> => {
     if (WorkerQueue.isInline) {
         // zero-copy: no point marshalling when running on this thread anyway
-        return quantize1dColumns(columns, k, alpha);
+        return quantize1dColumns(columns, k, alpha, gamma);
     }
 
     // compact copies: column data may be views into larger shared buffers,
@@ -34,7 +36,7 @@ const runQuantize1dColumns = async (
     const copies = columns.map((c) => ({ name: c.name, data: c.data.slice() }));
     return await WorkerQueue.run(
         'quantize1d',
-        { columns: copies, k, alpha },
+        { columns: copies, k, alpha, gamma },
         copies.map((c) => c.data.buffer as ArrayBuffer)
     );
 };
