@@ -646,7 +646,7 @@ const readGlb = async (source: ReadSource, pool: ChunkDataPool): Promise<ChunkSo
                 if (!Number.isFinite(value) || value < 0 || value > 1) {
                     throw new Error(`readGlb: invalid opacity value ${value}`);
                 }
-                output[slot * 8 + 7] = Math.log(value / (1 - value));
+                output[slot * 8 + 7] = value;
             });
         }
         if (request.color) {

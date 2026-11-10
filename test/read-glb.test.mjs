@@ -289,6 +289,9 @@ describe('GLB reader', () => {
                 assert.ok(
                     Math.abs(scalesAndOpacity[slot * 8 + 4] - expected.getColumnByName('scale_0').data[row]) < 2e-5
                 );
+                // the geometric layer holds true (linear) opacity, not the logit
+                const alpha = 1 / (1 + Math.exp(-expected.getColumnByName('opacity').data[row]));
+                assert.ok(Math.abs(scalesAndOpacity[slot * 8 + 7] - alpha) < 1e-6);
                 assert.strictEqual(colors[slot * 12], expected.getColumnByName('f_dc_0').data[row]);
                 assert.strictEqual(colors[slot * 12 + 3], expected.getColumnByName('f_rest_0').data[row]);
             }
