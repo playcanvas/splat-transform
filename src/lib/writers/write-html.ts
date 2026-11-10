@@ -13,9 +13,8 @@ import { logger, toBase64 } from '../utils';
 import { logWrittenFile } from './utils';
 import { writeSog } from './write-sog';
 
-// The bundled viewer's engine predates SOG v3, so HTML output embeds v2 until a
-// viewer release reads v3.
-const VIEWER_SOG_VERSION = 2;
+// The SOG version the bundled viewer's engine reads (v3 from viewer 1.43.0, engine 2.24).
+const VIEWER_SOG_VERSION = 3;
 
 type WriteHtmlOptions = {
     filename: string;

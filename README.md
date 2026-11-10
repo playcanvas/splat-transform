@@ -101,7 +101,7 @@ Scenes trained with antialiasing or as 2DGS are tagged, and the tag is preserved
 
 On read: a PLY header comment — Brush's `comment SplatRenderMode: default | mip | 2dgs` or Postshot's `comment postshot.anti_aliasing=1` (last one wins); SPZ's antialiased header bit; a SOG `meta.json` `"model"` entry, or the one in `lod-meta.json`, which applies to all its files. A PLY with `scale_0`/`scale_1` but no `scale_2` is read as 2DGS regardless of comments, and the missing column is materialized as a zero-thickness scale so the rest of the pipeline is unaffected.
 
-On write: `.ply` and `.compressed.ply` carry `comment SplatRenderMode: mip | 2dgs` (Brush's spelling, whichever form was read); `.sog`, `meta.json` and `lod-meta.json` carry `"model": "antialiased" | "2dgs"`; `.spz` sets its antialiased bit, and warns that it cannot represent 2DGS. A 2DGS PLY output drops the `scale_2` column again. Other output formats have nowhere to record it and drop the tag silently. Combining inputs whose models disagree warns and writes the result untagged.
+On write: `.ply` and `.compressed.ply` carry `comment SplatRenderMode: mip | 2dgs` (Brush's spelling, whichever form was read); `.sog`, `meta.json`, `lod-meta.json` and the SOG embedded in or beside `.html` output carry `"model": "antialiased" | "2dgs"`; `.spz` sets its antialiased bit, and warns that it cannot represent 2DGS. A 2DGS PLY output drops the `scale_2` column again. Other output formats have nowhere to record it and drop the tag silently. Combining inputs whose models disagree warns and writes the result untagged.
 
 ### Producer comments
 
@@ -114,7 +114,7 @@ Decimation merges Gaussians without losing their mass, so a merged Gaussian's op
 - `opacity`, the standard logit, at most 1. Written for every scene that cannot exceed 1.
 - `opacity_linear`, the opacity itself, which may exceed 1, in place of `opacity`. Written for decimated scenes and for SOG v3 input that holds opacity above 1. Tools that don't know `opacity_linear` cannot read these files; `--ply-logit-opacity` writes the standard logit instead, clamping opacity above 1.
 
-On read, a PLY's `opacity_linear` is used when present (even alongside `opacity`). SOG v3 stores opacity above 1 directly; SOG v2 and the other formats clamp it to 1. An infinite logit reads as opacity 0 or 1 and is written back as the same infinity.
+On read, a PLY's `opacity_linear` is used when present (even alongside `opacity`). SOG v3, including the SOG in `.html` output, stores opacity above 1 directly; SOG v2 and the other formats clamp it to 1. An infinite logit reads as opacity 0 or 1 and is written back as the same infinity.
 
 ## Actions
 
@@ -204,9 +204,9 @@ Apply when writing `.sog`, `meta.json`, `lod-meta.json`, or `.html` outputs.
 -i, --sh-iterations    <n>              Iterations for SH compression (more=better). Default: 10
     --sh-palette-size  <n>              SH palette entries for .sog / meta.json (more=better, slower). Up to 262144
                                           with SOG v3, 65536 with v2. Default: one per 1024 gaussians, at most 65536
-    --max-workers      <n>              Worker threads for SOG encoding (0 = inline/serial). Default: 4
+    --max-workers      <n>              Worker threads for SOG and image-sequence encoding (0 = inline/serial). Default: 4
     --sog-version      <2|3>            SOG format version to write. 2 is for older viewers: it drops opacity
-                                          above 1, blind data and a 4th SH band. Default: 3 (.html always embeds 2)
+                                          above 1, blind data and a 4th SH band. Default: 3 (.html always embeds 3)
     --sog-blind        <field>[,...]    Store columns as per-gaussian blind data (v3): one blind texture per flag,
                                           its fields filling 4 bytes (R,G,B,A) in order. field = <col>[:<enc>]
                                           enc: u8 u16 u24 u32 (unsigned integers), f16 f32 (float bits),
