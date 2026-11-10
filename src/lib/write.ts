@@ -279,6 +279,7 @@ const writeSource = async (writeSourceOptions: WriteSourceOptions, fs: FileSyste
                 {
                     filename,
                     dataTable: await materializeToDataTable(source, pool),
+                    model,
                     viewerSettingsJson: options.viewerSettingsJson,
                     bundle: outputFormat === 'html-bundle',
                     iterations: options.iterations ?? 10,

@@ -6,19 +6,21 @@ import { basename, dirname, join } from 'pathe';
 import type { DataTable } from '../data-table';
 import { MemoryFileSystem, writeFile } from '../io/write';
 import type { FileSystem } from '../io/write';
+import type { SplatModel } from '../splat-model';
 import type { DeviceCreator } from '../types';
 import { logger, toBase64 } from '../utils';
 
 import { logWrittenFile } from './utils';
 import { writeSog } from './write-sog';
 
-// The bundled viewer's engine predates SOG v3, so HTML output embeds v2 until a
-// viewer release reads v3.
-const VIEWER_SOG_VERSION = 2;
+// The SOG version the bundled viewer's engine reads (v3 from viewer 1.43.0, engine 2.24).
+const VIEWER_SOG_VERSION = 3;
 
 type WriteHtmlOptions = {
     filename: string;
     dataTable: DataTable;
+    /** Splat model to tag the embedded SOG with. Default `default` (untagged). */
+    model?: SplatModel;
     viewerSettingsJson?: ExperienceSettings;
     bundle: boolean;
     iterations: number;
@@ -38,7 +40,7 @@ type WriteHtmlOptions = {
  * @ignore
  */
 const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
-    const { filename, dataTable, viewerSettingsJson, bundle, iterations, webpEffort, createDevice } = options;
+    const { filename, dataTable, model, viewerSettingsJson, bundle, iterations, webpEffort, createDevice } = options;
 
     // Fail here rather than shipping a page that renders nothing: the settings are read by
     // the exact viewer version bundled into this output, and a single-file export has no
@@ -58,6 +60,7 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
             {
                 filename: sogFilename,
                 dataTable,
+                model,
                 bundle: true,
                 iterations,
                 webpEffort,
@@ -102,6 +105,7 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
             {
                 filename: sogPath,
                 dataTable,
+                model,
                 bundle: true,
                 iterations,
                 webpEffort,
