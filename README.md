@@ -80,7 +80,7 @@ splat-transform [GLOBAL] input [ACTIONS]  ...  output [ACTIONS]
 | `.compressed.ply` | ✅ | ✅ | Compressed PLY format (auto-detected and decompressed on read) |
 | `.spz` | ✅ | ✅ | Compressed splat format (Niantic format, v2–4) |
 | `.lcc` | ✅ | ❌ | LCC file format (XGRIDS) |
-| `.lcc2` | ✅ | ❌ | LCC2 file format (XGRIDS, octree) |
+| `.lcc2` | ✅ | ❌ | LCC2 file format (XGRIDS, N-ary tree) |
 | `.ksplat` | ✅ | ❌ | Compressed splat format (mkkellogg format) |
 | `.splat` | ✅ | ❌ | Compressed splat format (antimatter15 format) |
 | `.mjs` | ✅ | ❌ | Generate a scene using an mjs script (Beta) |

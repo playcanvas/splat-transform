@@ -22,7 +22,7 @@ const LCC2_TRANSFORM = () => new Transform().fromEulers(90, 0, 180);
 
 // --- Raw meta.lcc2 shapes (pre-normalization, mixed new/old protocol) -------
 
-// Raw octree node. `child` may be an array or a string-keyed object map.
+// Raw tree node. `child` may be an array or a string-keyed object map.
 // Old protocol uses files / child_num / datatype; new protocol uses
 // splatFiles / childNum / dataType.
 type RawLcc2Node = {
@@ -69,7 +69,7 @@ type RawLcc2Meta = {
     // Bounding box (passed through for downstream/debug use).
     boundingBox?: unknown;
 
-    // Octree root node.
+    // Tree root node.
     root: RawLcc2Node;
 
     [key: string]: unknown;
@@ -77,7 +77,7 @@ type RawLcc2Meta = {
 
 // --- Normalized model (post-parse) ------------------------------------------
 
-// Normalized octree node. collectChunksByLevel only relies on
+// Normalized tree node. collectChunksByLevel only relies on
 // data['3dgs'] and child.
 type Lcc2TreeNode = {
     data?: {
@@ -108,15 +108,15 @@ type Lcc2Meta = {
     boundingBox: unknown;
     /** Optional environment chunk file index (root.data.env.name); undefined if absent. */
     envFileIndex: number | undefined;
-    /** Octree root node (normalized). */
+    /** Tree root node (normalized). */
     tree: Lcc2TreeNode;
 };
 
 /**
- * Return the children of an octree node, tolerating both array and
+ * Return the children of a tree node, tolerating both array and
  * string-keyed object map shapes (and null/undefined).
  *
- * @param node - The octree node.
+ * @param node - The tree node.
  * @returns Child nodes as an array (empty when there are none).
  * @ignore
  */
@@ -271,7 +271,7 @@ const parseLcc2Meta = (metaText: string, filename: string): Lcc2Meta => {
 };
 
 /**
- * Collect the chunk files of every LOD level in a single octree traversal,
+ * Collect the chunk files of every LOD level in a single tree traversal,
  * along with each file's splat count when the meta provides one.
  *
  * Traversal starts from the root's children with `depth` counting from 1; each
@@ -282,7 +282,7 @@ const parseLcc2Meta = (metaText: string, filename: string): Lcc2Meta => {
  * contributing node lacks a valid count, the file's count is `undefined` and
  * the caller falls back to reading it from the chunk itself.
  *
- * @param tree - The octree root node.
+ * @param tree - The tree root node.
  * @param totalLevels - Total LOD level count.
  * @param envFileIndex - Optional environment chunk file index to exclude.
  * @returns Map of LOD level to (file index -> splat count or undefined).
@@ -508,7 +508,7 @@ const readChunkCount = async (fileSystem: ReadFileSystem, splatType: string, ful
 /**
  * Reads an XGrids LCC2 format containing multi-LOD Gaussian splat data.
  *
- * Unlike LCC v1 (quadtree + single data.bin/shcoef.bin), LCC2 uses an octree
+ * Unlike LCC v1 (quadtree + single data.bin/shcoef.bin), LCC2 uses an N-ary tree
  * spatial structure where each node's data is an independent `.sog` / `.spz`
  * chunk file, described by a `meta.lcc2` (JSON) file listing the tree, file
  * paths, LOD levels and bounding box.
@@ -759,7 +759,7 @@ const decodeChunkSource = async (
 
 /**
  * Lazy, chunked LCC2 reader: presents the selected LODs as one **multi-LOD
- * `ChunkSource`** over the octree's SPZ/SOG sub-files, decoding each on demand
+ * `ChunkSource`** over the tree's SPZ/SOG sub-files, decoding each on demand
  * (LRU-cached) instead of materializing the whole scene up front. The output LOD
  * / sub-file ordering matches the eager {@link readLcc2} (lod ascending, then
  * ascending file index), so `materialize`/flatten reproduces its merged table
