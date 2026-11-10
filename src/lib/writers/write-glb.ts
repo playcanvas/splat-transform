@@ -287,6 +287,9 @@ const writeGlb = async (options: WriteGlbOptions, fs: FileSystem) => {
     if (getSHBands(options.dataTable) > 3) logger.warn('GLB cannot store a 4th SH band; writing 3 bands');
     const dataTable = convertToSpace(keepSHBands(withOpacityLogit(options.dataTable), 3), Transform.IDENTITY);
     const numSplats = dataTable.numRows;
+    if (numSplats === 0) {
+        throw new Error('writeGlb: cannot write an empty DataTable');
+    }
     const shBands = getSHBands(dataTable);
 
     const { segments, offsets, binBuffer } = buildBinaryBuffer(dataTable, numSplats, shBands);
