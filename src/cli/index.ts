@@ -993,7 +993,8 @@ GPU (used by SOG compression and GPU voxelization: --filter-cluster, --filter-fl
 SOG COMPRESSION (.sog, meta.json, lod-meta.json, .html outputs)
     -i, --sh-iterations    <n>              SH compression iterations (more=better). Default: 10
         --sh-palette-size  <n>              SH palette entries for .sog / meta.json (more=better, slower). Up to 262144
-                                              with SOG v3, 65536 with v2. Default: one per 1024 gaussians, at most 65536
+                                              with SOG v3, 65536 with v2. Default: the gaussian count rounded down to a
+                                              power of 2, at most 65536
         --max-workers      <n>              Worker threads for SOG and image-sequence encoding (0 = inline/serial). Default: 4
         --sog-version      <2|3>            SOG format version to write. 2 is for older viewers: it drops opacity
                                               above 1, blind data and a 4th SH band. Default: 3 (.html always embeds 3)
