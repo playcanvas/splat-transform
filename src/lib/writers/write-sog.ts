@@ -188,8 +188,8 @@ type WriteSogSourceOptions = {
      */
     comments?: readonly string[] | null;
     /**
-     * SH palette entries. Default: about one per 1024 gaussians, at most 65536. Above 65536 needs
-     * v3 (24-bit labels), up to {@link MAX_SH_PALETTE}.
+     * SH palette entries. Default: the gaussian count rounded down to a power of 2, at most 65536.
+     * Above 65536 needs v3 (24-bit labels), up to {@link MAX_SH_PALETTE}.
      */
     paletteSize?: number;
 };
@@ -198,10 +198,10 @@ type WriteSogSourceOptions = {
 type SogVersion = 2 | 3;
 
 /**
- * WebGL2 guarantees 16 vertex texture units and SOG v3 uses 6 of them, so more
- * blind textures than this may not render on the weakest devices.
+ * WebGL2 guarantees 16 textures per shader: SOG v3 with SH uses 6 and the PlayCanvas engine adds a
+ * codebook lookup, so more blind textures than this may not render on the weakest devices.
  */
-const MAX_PORTABLE_BLIND_TEXTURES = 10;
+const MAX_PORTABLE_BLIND_TEXTURES = 9;
 
 /**
  * Importance exponent of the scale codebook: entries are weighted by exp(0.25 * log scale), shifting
@@ -440,7 +440,7 @@ const startSogWrite = async (
     }
     if (version === 3 && blindTextures.length > MAX_PORTABLE_BLIND_TEXTURES) {
         logger.warn(
-            `${blindTextures.length} SOG blind textures may exceed the vertex texture units of some WebGL2 devices ` +
+            `${blindTextures.length} SOG blind textures may exceed the texture units of some WebGL2 devices ` +
                 `(${MAX_PORTABLE_BLIND_TEXTURES} fit everywhere); pack narrow columns into shared textures`
         );
     }
