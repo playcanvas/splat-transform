@@ -49,6 +49,10 @@ For running on a backend with Docker (including GPU/Vulkan setup), see the [Dock
 - [Docker Backend](https://developer.playcanvas.com/user-manual/splat-transform/docker/) — run splat-transform on a backend (incl. GPU/Vulkan setup).
 - [Library Usage](https://developer.playcanvas.com/user-manual/splat-transform/library/) — drive splat-transform programmatically from Node.js or the browser.
 
+## Developing with AI
+
+Coding agents: start from the [SplatTransform guides index](https://developer.playcanvas.com/user-manual/splat-transform/llms.txt) and the [SplatTransform API index](https://api.playcanvas.com/splat-transform/llms.txt), which link a Markdown version of every page.
+
 ## Format Specifications
 
 | Format | Description |
