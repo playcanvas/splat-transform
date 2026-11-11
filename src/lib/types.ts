@@ -19,6 +19,14 @@ type Options = {
     /** Number of iterations for SOG SH compression (higher = better quality). Default: 10 */
     iterations?: number;
 
+    /**
+     * SOG SH palette size target: the visibility-weighted, view-averaged colour error the palette may
+     * add, in 8-bit levels. The writer picks the smallest palette that meets it. Default: 5. Ignored when
+     * `sogPaletteSize` is set, no GPU is available, or a single SOG's SH data exceeds the search's 2GB GPU
+     * budget (these use a fixed palette size).
+     */
+    shColorError?: number;
+
     /** Lossless WebP compression effort for image, SOG, HTML and LOD output, 0–9. Omit to use the default WebP encoder. */
     webpEffort?: number;
 

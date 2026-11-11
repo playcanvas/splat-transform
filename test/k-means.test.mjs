@@ -21,7 +21,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert';
 
-import { kmeansInterleaved } from '../src/lib/spatial/k-means.js';
+import { kmeansInterleaved, kmeansToColorError, shColorError } from '../src/lib/spatial/k-means.js';
 import { GpuKmeans } from '../src/lib/gpu/gpu-kmeans.js';
 
 // deterministic rng for reproducible data
@@ -160,6 +160,25 @@ describe('kmeansInterleaved (CPU path)', () => {
         const k = 4;
         const { centroids, labels } = await kmeansInterleaved(points, numRows, 3, k, 10);
         assertLloydInvariants(points, numRows, 3, centroids, labels, k);
+    });
+});
+
+describe('shColorError', () => {
+    it('is zero for an exact palette and scales with a uniform coefficient error', () => {
+        const numColumns = 9;
+        const numRows = 100;
+        const points = new Float32Array(numRows * numColumns).map((_, i) => Math.sin(i));
+        const labels = new Uint32Array(numRows).map((_, i) => i);
+        const weights = new Float32Array(numRows).fill(1);
+        assert.strictEqual(shColorError(points, numRows, numColumns, points, labels, weights), 0);
+
+        // every coefficient off by d: a channel's view-averaged squared error is
+        // (3 coefficients) × d² / 4π, so the RMS is 255 · d · sqrt(3 / 4π)
+        const d = 0.01;
+        const shifted = points.map((v) => v + d);
+        const expected = 255 * d * Math.sqrt(3 / (4 * Math.PI));
+        const err = shColorError(points, numRows, numColumns, shifted, labels, weights);
+        assert.ok(Math.abs(err - expected) < 1e-4, `${err} vs ${expected}`);
     });
 });
 
@@ -324,6 +343,147 @@ for (const precision of ['default', 'f32']) describe(`GpuKmeans (GPU path, ${pre
             gpu.destroy();
         }
         assert.strictEqual(device._computes.size, computes, 'GpuKmeans.destroy must release its computes');
+    });
+
+    it('e-means matches a reference Lloyd loop within 1% inertia from identical seeds', async (t) => {
+        if (!device) return t.skip('no WebGPU adapter available');
+
+        const rand = mulberry32(2468);
+        const numColumns = 12;
+        const k = 64;
+        const centers = Array.from({ length: k }, () => (
+            Array.from({ length: numColumns }, () => (rand() * 2 - 1) * 20)
+        ));
+        // 64 × 500 points: several batches per epoch, and the batch does not
+        // divide the row count, so batches wrap the shuffled order
+        const { points, numRows } = makeBlobs(centers, 500, numColumns, 0.25, rand);
+        const init = points.slice(0, k * numColumns);
+
+        const refCentroids = init.slice();
+        referenceLloyd(points, numRows, numColumns, refCentroids, k, 10);
+
+        const gpu = new GpuKmeans(device, numColumns, k);
+        try {
+            const centroids = init.slice();
+            const labels = new Uint32Array(numRows);
+            let epochs = 0;
+            await gpu.runEmeans(points, numRows, centroids, labels, 2.5, () => epochs++);
+            assert.strictEqual(epochs, 3, 'onEpoch fires once per epoch (2 whole + 1 partial)');
+
+            const refInertia = inertia(points, numRows, numColumns, refCentroids, k);
+            const gpuInertia = inertia(points, numRows, numColumns, centroids, k);
+            const diff = Math.abs(refInertia - gpuInertia) / refInertia;
+            assert.ok(diff < 0.01, `inertia mismatch: reference ${refInertia}, e-means ${gpuInertia} (${(diff * 100).toFixed(2)}%)`);
+
+            // labels map back through the upload shuffle to the caller's rows,
+            // and the closing centroids are their exact means
+            assertLloydInvariants(points, numRows, numColumns, centroids, labels, k);
+        } finally {
+            gpu.destroy();
+        }
+    });
+
+    it('e-means closes on weighted means', async (t) => {
+        if (!device) return t.skip('no WebGPU adapter available');
+
+        // two clusters, each made of two locations with weights 1 and 3: the
+        // closing centroid is the 1:3 blend, not the midpoint
+        const numColumns = 4;
+        const k = 2;
+        const locations = [[0, 0, 0, 0], [4, 4, 4, 4], [100, 0, 0, 0], [100, 8, 0, 0]];
+        const pointWeights = [1, 3, 1, 3];
+        const numRows = 4096;
+        const points = new Float32Array(numRows * numColumns);
+        const weights = new Float32Array(numRows);
+        for (let i = 0; i < numRows; i++) {
+            points.set(locations[i % 4], i * numColumns);
+            weights[i] = pointWeights[i % 4];
+        }
+        const centroids = new Float32Array([2, 2, 2, 2, 100, 4, 0, 0]);
+
+        const gpu = new GpuKmeans(device, numColumns, k);
+        try {
+            const labels = new Uint32Array(numRows);
+            await gpu.runEmeans(points, numRows, centroids, labels, 2, undefined, weights);
+            const expected = [3, 3, 3, 3, 100, 6, 0, 0];
+            for (let i = 0; i < expected.length; i++) {
+                assert.ok(Math.abs(centroids[i] - expected[i]) < 1e-3, `centroid elem ${i}: ${centroids[i]}, expected ${expected[i]}`);
+            }
+        } finally {
+            gpu.destroy();
+        }
+    });
+
+    it('e-means revives dead clusters as splits of real ones', async (t) => {
+        if (!device) return t.skip('no WebGPU adapter available');
+
+        // 4 distinct locations but k=32, seeded all on one location: the other
+        // centroids only reach the rest by revival
+        const distinct = [[1, 2.5, -3, 4], [5, 5, 5, 5], [-4, 0.5, 2, -1], [3, -6, 1, 2]];
+        const numColumns = 4;
+        const numRows = 8192;
+        const k = 32;
+        const points = new Float32Array(numRows * numColumns);
+        for (let i = 0; i < numRows; i++) points.set(distinct[i % 4], i * numColumns);
+        const centroids = new Float32Array(k * numColumns);
+        for (let c = 0; c < k; c++) centroids.set(distinct[0], c * numColumns);
+
+        const gpu = new GpuKmeans(device, numColumns, k);
+        try {
+            const labels = new Uint32Array(numRows);
+            await gpu.runEmeans(points, numRows, centroids, labels, 3);
+
+            for (let c = 0; c < k; c++) {
+                const cv = [...centroids.subarray(c * numColumns, (c + 1) * numColumns)];
+                assert.ok(cv.every(Number.isFinite), `centroid ${c} not finite: ${cv}`);
+            }
+            // every location ends up with a centroid of its own
+            for (let i = 0; i < 4; i++) {
+                const cv = [...centroids.subarray(labels[i] * numColumns, (labels[i] + 1) * numColumns)];
+                const err = Math.hypot(...distinct[i].map((v, j) => v - cv[j]));
+                assert.ok(err < 0.05, `point ${i} at ${distinct[i]} labelled to centroid ${cv}`);
+            }
+        } finally {
+            gpu.destroy();
+        }
+    });
+
+    describe('kmeansToColorError', () => {
+        // 64 well separated prototypes in 9 dims, ±0.01 noise (about 0.7 levels)
+        const numColumns = 9;
+        const numRows = 64 * 200;
+        const makeData = () => {
+            const rand = mulberry32(31);
+            const centers = Array.from({ length: 64 }, () => Array.from({ length: numColumns }, () => 2 * rand() - 1));
+            return makeBlobs(centers, 200, numColumns, 0.01, rand).points;
+        };
+        const weights = new Float32Array(numRows).fill(1);
+
+        it('returns a small palette meeting a loose target', async (t) => {
+            if (!device) return t.skip('no WebGPU adapter available');
+            const points = makeData();
+            const { centroids, labels, probes } = await kmeansToColorError(points, numRows, numColumns, weights, 3, 4096, device);
+            const k = centroids.length / numColumns;
+            const err = shColorError(points, numRows, numColumns, centroids, labels, weights);
+            assert.ok(err <= 3, `colour error ${err} above target`);
+            assert.ok(k >= 64 && k <= 256, `palette of ${k} entries (probes ${JSON.stringify(probes)})`);
+        });
+
+        it('stops at the size limit when the target is out of reach', async (t) => {
+            if (!device) return t.skip('no WebGPU adapter available');
+            const points = makeData();
+            const { centroids, probes } = await kmeansToColorError(points, numRows, numColumns, weights, 0.01, 1024, device);
+            assert.strictEqual(centroids.length / numColumns, 1024, `probes ${JSON.stringify(probes)}`);
+        });
+
+        it('stores every point when a palette that large is needed and allowed', async (t) => {
+            if (!device) return t.skip('no WebGPU adapter available');
+            const points = makeData().subarray(0, 300 * numColumns);
+            const w = weights.subarray(0, 300);
+            const { centroids, labels } = await kmeansToColorError(points, 300, numColumns, w, 1e-6, 4096, device);
+            assert.strictEqual(centroids.length / numColumns, 300);
+            assert.strictEqual(shColorError(points, 300, numColumns, centroids, labels, w), 0);
+        });
     });
 
     it('reseeds empty clusters to real points', async (t) => {

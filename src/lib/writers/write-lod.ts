@@ -435,6 +435,8 @@ type WriteLodSourceOptions = {
     mainSource: ChunkSource;
     envSource: ChunkSource | null;
     iterations: number;
+    /** SH palette colour error target in 8-bit levels, per unit (see {@link WriteSogSourceOptions}). */
+    colorError?: number;
     /** Lossless WebP compression effort, 0–9. Omit to use the default WebP encoder. */
     webpEffort?: number;
     /** Supplies the GPU that SOG encoding uses. */
@@ -492,6 +494,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
         filename,
         envSource,
         iterations,
+        colorError,
         webpEffort,
         createDevice,
         sogVersion,
@@ -706,6 +709,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
                     filename: envPathname,
                     bundle: false,
                     iterations,
+                    colorError,
                     webpEffort,
                     createDevice: sharedCreateDevice,
                     version: sogVersion,
@@ -780,6 +784,7 @@ const writeLodSource = async (options: WriteLodSourceOptions, fs: FileSystem) =>
             identity,
             state: startSogWrite(unitSource, pool, {
                 iterations,
+                colorError,
                 createDevice: sharedCreateDevice,
                 indices: identity,
                 version: sogVersion,

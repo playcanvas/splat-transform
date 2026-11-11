@@ -205,6 +205,7 @@ const writeSource = async (writeSourceOptions: WriteSourceOptions, fs: FileSyste
                     filename,
                     bundle: outputFormat === 'sog-bundle',
                     iterations: options.iterations ?? 10,
+                    colorError: options.shColorError,
                     webpEffort: options.webpEffort,
                     createDevice,
                     version: options.sogVersion,

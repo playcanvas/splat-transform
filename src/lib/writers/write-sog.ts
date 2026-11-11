@@ -8,7 +8,8 @@ import { writeFile, ZipFileSystem } from '../io/write';
 import type { FileSystem } from '../io/write';
 import { bakeTransform, reduceBandsSource } from '../ops';
 import { sortMortonInterleaved } from '../ops/morton-order';
-import { kmeansInterleaved } from '../spatial';
+import { COLOR_SEARCH_MAX_PROBES, colorErrorSearchFits, kmeansInterleaved, kmeansToColorError } from '../spatial';
+import type { PaletteProbe } from '../spatial';
 import type { SplatModel } from '../splat-model';
 import type { DeviceCreator } from '../types';
 import { logger, Transform } from '../utils';
@@ -152,6 +153,13 @@ type WriteSogSourceOptions = {
     filename: string;
     bundle: boolean;
     iterations: number;
+    /**
+     * SH palette size target: the visibility-weighted, view-averaged colour error (8-bit levels) the
+     * palette may add; the smallest palette meeting it is written (see {@link kmeansToColorError}).
+     * Default {@link DEFAULT_SH_COLOR_ERROR}. Unused when `paletteSize` is set, without a GPU, or when the
+     * scene's SH data exceeds the GPU budget of the search (2GB; about 12M gaussians at SH3 without f16).
+     */
+    colorError?: number;
     /** Lossless WebP compression effort, 0–9. Omit to use the default WebP encoder. */
     webpEffort?: number;
     createDevice?: DeviceCreator;
@@ -188,8 +196,9 @@ type WriteSogSourceOptions = {
      */
     comments?: readonly string[] | null;
     /**
-     * SH palette entries. Default: about one per 1024 gaussians, at most 65536. Above 65536 needs
-     * v3 (24-bit labels), up to {@link MAX_SH_PALETTE}.
+     * Fixed SH palette entries (Lloyd k-means, `iterations` rounds). Above 65536 needs v3 (24-bit
+     * labels), up to {@link MAX_SH_PALETTE}. Default: sized by `colorError`, or where that can't run about
+     * one per 1024 gaussians, at most 65536.
      */
     paletteSize?: number;
 };
@@ -210,6 +219,49 @@ const MAX_PORTABLE_BLIND_TEXTURES = 10;
  * largest scale, so render quality varies by ±1.5 dB with the splat set.
  */
 const SCALE_IMPORTANCE = 0.25;
+
+/** Default SH palette colour error target, in 8-bit levels (`colorError`). */
+const DEFAULT_SH_COLOR_ERROR = 5;
+
+/**
+ * Per-gaussian weight of the SH palette clustering and its colour error: how much a gaussian's colour
+ * shows, approximated as min(opacity, 1) × (area of its two largest axes)^0.25, normalized to mean 1.
+ * The damped area keeps huge background splats from dominating (as {@link SCALE_IMPORTANCE} does for
+ * the scale codebook). Measured on 11 scenes: +0.2-2.3 dB rendered at equal palette size over
+ * unweighted, up to +5.5 dB on objects; area^0.5 helps indoors but hurts outdoor scenes.
+ *
+ * @param opacity - Linear opacity per gaussian.
+ * @param s0 - Log scale, axis 0.
+ * @param s1 - Log scale, axis 1.
+ * @param s2 - Log scale, axis 2.
+ * @returns One weight per gaussian.
+ */
+const shPaletteWeights = (
+    opacity: Float32Array,
+    s0: Float32Array,
+    s1: Float32Array,
+    s2: Float32Array
+): Float32Array => {
+    const n = opacity.length;
+    const logArea = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+        // two largest of three: total minus the smallest
+        logArea[i] = s0[i] + s1[i] + s2[i] - Math.min(s0[i], s1[i], s2[i]);
+    }
+    // relative to the median area so the exponentials stay well scaled
+    const median = Float32Array.from(logArea).sort()[n >> 1];
+    const weights = new Float32Array(n);
+    let total = 0;
+    for (let i = 0; i < n; i++) {
+        const a = Math.min(Math.max(opacity[i], 0), 1);
+        weights[i] = a * Math.exp(0.25 * (logArea[i] - median));
+        if (!Number.isFinite(weights[i])) weights[i] = 0;
+        total += weights[i];
+    }
+    if (!(total > 0)) return weights.fill(1);
+    for (let i = 0; i < n; i++) weights[i] *= n / total;
+    return weights;
+};
 
 /**
  * Largest SH palette written: the palette image is 64 entries per row, so this keeps it within the
@@ -332,7 +384,7 @@ type ResolvedBlindTexture = {
     bytes: number;
 };
 
-type Clustering = { centroids: Float32Array; labels: Uint32Array };
+type Clustering = { centroids: Float32Array; labels: Uint32Array; probes?: PaletteProbe[] };
 
 // One SOG write between its two phases: the gathered layers plus the worker
 // and GPU jobs already running on them.
@@ -346,7 +398,9 @@ type SogWriteState = {
     layers: SogLayers;
     iterations: number;
     restCount: number;
-    paletteSize: number;
+    /** Fixed palette size, or null when sized by `colorError`. */
+    paletteSize: number | null;
+    colorError: number;
     scalesQuant: ReturnType<typeof runQuantize1dColumns>;
     colorsQuant: ReturnType<typeof runQuantize1dColumns>;
     shCluster: Promise<Clustering> | null;
@@ -377,10 +431,27 @@ const startSogWrite = async (
     pool: ChunkDataPool,
     options: Pick<
         WriteSogSourceOptions,
-        'iterations' | 'createDevice' | 'indices' | 'version' | 'blind' | 'extras' | 'comments' | 'paletteSize'
+        | 'iterations'
+        | 'colorError'
+        | 'createDevice'
+        | 'indices'
+        | 'version'
+        | 'blind'
+        | 'extras'
+        | 'comments'
+        | 'paletteSize'
     >
 ): Promise<SogWriteState> => {
-    const { iterations, createDevice } = options;
+    const { createDevice } = options;
+    const colorError = options.colorError ?? DEFAULT_SH_COLOR_ERROR;
+    if (!(colorError > 0) || !Number.isFinite(colorError)) {
+        throw new Error(`SOG SH colour error target must be a positive number (got ${colorError})`);
+    }
+    // the colour target needs the GPU (e-means); otherwise a fixed palette size,
+    // also when the device creator yields no device
+    const sizedByError = options.paletteSize === undefined && !!createDevice;
+    // k-means progress steps: Lloyd iterations, or palette sizes tried
+    const iterations = sizedByError ? COLOR_SEARCH_MAX_PROBES : options.iterations;
     const version = options.version ?? 3;
     if (version !== 2 && version !== 3) {
         throw new Error(`writeSogSource: unsupported SOG version ${version as number} (must be 2 or 3)`);
@@ -473,23 +544,47 @@ const startSogWrite = async (
         { name: 'f_dc_2', data: fdc2 }
     ]);
     const restCount = SH_REST_COUNTS[shBands];
-    const paletteSize = options.paletteSize ?? Math.min(64, 2 ** Math.floor(Math.log2(numRows / 1024))) * 1024;
+    const fixedPaletteSize = options.paletteSize ?? Math.min(64, 2 ** Math.floor(Math.log2(numRows / 1024))) * 1024;
+    const paletteSize = sizedByError ? null : fixedPaletteSize;
     const progress: SogWriteState['progress'] = { done: 0, report: null };
+    const onStep = () => {
+        progress.done++;
+        progress.report?.(progress.done);
+    };
     const shCluster =
         shBands > 0
-            ? (async () => {
+            ? (async (): Promise<Clustering> => {
                   const gpuDevice = createDevice ? await createDevice() : undefined;
+                  if (paletteSize === null && gpuDevice && colorErrorSearchFits(gpuDevice, numRows, restCount)) {
+                      const weights = shPaletteWeights(
+                          layers.geometric[7],
+                          layers.geometric[4],
+                          layers.geometric[5],
+                          layers.geometric[6]
+                      );
+                      return kmeansToColorError(
+                          layers.shRest,
+                          numRows,
+                          restCount,
+                          weights,
+                          colorError,
+                          version === 3 ? MAX_SH_PALETTE : 65536,
+                          gpuDevice,
+                          onStep
+                      );
+                  }
+                  // fixed size; with no device after all the CPU Lloyd loop,
+                  // and Lloyd's streaming mode for scenes too large for the
+                  // colour search (its iterations don't map onto the probe
+                  // progress bar)
                   return kmeansInterleaved(
                       layers.shRest,
                       numRows,
                       restCount,
-                      paletteSize,
-                      iterations,
+                      fixedPaletteSize,
+                      options.iterations,
                       gpuDevice,
-                      () => {
-                          progress.done++;
-                          progress.report?.(progress.done);
-                      }
+                      paletteSize === null ? undefined : onStep
                   );
               })()
             : null;
@@ -510,6 +605,7 @@ const startSogWrite = async (
         iterations,
         restCount,
         paletteSize,
+        colorError,
         scalesQuant,
         colorsQuant,
         shCluster,
@@ -540,7 +636,19 @@ const finishSogWrite = async (
     const emitInfo = logging !== 'silent';
     const openGroup = logging === 'own';
 
-    const { version, numRows, shBands, width, height, layers, iterations, restCount, paletteSize, progress } = state;
+    const {
+        version,
+        numRows,
+        shBands,
+        width,
+        height,
+        layers,
+        iterations,
+        restCount,
+        paletteSize,
+        colorError,
+        progress
+    } = state;
     const { scalesQuant, colorsQuant, shCluster, blind } = state;
     const channels = 4;
 
@@ -598,7 +706,9 @@ const finishSogWrite = async (
         // started ahead of time (LOD units) the bar times the remaining wait.
         if (shCluster) {
             logger.debug(
-                `running k-means clustering: dims=${restCount} points=${numRows} clusters=${paletteSize} iterations=${iterations}`
+                paletteSize === null
+                    ? `sizing SH palette: dims=${restCount} points=${numRows} colour error target=${colorError} levels`
+                    : `running k-means clustering: dims=${restCount} points=${numRows} clusters=${paletteSize} iterations=${iterations}`
             );
             const bar = logger.bar('k-means', iterations);
             bar.update(progress.done);
@@ -739,7 +849,13 @@ const finishSogWrite = async (
         let shN: ShNMeta | null = null;
         if (shCluster) {
             const shCoeffs = restCount / 3;
-            const { centroids, labels } = await shCluster;
+            const { centroids, labels, probes } = await shCluster;
+            if (probes) {
+                const tried = probes.map((p) => `${p.k}: ${p.error.toFixed(2)}`).join(', ');
+                logger.debug(
+                    `SH palette: ${centroids.length / restCount} entries (sizes tried, colour error in levels: ${tried})`
+                );
+            }
             const numCentroids = centroids.length / restCount;
 
             // quantize the centroid palette to a uint8 codebook. De-interleave

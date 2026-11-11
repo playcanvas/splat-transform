@@ -267,6 +267,18 @@ describe('writeSogSource: indices ordering contract', () => {
     });
 });
 
+// deterministic rng for reproducible data
+const mulberry32 = (seed) => {
+    let a = seed >>> 0;
+    return () => {
+        a = (a + 0x6D2B79F5) >>> 0;
+        let t = a;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+};
+
 describe('writeSogSource: GPU resources', () => {
     // created in before() so registration never blocks; skips when the
     // environment has no usable WebGPU adapter
@@ -294,5 +306,34 @@ describe('writeSogSource: GPU resources', () => {
             new MemoryFileSystem());
         await src.close();
         assert.strictEqual(device._computes.size, computes, 'leaked Compute objects on the device');
+    });
+    it('sizes the SH palette from the colour error target', async (t) => {
+        if (!device) return t.skip('no WebGPU adapter available');
+
+        // band-1 SH drawn from 32 prototypes plus a little noise: a loose target needs
+        // about one entry per prototype, one below the noise needs far more
+        const count = 8192;
+        const dt = createTestDataTable(count, { includeSH: true, shBands: 1 });
+        const r = mulberry32(5);
+        const prototypes = Array.from({ length: 32 }, () => Array.from({ length: 9 }, () => 2 * r() - 1));
+        for (let k = 0; k < 9; k++) {
+            const col = dt.getColumnByName(`f_rest_${k}`).data;
+            for (let i = 0; i < count; i++) col[i] = prototypes[i % 32][k] + 0.01 * (2 * r() - 1);
+        }
+        const paletteFor = async (colorError) => {
+            const pool = createChunkDataPool();
+            const src = await readPly(await sourceFromBytes(encodePlyBinary(dt)), pool);
+            const fs = new MemoryFileSystem();
+            await writeSogSource(src, pool,
+                { filename: 'meta.json', bundle: false, iterations: 2, logging: 'silent', colorError, createDevice: async () => device },
+                fs);
+            await src.close();
+            return JSON.parse(new TextDecoder().decode(fs.results.get('meta.json'))).shN.count;
+        };
+
+        const loose = await paletteFor(3);
+        const tight = await paletteFor(0.05);
+        assert.ok(loose >= 32 && loose <= 256, `3-level target wrote ${loose} entries`);
+        assert.ok(tight > 2 * loose, `0.05-level target wrote ${tight} entries vs ${loose}`);
     });
 });
