@@ -113,15 +113,33 @@ describe('SOG rotation encodings', () => {
         assert.ok(rms < 0.45, `rms ${rms}`);
     });
 
-    it('v3 exp map (max < 1.25°, rms < 0.65°), no quats texture', async () => {
+    it('v3 exp map in quats.webp (max < 1.25°, rms < 0.65°)', async () => {
         const dt = createTestDataTable(4096);
         setRandomRotations(dt, 2);
         const { meta, table } = await roundTrip(dt);
         assert.strictEqual(meta.version, 3);
-        assert.strictEqual(meta.quats, undefined);
+        assert.deepStrictEqual(meta.quats, { files: ['quats.webp'] });
         const { max, rms } = stats(rotationErrors(dt, table));
         assert.ok(max < 1.25, `max ${max}`);
         assert.ok(rms < 0.65, `rms ${rms}`);
+    });
+
+    // WebKit premultiplies decoded images under WebGPU, destroying RGB stored
+    // under a non-opaque alpha, so these textures must stay fully opaque.
+    it('v3 means, scales and quats textures are fully opaque', async () => {
+        const dt = createTestDataTable(1024);
+        setRandomRotations(dt, 3);
+        const pool = createChunkDataPool();
+        const fs = new MemoryFileSystem();
+        await writeSogSource(await plySource(dt, pool), pool, { filename: 'out.sog', bundle: true, iterations: 3, logging: 'silent' }, fs);
+        const rfs = new MemoryReadFileSystem();
+        rfs.set('out.sog', fs.results.get('out.sog'));
+        const zip = new ZipReadFileSystem(await rfs.createSource('out.sog'));
+        const codec = await WebPCodec.create();
+        for (const file of ['means_l.webp', 'means_u.webp', 'scales.webp', 'quats.webp']) {
+            const { rgba } = codec.decodeRGBA(await readRawFile(zip, file));
+            for (let i = 3; i < rgba.length; i += 4) assert.strictEqual(rgba[i], 255, `${file} alpha at texel ${i >> 2}`);
+        }
     });
 
     it('v3 represents the identity rotation exactly', async () => {

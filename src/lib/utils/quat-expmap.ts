@@ -5,9 +5,8 @@
  * rotation) is mapped to `p = (2/π)·θ·v/|v|`, where `θ = atan2(|v|, w)` is half
  * the rotation angle and `v = (x, y, z)`. `p` lies in the unit ball, and each
  * component is stored in one byte on a mid-tread lattice `(b − 128)/127`, so
- * the identity rotation round-trips exactly. `|p| <= 1`, so every byte is >= 1:
- * stored in a texture's alpha it never reads as fully transparent, which
- * WebP encoders without the `exact` flag would otherwise use to discard RGB.
+ * the identity rotation round-trips exactly. The three bytes are stored in the
+ * RGB of `quats.webp`.
  *
  * Measured over 2M uniform random rotations: max error 1.20°, RMS 0.62° — better
  * than SOG v2's smallest-three as shipped (2.03° / 0.71°) in one byte less.

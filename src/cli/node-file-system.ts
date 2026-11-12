@@ -113,6 +113,10 @@ class NodeReadFileSystem implements ReadFileSystem {
 // Write implementations
 // ============================================================================
 
+// Node rejects a single write of more than 2^31-1 bytes with ERR_OUT_OF_RANGE,
+// so larger buffers are written in pieces of at most this size.
+const MAX_WRITE_BYTES = 1 << 30;
+
 /**
  * Writer implementation for writing to Node.js file handles.
  */
@@ -126,7 +130,8 @@ class FileWriter implements Writer {
         this.write = async (data: Uint8Array) => {
             let offset = 0;
             while (offset < data.byteLength) {
-                const { bytesWritten } = await fileHandle.write(data, offset, data.byteLength - offset);
+                const length = Math.min(data.byteLength - offset, MAX_WRITE_BYTES);
+                const { bytesWritten } = await fileHandle.write(data, offset, length);
                 if (bytesWritten === 0) {
                     throw new Error('Failed to write all data to file.');
                 }

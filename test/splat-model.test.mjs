@@ -2,7 +2,7 @@
  * Splat model (default / antialiased / 2dgs) detection and propagation.
  *
  *  - comment parsing: Brush's `SplatRenderMode:` and Postshot's `postshot.anti_aliasing=N`;
- *  - PLY / compressed-PLY / SOG / SPZ outputs carry the tag (PLY always in
+ *  - PLY / compressed-PLY / SOG / SPZ / HTML viewer outputs carry the tag (PLY always in
  *    Brush's spelling, whichever form it was read from);
  *  - a 2DGS PLY (no scale_2) reads with a full geometric layer and writes back
  *    without the column, and is only inferred from an otherwise-complete record;
@@ -20,9 +20,10 @@ import { createChunkDataPool } from '../src/lib/chunk/index.js';
 import { materializeToDataTable } from '../src/lib/compat/data-table.js';
 import {
     DataTable, WebPCodec,
-    MemoryFileSystem, MemoryReadFileSystem,
+    MemoryFileSystem, MemoryReadFileSystem, ZipReadFileSystem,
     resolveSplatModel, writeSource
 } from '../src/lib/index.js';
+import { readFile as readWholeFile } from '../src/lib/io/read/index.js';
 import { withComments } from '../src/lib/comments.js';
 import { withExtras } from '../src/lib/extras.js';
 import { concatSource } from '../src/lib/ops/index.js';
@@ -64,6 +65,28 @@ const writeChunked = async (source, pool, filename, outputFormat) => {
     const fs = new MemoryFileSystem();
     await writeSource({ filename, outputFormat, source, pool, options: {} }, fs);
     return fs.results;
+};
+
+// The meta.json of the SOG an HTML viewer output ships: embedded as a data: URI
+// (html-bundle) or written beside the page (html).
+const htmlSogMeta = async (source, pool, outputFormat) => {
+    const out = await writeChunked(source, pool, 'viewer.html', outputFormat);
+    let sog;
+    if (outputFormat === 'html-bundle') {
+        const html = Buffer.from(out.get('viewer.html')).toString();
+        const [, base64] = html.match(/"contentUrl":"data:application\/octet-stream;base64,([^"]+)"/);
+        sog = new Uint8Array(Buffer.from(base64, 'base64'));
+    } else {
+        sog = out.get('viewer.sog');
+    }
+    const rfs = new MemoryReadFileSystem();
+    rfs.set('scene.sog', sog);
+    const zipFs = new ZipReadFileSystem(await rfs.createSource('scene.sog'));
+    try {
+        return JSON.parse(Buffer.from(await readWholeFile(zipFs, 'meta.json')).toString());
+    } finally {
+        zipFs.close();
+    }
 };
 
 describe('splatModelFromComments', () => {
@@ -153,6 +176,14 @@ describe('antialiased scenes', () => {
         const spzSource = await readSpz(await rfs.createSource('in.spz'), pool2);
         assert.strictEqual(spzSource.meta.model, 'antialiased');
     });
+
+    for (const outputFormat of ['html-bundle', 'html']) {
+        it(`tags the SOG of ${outputFormat} viewer output`, async () => {
+            const { source, pool } = await openPly(createTestDataTable(16), ['SplatRenderMode: mip']);
+            const meta = await htmlSogMeta(source, pool, outputFormat);
+            assert.strictEqual(meta.model, 'antialiased');
+        });
+    }
 });
 
 describe('2dgs scenes', () => {
@@ -340,6 +371,12 @@ describe('untagged scenes', () => {
         const sog = await writeChunked(s2, p2, 'meta.json', 'sog');
         const meta = JSON.parse(Buffer.from(sog.get('meta.json')).toString());
         assert.ok(!('model' in meta), 'no model key for an untagged scene');
+
+        for (const outputFormat of ['html-bundle', 'html']) {
+            const { source: s3, pool: p3 } = await openPly(createTestDataTable(16));
+            const htmlMeta = await htmlSogMeta(s3, p3, outputFormat);
+            assert.ok(!('model' in htmlMeta), `no model key in ${outputFormat} output for an untagged scene`);
+        }
     });
 });
 

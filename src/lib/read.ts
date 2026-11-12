@@ -4,6 +4,7 @@ import { dataTableToChunkSource } from './compat/data-table';
 import type { ReadFileSystem } from './io/read';
 import { ZipReadFileSystem } from './io/read';
 import {
+    readGlb,
     readKsplat,
     readMjs,
     readPly,
@@ -31,8 +32,9 @@ import type { Options, Param } from './types';
  * - `splat` - Antimatter15 splat format
  * - `ksplat` - Kevin Kwok's compressed splat format
  * - `mjs` - JavaScript module generator
+ * - `glb` - Binary glTF with KHR_gaussian_splatting extension
  */
-type InputFormat = 'mjs' | 'ksplat' | 'splat' | 'sog' | 'ply' | 'spz' | 'lcc' | 'lcc2' | 'lod';
+type InputFormat = 'mjs' | 'ksplat' | 'splat' | 'sog' | 'ply' | 'spz' | 'lcc' | 'lcc2' | 'lod' | 'glb';
 
 /**
  * Determines the input format based on file extension.
@@ -84,6 +86,8 @@ const getInputFormat = (filename: string): InputFormat => {
         return 'lcc2';
     } else if (lowerFilename.endsWith('.lcc')) {
         return 'lcc';
+    } else if (lowerFilename.endsWith('.glb')) {
+        return 'glb';
     }
 
     throw new Error(`Unsupported input file type: ${filename}`);
@@ -109,7 +113,7 @@ type ReadFileOptions = {
  * Reads a Gaussian splat file and returns its data as {@link ChunkSource}s
  * (usually one; a Streamed SOG/LCC/LCC2 container yields a single structural multi-LOD source).
  *
- * Readers are chunk-native: `ply`/`splat`/`spz`/`lcc`/`lcc2`/`lod` return lazy /
+ * Readers are chunk-native: `ply`/`splat`/`spz`/`glb`/`lcc`/`lcc2`/`lod` return lazy /
  * streaming sources whose `close()` releases the underlying file(s); whole-blob
  * formats (`sog`/`mjs`/`ksplat`) are decoded up front and returned resident.
  * Callers that need a `DataTable` materialize at their own boundary (and call
@@ -174,7 +178,7 @@ const readFile = async (readFileOptions: ReadFileOptions): Promise<ChunkSource[]
     }
 
     // Single-source binary formats over a seekable ReadSource. Lazy readers
-    // (ply/splat/spz) hand the source's lifetime to the returned ChunkSource —
+    // (ply/splat/spz/glb) hand the source's lifetime to the returned ChunkSource —
     // its close() releases it — so the source is NOT closed here on success;
     // ksplat is eager and is done with the source once decoded. On error the
     // source is released (close() is idempotent).
@@ -184,6 +188,7 @@ const readFile = async (readFileOptions: ReadFileOptions): Promise<ChunkSource[]
         if (inputFormat === 'ply') return [await readPly(source, pool)];
         if (inputFormat === 'splat') return [await readSplat(source, pool)];
         if (inputFormat === 'spz') return [await readSpz(source, pool)];
+        if (inputFormat === 'glb') return [await readGlb(source, pool)];
         if (inputFormat === 'ksplat') {
             const dataTable = await readKsplat(source);
             source.close();

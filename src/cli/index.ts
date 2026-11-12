@@ -940,7 +940,7 @@ USAGE
   • Use 'null' as output to discard file output.
 
 SUPPORTED INPUTS
-    .ply   .compressed.ply   .sog   .spz   meta.json   lod-meta.json   .ksplat   .splat   .mjs   .lcc   .lcc2
+    .ply   .compressed.ply   .sog   .spz   meta.json   lod-meta.json   .ksplat   .splat   .glb   .mjs   .lcc   .lcc2
 
     Input filenames may also be http(s):// URLs (downloaded on demand;
     .mjs generators are local-only).
@@ -1001,7 +1001,7 @@ SOG COMPRESSION (.sog, meta.json, lod-meta.json, .html outputs)
                                               written, up to 262144 entries with SOG v3, 65536 with v2. Default: 5
         --max-workers      <n>              Worker threads for SOG and image-sequence encoding (0 = inline/serial). Default: 4
         --sog-version      <2|3>            SOG format version to write. 2 is for older viewers: it drops opacity
-                                              above 1, blind data and a 4th SH band. Default: 3 (.html always embeds 2)
+                                              above 1, blind data and a 4th SH band. Default: 3 (.html always embeds 3)
         --sog-blind        <field>[,...]    Store columns as per-gaussian blind data (v3): one blind texture per flag,
                                               its fields filling 4 bytes (R,G,B,A) in order. field = <col>[:<enc>]
                                               enc: u8 u16 u24 u32 (unsigned integers), f16 f32 (float bits),

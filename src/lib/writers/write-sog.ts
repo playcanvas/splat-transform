@@ -197,8 +197,8 @@ type WriteSogSourceOptions = {
     comments?: readonly string[] | null;
     /**
      * Fixed SH palette entries (Lloyd k-means, `iterations` rounds). Above 65536 needs v3 (24-bit
-     * labels), up to {@link MAX_SH_PALETTE}. Default: sized by `colorError`, or where that can't run about
-     * one per 1024 gaussians, at most 65536.
+     * labels), up to {@link MAX_SH_PALETTE}. Default: sized by `colorError`, or where that can't run the
+     * gaussian count rounded down to a power of 2, at most 65536.
      */
     paletteSize?: number;
 };
@@ -207,10 +207,10 @@ type WriteSogSourceOptions = {
 type SogVersion = 2 | 3;
 
 /**
- * WebGL2 guarantees 16 vertex texture units and SOG v3 uses 6 of them, so more
- * blind textures than this may not render on the weakest devices.
+ * WebGL2 guarantees 16 textures per shader: SOG v3 with SH uses 7 and the PlayCanvas engine adds a
+ * codebook lookup, so more blind textures than this may not render on the weakest devices.
  */
-const MAX_PORTABLE_BLIND_TEXTURES = 10;
+const MAX_PORTABLE_BLIND_TEXTURES = 8;
 
 /**
  * Importance exponent of the scale codebook: entries are weighted by exp(0.25 * log scale), shifting
@@ -511,7 +511,7 @@ const startSogWrite = async (
     }
     if (version === 3 && blindTextures.length > MAX_PORTABLE_BLIND_TEXTURES) {
         logger.warn(
-            `${blindTextures.length} SOG blind textures may exceed the vertex texture units of some WebGL2 devices ` +
+            `${blindTextures.length} SOG blind textures may exceed the texture units of some WebGL2 devices ` +
                 `(${MAX_PORTABLE_BLIND_TEXTURES} fit everywhere); pack narrow columns into shared textures`
         );
     }
@@ -723,13 +723,6 @@ const finishSogWrite = async (
         const [r0, r1, r2, r3, , , , op] = layers.geometric;
         const v3 = version === 3;
 
-        // ---- v3 rotation: a 24-bit exp map, one byte in the otherwise-unused
-        // alpha of each of means_l / means_u / scales. Indexed by source row.
-        const rot = v3 ? new Uint8Array(numRows * 3) : null;
-        if (rot) {
-            for (let g = 0; g < numRows; g++) encodeQuatExpMap(r0[g], r1[g], r2[g], r3[g], rot, g * 3);
-        }
-
         // ---- means: Morton order (unless a caller-supplied order is used) +
         // log-encoded positions split into low/high bytes.
         const meansMeta = (() => {
@@ -760,18 +753,29 @@ const finishSogWrite = async (
                 meansL[ti * 4] = x & 0xff;
                 meansL[ti * 4 + 1] = y & 0xff;
                 meansL[ti * 4 + 2] = z & 0xff;
-                meansL[ti * 4 + 3] = rot ? rot[g * 3] : 0xff;
+                meansL[ti * 4 + 3] = 0xff;
                 meansU[ti * 4] = (x >> 8) & 0xff;
                 meansU[ti * 4 + 1] = (y >> 8) & 0xff;
                 meansU[ti * 4 + 2] = (z >> 8) & 0xff;
-                meansU[ti * 4 + 3] = rot ? rot[g * 3 + 1] : 0xff;
+                meansU[ti * 4 + 3] = 0xff;
             }
             pending.push(writeWebp('means_l.webp', meansL), writeWebp('means_u.webp', meansU));
             return { mins: minMax.map((v) => v[0]), maxs: minMax.map((v) => v[1]) };
         })();
 
-        // ---- v2 quats: largest-3 packed quaternions.
-        if (!v3) {
+        // ---- v3 quats: a 24-bit exp map in RGB. The alpha stays 255: WebKit
+        // premultiplies decoded images under WebGPU, which destroys RGB
+        // stored under a non-opaque alpha.
+        if (v3) {
+            const quats = new Uint8Array(width * height * channels);
+            for (let i = 0; i < numRows; ++i) {
+                const g = indices[i];
+                encodeQuatExpMap(r0[g], r1[g], r2[g], r3[g], quats, i * 4);
+                quats[i * 4 + 3] = 0xff;
+            }
+            pending.push(writeWebp('quats.webp', quats));
+        } else {
+            // ---- v2 quats: largest-3 packed quaternions.
             const quats = new Uint8Array(width * height * channels);
             const q = [0, 0, 0, 0];
             const sqrt2 = Math.sqrt(2);
@@ -815,14 +819,9 @@ const finishSogWrite = async (
             pending.push(writeWebp('quats.webp', quats));
         }
 
-        // ---- scales: quantized log-scales (v3: rotation byte 2 in alpha).
+        // ---- scales: quantized log-scales.
         const sd = await scalesQuant;
         const scaleCols = sd.labels.map((c) => c.data);
-        if (rot) {
-            const rz = new Uint8Array(numRows);
-            for (let g = 0; g < numRows; g++) rz[g] = rot[g * 3 + 2];
-            scaleCols.push(rz);
-        }
         pending.push(writeLabels('scales.webp', scaleCols, indices));
         const scalesCodebook = Array.from(sd.centroids);
 
@@ -943,6 +942,7 @@ const finishSogWrite = async (
                   ...(state.model === 'default' ? {} : { model: state.model }),
                   means: { mins: meansMeta.mins, maxs: meansMeta.maxs, files: ['means_l.webp', 'means_u.webp'] },
                   scales: { codebook: scalesCodebook, files: ['scales.webp'] },
+                  quats: { files: ['quats.webp'] },
                   sh0: { codebook: colorsCodebook, files: ['sh0.webp'] },
                   ...(opacityMax > 1 ? { opacity: { max: opacityMax } } : {}),
                   ...(shN ? { shN } : {}),

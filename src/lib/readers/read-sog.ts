@@ -35,9 +35,8 @@ import { readSogV1 } from './read-sog-v1';
 import type { MetaV1 } from './read-sog-v1';
 
 // V2/V3 SOG meta layout - codebook-based quantization for scales / sh0 / shN.
-// V3 drops `quats` (the rotation is an exp map in the alpha channels of
-// means_l / means_u / scales), stores opacity as a fixed byte that may reach
-// above 1 (`opacity.max` > 1 says some do, see decodeOpacityByte) and adds
+// V3 stores the rotation as a 24-bit exp map in the RGB of `quats`, stores
+// opacity as a fixed byte that may reach above 1 (`opacity.max` > 1 says some do, see decodeOpacityByte) and adds
 // optional `blind` data. Legacy V1 uses a
 // per-channel mins/maxs scheme and is handled separately in read-sog-v1.ts.
 type MetaV2 = {
@@ -46,7 +45,7 @@ type MetaV2 = {
     model?: string;
     means: { mins: number[]; maxs: number[]; files: string[] };
     scales: { codebook: number[]; files: string[] };
-    quats?: { files: string[] };
+    quats: { files: string[] };
     sh0: { codebook: number[]; files: string[] };
     opacity?: { max: number };
     shN?: { count: number; bands: number; codebook: number[]; files: string[] };
@@ -188,14 +187,11 @@ const readSogSourceV2 = async (
 
     const v3 = meta.version === 3;
 
-    // V2 quats: 4 bytes/splat, last byte is the largest-component tag (252-255).
-    // V3 has no quats texture (rotation lives in the alpha channels).
-    let qr: Uint8Array | null = null;
-    if (!v3) {
-        const quats = decoder.decodeRGBA(await load(meta.quats!.files[0]));
-        qr = quats.rgba;
-        if (quats.width * quats.height < count) throw new Error('SOG quats texture too small for count');
-    }
+    // quats: V2 packs 3 components + the largest-component tag (252-255) in A;
+    // V3 stores a 24-bit exp map in RGB.
+    const quats = decoder.decodeRGBA(await load(meta.quats.files[0]));
+    const qr = quats.rgba;
+    if (quats.width * quats.height < count) throw new Error('SOG quats texture too small for count');
 
     // scales: 3 bytes index the shared 256-entry codebook.
     const scales = decoder.decodeRGBA(await load(meta.scales.files[0]));
@@ -334,14 +330,14 @@ const readSogSourceV2 = async (
         if (geoOut) {
             const o = r * 8; // [rot0..3, scale0..2, opacity]
             if (v3) {
-                decodeQuatExpMap(lo[o4 + 3], hi[o4 + 3], sl[o4 + 3], geoOut, o);
-            } else if (qr![o4 + 3] < 252 || qr![o4 + 3] > 255) {
+                decodeQuatExpMap(qr[o4], qr[o4 + 1], qr[o4 + 2], geoOut, o);
+            } else if (qr[o4 + 3] < 252 || qr[o4 + 3] > 255) {
                 geoOut[o] = 1;
                 geoOut[o + 1] = 0;
                 geoOut[o + 2] = 0;
                 geoOut[o + 3] = 0;
             } else {
-                unpackQuat(qr![o4], qr![o4 + 1], qr![o4 + 2], qr![o4 + 3]);
+                unpackQuat(qr[o4], qr[o4 + 1], qr[o4 + 2], qr[o4 + 3]);
                 geoOut[o] = tmpQuat[0];
                 geoOut[o + 1] = tmpQuat[1];
                 geoOut[o + 2] = tmpQuat[2];

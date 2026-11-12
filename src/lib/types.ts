@@ -74,8 +74,9 @@ type Options = {
     sogExtras?: unknown;
 
     /**
-     * SH palette entries for SOG / SOG bundle output. Default: about one per 1024 gaussians, at most
-     * 65536. v3 allows up to 262144 (24-bit labels); v2 up to 65536. LOD output keeps the default.
+     * Fixed SH palette entries for SOG / SOG bundle output. Default: sized by `shColorError`, or where that
+     * can't run the gaussian count rounded down to a power of 2, at most 65536. v3 allows up to 262144
+     * (24-bit labels); v2 up to 65536. LOD output always uses the default.
      */
     sogPaletteSize?: number;
 
