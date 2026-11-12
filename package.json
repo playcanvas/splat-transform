@@ -55,7 +55,7 @@
   },
   "devDependencies": {
     "@playcanvas/eslint-config": "3.0.0",
-    "@playcanvas/supersplat-viewer": "1.43.0",
+    "@playcanvas/supersplat-viewer": "1.43.2",
     "@rollup/plugin-json": "6.1.0",
     "@rollup/plugin-node-resolve": "16.0.3",
     "@rollup/plugin-replace": "6.0.3",
@@ -64,7 +64,7 @@
     "eslint": "9.39.5",
     "fzstd": "0.1.1",
     "pathe": "2.0.3",
-    "playcanvas": "2.24.0",
+    "playcanvas": "2.24.1",
     "prettier": "3.9.10",
     "publint": "0.3.25",
     "rollup": "4.68.2",
