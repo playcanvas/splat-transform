@@ -77,6 +77,9 @@ type Options = {
     /** Opacity threshold for solid voxels - voxels below this are considered empty. Default: 0.1 */
     opacityCutoff?: number;
 
+    /** Width in world units of the widest holes and gaps in the solid voxels to close, by a morphological closing. Default: 0 (disabled) */
+    closeGaps?: number;
+
     /** Exterior fill radius in world units. Enables exterior fill when set. Requires navSeed. */
     navExteriorRadius?: number;
 

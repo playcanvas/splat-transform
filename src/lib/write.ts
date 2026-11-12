@@ -241,6 +241,7 @@ const writeSource = async (writeSourceOptions: WriteSourceOptions, fs: FileSyste
                     dataTable,
                     voxelResolution: options.voxelResolution,
                     opacityCutoff: options.opacityCutoff,
+                    closeGaps: options.closeGaps,
                     navExteriorRadius: options.navExteriorRadius,
                     floorFill: options.floorFill,
                     floorFillDilation: options.floorFillDilation,

@@ -190,6 +190,7 @@ const cliOptionsConfig = {
     compensation: { type: 'boolean' },
     'voxel-size': { type: 'string' },
     'voxel-opacity': { type: 'string' },
+    'voxel-close': { type: 'string' },
     'voxel-external-fill': { type: 'string' },
     'voxel-floor-fill': { type: 'string' },
     'voxel-carve': { type: 'string' },
@@ -257,6 +258,7 @@ const optionalValueOptions = new Map<string, OptionalValueValidator>([
     ['-C', isNumericValue],
     ['--filter-floaters', isNumericValue],
     ['-F', isNumericValue],
+    ['--voxel-close', isNumericValue],
     ['--voxel-external-fill', isNumericValue],
     ['--voxel-floor-fill', isNumericValue],
     ['--voxel-carve', isNumericValue],
@@ -468,6 +470,15 @@ const parseArguments = async () => {
     }
     if (voxelOpacityStr) {
         opacityCutoff = parseNumber(voxelOpacityStr, 0);
+    }
+
+    const closeStr = v['voxel-close'];
+    let closeGaps = 0;
+    if (closeStr !== undefined) {
+        closeGaps = closeStr ? parseNumber(closeStr, 0) : 0.1;
+        if (!(closeGaps > 0)) {
+            throw new Error(`Invalid voxel-close value: ${closeStr}. Must be > 0`);
+        }
     }
 
     let navExteriorRadius: number | undefined;
@@ -688,6 +699,7 @@ const parseArguments = async () => {
         ...(v['sh-palette-size'] !== undefined ? { sogPaletteSize: parseInteger(v['sh-palette-size']) } : {}),
         voxelResolution,
         opacityCutoff,
+        closeGaps,
         navExteriorRadius,
         floorFill,
         floorFillDilation,
@@ -1033,6 +1045,7 @@ LOD OUTPUT (lod-meta.json)
 VOXEL OUTPUT (.voxel.json)
         --voxel-size       <n>              Voxel size for .voxel.json. Default: 0.05
         --voxel-opacity    <n>              Voxel opacity threshold for .voxel.json. Default: 0.1
+        --voxel-close      [size]           Close holes and gaps in the voxels up to size wide. Default: 0.1
         --voxel-external-fill [size]        Fill exterior voxels via boundary flood fill (interior scenes). Default: 1.6
         --voxel-floor-fill [size]           Fill columns upward from bottom (exterior scenes). Default: 1.6
         --voxel-carve [h,r]                 Carve navigable space using capsule flood fill from seed. Default: 1.6,0.2
