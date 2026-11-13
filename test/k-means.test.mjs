@@ -431,7 +431,7 @@ for (const precision of ['default', 'f32']) describe(`GpuKmeans (GPU path, ${pre
         const gpu = new GpuKmeans(device, numColumns, k);
         try {
             const labels = new Uint32Array(numRows);
-            await gpu.runEmeans(points, numRows, centroids, labels, 3);
+            await gpu.runEmeans(points, numRows, centroids, labels, 12);
 
             for (let c = 0; c < k; c++) {
                 const cv = [...centroids.subarray(c * numColumns, (c + 1) * numColumns)];
@@ -518,6 +518,24 @@ for (const precision of ['default', 'f32']) describe(`GpuKmeans (GPU path, ${pre
             const points = makeData();
             const { centroids, probes } = await kmeansToColorError(points, numRows, numColumns, weights, 0.01, 1024, device);
             assert.strictEqual(centroids.length / numColumns, 1024, `probes ${JSON.stringify(probes)}`);
+        });
+
+        it('grows the palette past its first size to meet a tight target', async (t) => {
+            if (!device) return t.skip('no WebGPU adapter available');
+            // 6000 tight prototypes: a palette meets 1.5 levels only with an entry near
+            // nearly each, which random seeding needs ~12-16K entries for (fresh palettes too)
+            const rand = mulberry32(7);
+            const centers = Array.from({ length: 6000 }, () => Array.from({ length: numColumns }, () => 2 * rand() - 1));
+            const rows = 6000 * 40;
+            const points = makeBlobs(centers, 40, numColumns, 0.01, rand).points;
+            const w = new Float32Array(rows).fill(1);
+            const { centroids, labels, probes } = await kmeansToColorError(points, rows, numColumns, w, 1.5, 65536, device);
+            const k = centroids.length / numColumns;
+            const err = shColorError(points, rows, numColumns, centroids, labels, w);
+            assert.strictEqual(probes[0].k, 4096);
+            assert.ok(probes[0].error > 1.5, `first size already met the target (${probes[0].error})`);
+            assert.ok(err <= 1.5, `colour error ${err} above target (probes ${JSON.stringify(probes)})`);
+            assert.ok(k > 4096 && k <= 24576, `palette of ${k} entries (probes ${JSON.stringify(probes)})`);
         });
 
         it('stores every point when a palette that large is needed and allowed', async (t) => {

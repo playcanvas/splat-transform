@@ -173,6 +173,18 @@ const COLOR_SEARCH_ERROR_TOLERANCE = 0.02;
 // at 64K+), so a full jump from the slope measured so far overshoots, and the
 // oversized passing palette it lands on can use up the probe budget
 const COLOR_SEARCH_DAMPING = 0.7;
+// growing a palette (when 4096 entries don't meet the target): e-means epochs
+// per growth step, warm from the previous palette (one leaves ~2x more entries
+// for the same error)
+const COLOR_GROW_EPOCHS = 2;
+// largest and smallest growth per step
+const COLOR_GROW_MAX_STEP = 2;
+const COLOR_GROW_MIN_STEP = 1.1;
+// log-log slope of error against size for the first growth step (-0.12 to -0.2
+// measured); later steps use the slope measured between the last two sizes
+const COLOR_GROW_FIRST_SLOPE = -0.15;
+// guard on growth steps (4096 to 262144 takes about 7)
+const COLOR_GROW_MAX_STEPS = 32;
 // palette rows hold 64 entries: sizes are whole rows
 const PALETTE_ROW = 64;
 
@@ -220,14 +232,72 @@ const shColorError = (
 
 type PaletteProbe = { k: number; error: number };
 
+// Grow a k-entry palette to `next` entries by splitting the entries with the most
+// weighted squared error: each new entry starts at one of that entry's points,
+// sampled by weight (sampling by error, as k-means++ does, favours outliers and
+// leaves the new entries nearly unused). Grown palettes match fresh 3-epoch ones
+// of the same size, on real SH data and on tightly clustered data alike.
+const splitEntries = (
+    points: Float32Array,
+    numRows: number,
+    nc: number,
+    centroids: Float32Array,
+    labels: Uint32Array,
+    weights: Float32Array,
+    k: number,
+    next: number
+): Float32Array => {
+    const sse = new Float64Array(k);
+    const keys = new Float64Array(k).fill(-Infinity);
+    const picks = new Int32Array(k).fill(-1);
+    for (let i = 0; i < numRows; i++) {
+        const c = labels[i];
+        let d = 0;
+        for (let j = 0; j < nc; j++) {
+            const v = points[i * nc + j] - centroids[c * nc + j];
+            d += v * v;
+        }
+        const w = weights[i];
+        sse[c] += w * d;
+        if (w > 0) {
+            // weighted reservoir of one (Efraimidis-Spirakis): largest u^(1/w)
+            const key = Math.log(Math.random()) / w;
+            if (key > keys[c]) {
+                keys[c] = key;
+                picks[c] = i;
+            }
+        }
+    }
+    const order = Uint32Array.from({ length: k }, (_, i) => i).sort((a, b) => sse[b] - sse[a]);
+    const grown = new Float32Array(next * nc);
+    grown.set(centroids.subarray(0, k * nc));
+    let n = k;
+    for (let i = 0; i < k && n < next; i++) {
+        const c = order[i];
+        if (picks[c] < 0 || sse[c] === 0) continue;
+        grown.set(points.subarray(picks[c] * nc, (picks[c] + 1) * nc), n * nc);
+        n++;
+    }
+    // too few entries with any error to split: new entries at random points
+    while (n < next) {
+        const row = Math.floor(Math.random() * numRows);
+        grown.set(points.subarray(row * nc, (row + 1) * nc), n * nc);
+        n++;
+    }
+    return grown;
+};
+
 /**
- * Size an SH palette from a colour-error target: cluster with GPU e-means
- * (weighted) at a few palette sizes, stepping by the log-log slope measured
- * between them (damped when extrapolating) and interpolating between a size
- * that meets the target and one that doesn't, and keep the smallest size found whose weighted colour error
- * ({@link shColorError}) is at most `target`. The points are uploaded once for
- * every size tried. When no size up to `maxK` meets
- * it, the `maxK` palette is returned. A palette of every point (maxK ≥
+ * Size an SH palette from a colour-error target with GPU e-means (weighted),
+ * keeping the smallest palette found whose weighted colour error
+ * ({@link shColorError}) is at most `target`. A 4096-entry palette is clustered
+ * first. If it misses the target, the palette grows: the entries with the most
+ * error are split and the palette refined warm, by steps sized from the log-log
+ * slope of error against size, until it meets the target. If it meets it, smaller
+ * sizes are clustered afresh, stepping by the measured slope (damped) and
+ * interpolating between a size that meets the target and one that doesn't. The
+ * points are uploaded once for all of it. When no size up to `maxK` meets the
+ * target, the `maxK` palette is returned. A palette of every point (maxK ≥
  * numRows) is exact.
  *
  * @param points - Interleaved SH rest coefficients (numRows × numColumns).
@@ -237,7 +307,8 @@ type PaletteProbe = { k: number; error: number };
  * @param target - Colour error target in 8-bit levels.
  * @param maxK - Largest palette allowed.
  * @param device - GPU device.
- * @param onProbe - Optional callback fired after each palette size is tried.
+ * @param onProbe - Optional callback fired after each palette size is tried (at most
+ *   {@link COLOR_SEARCH_MAX_PROBES} times, for a progress bar).
  * @returns The palette, labels, and every size tried with its error.
  * @ignore
  */
@@ -274,13 +345,13 @@ const kmeansToColorError = async (
     // the points and weights are shuffled and uploaded once for every size tried
     const resident = uploadEmeansPoints(device, points, numRows, numColumns, weights);
 
-    const evaluate = async (k: number) => {
-        const centroids = new Float32Array(k * numColumns);
-        initCentroids(points, numRows, numColumns, centroids, k);
+    let reported = 0;
+    // cluster `centroids` (k entries, updated in place) for `epochs`; record the size
+    const cluster = async (centroids: Float32Array, k: number, epochs: number) => {
         const labels = new Uint32Array(numRows);
         const gpu = new GpuKmeans(device, numColumns, k);
         try {
-            await gpu.runEmeans(points, numRows, centroids, labels, COLOR_SEARCH_EPOCHS, undefined, weights, resident);
+            await gpu.runEmeans(points, numRows, centroids, labels, epochs, undefined, weights, resident);
         } finally {
             gpu.destroy();
         }
@@ -288,7 +359,15 @@ const kmeansToColorError = async (
         probes.push({ k, error });
         if (error <= target && (!best || k < best.k)) best = { centroids, labels, k };
         if (!largest || k > largest.k) largest = { centroids, labels, k };
-        onProbe?.();
+        if (reported++ < COLOR_SEARCH_MAX_PROBES) onProbe?.();
+        return { labels, error };
+    };
+
+    // a fresh palette of k entries seeded at random points
+    const evaluate = async (k: number) => {
+        const centroids = new Float32Array(k * numColumns);
+        initCentroids(points, numRows, numColumns, centroids, k);
+        return { centroids, ...(await cluster(centroids, k, COLOR_SEARCH_EPOCHS)) };
     };
 
     // log-log interpolation (or extrapolation) of the size reaching `target`
@@ -301,35 +380,52 @@ const kmeansToColorError = async (
     // a damped step from size `from` towards the predicted size `to`
     const damped = (from: number, to: number) => from * (to / from) ** COLOR_SEARCH_DAMPING;
 
-    try {
-        let k = clamp(4096);
-        for (let i = 0; i < COLOR_SEARCH_MAX_PROBES; i++) {
-            await evaluate(k);
+    // the first size met the target: search smaller sizes
+    const shrink = async () => {
+        while (probes.length < COLOR_SEARCH_MAX_PROBES) {
             const passing = probes.filter((p) => p.error <= target).sort((a, b) => a.k - b.k);
             const failing = probes.filter((p) => p.error > target).sort((a, b) => b.k - a.k);
             const hi = passing[0];
             const lo = failing[0];
             // close enough to the target that a smaller size can't gain much
-            if (hi && hi.error >= target * (1 - COLOR_SEARCH_ERROR_TOLERANCE)) break;
+            if (hi.error >= target * (1 - COLOR_SEARCH_ERROR_TOLERANCE)) return;
             let next: number;
-            if (hi && lo) {
-                if (hi.k <= lo.k * COLOR_SEARCH_TOLERANCE) break;
+            if (lo) {
+                if (hi.k <= lo.k * COLOR_SEARCH_TOLERANCE) return;
                 const guess = sizeFor(lo, hi) ?? Math.sqrt(lo.k * hi.k);
                 next = clamp(Math.min(hi.k / 1.05, Math.max(lo.k * 1.05, guess)));
-                if (next <= lo.k || next >= hi.k) break;
-            } else if (lo) {
-                // all too coarse: grow, ×4 first, then a damped step by the measured slope, at least 1.2×
-                if (lo.k >= maxK) break;
-                const guess = failing.length > 1 ? sizeFor(failing[1], failing[0]) : null;
-                next = clamp(guess ? Math.max(lo.k * 1.2, Math.min(lo.k * 16, damped(lo.k, guess))) : lo.k * 4);
+                if (next <= lo.k || next >= hi.k) return;
             } else {
-                // all good enough: shrink, ÷4 first, then a damped step by the measured slope, at least 1.2×
-                if (hi.k <= PALETTE_ROW) break;
+                // all good enough: ÷4 first, then a damped step by the measured slope, at least 1.2×
+                if (hi.k <= PALETTE_ROW) return;
                 const guess = passing.length > 1 ? sizeFor(passing[0], passing[1]) : null;
                 next = clamp(guess ? Math.min(hi.k / 1.2, Math.max(hi.k / 16, damped(hi.k, guess))) : hi.k / 4);
             }
-            if (probes.some((p) => p.k === next)) break;
-            k = next;
+            if (probes.some((p) => p.k === next)) return;
+            await evaluate(next);
+        }
+    };
+
+    try {
+        let k = clamp(4096);
+        let { centroids, labels, error }: { centroids: Float32Array; labels: Uint32Array; error: number } =
+            await evaluate(k);
+        if (error <= target) {
+            await shrink();
+        } else {
+            // grow this palette until it meets the target
+            for (let step = 0; error > target && k < maxK && step < COLOR_GROW_MAX_STEPS; step++) {
+                const prev = probes[probes.length - 2];
+                const slope = prev
+                    ? (Math.log(error) - Math.log(prev.error)) / (Math.log(k) - Math.log(prev.k))
+                    : COLOR_GROW_FIRST_SLOPE;
+                const factor = slope < 0 ? (target / error) ** (1 / slope) : COLOR_GROW_MAX_STEP;
+                const next = clamp(k * Math.min(COLOR_GROW_MAX_STEP, Math.max(COLOR_GROW_MIN_STEP, factor)));
+                if (next <= k) break;
+                centroids = splitEntries(points, numRows, numColumns, centroids, labels, weights, k, next);
+                k = next;
+                ({ labels, error } = await cluster(centroids, k, COLOR_GROW_EPOCHS));
+            }
         }
     } finally {
         resident.destroy();
