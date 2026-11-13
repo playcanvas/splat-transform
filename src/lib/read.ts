@@ -4,6 +4,7 @@ import { dataTableToChunkSource } from './compat/data-table';
 import type { ReadFileSystem } from './io/read';
 import { ZipReadFileSystem } from './io/read';
 import {
+    readCsv,
     readGlb,
     readKsplat,
     readMjs,
@@ -33,8 +34,9 @@ import type { Options, Param } from './types';
  * - `ksplat` - Kevin Kwok's compressed splat format
  * - `mjs` - JavaScript module generator
  * - `glb` - Binary glTF with KHR_gaussian_splatting extension
+ * - `csv` - Numeric comma-separated values produced by splat-transform
  */
-type InputFormat = 'mjs' | 'ksplat' | 'splat' | 'sog' | 'ply' | 'spz' | 'lcc' | 'lcc2' | 'lod' | 'glb';
+type InputFormat = 'mjs' | 'ksplat' | 'splat' | 'sog' | 'ply' | 'spz' | 'lcc' | 'lcc2' | 'lod' | 'glb' | 'csv';
 
 /**
  * Determines the input format based on file extension.
@@ -88,6 +90,8 @@ const getInputFormat = (filename: string): InputFormat => {
         return 'lcc';
     } else if (lowerFilename.endsWith('.glb')) {
         return 'glb';
+    } else if (lowerFilename.endsWith('.csv')) {
+        return 'csv';
     }
 
     throw new Error(`Unsupported input file type: ${filename}`);
@@ -115,7 +119,7 @@ type ReadFileOptions = {
  *
  * Readers are chunk-native: `ply`/`splat`/`spz`/`glb`/`lcc`/`lcc2`/`lod` return lazy /
  * streaming sources whose `close()` releases the underlying file(s); whole-blob
- * formats (`sog`/`mjs`/`ksplat`) are decoded up front and returned resident.
+ * formats (`sog`/`mjs`/`ksplat`/`csv`) are decoded up front and returned resident.
  * Callers that need a `DataTable` materialize at their own boundary (and call
  * `source.close()` when done).
  *
@@ -180,7 +184,7 @@ const readFile = async (readFileOptions: ReadFileOptions): Promise<ChunkSource[]
     // Single-source binary formats over a seekable ReadSource. Lazy readers
     // (ply/splat/spz/glb) hand the source's lifetime to the returned ChunkSource —
     // its close() releases it — so the source is NOT closed here on success;
-    // ksplat is eager and is done with the source once decoded. On error the
+    // ksplat/csv are eager and are done with the source once decoded. On error the
     // source is released (close() is idempotent).
     const source = await fileSystem.createSource(filename);
     const pool = createChunkDataPool();
@@ -189,6 +193,11 @@ const readFile = async (readFileOptions: ReadFileOptions): Promise<ChunkSource[]
         if (inputFormat === 'splat') return [await readSplat(source, pool)];
         if (inputFormat === 'spz') return [await readSpz(source, pool)];
         if (inputFormat === 'glb') return [await readGlb(source, pool)];
+        if (inputFormat === 'csv') {
+            const dataTable = await readCsv(source);
+            source.close();
+            return [dataTableToChunkSource(dataTable)];
+        }
         if (inputFormat === 'ksplat') {
             const dataTable = await readKsplat(source);
             source.close();
@@ -317,7 +326,8 @@ const readFileInfo = async (readFileOptions: ReadFileOptions): Promise<FileInfo>
 
     // Every other format (and SOG V1): open via readFile and read its meta,
     // forcing all LOD levels (ignore any caller lodSelect). Lazy readers parse
-    // only the header; a truncated/corrupt file throws in the reader's guard.
+    // only the header; eager readers include `ksplat`/`mjs`/`csv`. A
+    // truncated/corrupt file throws in the reader's guard.
     const [src] = await readFile({ ...readFileOptions, options: { ...readFileOptions.options, lodSelect: [] } });
     try {
         return buildFileInfo(inputFormat, src.meta);

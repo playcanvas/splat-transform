@@ -15,6 +15,7 @@ import {
     Transform,
     getInputFormat,
     readFile,
+    readCsv,
     readPly,
     readSplat,
     readKsplat,
@@ -1079,7 +1080,7 @@ describe('SPZ pure-JS decoder vs @adobe/spz (raw decode)', () => {
     });
 });
 
-describe('CSV Format (Output Only)', () => {
+describe('CSV Format', () => {
     let testData;
 
     before(() => {
@@ -1114,6 +1115,77 @@ describe('CSV Format (Output Only)', () => {
         for (const value of firstRow) {
             const num = parseFloat(value);
             assert(!Number.isNaN(num), `Invalid number in CSV: ${value}`);
+        }
+    });
+
+    it('should preserve an export through import and export', async () => {
+        const firstWriteFs = new MemoryFileSystem();
+        await writeCsv({ filename: 'first.csv', dataTable: testData }, firstWriteFs);
+        const firstCsv = firstWriteFs.results.get('first.csv');
+        assert(firstCsv, 'First CSV file should be written');
+
+        const imported = await readCsv(new BufferReadSource(firstCsv));
+        compareDataTables(imported, testData, 0);
+
+        const secondWriteFs = new MemoryFileSystem();
+        await writeCsv({ filename: 'second.csv', dataTable: imported }, secondWriteFs);
+        const secondCsv = secondWriteFs.results.get('second.csv');
+        assert(secondCsv, 'Second CSV file should be written');
+        assert.deepStrictEqual(secondCsv, firstCsv);
+    });
+
+    it('should import CSV through the high-level file reader', async () => {
+        const writeFs = new MemoryFileSystem();
+        await writeCsv({ filename: 'test.csv', dataTable: testData }, writeFs);
+        const csv = writeFs.results.get('test.csv');
+        assert(csv);
+
+        const readFs = new MemoryReadFileSystem();
+        readFs.set('test.csv', csv);
+        assert.strictEqual(getInputFormat('test.csv'), 'csv');
+
+        const [source] = await readFile({
+            filename: 'test.csv',
+            inputFormat: getInputFormat('test.csv'),
+            fileSystem: readFs
+        });
+        try {
+            const pool = createChunkDataPool();
+            const imported = await materializeToDataTable(source, pool);
+            const expectedSource = dataTableToChunkSource(testData);
+            try {
+                const expected = await materializeToDataTable(expectedSource, pool);
+                compareDataTables(imported, expected, 0);
+            } finally {
+                await expectedSource.close();
+            }
+        } finally {
+            await source.close();
+        }
+    });
+
+    it('should accept every non-finite value emitted by the exporter', async () => {
+        const data = new TextEncoder().encode('value\nNaN\nInfinity\n-Infinity\n');
+        const imported = await readCsv(new BufferReadSource(data));
+        const values = imported.getColumnByName('value').data;
+
+        assert(Number.isNaN(values[0]));
+        assert.strictEqual(values[1], Infinity);
+        assert.strictEqual(values[2], -Infinity);
+    });
+
+    it('should report clear errors for invalid CSV', async () => {
+        const invalidCases = [
+            ['', /readCsv: invalid CSV: missing header/],
+            ['x,,z\n1,2,3\n', /line 1, column 2: empty column name/],
+            ['x,y,x\n1,2,3\n', /line 1: duplicate column name 'x'/],
+            ['x,y\n1\n', /line 2: expected 2 values, got 1/],
+            ['x,y\n1,\n', /line 2, column 'y': empty value/],
+            ['x,y\n1,2oops\n', /line 2, column 'y': invalid number '2oops'/]
+        ];
+
+        for (const [csv, expected] of invalidCases) {
+            await assert.rejects(readCsv(new BufferReadSource(new TextEncoder().encode(csv))), expected);
         }
     });
 });
