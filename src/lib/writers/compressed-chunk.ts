@@ -53,20 +53,23 @@ class CompressedChunk {
     }
 
     pack() {
+        // Bounds over the finite values only: a single NaN/Infinity would otherwise
+        // make the whole chunk's bounds non-finite and corrupt all 256 splats.
         const calcMinMax = (data: Float32Array) => {
-            let min;
-            let max;
-            min = max = data[0];
-            for (let i = 1; i < data.length; ++i) {
+            let min = Infinity;
+            let max = -Infinity;
+            for (let i = 0; i < data.length; ++i) {
                 const v = data[i];
-                min = Math.min(min, v);
-                max = Math.max(max, v);
+                if (Number.isFinite(v)) {
+                    if (v < min) min = v;
+                    if (v > max) max = v;
+                }
             }
-            return { min, max };
+            return min <= max ? { min, max } : { min: 0, max: 0 };
         };
 
         const normalize = (x: number, min: number, max: number) => {
-            if (x <= min) return 0;
+            if (Number.isNaN(x) || x <= min) return 0;
             if (x >= max) return 1;
             return max - min < 0.00001 ? 0 : (x - min) / (max - min);
         };
