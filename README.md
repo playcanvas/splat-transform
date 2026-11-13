@@ -36,7 +36,60 @@ For library usage, install as a dependency:
 npm install @playcanvas/splat-transform
 ```
 
-For running on a backend with Docker (including GPU/Vulkan setup), see the [Docker Backend](https://developer.playcanvas.com/user-manual/splat-transform/docker/) guide.
+### Docker
+
+Build the CLI image from this repository:
+
+```bash
+docker build -t splat-transform .
+```
+
+Mount the directory containing your splat files at `/work`. GPU access is optional and is not
+enabled unless it is explicitly exposed to the container. For a CPU-only conversion:
+
+```bash
+docker run --rm --user "$(id -u):$(id -g)" \
+    -v "$PWD:/work" splat-transform \
+    --gpu cpu input.ply output.ply
+```
+
+The image includes the Vulkan userspace libraries needed by WebGPU. On a Linux host with an NVIDIA
+GPU and the
+[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html),
+expose all GPUs with `--gpus all`:
+
+```bash
+docker run --rm --gpus all --user "$(id -u):$(id -g)" \
+    -v "$PWD:/work" splat-transform \
+    input.ply output.sog
+```
+
+On compatible Linux hosts, Intel or AMD GPUs may work by exposing the host's direct-rendering
+devices. The supplementary group grants the non-root container process access to the render node:
+
+```bash
+docker run --rm --device /dev/dri \
+    --group-add "$(stat -c '%g' /dev/dri/renderD128)" \
+    --user "$(id -u):$(id -g)" \
+    -v "$PWD:/work" splat-transform \
+    input.ply output.sog
+```
+
+Use `splat-transform --list-gpus` in place of the input and output arguments to verify that WebGPU
+can see the exposed adapter. If the system uses a different render node, substitute it for
+`renderD128` in the group lookup.
+
+> [!NOTE]
+> Linux with an NVIDIA GPU and NVIDIA Container Toolkit is the supported GPU configuration.
+> Intel and AMD `/dev/dri` passthrough is best-effort and depends on compatible host drivers,
+> Mesa and the container runtime. Other GPU vendors and Docker host platforms may not expose a
+> usable Vulkan adapter to the container. If `--list-gpus` does not report the expected adapter,
+> run with `--gpu cpu`; GPU-only commands are unavailable in that mode.
+
+The image runs as a non-root user by default. Passing the host UID and GID as shown above ensures
+output files in the bind mount are owned by the current user. See the
+[Docker Backend](https://developer.playcanvas.com/user-manual/splat-transform/docker/) guide for
+host setup, GPU verification, Kubernetes notes and troubleshooting.
 
 > [!TIP]
 > For one-off conversions without installing anything, try [SuperSplat Convert](https://superspl.at/convert) — a browser-based frontend to splat-transform. See the [Convert page docs](https://developer.playcanvas.com/user-manual/supersplat/convert/) for details.
