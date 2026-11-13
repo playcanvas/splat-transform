@@ -22,7 +22,7 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert';
 
 import { kmeansInterleaved, kmeansToColorError, shColorError } from '../src/lib/spatial/k-means.js';
-import { GpuKmeans } from '../src/lib/gpu/gpu-kmeans.js';
+import { GpuKmeans, uploadEmeansPoints } from '../src/lib/gpu/gpu-kmeans.js';
 
 // deterministic rng for reproducible data
 const mulberry32 = (seed) => {
@@ -445,6 +445,50 @@ for (const precision of ['default', 'f32']) describe(`GpuKmeans (GPU path, ${pre
             }
         } finally {
             gpu.destroy();
+        }
+    });
+
+    it('e-means reuses one upload across palette sizes', async (t) => {
+        if (!device) return t.skip('no WebGPU adapter available');
+
+        // 4 distinct weighted locations, uploaded once and clustered at k=2
+        // and then k=4: each run labels every point against its own centroids
+        const distinct = [[1, 2.5, -3, 4], [5, 5, 5, 5], [-4, 0.5, 2, -1], [3, -6, 1, 2]];
+        const numColumns = 4;
+        const numRows = 8192;
+        const points = new Float32Array(numRows * numColumns);
+        const weights = new Float32Array(numRows);
+        for (let i = 0; i < numRows; i++) {
+            points.set(distinct[i % 4], i * numColumns);
+            weights[i] = 1 + (i % 3);
+        }
+        const resident = uploadEmeansPoints(device, points, numRows, numColumns, weights);
+        const cluster = async (k, rows = numRows) => {
+            const centroids = new Float32Array(k * numColumns);
+            for (let c = 0; c < k; c++) centroids.set(distinct[(c + 1) % 4], c * numColumns);
+            const labels = new Uint32Array(numRows);
+            const gpu = new GpuKmeans(device, numColumns, k);
+            try {
+                await gpu.runEmeans(points, rows, centroids, labels, 3, undefined, weights, resident);
+            } finally {
+                gpu.destroy();
+            }
+            return { centroids, labels };
+        };
+        try {
+            const two = await cluster(2);
+            const nearest = bruteForceLabels(points, numRows, numColumns, two.centroids, 2);
+            assert.ok(two.labels.every((l, i) => l === nearest[i]), 'k=2 labels are not nearest their centroids');
+
+            const four = await cluster(4);
+            for (let i = 0; i < numRows; i++) {
+                const cv = four.centroids.subarray(four.labels[i] * numColumns, (four.labels[i] + 1) * numColumns);
+                assert.ok(Math.hypot(...distinct[i % 4].map((v, j) => v - cv[j])) < 1e-3, `point ${i} labelled away from its location`);
+            }
+
+            await assert.rejects(cluster(4, numRows - 2), /resident points/);
+        } finally {
+            resident.destroy();
         }
     });
 

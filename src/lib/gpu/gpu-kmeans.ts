@@ -629,6 +629,116 @@ const emeansFits = (device: GraphicsDevice, numPoints: number, numColumns: numbe
     return numPoints * numColumns * (f16 ? 2 : 4) <= EMEANS_RESIDENT_BYTES && numPoints * 4 <= bindingLimit;
 };
 
+/**
+ * Points and weights shuffled once and resident on the GPU, shared by every
+ * {@link GpuKmeans.runEmeans} call over the same data (e.g. the palette sizes
+ * a colour-error search tries), which then skip the shuffle, the f16 packing
+ * and the upload. Free with `destroy`.
+ *
+ * @ignore
+ */
+type EmeansPoints = {
+    numPoints: number;
+    numColumns: number;
+    /** shuffled position → original row */
+    perm: Uint32Array;
+    /** rows per point buffer (each within one storage binding) */
+    chunkCap: number;
+    pointBufs: StorageBuffer[];
+    weightsBuf: StorageBuffer;
+    destroy: () => void;
+};
+
+/**
+ * Shuffle, pack (f16 when the device supports it) and upload points and
+ * weights for e-means. The input must pass {@link emeansFits}.
+ *
+ * @param device - GPU device.
+ * @param points - Interleaved points (numPoints × numColumns).
+ * @param numPoints - Number of points.
+ * @param numColumns - Dimensions per point.
+ * @param weights - Per-point weight; default 1.
+ * @returns The resident points.
+ * @ignore
+ */
+const uploadEmeansPoints = (
+    device: GraphicsDevice,
+    points: Float32Array,
+    numPoints: number,
+    numColumns: number,
+    weights?: Float32Array
+): EmeansPoints => {
+    const useF16 = !!('supportsShaderF16' in device && device.supportsShaderF16);
+    const bytesPerElem = useF16 ? 2 : 4;
+    const rowBytes = numColumns * bytesPerElem;
+    const bindingLimit =
+        (device as GraphicsDevice & { wgpu?: { limits?: { maxStorageBufferBindingSize?: number } } }).wgpu?.limits
+            ?.maxStorageBufferBindingSize ?? 128 * 1024 * 1024;
+    const chunkCap = Math.min(4_000_000, Math.floor(bindingLimit / rowBytes)) & ~1;
+    const numChunks = Math.ceil(numPoints / chunkCap);
+    if (numPoints * 4 > bindingLimit) {
+        throw new Error(
+            `GpuKmeans: labels buffer (${numPoints * 4} bytes) exceeds device maxStorageBufferBindingSize (${bindingLimit})`
+        );
+    }
+    if (numPoints * rowBytes > EMEANS_RESIDENT_BYTES) {
+        throw new Error(
+            `GpuKmeans e-means: points (${numPoints * rowBytes} bytes) exceed the ${EMEANS_RESIDENT_BYTES}-byte resident budget`
+        );
+    }
+    const chunkRows = (c: number) => Math.min(chunkCap, numPoints - c * chunkCap);
+
+    // one shuffle up front (Fisher-Yates); batches are contiguous ranges of
+    // the shuffled order
+    const perm = new Uint32Array(numPoints);
+    for (let i = 0; i < numPoints; i++) perm[i] = i;
+    for (let i = numPoints - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        const t = perm[i];
+        perm[i] = perm[j];
+        perm[j] = t;
+    }
+    const packed = useF16
+        ? new Uint16Array(roundUp(numPoints * numColumns, 2))
+        : new Float32Array(numPoints * numColumns);
+    for (let i = 0; i < numPoints; i++) {
+        const src = perm[i] * numColumns;
+        const dst = i * numColumns;
+        if (useF16) {
+            for (let j = 0; j < numColumns; j++) packed[dst + j] = FloatPacking.float2Half(points[src + j]);
+        } else {
+            for (let j = 0; j < numColumns; j++) packed[dst + j] = points[src + j];
+        }
+    }
+    const shuffledWeights = new Float32Array(numPoints);
+    for (let i = 0; i < numPoints; i++) shuffledWeights[i] = weights ? weights[perm[i]] : 1;
+
+    const pointBufs = Array.from({ length: numChunks }, (_, c) => {
+        const buf = new StorageBuffer(
+            device,
+            roundUp(chunkRows(c) * numColumns, 2) * bytesPerElem,
+            BUFFERUSAGE_COPY_DST
+        );
+        buf.write(0, packed, c * chunkCap * numColumns, roundUp(chunkRows(c) * numColumns, useF16 ? 2 : 1));
+        return buf;
+    });
+    const weightsBuf = new StorageBuffer(device, numPoints * 4, BUFFERUSAGE_COPY_DST);
+    weightsBuf.write(0, shuffledWeights, 0, numPoints);
+
+    return {
+        numPoints,
+        numColumns,
+        perm,
+        chunkCap,
+        pointBufs,
+        weightsBuf,
+        destroy: () => {
+            pointBufs.forEach((b) => b.destroy());
+            weightsBuf.destroy();
+        }
+    };
+};
+
 const roundPowerOfTwo = (value: number) => {
     if (value <= 1) return 1;
     const low = 2 ** Math.floor(Math.log2(value));
@@ -861,7 +971,9 @@ class GpuKmeans {
      * means. `weights` (one per point, default 1) scale each point's pull
      * on its centroid; assignment stays plain nearest-centroid. `onEpoch`
      * fires as each epoch is submitted. All points stay resident on the
-     * GPU, so the input must pass {@link emeansFits}.
+     * GPU, so the input must pass {@link emeansFits}. `resident` (from
+     * {@link uploadEmeansPoints} over the same points and weights) skips the
+     * shuffle and upload; it stays owned by the caller.
      */
     runEmeans: (
         points: Float32Array,
@@ -870,7 +982,8 @@ class GpuKmeans {
         labels: Uint32Array,
         epochs: number,
         onEpoch?: () => void,
-        weights?: Float32Array
+        weights?: Float32Array,
+        resident?: EmeansPoints
     ) => Promise<void>;
     destroy: () => void;
 
@@ -1341,64 +1454,20 @@ class GpuKmeans {
             }
         };
 
-        this.runEmeans = async (points, numPoints, centroids, labels, epochs, onEpoch, weights) => {
+        this.runEmeans = async (points, numPoints, centroids, labels, epochs, onEpoch, weights, resident) => {
             const recipe = emeansRecipe(numPoints, numCentroids, numColumns, epochs);
             const { batchSize, alpha0, epochRows, totalSteps } = recipe;
             // faiss disables revival at d <= 2
             const revive = numColumns > 2;
 
-            const rowBytes = numColumns * bytesPerElem;
-            const bindingLimit: number = wgpuLimits?.maxStorageBufferBindingSize ?? 128 * 1024 * 1024;
-            const chunkCap = Math.min(4_000_000, Math.floor(bindingLimit / rowBytes)) & ~1;
-            const numChunks = Math.ceil(numPoints / chunkCap);
-            if (numPoints * 4 > bindingLimit) {
-                throw new Error(
-                    `GpuKmeans: labels buffer (${numPoints * 4} bytes) exceeds device maxStorageBufferBindingSize (${bindingLimit})`
-                );
+            if (resident && (resident.numPoints !== numPoints || resident.numColumns !== numColumns)) {
+                throw new Error('GpuKmeans e-means: resident points do not match the input');
             }
-            if (numPoints * rowBytes > EMEANS_RESIDENT_BYTES) {
-                throw new Error(
-                    `GpuKmeans e-means: points (${numPoints * rowBytes} bytes) exceed the ${EMEANS_RESIDENT_BYTES}-byte resident budget`
-                );
-            }
+            const data = resident ?? uploadEmeansPoints(device, points, numPoints, numColumns, weights);
+            const { perm, chunkCap, pointBufs, weightsBuf } = data;
             const chunkRows = (c: number) => Math.min(chunkCap, numPoints - c * chunkCap);
 
-            // one shuffle up front (Fisher-Yates); batches are contiguous
-            // ranges of the shuffled order
-            const perm = new Uint32Array(numPoints);
-            for (let i = 0; i < numPoints; i++) perm[i] = i;
-            for (let i = numPoints - 1; i > 0; i--) {
-                const j = Math.floor(Math.random() * (i + 1));
-                const t = perm[i];
-                perm[i] = perm[j];
-                perm[j] = t;
-            }
-            const packed = useF16
-                ? new Uint16Array(roundUp(numPoints * numColumns, 2))
-                : new Float32Array(numPoints * numColumns);
-            for (let i = 0; i < numPoints; i++) {
-                const src = perm[i] * numColumns;
-                const dst = i * numColumns;
-                if (useF16) {
-                    for (let j = 0; j < numColumns; j++) packed[dst + j] = FloatPacking.float2Half(points[src + j]);
-                } else {
-                    for (let j = 0; j < numColumns; j++) packed[dst + j] = points[src + j];
-                }
-            }
-
-            const shuffledWeights = new Float32Array(numPoints);
-            for (let i = 0; i < numPoints; i++) shuffledWeights[i] = weights ? weights[perm[i]] : 1;
-
             // ---- buffers
-            const pointBufs = Array.from(
-                { length: numChunks },
-                (_, c) =>
-                    new StorageBuffer(
-                        device,
-                        roundUp(chunkRows(c) * numColumns, 2) * bytesPerElem,
-                        BUFFERUSAGE_COPY_DST
-                    )
-            );
             const centroidsBuf = new StorageBuffer(
                 device,
                 numCentroids * numColumns * 4,
@@ -1424,7 +1493,6 @@ class GpuKmeans {
                 : new StorageBuffer(device, roundUp(numColumns, 4) * 4, BUFFERUSAGE_COPY_DST);
             const usageBuf = new StorageBuffer(device, numCentroids * 4, BUFFERUSAGE_COPY_DST | BUFFERUSAGE_COPY_SRC);
             const passSumsBuf = new StorageBuffer(device, numCentroids * numColumns * 4, BUFFERUSAGE_COPY_DST);
-            const weightsBuf = new StorageBuffer(device, numPoints * 4, BUFFERUSAGE_COPY_DST);
             const weightSumsBuf = new StorageBuffer(device, numCentroids * 4, BUFFERUSAGE_COPY_DST);
             const passWeightsBuf = new StorageBuffer(device, numCentroids * 4, BUFFERUSAGE_COPY_DST);
             const pairsBuf = new StorageBuffer(device, Math.max(8, numCentroids * 4), BUFFERUSAGE_COPY_DST);
@@ -1497,18 +1565,9 @@ class GpuKmeans {
                     }
                 };
 
-                // ---- one-time uploads
-                for (let c = 0; c < numChunks; c++) {
-                    pointBufs[c].write(
-                        0,
-                        packed,
-                        c * chunkCap * numColumns,
-                        roundUp(chunkRows(c) * numColumns, useF16 ? 2 : 1)
-                    );
-                }
+                // ---- one-time uploads (points and weights are resident already)
                 centroidsBuf.write(0, centroids, 0, numCentroids * numColumns);
                 usageBuf.write(0, new Float32Array(numCentroids).fill(EMEANS_INIT_USAGE), 0, numCentroids);
-                weightsBuf.write(0, shuffledWeights, 0, numPoints);
                 passSumsBuf.clear();
                 passWeightsBuf.clear();
                 dispatchConvert();
@@ -1639,7 +1698,7 @@ class GpuKmeans {
                 ]);
                 for (let i = 0; i < numPoints; i++) labels[perm[i]] = shuffledLabels[i];
             } finally {
-                pointBufs.forEach((b) => b.destroy());
+                if (!resident) data.destroy();
                 centroidsBuf.destroy();
                 centroidsF16Buf?.destroy();
                 labelsBuf.destroy();
@@ -1652,7 +1711,6 @@ class GpuKmeans {
                 centerBuf?.destroy();
                 usageBuf.destroy();
                 passSumsBuf.destroy();
-                weightsBuf.destroy();
                 weightSumsBuf.destroy();
                 passWeightsBuf.destroy();
                 pairsBuf.destroy();
@@ -1665,4 +1723,4 @@ class GpuKmeans {
     }
 }
 
-export { GpuKmeans, emeansFits };
+export { GpuKmeans, emeansFits, uploadEmeansPoints, type EmeansPoints };

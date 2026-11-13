@@ -1,6 +1,6 @@
 export { GpuDilation } from './gpu-dilation';
 export { GpuEdgeCost } from './gpu-edge-cost';
-export { GpuKmeans, emeansFits } from './gpu-kmeans';
+export { GpuKmeans, emeansFits, uploadEmeansPoints } from './gpu-kmeans';
 export { GpuKnn } from './gpu-knn';
 export { GpuVoxelization } from './gpu-voxelization';
 export type { BatchSpec, MultiBatchResult } from './gpu-voxelization';

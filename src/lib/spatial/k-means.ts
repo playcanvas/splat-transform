@@ -1,6 +1,6 @@
 import type { GraphicsDevice } from 'playcanvas';
 
-import { GpuKmeans, emeansFits } from '../gpu';
+import { GpuKmeans, emeansFits, uploadEmeansPoints } from '../gpu';
 
 import { KdTree } from './kd-tree';
 
@@ -164,6 +164,15 @@ const COLOR_SEARCH_EPOCHS = 3;
 const COLOR_SEARCH_MAX_PROBES = 6;
 // stop once the smallest passing size is within this ratio of the largest failing one
 const COLOR_SEARCH_TOLERANCE = 1.25;
+// ...or once a passing size's error is within this fraction of the target: the
+// error falls slowly with size (about size^-0.15), so a size 25% smaller would
+// gain only ~3% error, the same precision as the ratio above
+const COLOR_SEARCH_ERROR_TOLERANCE = 0.02;
+// extrapolated jumps cover this fraction of the predicted change in log size:
+// the error falls faster at larger sizes (log-log slope about -0.12 at 4K, -0.2
+// at 64K+), so a full jump from the slope measured so far overshoots, and the
+// oversized passing palette it lands on can use up the probe budget
+const COLOR_SEARCH_DAMPING = 0.7;
 // palette rows hold 64 entries: sizes are whole rows
 const PALETTE_ROW = 64;
 
@@ -213,9 +222,11 @@ type PaletteProbe = { k: number; error: number };
 
 /**
  * Size an SH palette from a colour-error target: cluster with GPU e-means
- * (weighted) at a few palette sizes, interpolating log error against log size
- * between them, and keep the smallest size found whose weighted colour error
- * ({@link shColorError}) is at most `target`. When no size up to `maxK` meets
+ * (weighted) at a few palette sizes, stepping by the log-log slope measured
+ * between them (damped when extrapolating) and interpolating between a size
+ * that meets the target and one that doesn't, and keep the smallest size found whose weighted colour error
+ * ({@link shColorError}) is at most `target`. The points are uploaded once for
+ * every size tried. When no size up to `maxK` meets
  * it, the `maxK` palette is returned. A palette of every point (maxK ≥
  * numRows) is exact.
  *
@@ -260,13 +271,16 @@ const kmeansToColorError = async (
     let best: { centroids: Float32Array; labels: Uint32Array; k: number } | null = null;
     let largest: { centroids: Float32Array; labels: Uint32Array; k: number } | null = null;
 
+    // the points and weights are shuffled and uploaded once for every size tried
+    const resident = uploadEmeansPoints(device, points, numRows, numColumns, weights);
+
     const evaluate = async (k: number) => {
         const centroids = new Float32Array(k * numColumns);
         initCentroids(points, numRows, numColumns, centroids, k);
         const labels = new Uint32Array(numRows);
         const gpu = new GpuKmeans(device, numColumns, k);
         try {
-            await gpu.runEmeans(points, numRows, centroids, labels, COLOR_SEARCH_EPOCHS, undefined, weights);
+            await gpu.runEmeans(points, numRows, centroids, labels, COLOR_SEARCH_EPOCHS, undefined, weights, resident);
         } finally {
             gpu.destroy();
         }
@@ -284,32 +298,41 @@ const kmeansToColorError = async (
         return Math.exp(Math.log(a.k) + (Math.log(target) - Math.log(a.error)) / slope);
     };
 
-    let k = clamp(4096);
-    for (let i = 0; i < COLOR_SEARCH_MAX_PROBES; i++) {
-        await evaluate(k);
-        const passing = probes.filter((p) => p.error <= target).sort((a, b) => a.k - b.k);
-        const failing = probes.filter((p) => p.error > target).sort((a, b) => b.k - a.k);
-        const hi = passing[0];
-        const lo = failing[0];
-        let next: number;
-        if (hi && lo) {
-            if (hi.k <= lo.k * COLOR_SEARCH_TOLERANCE) break;
-            const guess = sizeFor(lo, hi) ?? Math.sqrt(lo.k * hi.k);
-            next = clamp(Math.min(hi.k / 1.05, Math.max(lo.k * 1.05, guess)));
-            if (next <= lo.k || next >= hi.k) break;
-        } else if (lo) {
-            // all too coarse: grow, at least 1.5×, by the local slope when known
-            if (lo.k >= maxK) break;
-            const guess = failing.length > 1 ? sizeFor(failing[1], failing[0]) : null;
-            next = clamp(Math.max(lo.k * 1.5, Math.min(lo.k * 16, guess ?? lo.k * 4)));
-        } else {
-            // all good enough: shrink, at least 1.5×
-            if (hi.k <= PALETTE_ROW) break;
-            const guess = passing.length > 1 ? sizeFor(passing[0], passing[1]) : null;
-            next = clamp(Math.min(hi.k / 1.5, Math.max(hi.k / 16, guess ?? hi.k / 4)));
+    // a damped step from size `from` towards the predicted size `to`
+    const damped = (from: number, to: number) => from * (to / from) ** COLOR_SEARCH_DAMPING;
+
+    try {
+        let k = clamp(4096);
+        for (let i = 0; i < COLOR_SEARCH_MAX_PROBES; i++) {
+            await evaluate(k);
+            const passing = probes.filter((p) => p.error <= target).sort((a, b) => a.k - b.k);
+            const failing = probes.filter((p) => p.error > target).sort((a, b) => b.k - a.k);
+            const hi = passing[0];
+            const lo = failing[0];
+            // close enough to the target that a smaller size can't gain much
+            if (hi && hi.error >= target * (1 - COLOR_SEARCH_ERROR_TOLERANCE)) break;
+            let next: number;
+            if (hi && lo) {
+                if (hi.k <= lo.k * COLOR_SEARCH_TOLERANCE) break;
+                const guess = sizeFor(lo, hi) ?? Math.sqrt(lo.k * hi.k);
+                next = clamp(Math.min(hi.k / 1.05, Math.max(lo.k * 1.05, guess)));
+                if (next <= lo.k || next >= hi.k) break;
+            } else if (lo) {
+                // all too coarse: grow, ×4 first, then a damped step by the measured slope, at least 1.2×
+                if (lo.k >= maxK) break;
+                const guess = failing.length > 1 ? sizeFor(failing[1], failing[0]) : null;
+                next = clamp(guess ? Math.max(lo.k * 1.2, Math.min(lo.k * 16, damped(lo.k, guess))) : lo.k * 4);
+            } else {
+                // all good enough: shrink, ÷4 first, then a damped step by the measured slope, at least 1.2×
+                if (hi.k <= PALETTE_ROW) break;
+                const guess = passing.length > 1 ? sizeFor(passing[0], passing[1]) : null;
+                next = clamp(guess ? Math.min(hi.k / 1.2, Math.max(hi.k / 16, damped(hi.k, guess))) : hi.k / 4);
+            }
+            if (probes.some((p) => p.k === next)) break;
+            k = next;
         }
-        if (probes.some((p) => p.k === next)) break;
-        k = next;
+    } finally {
+        resident.destroy();
     }
 
     const chosen = best ?? largest!;
