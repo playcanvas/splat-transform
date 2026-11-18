@@ -245,8 +245,9 @@ const shPaletteWeights = (
     const n = opacity.length;
     const logArea = new Float32Array(n);
     for (let i = 0; i < n; i++) {
-        // two largest of three: total minus the smallest
-        logArea[i] = s0[i] + s1[i] + s2[i] - Math.min(s0[i], s1[i], s2[i]);
+        // two largest of three, summed directly: total minus the smallest is NaN for a flat
+        // splat whose third log scale is -Infinity
+        logArea[i] = Math.max(s0[i], s1[i]) + Math.max(Math.min(s0[i], s1[i]), s2[i]);
     }
     // relative to the median area so the exponentials stay well scaled
     const median = Float32Array.from(logArea).sort()[n >> 1];
@@ -1047,5 +1048,5 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem): Promise<void>
     await writeSogSource(source, pool, rest, fs);
 };
 
-export { finishSogWrite, startSogWrite, writeSog, writeSogSource };
+export { finishSogWrite, shPaletteWeights, startSogWrite, writeSog, writeSogSource };
 export type { SogVersion };

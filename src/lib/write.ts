@@ -284,6 +284,7 @@ const writeSource = async (writeSourceOptions: WriteSourceOptions, fs: FileSyste
                     viewerSettingsJson: options.viewerSettingsJson,
                     bundle: outputFormat === 'html-bundle',
                     iterations: options.iterations ?? 10,
+                    colorError: options.shColorError,
                     webpEffort: options.webpEffort,
                     createDevice
                 },
