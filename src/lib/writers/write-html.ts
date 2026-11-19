@@ -24,6 +24,8 @@ type WriteHtmlOptions = {
     viewerSettingsJson?: ExperienceSettings;
     bundle: boolean;
     iterations: number;
+    /** SH palette colour error target in 8-bit levels, passed to the SOG writer. */
+    colorError?: number;
     /** Lossless WebP compression effort, 0–9. Omit to use the default WebP encoder. */
     webpEffort?: number;
     createDevice?: DeviceCreator;
@@ -40,7 +42,8 @@ type WriteHtmlOptions = {
  * @ignore
  */
 const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
-    const { filename, dataTable, model, viewerSettingsJson, bundle, iterations, webpEffort, createDevice } = options;
+    const { filename, dataTable, model, viewerSettingsJson, bundle, iterations, colorError, webpEffort, createDevice } =
+        options;
 
     // Fail here rather than shipping a page that renders nothing: the settings are read by
     // the exact viewer version bundled into this output, and a single-file export has no
@@ -63,6 +66,7 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
                 model,
                 bundle: true,
                 iterations,
+                colorError,
                 webpEffort,
                 createDevice,
                 version: VIEWER_SOG_VERSION,
@@ -108,6 +112,7 @@ const writeHtml = async (options: WriteHtmlOptions, fs: FileSystem) => {
                 model,
                 bundle: true,
                 iterations,
+                colorError,
                 webpEffort,
                 createDevice,
                 version: VIEWER_SOG_VERSION,

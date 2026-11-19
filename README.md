@@ -205,9 +205,12 @@ Used by SOG compression and GPU voxelization (`--filter-cluster`, `--filter-floa
 Apply when writing `.sog`, `meta.json`, `lod-meta.json`, or `.html` outputs.
 
 ```none
--i, --sh-iterations    <n>              Iterations for SH compression (more=better). Default: 10
-    --sh-palette-size  <n>              SH palette entries for .sog / meta.json (more=better, slower). Up to 262144
-                                          with SOG v3, 65536 with v2. Default: one per 1024 gaussians, at most 65536
+-i, --sh-iterations    <n>              SH compression iterations with --sh-palette-size (more=better). Default: 10
+    --sh-palette-size  <n>              Fixed SH palette entries for .sog / meta.json (more=better, slower). Up to
+                                          262144 with SOG v3, 65536 with v2. Default: sized by --sh-color-error
+    --sh-color-error   <levels>         SH palette size target: the visibility-weighted colour error (in 8-bit
+                                          levels) the palette may add; the smallest palette meeting it is
+                                          written, up to 262144 entries with SOG v3, 65536 with v2. Default: 5
     --max-workers      <n>              Worker threads for SOG and image-sequence encoding (0 = inline/serial). Default: 4
     --sog-version      <2|3>            SOG format version to write. 2 is for older viewers: it drops opacity
                                           above 1, blind data and a 4th SH band. Default: 3 (.html always embeds 3)

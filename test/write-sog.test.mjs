@@ -21,7 +21,7 @@ import { dataTableToChunkSource } from '../src/lib/compat/data-table.js';
 import { readFile as readRawFile } from '../src/lib/io/read/index.js';
 import {
     Transform, readSog,
-    MemoryFileSystem, MemoryReadFileSystem, ZipReadFileSystem, WebPCodec
+    MemoryFileSystem, MemoryReadFileSystem, ZipReadFileSystem, WebPCodec, writeSource
 } from '../src/lib/index.js';
 import { materializeToDataTable } from '../src/lib/compat/data-table.js';
 import { permuteSource } from '../src/lib/ops/index.js';
@@ -29,7 +29,7 @@ import { decodePlyToDataTable, readPly } from '../src/lib/readers/read-ply.js';
 import { readSogSource } from '../src/lib/readers/read-sog.js';
 import { createChunkDataPool } from '../src/lib/chunk/index.js';
 import { writeCompressedPly } from '../src/lib/writers/write-compressed-ply.js';
-import { writeSog, writeSogSource } from '../src/lib/writers/write-sog.js';
+import { shPaletteWeights, writeSog, writeSogSource } from '../src/lib/writers/write-sog.js';
 
 const sourceFromBytes = (bytes) => {
     const rfs = new MemoryReadFileSystem();
@@ -267,6 +267,18 @@ describe('writeSogSource: indices ordering contract', () => {
     });
 });
 
+// deterministic rng for reproducible data
+const mulberry32 = (seed) => {
+    let a = seed >>> 0;
+    return () => {
+        a = (a + 0x6D2B79F5) >>> 0;
+        let t = a;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+};
+
 describe('writeSogSource: GPU resources', () => {
     // created in before() so registration never blocks; skips when the
     // environment has no usable WebGPU adapter
@@ -294,5 +306,89 @@ describe('writeSogSource: GPU resources', () => {
             new MemoryFileSystem());
         await src.close();
         assert.strictEqual(device._computes.size, computes, 'leaked Compute objects on the device');
+    });
+    // band-1 SH drawn from 32 prototypes plus a little noise: a loose target needs
+    // about one entry per prototype, one below the noise needs far more
+    const prototypeTable = () => {
+        const count = 8192;
+        const dt = createTestDataTable(count, { includeSH: true, shBands: 1 });
+        const r = mulberry32(5);
+        const prototypes = Array.from({ length: 32 }, () => Array.from({ length: 9 }, () => 2 * r() - 1));
+        for (let k = 0; k < 9; k++) {
+            const col = dt.getColumnByName(`f_rest_${k}`).data;
+            for (let i = 0; i < count; i++) col[i] = prototypes[i % 32][k] + 0.01 * (2 * r() - 1);
+        }
+        return dt;
+    };
+
+    it('sizes the SH palette from the colour error target', async (t) => {
+        if (!device) return t.skip('no WebGPU adapter available');
+
+        const dt = prototypeTable();
+        const paletteFor = async (colorError) => {
+            const pool = createChunkDataPool();
+            const src = await readPly(await sourceFromBytes(encodePlyBinary(dt)), pool);
+            const fs = new MemoryFileSystem();
+            await writeSogSource(src, pool,
+                { filename: 'meta.json', bundle: false, iterations: 2, logging: 'silent', colorError, createDevice: async () => device },
+                fs);
+            await src.close();
+            return JSON.parse(new TextDecoder().decode(fs.results.get('meta.json'))).shN.count;
+        };
+
+        const loose = await paletteFor(3);
+        const tight = await paletteFor(0.05);
+        assert.ok(loose >= 32 && loose <= 256, `3-level target wrote ${loose} entries`);
+        assert.ok(tight > 2 * loose, `0.05-level target wrote ${tight} entries vs ${loose}`);
+    });
+
+    it('passes the colour error target to HTML exports', async (t) => {
+        if (!device) return t.skip('no WebGPU adapter available');
+
+        const encoded = encodePlyBinary(prototypeTable());
+        // palette size of the SOG embedded in (bundled) or written beside (unbundled) the page
+        const paletteFor = async (outputFormat, shColorError) => {
+            const pool = createChunkDataPool();
+            const source = await readPly(await sourceFromBytes(encoded), pool);
+            const fs = new MemoryFileSystem();
+            await writeSource({
+                filename: 'viewer.html', outputFormat, source, pool,
+                options: { iterations: 2, shColorError }, createDevice: async () => device
+            }, fs);
+            await source.close();
+            let sog = fs.results.get('viewer.sog');
+            if (outputFormat === 'html-bundle') {
+                const html = new TextDecoder().decode(fs.results.get('viewer.html'));
+                sog = Buffer.from(html.match(/data:application\/octet-stream;base64,([A-Za-z0-9+/=]+)/)[1], 'base64');
+            }
+            const rfs = new MemoryReadFileSystem();
+            rfs.set('scene.sog', new Uint8Array(sog));
+            const zipFs = new ZipReadFileSystem(await rfs.createSource('scene.sog'));
+            try {
+                return JSON.parse(new TextDecoder().decode(await readRawFile(zipFs, 'meta.json'))).shN.count;
+            } finally {
+                zipFs.close();
+            }
+        };
+
+        for (const format of ['html', 'html-bundle']) {
+            const loose = await paletteFor(format, 3);
+            const tight = await paletteFor(format, 0.05);
+            assert.ok(tight > 2 * loose, `${format}: 0.05-level target wrote ${tight} entries vs ${loose}`);
+        }
+    });
+});
+
+describe('shPaletteWeights', () => {
+    it('keeps the weight of a flat splat', () => {
+        // equally opaque splats whose two largest axes have equal area; the third is flat
+        // (log scale -Infinity), which must not turn its area into NaN
+        const weights = shPaletteWeights(
+            new Float32Array([0.5, 0.5, 0.5]),
+            new Float32Array([0, 0, 0]),
+            new Float32Array([0, -1, 0]),
+            new Float32Array([-1, 0, -Infinity])
+        );
+        assert.deepStrictEqual(Array.from(weights), [1, 1, 1]);
     });
 });

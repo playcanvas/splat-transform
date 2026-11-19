@@ -19,6 +19,14 @@ type Options = {
     /** Number of iterations for SOG SH compression (higher = better quality). Default: 10 */
     iterations?: number;
 
+    /**
+     * SOG SH palette size target: the visibility-weighted, view-averaged colour error the palette may
+     * add, in 8-bit levels. The writer picks the smallest palette that meets it. Default: 5. Ignored when
+     * `sogPaletteSize` is set, no GPU is available, or a single SOG's SH data exceeds the search's 2GB GPU
+     * budget (these use a fixed palette size).
+     */
+    shColorError?: number;
+
     /** Lossless WebP compression effort for image, SOG, HTML and LOD output, 0–9. Omit to use the default WebP encoder. */
     webpEffort?: number;
 
@@ -66,8 +74,9 @@ type Options = {
     sogExtras?: unknown;
 
     /**
-     * SH palette entries for SOG / SOG bundle output. Default: the gaussian count rounded down to a
-     * power of 2, at most 65536. v3 allows up to 262144 (24-bit labels); v2 up to 65536. LOD output keeps the default.
+     * Fixed SH palette entries for SOG / SOG bundle output. Default: sized by `shColorError`, or where that
+     * can't run the gaussian count rounded down to a power of 2, at most 65536. v3 allows up to 262144
+     * (24-bit labels); v2 up to 65536. LOD output always uses the default.
      */
     sogPaletteSize?: number;
 

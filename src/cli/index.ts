@@ -185,6 +185,7 @@ const cliOptionsConfig = {
     'sog-blind': { type: 'string', multiple: true },
     'sog-extras': { type: 'string' },
     'sh-palette-size': { type: 'string' },
+    'sh-color-error': { type: 'string', default: '5' },
     unbundled: { type: 'boolean', default: false },
     // negated as --no-compensation (parseArgs allowNegative)
     compensation: { type: 'boolean' },
@@ -686,6 +687,7 @@ const parseArguments = async () => {
         sogBlind,
         ...(v['sog-extras'] !== undefined ? { sogExtras: await readJsonFile(v['sog-extras']) } : {}),
         ...(v['sh-palette-size'] !== undefined ? { sogPaletteSize: parseInteger(v['sh-palette-size']) } : {}),
+        shColorError: parseNumber(v['sh-color-error'], 0.01),
         voxelResolution,
         opacityCutoff,
         navExteriorRadius,
@@ -991,10 +993,12 @@ GPU (used by SOG compression and GPU voxelization: --filter-cluster, --filter-fl
                                               (e.g. vulkan works around Dawn D3D12 bugs on Windows)
 
 SOG COMPRESSION (.sog, meta.json, lod-meta.json, .html outputs)
-    -i, --sh-iterations    <n>              SH compression iterations (more=better). Default: 10
-        --sh-palette-size  <n>              SH palette entries for .sog / meta.json (more=better, slower). Up to 262144
-                                              with SOG v3, 65536 with v2. Default: the gaussian count rounded down to a
-                                              power of 2, at most 65536
+    -i, --sh-iterations    <n>              SH compression iterations with --sh-palette-size (more=better). Default: 10
+        --sh-palette-size  <n>              Fixed SH palette entries for .sog / meta.json (more=better, slower). Up to
+                                              262144 with SOG v3, 65536 with v2. Default: sized by --sh-color-error
+        --sh-color-error   <levels>         SH palette size target: the visibility-weighted colour error (in 8-bit
+                                              levels) the palette may add; the smallest palette meeting it is
+                                              written, up to 262144 entries with SOG v3, 65536 with v2. Default: 5
         --max-workers      <n>              Worker threads for SOG and image-sequence encoding (0 = inline/serial). Default: 4
         --sog-version      <2|3>            SOG format version to write. 2 is for older viewers: it drops opacity
                                               above 1, blind data and a 4th SH band. Default: 3 (.html always embeds 3)
@@ -1689,6 +1693,7 @@ const main = async () => {
                     mainSource,
                     envSource,
                     iterations: options.iterations,
+                    colorError: options.shColorError,
                     webpEffort: options.webpEffort,
                     createDevice: deviceCreator,
                     sogVersion: options.sogVersion,
