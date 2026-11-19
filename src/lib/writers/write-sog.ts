@@ -221,7 +221,7 @@ const MAX_PORTABLE_BLIND_TEXTURES = 8;
 const SCALE_IMPORTANCE = 0.25;
 
 /** Default SH palette colour error target, in 8-bit levels (`colorError`). */
-const DEFAULT_SH_COLOR_ERROR = 6;
+const DEFAULT_SH_COLOR_ERROR = 5;
 
 /**
  * Per-gaussian weight of the SH palette clustering and its colour error: how much a gaussian's colour

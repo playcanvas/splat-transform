@@ -185,7 +185,7 @@ const cliOptionsConfig = {
     'sog-blind': { type: 'string', multiple: true },
     'sog-extras': { type: 'string' },
     'sh-palette-size': { type: 'string' },
-    'sh-color-error': { type: 'string', default: '6' },
+    'sh-color-error': { type: 'string', default: '5' },
     unbundled: { type: 'boolean', default: false },
     // negated as --no-compensation (parseArgs allowNegative)
     compensation: { type: 'boolean' },
@@ -998,7 +998,7 @@ SOG COMPRESSION (.sog, meta.json, lod-meta.json, .html outputs)
                                               262144 with SOG v3, 65536 with v2. Default: sized by --sh-color-error
         --sh-color-error   <levels>         SH palette size target: the visibility-weighted colour error (in 8-bit
                                               levels) the palette may add; the smallest palette meeting it is
-                                              written, up to 262144 entries with SOG v3, 65536 with v2. Default: 6
+                                              written, up to 262144 entries with SOG v3, 65536 with v2. Default: 5
         --max-workers      <n>              Worker threads for SOG and image-sequence encoding (0 = inline/serial). Default: 4
         --sog-version      <2|3>            SOG format version to write. 2 is for older viewers: it drops opacity
                                               above 1, blind data and a 4th SH band. Default: 3 (.html always embeds 3)

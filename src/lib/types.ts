@@ -21,7 +21,7 @@ type Options = {
 
     /**
      * SOG SH palette size target: the visibility-weighted, view-averaged colour error the palette may
-     * add, in 8-bit levels. The writer picks the smallest palette that meets it. Default: 6. Ignored when
+     * add, in 8-bit levels. The writer picks the smallest palette that meets it. Default: 5. Ignored when
      * `sogPaletteSize` is set, no GPU is available, or a single SOG's SH data exceeds the search's 2GB GPU
      * budget (these use a fixed palette size).
      */
