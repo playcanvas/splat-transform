@@ -1,3 +1,4 @@
+export { readCsv } from './read-csv';
 export { readGlb } from './read-glb';
 export { readKsplat } from './read-ksplat';
 export { readMjs } from './read-mjs';
