@@ -1,0 +1,17 @@
+.git
+.github
+.agents
+.aws
+.bench
+.codex
+.cursor
+AGENTS.md
+dist
+docs
+generators
+node_modules
+scenes
+test
+coverage
+*.log
+.DS_Store

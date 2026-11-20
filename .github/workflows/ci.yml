@@ -7,6 +7,27 @@ on:
     branches: [main]
 
 jobs:
+  docker:
+    name: Docker
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+
+      - name: Build image
+        run: docker build --tag splat-transform .
+
+      - name: Run CLI smoke tests
+        run: |
+          docker run --rm splat-transform --version
+          workdir="$RUNNER_TEMP/splat-transform-docker"
+          mkdir "$workdir"
+          cp test/fixtures/splat/minimal.splat "$workdir/input.splat"
+          docker run --rm --user "$(id -u):$(id -g)" \
+            --volume "$workdir:/work" splat-transform \
+            --gpu cpu input.splat output.ply
+          test -s "$workdir/output.ply"
+
   build:
     name: Build
     runs-on: ubuntu-latest
