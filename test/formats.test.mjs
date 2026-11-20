@@ -270,6 +270,28 @@ describe('Compressed PLY Format', () => {
         compareSummaries(actualSummary, expectedSummary, { tolerance: 0.1 });
     });
 
+    it('a non-finite value must not corrupt the rest of its 256-splat chunk', async () => {
+        const dt = createTestDataTable(256);
+        dt.transform = Transform.PLY.clone();
+        dt.getColumnByName('x').data[7] = NaN;
+        dt.getColumnByName('scale_0').data[9] = NaN;
+        dt.getColumnByName('f_dc_1').data[11] = NaN;
+
+        const writeFs = new MemoryFileSystem();
+        await writeCompressedPly({ filename: 'nan.compressed.ply', dataTable: dt }, writeFs);
+
+        const pool = createChunkDataPool();
+        const readBack = await materializeToDataTable(
+            await readPly(new BufferReadSource(writeFs.results.get('nan.compressed.ply')), pool), pool
+        );
+
+        // Before the fix all 256 splats decoded as NaN in each of these columns.
+        for (const name of ['x', 'scale_0', 'f_dc_1']) {
+            const nanCount = Array.from(readBack.getColumnByName(name).data).filter(Number.isNaN).length;
+            assert.strictEqual(nanCount, 0, `${name}: ${nanCount} NaN values after round-trip`);
+        }
+    });
+
     it('writeCompressedPlySource (ChunkSource adapter) == writeCompressedPly byte-for-byte', async () => {
         const dt = createTestDataTable(300, { includeSH: true, shBands: 1 });
         dt.transform = Transform.PLY.clone();
