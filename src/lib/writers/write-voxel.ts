@@ -17,7 +17,16 @@ import { GaussianBVH } from '../spatial';
 import type { CollisionMeshShape, DeviceCreator } from '../types';
 import { fmtCount, logger, Transform } from '../utils';
 import { version } from '../version';
-import { filterAndFillBlocks, alignGridBounds, carve, fillExterior, fillFloor, voxelizeToBuffer } from '../voxel';
+import {
+    filterAndFillBlocks,
+    alignGridBounds,
+    carve,
+    closeGaps,
+    closeGapsHalfExtent,
+    fillExterior,
+    fillFloor,
+    voxelizeToBuffer
+} from '../voxel';
 import type { NavSeed } from '../voxel';
 import type { BlockMaskBuffer } from '../voxel/block-mask-buffer';
 import { SparseVoxelGrid } from '../voxel/sparse-voxel-grid';
@@ -149,6 +158,9 @@ type WriteVoxelOptions = {
 
     /** Optional function to create a GPU device for voxelization */
     createDevice?: DeviceCreator;
+
+    /** Width in world units of the widest holes and gaps in the solid voxels to close, by a morphological closing. Runs before the fills and the carve. Default: 0 (disabled) */
+    closeGaps?: number;
 
     /** Exterior fill radius in world units. Enables exterior fill when set. Requires navSeed; ignored without it. */
     navExteriorRadius?: number;
@@ -430,6 +442,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         voxelResolution = 0.05,
         opacityCutoff = 0.1,
         createDevice,
+        closeGaps: closeGapsWidth = 0,
         navExteriorRadius,
         floorFill = false,
         floorFillDilation = 0,
@@ -458,6 +471,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
     const hasNav = !!(navCapsule && navSeed && navCapsule.height > 0);
     const hasFillExterior = !!(navExteriorRadius && navSeed);
     const hasFloorFill = floorFill;
+    const hasCloseGaps = closeGapsWidth > 0;
 
     // Build a DataTable in engine space containing only the columns needed
     // for voxelization (no SH, so SH rotation cost is never paid).
@@ -519,12 +533,19 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         // Vertical pad is only contributed by exteriorPad — fillFloor's
         // dilation is XZ-only, and Y padding would extend the wall pillars
         // above the splat's natural ceiling and below its floor.
+        //
+        // closeGaps needs a margin of empty voxels as wide as its dilation on
+        // every side, as its erosion counts the voxels outside the grid as
+        // solid, which would close the gaps along the grid boundary.
         const exteriorPad = hasFillExterior
             ? (Math.ceil(navExteriorRadius! / voxelResolution) + 1) * voxelResolution
             : 0;
         const floorPad = hasFloorFill ? (Math.ceil(floorFillDilation / voxelResolution) + 1) * voxelResolution : 0;
-        const padXZ = Math.max(exteriorPad, floorPad);
-        const padY = exteriorPad;
+        const closePad = hasCloseGaps
+            ? (closeGapsHalfExtent(closeGapsWidth, voxelResolution) + 1) * voxelResolution
+            : 0;
+        const padXZ = Math.max(exteriorPad, floorPad, closePad);
+        const padY = Math.max(exteriorPad, closePad);
         let gridBounds = alignGridBounds(
             bounds.min.x - padXZ,
             bounds.min.y - padY,
@@ -552,7 +573,8 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
         buffer.clear();
         filterSub.end();
 
-        const needsMutableGrid = hasFillExterior || hasFloorFill || hasNav || collisionMeshShape !== null;
+        const needsMutableGrid =
+            hasCloseGaps || hasFillExterior || hasFloorFill || hasNav || collisionMeshShape !== null;
         let glbBytes: Uint8Array | null = null;
         let octree: SparseOctree;
 
@@ -574,7 +596,7 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             );
             filteredBuffer.clear();
         } else {
-            const simultaneousGrids = hasFillExterior || hasFloorFill || hasNav ? 4 : 2;
+            const simultaneousGrids = hasCloseGaps || hasFillExterior || hasFloorFill || hasNav ? 4 : 2;
             assertMutableGridFits(filteredBuffer, nbxInit, nbyInit, nbzInit, simultaneousGrids);
 
             const loadSub = logger.group('Loading grid');
@@ -589,10 +611,19 @@ const writeVoxel = async (options: WriteVoxelOptions, fs: FileSystem): Promise<v
             filteredBuffer.clear();
             loadSub.end();
 
-            // Reuse the same device for GPU dilation across exterior, floor, carve.
-            const needsGpuDilation = hasFillExterior || hasNav || (hasFloorFill && floorFillDilation > 0);
+            // Reuse the same device for GPU dilation across close, exterior, floor, carve.
+            const needsGpuDilation =
+                hasCloseGaps || hasFillExterior || hasNav || (hasFloorFill && floorFillDilation > 0);
             if (needsGpuDilation) {
                 gpuDilation = new GpuDilation(device);
+            }
+
+            // Close the holes first, so that the fills and the carve do not
+            // leak through them.
+            if (hasCloseGaps) {
+                const sub = logger.group('Close gaps');
+                grid = await closeGaps(grid, voxelResolution, closeGapsWidth, gpuDilation!);
+                sub.end();
             }
 
             if (hasFillExterior) {
