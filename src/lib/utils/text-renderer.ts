@@ -5,7 +5,6 @@ import type { LogEvent, Renderer } from './logger';
 /**
  * Output streams and optional memory-usage probe for {@link TextRenderer}.
  */
-// eslint-disable-next-line @typescript-eslint/consistent-type-definitions -- preserve public declaration merging
 interface TextRendererOptions {
     /**
      * Receives all status chunks (scopes, bars, messages). May contain

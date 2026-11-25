@@ -67,7 +67,7 @@ describe('processSource A/B vs processDataTable', () => {
         assertEquivalent(tableA, tableB);
     });
 
-    it('filterNaN drops the same rows (with +Inf opacity / -Inf scale kept)', async () => {
+    it('filterNaN drops the same rows (with ±Inf opacity / -Inf scale kept)', async () => {
         const inject = (dt) => {
             const col = n => dt.getColumnByName(n).data;
             col('x')[5] = NaN;            // drop
@@ -75,11 +75,11 @@ describe('processSource A/B vs processDataTable', () => {
             col('scale_0')[15] = -Infinity; // keep (-Inf ok for scale)
             col('z')[20] = Infinity;        // drop
             col('f_dc_0')[25] = NaN;        // drop
-            col('opacity')[30] = -Infinity; // drop (-Inf not ok for opacity)
+            col('opacity')[30] = -Infinity; // keep (-Inf ok for opacity: opacity 0)
             col('scale_1')[35] = Infinity;  // drop (+Inf not ok for scale)
         };
         const { tableA, tableB } = await runAB(300, {}, [{ kind: 'filterNaN' }], inject);
-        assert.strictEqual(tableA.numRows, 295);
+        assert.strictEqual(tableA.numRows, 296);
         assertEquivalent(tableA, tableB);
     });
 

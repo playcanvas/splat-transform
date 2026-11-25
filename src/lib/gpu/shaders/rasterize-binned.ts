@@ -94,7 +94,15 @@ fn main(
         // at the 3σ truncation radius instead of clipping at ~1.1% —
         // eliminates faint ring artifacts at splat edges. Matches the
         // PlayCanvas engine.
-        let alpha = min(OPACITY_CAP, v1.w * max(0.0, exp(power) - GAUSSIAN_FLOOR));
+        // v0.w > 0: over-unity opacity (see project.ts), an opaque core of radius v0.w (a fraction
+        // of SIGMA_CUTOFF) with the gaussian's falloff stretched over the rest, the distance in sigma
+        // remapped as max(0, r - core) / (1 - core).
+        var prof = exp(power);
+        if (v0.w > 0.0) {
+            let sh = max(0.0, sqrt(-2.0 * power) - v0.w * SIGMA_CUTOFF) / (1.0 - v0.w);
+            prof = exp(-0.5 * sh * sh);
+        }
+        let alpha = min(OPACITY_CAP, v1.w * max(0.0, prof - GAUSSIAN_FLOOR));
         if (alpha <= 0.0 || alpha < minAlpha) { continue; }
         let weight = T * alpha;
         let v2 = projected[splatIdx * 3u + 2u];

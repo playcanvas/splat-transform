@@ -1,7 +1,7 @@
 /**
  * Depth sort keys for the scene rasterizer: one thread per gaussian, reading
  * its centre from the resident position layer and writing a u32 key whose
- * unsigned order is the front-to-back order of the chunked path's CPU sort.
+ * unsigned order is the front-to-back order of the streamed-cpu tier's CPU sort.
  *
  * - pinhole: camera-space depth `forward · (p − eye)`;
  * - equirect: radial distance squared (monotone in the distance).

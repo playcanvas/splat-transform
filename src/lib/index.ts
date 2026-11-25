@@ -83,9 +83,9 @@ export type { TypedArray, ColumnType, Row } from './data-table';
 export { dataTableToChunkSource, materializeToDataTable } from './compat/data-table';
 export { processDataTable } from './process';
 
-// Individual readers (advanced use; ply/splat/spz return a `ChunkSource`,
-// ksplat/mjs/sog return a `DataTable`)
-export { readKsplat, readMjs, readPly, readSog, readSplat, readSpz } from './readers';
+// Individual readers (advanced use; ply/splat/spz/glb return a `ChunkSource`,
+// csv/ksplat/mjs/sog return a `DataTable`)
+export { readCsv, readGlb, readKsplat, readMjs, readPly, readSog, readSplat, readSpz } from './readers';
 
 // Individual writers (advanced use; DataTable-input compat set)
 export {
@@ -113,6 +113,7 @@ export type { CameraTrack, TrackPose } from './render/camera-track';
 // Utils
 export { fmtBytes, fmtCount, fmtTime, logger, TextRenderer, Transform, WebPCodec } from './utils';
 export type { Bar, Group, LogEvent, Logger, MessageKind, Renderer, TextRendererOptions, Verbosity } from './utils';
+export type { SogBlindEncoding, SogBlindField, SogBlindTexture } from './utils/sog-blind';
 
 // Worker pool for CPU-heavy tasks
 export { WorkerQueue } from './workers';

@@ -76,8 +76,9 @@ describe('rendered-quality acceptance', () => {
         if (!device) return t.skip('no WebGPU adapter available');
 
         const { Vec3 } = await import('playcanvas');
-        const { Column, DataTable, processDataTable } = await import('../src/lib/index.js');
-        const { renderSplats } = await import('../src/lib/render/index.js');
+        const { Column, DataTable, dataTableToChunkSource, processDataTable } = await import('../src/lib/index.js');
+        const { createChunkDataPool } = await import('../src/lib/chunk/index.js');
+        const { SceneRenderer } = await import('../src/lib/render/index.js');
 
         const n = 4000, target = 2000;
         const { view } = await makeSyntheticSource(n, 1, 53, { chunkSize: 1024 });
@@ -125,6 +126,19 @@ describe('rendered-quality acceptance', () => {
             near: 0.1
         }));
         const background = { r: 0, g: 0, b: 0, a: 1 };
+        const renderTable = async (table, camera) => {
+            const source = dataTableToChunkSource(table);
+            const renderer = new SceneRenderer(device, source, createChunkDataPool(), {
+                projection: 'pinhole', width: camera.width, height: camera.height, background
+            });
+            try {
+                await renderer.upload();
+                return await renderer.render(camera);
+            } finally {
+                renderer.destroy();
+                await source.close();
+            }
+        };
 
         const psnr = (a, b) => {
             let se = 0;
@@ -137,9 +151,9 @@ describe('rendered-quality acceptance', () => {
         };
 
         for (const camera of cameras) {
-            const ref = await renderSplats(device, original, camera, background);
-            const legacyImg = await renderSplats(device, legacy, camera, background);
-            const oursImg = await renderSplats(device, ours, camera, background);
+            const ref = await renderTable(original, camera);
+            const legacyImg = await renderTable(legacy, camera);
+            const oursImg = await renderTable(ours, camera);
             const psnrLegacy = psnr(legacyImg, ref);
             const psnrOurs = psnr(oursImg, ref);
             assert.ok(

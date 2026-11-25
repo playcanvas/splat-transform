@@ -241,3 +241,98 @@ describe('RotateSH axis-aligned fast path', () => {
         });
     });
 });
+
+// Real SH basis exactly as the renderers evaluate it (engine gsplatEvalSH /
+// 3DGS sh_utils), bands 1-4, for a unit direction.
+const evalBasis = (x, y, z) => {
+    const xx = x * x, yy = y * y, zz = z * z, xy = x * y, yz = y * z, xz = x * z;
+    return [
+        // band 1
+        -0.4886025119029199 * y, 0.4886025119029199 * z, -0.4886025119029199 * x,
+        // band 2
+        1.0925484305920792 * xy, -1.0925484305920792 * yz, 0.31539156525252005 * (2 * zz - xx - yy),
+        -1.0925484305920792 * xz, 0.5462742152960396 * (xx - yy),
+        // band 3
+        -0.5900435899266435 * y * (3 * xx - yy), 2.890611442640554 * xy * z,
+        -0.4570457994644658 * y * (4 * zz - xx - yy), 0.3731763325901154 * z * (2 * zz - 3 * xx - 3 * yy),
+        -0.4570457994644658 * x * (4 * zz - xx - yy), 1.445305721320277 * z * (xx - yy),
+        -0.5900435899266435 * x * (xx - 3 * yy),
+        // band 4
+        2.5033429417967046 * xy * (xx - yy), -1.7701307697799304 * yz * (3 * xx - yy),
+        0.9461746957575601 * xy * (7 * zz - 1), -0.6690465435572892 * yz * (7 * zz - 3),
+        0.10578554691520431 * (zz * (35 * zz - 30) + 3), -0.6690465435572892 * xz * (7 * zz - 3),
+        0.47308734787878004 * (xx - yy) * (7 * zz - 1), -1.7701307697799304 * xz * (xx - 3 * yy),
+        0.6258357354491761 * (xx * (xx - 3 * yy) - yy * (3 * xx - yy))
+    ];
+};
+
+const BAND_RANGES = [[0, 3], [3, 8], [8, 15], [15, 24]];
+
+// Evaluate one band of a 24-coefficient channel at direction d.
+const evalBand = (c, band, d) => {
+    const y = evalBasis(...d);
+    const [a, b] = BAND_RANGES[band];
+    let sum = 0;
+    for (let i = a; i < b; i++) sum += c[i] * y[i];
+    return sum;
+};
+
+describe('RotateSH band 4', () => {
+    let seed = 7;
+    const rand = () => {
+        seed = (seed * 16807) % 2147483647;
+        return seed / 2147483647 * 2 - 1;
+    };
+    const randDir = () => {
+        const v = [rand(), rand(), rand()];
+        const l = Math.hypot(...v);
+        return v.map(c => c / l);
+    };
+
+    // f'(d) = f(R^T d): rotating the coefficients rotates the function.
+    const checkRotation = (mat, label) => {
+        const r = new RotateSH(mat);
+        const c = Float64Array.from({ length: 24 }, rand);
+        const out = new Float32Array(24);
+        r.apply(out, c);
+        const m = mat.data;
+        for (let t = 0; t < 20; t++) {
+            const d = randDir();
+            // R^T d with column-major R
+            const rd = [
+                m[0] * d[0] + m[1] * d[1] + m[2] * d[2],
+                m[3] * d[0] + m[4] * d[1] + m[5] * d[2],
+                m[6] * d[0] + m[7] * d[1] + m[8] * d[2]
+            ];
+            for (let band = 0; band < 4; band++) {
+                assertClose(evalBand(out, band, d), evalBand(c, band, rd), 1e-5, `${label} band ${band + 1}`);
+            }
+        }
+    };
+
+    it('rotates every band consistently with the evaluated basis (general rotations)', () => {
+        for (let i = 0; i < 10; i++) {
+            const q = new Quat(rand(), rand(), rand(), rand()).normalize();
+            checkRotation(new Mat3().setFromQuat(q), `random ${i}`);
+        }
+    });
+
+    it('rotates every band consistently on the axis-aligned fast path', () => {
+        for (const [x, y, z] of [[90, 0, 0], [0, 90, 0], [0, 0, 90], [180, 0, 0], [90, 180, -90]]) {
+            checkRotation(mat3FromEulers(x, y, z), `axis ${x},${y},${z}`);
+        }
+    });
+
+    it('preserves band-4 energy and composes', () => {
+        const q1 = new Quat().setFromEulerAngles(17, -40, 63);
+        const q2 = new Quat().setFromEulerAngles(-5, 22, 141);
+        const c = Float32Array.from({ length: 24 }, rand);
+        const a = c.slice();
+        new RotateSH(new Mat3().setFromQuat(q1)).apply(a);
+        new RotateSH(new Mat3().setFromQuat(q2)).apply(a);
+        const b = c.slice();
+        new RotateSH(new Mat3().setFromQuat(new Quat().mul2(q2, q1))).apply(b);
+        for (let i = 15; i < 24; i++) assertClose(a[i], b[i], 1e-5, `composed coeff ${i}`);
+        assertClose(bandNorm(a, 15, 9), bandNorm(c, 15, 9), 1e-4, 'band-4 energy');
+    });
+});

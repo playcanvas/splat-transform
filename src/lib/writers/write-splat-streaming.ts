@@ -79,7 +79,7 @@ const writeSplatStreaming = async (
                 dv.setUint8(off + 24, clamp((0.5 + C[i * 3 + 0] * SH_C0) * 255));
                 dv.setUint8(off + 25, clamp((0.5 + C[i * 3 + 1] * SH_C0) * 255));
                 dv.setUint8(off + 26, clamp((0.5 + C[i * 3 + 2] * SH_C0) * 255));
-                dv.setUint8(off + 27, clamp((1 / (1 + Math.exp(-O[i]))) * 255));
+                dv.setUint8(off + 27, clamp(O[i] * 255)); // true opacity, clamped to 1
 
                 // rot_* are not necessarily unit length; normalize before
                 // quantizing so components beyond +-1 are not clamped

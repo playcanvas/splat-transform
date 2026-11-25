@@ -59,6 +59,10 @@ type SceneRendererOptions = {
     residentBudget?: number;
     /** Use this tier regardless of fit (tests); default picks the first that fits. */
     tier?: SceneTier;
+    /** Draw opacity above 1 with the over-unity profile; default true (false clamps it to 1). */
+    compensation?: boolean;
+    /** Screen-space filter, in pixels², of scenes trained with anti-aliasing; default `AA_FILTER_COV` (0.1). */
+    antiAliasFilterSize?: number;
 };
 
 /**
@@ -151,6 +155,9 @@ class SceneRenderer {
             groupTilesX,
             groupTilesY,
             sizeClamp: options.sizeClamp,
+            clampOpacity: options.compensation === false,
+            aaCompensation: source.meta.model === 'antialiased',
+            antiAliasFilterSize: options.antiAliasFilterSize,
             bgR: bg.r,
             bgG: bg.g,
             bgB: bg.b,

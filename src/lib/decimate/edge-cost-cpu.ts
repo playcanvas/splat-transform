@@ -26,7 +26,7 @@
  * Engine-free.
  */
 
-import { EPS_COV, sigmoid, ellipsoidArea, quatToRotmat, sigmaFromRotVar } from './moment-match';
+import { EPS_COV, ellipsoidArea, quatToRotmat, sigmaFromRotVar } from './moment-match';
 import type { SplatView } from './moment-match';
 
 /** SH band-0 constant (f_dc → base colour: 0.5 + C0·f_dc). */
@@ -65,7 +65,7 @@ const TWO_PI_1_5 = (2 * Math.PI) ** 1.5;
  *   [3..8]   covariance Σ (xx, xy, xz, yy, yz, zz) — unregularized
  *   [9]      sqrtDet = √|Σ| = sx·sy·sz
  *   [10]     alpha (linear opacity)
- *   [11]     mass (area·α merge weight)
+ *   [11]     mass (area·A merge weight, A the true opacity)
  *   [12..14] base colour (0.5 + C0·f_dc per channel)
  *   [15]     |base|²
  *
@@ -85,7 +85,7 @@ const buildSplatCache = (view: SplatView, out: Float32Array): number => {
     for (let i = 0; i < n; i++) {
         const i8 = 8 * i;
 
-        const a = sigmoid(geo[i8 + 7]);
+        const a = Math.min(geo[i8 + 7], 1);
         const sx = Math.max(Math.exp(geo[i8 + 4]), 1e-12);
         const sy = Math.max(Math.exp(geo[i8 + 5]), 1e-12);
         const sz = Math.max(Math.exp(geo[i8 + 6]), 1e-12);
@@ -116,7 +116,7 @@ const buildSplatCache = (view: SplatView, out: Float32Array): number => {
         out[o + 8] = S[8];
         out[o + 9] = sx * sy * sz;
         out[o + 10] = a;
-        out[o + 11] = a * ellipsoidArea(sx, sy, sz) + 1e-30;
+        out[o + 11] = geo[i8 + 7] * ellipsoidArea(sx, sy, sz) + 1e-30;
 
         const br = 0.5 + C0 * color[i * colorDim];
         const bg = 0.5 + C0 * color[i * colorDim + 1];
@@ -211,6 +211,13 @@ const computeEdgeCost = (cache: Float32Array, i: number, j: number): number => {
 
     // Merged opacity: mass-conserving, capped at 1 (needs merged scales, i.e.
     // eigenvalues of Σ_m — Smith's closed form for a symmetric 3×3).
+    // The cap is deliberate even though merges keep opacity above 1
+    // (as true opacity): it only steers selection. Uncapping it (and scoring
+    // inputs at their true opacity) was A/B tested on five scenes (2026-10-29) and
+    // was worse under the default compensation, because this additive field
+    // ignores occlusion and the renderer draws opacity above 1 as a shrunk opaque
+    // plateau, so dense merges score cheaper than they render. The cap sites
+    // in recost-core.ts, gpu-edge-cost.ts and gpu-recost.ts must stay in step.
     const q = (sxx + syy + szz) / 3;
     const p1 = sxy * sxy + sxz * sxz + syz * syz;
     let e0: number, e1: number, e2: number;

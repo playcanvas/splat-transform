@@ -113,6 +113,9 @@ describe('stats process action', () => {
     });
 });
 
+// A source holds true opacity, so its stats see sigmoid of a table's opacity logit.
+const sourceValues = (name, data) => (name === 'opacity' ? Float32Array.from(data, (v) => 1 / (1 + Math.exp(-v))) : data);
+
 describe('computeStats accuracy', () => {
     it('matches an exact oracle per column (median within bin error)', async () => {
         const dt = createTestDataTable(300, { includeSH: true, shBands: 1 });
@@ -122,7 +125,7 @@ describe('computeStats accuracy', () => {
         assert.strictEqual(lod.numGaussians, 300);
         for (let i = 0; i < lod.columns.length; i++) {
             const name = lod.columns[i];
-            const expected = exactStats(dt.getColumnByName(name).data);
+            const expected = exactStats(sourceValues(name, dt.getColumnByName(name).data));
             assert.ok(Math.abs(lod.data.min[i] - expected.min) <= 1e-5, `${name}.min`);
             assert.ok(Math.abs(lod.data.max[i] - expected.max) <= 1e-5, `${name}.max`);
             assert.ok(Math.abs(lod.data.mean[i] - expected.mean) <= 1e-5 * (1 + Math.abs(expected.mean)), `${name}.mean`);
@@ -193,7 +196,7 @@ describe('computeStats accuracy', () => {
         const json = JSON.parse(outputs[0]);
         for (const name of ['opacity', 'scale_0', 'f_dc_0']) {
             const i = lods[0].columns.indexOf(name);
-            const expected = +forwardTransforms[name](lods[0].data.median[i]).toPrecision(6);
+            const expected = +(forwardTransforms[name] ?? ((v) => v))(lods[0].data.median[i]).toPrecision(6);
             assert.strictEqual(json.stats[0].data.median[i], expected, `${name} display median`);
         }
         // Untransformed columns pass through raw.
@@ -217,7 +220,7 @@ describe('computeStats accuracy', () => {
         for (const name of ['opacity', 'scale_0', 'f_dc_0', 'x']) {
             const i = lods[0].columns.indexOf(name);
             const fn = forwardTransforms[name] ?? ((v) => v);
-            const expected = exactStats(Array.from(dt.getColumnByName(name).data, fn));
+            const expected = exactStats(Array.from(sourceValues(name, dt.getColumnByName(name).data), fn));
             assert.ok(Math.abs(lods[0].data.displayMean[i] - expected.mean) <= 1e-5 * (1 + Math.abs(expected.mean)), `${name}.displayMean`);
             assert.ok(Math.abs(lods[0].data.displayStdDev[i] - expected.stdDev) <= 1e-5 * (1 + expected.stdDev), `${name}.displayStdDev`);
             assert.strictEqual(json.stats[0].data.mean[i], lods[0].data.displayMean[i], `${name} JSON mean`);

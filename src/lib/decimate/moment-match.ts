@@ -4,25 +4,18 @@
  * Engine-free: this module is imported by worker tasks, so it must not import
  * DataTable or playcanvas (see the note at the top of workers/tasks.ts).
  *
- * The n = 2 path of {@link mergeGroup} is arithmetic-identical to the legacy
- * `momentMatch` in the pre-3.0 `data-table/decimate.ts` (area·α weighted,
- * law-of-total-variance covariance, mass-conserving opacity capped at 1) —
- * enforced by test/moment-match.test.mjs against a verbatim reference copy.
+ * The n = 2 path of {@link mergeGroup} matches the legacy `momentMatch` in the
+ * pre-3.0 `data-table/decimate.ts` (area·α weighted, law-of-total-variance
+ * covariance, mass-conserving opacity) — enforced by test/moment-match.test.mjs
+ * against a verbatim reference copy — to f32 precision: it reads true opacity
+ * (stored as f32) where the legacy merge took the sigmoid of a logit, and keeps
+ * the full mass as true opacity where the legacy merge capped it at 1.
  */
 
 const LOG2PI = Math.log(2 * Math.PI);
 
 /** Covariance diagonal regularizer, matching legacy EPS_COV. */
 const EPS_COV = 1e-8;
-
-// ---------- sigmoid / logit ----------
-
-const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
-
-const logit = (p: number) => {
-    p = Math.max(1e-7, Math.min(1 - 1e-7, p));
-    return Math.log(p / (1 - p));
-};
 
 const logAddExp = (a: number, b: number) => {
     if (a === -Infinity) return b;
@@ -263,7 +256,7 @@ const ellipsoidArea = (sx: number, sy: number, sz: number): number => {
 /**
  * Column-tight view over a batch of splats, the working representation for
  * block processing. `pos` is 3 f32/splat (x, y, z); `geo` is 8 f32/splat in
- * geometric-layer order (rot_0..3, scale_0..2 log-space, opacity logit);
+ * geometric-layer order (rot_0..3, scale_0..2 log-space, true opacity);
  * `color` is `colorDim` f32/splat (dc0..2 then f_rest coefficients).
  */
 type SplatView = {
@@ -273,7 +266,10 @@ type SplatView = {
     colorDim: number;
 };
 
-/** Merged-splat output: pos 3, geo 8 (same encoding as SplatView), color colorDim. */
+/**
+ * Merged-splat output: pos 3, geo 8 (same encoding as SplatView, opacity the
+ * merged true opacity, unclamped), color colorDim.
+ */
 type MergedOut = {
     pos: Float64Array;
     geo: Float64Array;
@@ -313,9 +309,9 @@ const createMergeScratch = (): MergeScratch => ({
 });
 
 /**
- * Merge weight of one splat: area·α "ink" mass (+1e-30, the merge-path
- * epsilon; the cost-path cache uses +1e-12 — both match their legacy
- * counterparts exactly).
+ * Merge weight of one splat: area·A "ink" mass, A the true opacity (+1e-30,
+ * the merge-path epsilon; the cost-path cache uses +1e-12 — both match their
+ * legacy counterparts exactly).
  * @param geo - Geometric-layer view (8 f32/splat).
  * @param i - Splat index.
  * @returns The merge weight.
@@ -325,20 +321,20 @@ const splatMass = (geo: Float32Array, i: number): number => {
     const sx = Math.max(Math.exp(geo[i8 + 4]), 1e-12);
     const sy = Math.max(Math.exp(geo[i8 + 5]), 1e-12);
     const sz = Math.max(Math.exp(geo[i8 + 6]), 1e-12);
-    return sigmoid(geo[i8 + 7]) * ellipsoidArea(sx, sy, sz) + 1e-30;
+    return geo[i8 + 7] * ellipsoidArea(sx, sy, sz) + 1e-30;
 };
 
 /**
  * n-ary moment match: merge `count` splats into one Gaussian. Weights are
  * area·α; merged covariance is the weighted sum of (δδᵀ + Σₖ) (law of total
- * variance); opacity is mass-conserving capped at 1; color/SH is the weighted
+ * variance); opacity is mass-conserving (it may exceed 1); color/SH is the weighted
  * average. For n = 2 this is arithmetic-identical to the legacy pairwise
  * `momentMatch`.
  *
  * @param view - Splat columns.
  * @param members - Indices of the splats to merge.
  * @param count - Number of members.
- * @param out - Output splat (geo encoded ready-to-store: quat, log scales, logit opacity).
+ * @param out - Output splat (geo encoded ready-to-store: quat, log scales, true opacity).
  * @param scratch - Reusable scratch from {@link createMergeScratch}.
  */
 const mergeGroup = (
@@ -468,8 +464,9 @@ const mergeGroup = (
     const s1 = Math.sqrt(ev1);
     const s2 = Math.sqrt(ev2);
 
-    // Mass-conserving opacity, capped at 1 (no scale inflation).
-    const alphaM = Math.min(1, W / Math.max(ellipsoidArea(s0, s1, s2), 1e-30));
+    // Mass-conserving opacity (no scale inflation): the full mass A, which may
+    // exceed 1, for renderers (and later levels) to use.
+    const A = W / Math.max(ellipsoidArea(s0, s1, s2), 1e-30);
 
     const Rm = scratch.rM;
     Rm[0] = vecs[o0];
@@ -494,7 +491,7 @@ const mergeGroup = (
     out.geo[4] = Math.log(s0);
     out.geo[5] = Math.log(s1);
     out.geo[6] = Math.log(s2);
-    out.geo[7] = logit(Math.max(0, Math.min(1, alphaM)));
+    out.geo[7] = A;
 
     // Color: weight-normalized (area·α weighted) average.
     for (let c = 0; c < colorDim; c++) {
@@ -509,8 +506,6 @@ const mergeGroup = (
 export {
     EPS_COV,
     LOG2PI,
-    sigmoid,
-    logit,
     logAddExp,
     makeGaussianSamples,
     quatToRotmat,

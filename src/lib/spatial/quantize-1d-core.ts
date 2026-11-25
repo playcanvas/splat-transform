@@ -13,7 +13,13 @@ type QuantizedColumns = {
 
 // The histogram + DP core over sorted finite values: returns up to kTarget
 // centroids, sorted ascending.
-const quantizeFinite = (sortedData: Float32Array, N: number, kTarget: number, alpha: number): Float32Array => {
+const quantizeFinite = (
+    sortedData: Float32Array,
+    N: number,
+    kTarget: number,
+    alpha: number,
+    gamma: number
+): Float32Array => {
     const vMin = sortedData[0];
     const vMax = sortedData[N - 1];
 
@@ -44,10 +50,11 @@ const quantizeFinite = (sortedData: Float32Array, N: number, kTarget: number, al
         centers[i] = counts[i] > 0 ? sums[i] / counts[i] : vMin + ((i + 0.5) / H) * vRange;
     }
 
-    // compute weights: w = count^alpha (sub-linear density weighting)
+    // compute weights: w = count^alpha (sub-linear density weighting), times the
+    // importance exp(gamma * value) (taken relative to vMax so it never overflows)
     const weights = new Float64Array(H);
     for (let i = 0; i < H; ++i) {
-        weights[i] = counts[i] > 0 ? Math.pow(counts[i], alpha) : 0;
+        weights[i] = counts[i] > 0 ? Math.pow(counts[i], alpha) * Math.exp(gamma * (centers[i] - vMax)) : 0;
     }
 
     // prefix sums for O(1) range cost queries
@@ -154,10 +161,13 @@ const quantizeFinite = (sortedData: Float32Array, N: number, kTarget: number, al
  *
  * Bin weights use sub-linear density weighting: weight = count^alpha.
  * With alpha < 1, sparse tail regions earn meaningful influence on
- * centroid placement.
+ * centroid placement. An optional importance factor exp(gamma * value)
+ * shifts resolution toward large values, for data whose larger values
+ * matter more than their count suggests (log scales: large splats cover
+ * the most pixels).
  *
  * Non-finite values: `±Infinity` is a valid pipeline value (`scale_*` may be
- * `-Infinity` for flat splats, `opacity` `+Infinity` — see `filterNaN`), but a
+ * `-Infinity` for flat splats — see `filterNaN`), but a
  * single one pooled into the histogram poisons vMin/vRange and NaN-cascades
  * into an all-NaN codebook (serialized as JSON nulls). So the histogram/DP
  * runs over the finite values only, and each infinity present earns a
@@ -171,11 +181,18 @@ const quantizeFinite = (sortedData: Float32Array, N: number, kTarget: number, al
  * @param alpha - Density weight exponent. 0 = uniform (each bin equal),
  * 0.5 = sqrt (balanced), 1.0 = standard MSE (dense regions dominate).
  * Default 0.5.
+ * @param gamma - Importance exponent: each bin's weight is also scaled by
+ * exp(gamma * value). 0 = none. Default 0.
  * @returns Object with `centroids` (k Float32 values, sorted ascending) and
  * `labels` (same column layout as input, each holding Uint8Array indices
  * into the codebook).
  */
-const quantize1dColumns = (columns: { name: string; data: TypedArray }[], k = 256, alpha = 0.5): QuantizedColumns => {
+const quantize1dColumns = (
+    columns: { name: string; data: TypedArray }[],
+    k = 256,
+    alpha = 0.5,
+    gamma = 0
+): QuantizedColumns => {
     const numColumns = columns.length;
     const numRows = numColumns > 0 ? columns[0].data.length : 0;
 
@@ -246,7 +263,7 @@ const quantize1dColumns = (columns: { name: string; data: TypedArray }[], k = 25
         // case returned above): a single centroid represents them
         centroidValues = Float32Array.of(vMin);
     } else {
-        centroidValues = quantizeFinite(finite, numFinite, kFinite, alpha);
+        centroidValues = quantizeFinite(finite, numFinite, kFinite, alpha, gamma);
     }
 
     const effectiveK = centroidValues.length;

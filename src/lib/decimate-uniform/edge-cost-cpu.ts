@@ -12,7 +12,6 @@ import {
     EPS_COV,
     LOG2PI,
     logAddExp,
-    sigmoid,
     ellipsoidArea,
     quatToRotmat,
     sigmaFromRotVar,
@@ -50,7 +49,7 @@ const buildCostCache = (view: SplatView): CostCache => {
         const i8 = 8 * i;
         const i9 = 9 * i;
 
-        const linAlpha = sigmoid(geo[i8 + 7]);
+        const linAlpha = geo[i8 + 7];
         const sx = Math.max(Math.exp(geo[i8 + 4]), 1e-12);
         const sy = Math.max(Math.exp(geo[i8 + 5]), 1e-12);
         const sz = Math.max(Math.exp(geo[i8 + 6]), 1e-12);

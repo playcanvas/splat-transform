@@ -1,5 +1,6 @@
 import { basename } from 'pathe';
 
+import { withOpacityLogit } from '../data-table';
 import type { DataTable } from '../data-table';
 import { writeFile } from '../io/write';
 import type { FileSystem } from '../io/write';
@@ -37,7 +38,7 @@ const writeSpz = async (options: WriteSpzOptions, fs: FileSystem) => {
 
     const spz = await getSpzModule();
     const packOptions = await makeSpzPackOptions({ version });
-    const cloud = dataTableToGaussianCloud(dataTable, model);
+    const cloud = dataTableToGaussianCloud(withOpacityLogit(dataTable), model);
     const bytes = spz.saveSpzToBuffer(cloud, packOptions);
 
     if (version === 4) {

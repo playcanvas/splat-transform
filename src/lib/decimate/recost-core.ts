@@ -289,6 +289,7 @@ const finishComp = (c: Comp): void => {
     const s0 = Math.sqrt(Math.max(eigOut[0], 1e-18));
     const s1 = Math.sqrt(Math.max(eigOut[1], 1e-18));
     const s2 = Math.sqrt(Math.max(eigOut[2], 1e-18));
+    // capped deliberately: see the merged-opacity note in edge-cost-cpu.ts
     c.alpha = Math.min(1, c.W / Math.max(ellipsoidArea(s0, s1, s2), 1e-30));
 
     c.bc0 = c.bw0 * iw;

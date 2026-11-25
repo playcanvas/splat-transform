@@ -36,8 +36,8 @@ const wgslF32 = (n: number): string => {
  * additionally be used inside `@workgroup_size(...)` and other const-
  * expression contexts.
  *
- * Included via `#include "constants"` (see `sharedCincludes` in
- * `gpu-splat-rasterizer.ts`).
+ * Included via `#include "constants"` (see `cincludes` in
+ * `gpu-scene-rasterizer.ts`).
  */
 const constantsChunk = /* wgsl */ `
 const TILE_SIZE: u32 = ${TILE_SIZE}u;

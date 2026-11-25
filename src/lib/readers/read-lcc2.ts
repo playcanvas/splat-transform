@@ -1,4 +1,4 @@
-import { createChunkDataPool } from '../chunk';
+import { createChunkDataPool, OPACITY_LINEAR_COLUMN } from '../chunk';
 import type { ChunkDataPool, ChunkSource } from '../chunk';
 import { dataTableToChunkSource, materializeToDataTable } from '../compat/data-table';
 import type { TypedArray } from '../data-table';
@@ -8,9 +8,9 @@ import { basename, dirname, join, readFile, ZipReadFileSystem } from '../io/read
 import type { Options } from '../types';
 import { logger, Transform } from '../utils';
 
-import { containerSource } from './container-source';
+import { containerSource, summarizeUnits } from './container-source';
 import type { ContainerSegment } from './container-source';
-import { readSog, readSogSource } from './read-sog';
+import { readSog, readSogSource, statSogSource } from './read-sog';
 import { readSpz, readSpzHeader } from './read-spz';
 
 // Bounded concurrency for chunk decoding. SOG/SPZ decoding is heavier than
@@ -22,7 +22,7 @@ const LCC2_TRANSFORM = () => new Transform().fromEulers(90, 0, 180);
 
 // --- Raw meta.lcc2 shapes (pre-normalization, mixed new/old protocol) -------
 
-// Raw octree node. `child` may be an array or a string-keyed object map.
+// Raw tree node. `child` may be an array or a string-keyed object map.
 // Old protocol uses files / child_num / datatype; new protocol uses
 // splatFiles / childNum / dataType.
 type RawLcc2Node = {
@@ -69,7 +69,7 @@ type RawLcc2Meta = {
     // Bounding box (passed through for downstream/debug use).
     boundingBox?: unknown;
 
-    // Octree root node.
+    // Tree root node.
     root: RawLcc2Node;
 
     [key: string]: unknown;
@@ -77,7 +77,7 @@ type RawLcc2Meta = {
 
 // --- Normalized model (post-parse) ------------------------------------------
 
-// Normalized octree node. collectChunksByLevel only relies on
+// Normalized tree node. collectChunksByLevel only relies on
 // data['3dgs'] and child.
 type Lcc2TreeNode = {
     data?: {
@@ -108,15 +108,15 @@ type Lcc2Meta = {
     boundingBox: unknown;
     /** Optional environment chunk file index (root.data.env.name); undefined if absent. */
     envFileIndex: number | undefined;
-    /** Octree root node (normalized). */
+    /** Tree root node (normalized). */
     tree: Lcc2TreeNode;
 };
 
 /**
- * Return the children of an octree node, tolerating both array and
+ * Return the children of a tree node, tolerating both array and
  * string-keyed object map shapes (and null/undefined).
  *
- * @param node - The octree node.
+ * @param node - The tree node.
  * @returns Child nodes as an array (empty when there are none).
  * @ignore
  */
@@ -271,7 +271,7 @@ const parseLcc2Meta = (metaText: string, filename: string): Lcc2Meta => {
 };
 
 /**
- * Collect the chunk files of every LOD level in a single octree traversal,
+ * Collect the chunk files of every LOD level in a single tree traversal,
  * along with each file's splat count when the meta provides one.
  *
  * Traversal starts from the root's children with `depth` counting from 1; each
@@ -282,7 +282,7 @@ const parseLcc2Meta = (metaText: string, filename: string): Lcc2Meta => {
  * contributing node lacks a valid count, the file's count is `undefined` and
  * the caller falls back to reading it from the chunk itself.
  *
- * @param tree - The octree root node.
+ * @param tree - The tree root node.
  * @param totalLevels - Total LOD level count.
  * @param envFileIndex - Optional environment chunk file index to exclude.
  * @returns Map of LOD level to (file index -> splat count or undefined).
@@ -485,7 +485,7 @@ const readChunkCount = async (fileSystem: ReadFileSystem, splatType: string, ful
                 const count =
                     version === undefined
                         ? sogMeta.means?.shape?.[0] // V1: texture shape
-                        : version === 2
+                        : version === 2 || version === 3
                           ? sogMeta.count
                           : undefined;
                 if (!Number.isInteger(count) || count < 0) {
@@ -508,7 +508,7 @@ const readChunkCount = async (fileSystem: ReadFileSystem, splatType: string, ful
 /**
  * Reads an XGrids LCC2 format containing multi-LOD Gaussian splat data.
  *
- * Unlike LCC v1 (quadtree + single data.bin/shcoef.bin), LCC2 uses an octree
+ * Unlike LCC v1 (quadtree + single data.bin/shcoef.bin), LCC2 uses an N-ary tree
  * spatial structure where each node's data is an independent `.sog` / `.spz`
  * chunk file, described by a `meta.lcc2` (JSON) file listing the tree, file
  * paths, LOD levels and bounding box.
@@ -630,6 +630,8 @@ const readLcc2 = async (fileSystem: ReadFileSystem, filename: string, options: O
     type OutputColumn = { data: TypedArray; task: number; pos: number };
     const outputs = new Map<string, OutputColumn>();
     const lodData = new Float32Array(totalRows);
+    // chunks without opacity_linear, whose rows read as sigmoid(opacity) when another chunk has it
+    const lacksLinear: number[] = [];
 
     // 7) Bounded-concurrency decode pool: decode each chunk, validate its row
     // count against the expected count, copy it into the output arrays at its
@@ -651,6 +653,7 @@ const readLcc2 = async (fileSystem: ReadFileSystem, filename: string, options: O
                     `LCC2 chunk splat count mismatch for ${fullPath}: expected ${counts[i]}, decoded ${dt.numRows}`
                 );
             }
+            if (!dt.hasColumn(OPACITY_LINEAR_COLUMN)) lacksLinear.push(i);
             for (let pos = 0; pos < dt.columns.length; pos++) {
                 const column = dt.columns[pos];
                 let output = outputs.get(column.name);
@@ -671,6 +674,15 @@ const readLcc2 = async (fileSystem: ReadFileSystem, filename: string, options: O
         }
     };
     await Promise.all(Array.from({ length: Math.min(LOAD_CONCURRENCY, tasks.length) }, () => worker()));
+
+    // opacity_linear's absence means sigmoid(opacity), not the zero a missing column is left at
+    const linear = outputs.get(OPACITY_LINEAR_COLUMN)?.data;
+    const opacity = outputs.get('opacity')?.data;
+    if (linear && opacity) {
+        for (const i of lacksLinear) {
+            for (let r = offsets[i]; r < offsets[i] + counts[i]; r++) linear[r] = 1 / (1 + Math.exp(-opacity[r]));
+        }
+    }
 
     // 8) Assemble the merged table, columns ordered by first sighting.
     const columns = [...outputs.entries()]
@@ -747,7 +759,7 @@ const decodeChunkSource = async (
 
 /**
  * Lazy, chunked LCC2 reader: presents the selected LODs as one **multi-LOD
- * `ChunkSource`** over the octree's SPZ/SOG sub-files, decoding each on demand
+ * `ChunkSource`** over the tree's SPZ/SOG sub-files, decoding each on demand
  * (LRU-cached) instead of materializing the whole scene up front. The output LOD
  * / sub-file ordering matches the eager {@link readLcc2} (lod ascending, then
  * ascending file index), so `materialize`/flatten reproduces its merged table
@@ -789,6 +801,7 @@ const readLcc2Source = async (
     // one is resolved by a cheap header read (no decode).
     const byLevel = collectChunksByLevel(tree, totalLevels, envFileIndex);
     const segmentsByLod: ContainerSegment[][] = [];
+    const chunkPaths = new Map<ContainerSegment, string>();
     let total = 0;
     for (let outputLod = 0; outputLod < inputLods.length; outputLod++) {
         const files = byLevel.get(inputLods[outputLod]);
@@ -808,7 +821,9 @@ const readLcc2Source = async (
             const fullPath = related(splatFiles[fileIndex]);
             const metaCount = files!.get(fileIndex);
             const count = metaCount ?? (await readChunkCount(fileSystem, splatType, fullPath));
-            segs.push({ count, decode: () => decodeChunkSource(fileSystem, splatType, fullPath, pool) });
+            const seg = { count, decode: () => decodeChunkSource(fileSystem, splatType, fullPath, pool) };
+            chunkPaths.set(seg, fullPath);
+            segs.push(seg);
             total += count;
         }
         segmentsByLod.push(segs);
@@ -820,7 +835,21 @@ const readLcc2Source = async (
         );
     }
 
-    return containerSource(segmentsByLod, pool, { transform: LCC2_TRANSFORM() });
+    // whether any selected SOG chunk holds opacity above 1, and their blind origins; only each chunk's meta.json is read
+    const paths = segmentsByLod.flatMap((segs) => segs.map((seg) => chunkPaths.get(seg)!));
+    const units =
+        splatType === '.sog'
+            ? await summarizeUnits(paths, async (path) => {
+                  const zipFs = new ZipReadFileSystem(await openChunkSource(fileSystem, path));
+                  try {
+                      return await statSogSource(zipFs, 'meta.json');
+                  } finally {
+                      zipFs.close();
+                  }
+              })
+            : {};
+
+    return containerSource(segmentsByLod, pool, { transform: LCC2_TRANSFORM(), ...units });
 };
 
 /**

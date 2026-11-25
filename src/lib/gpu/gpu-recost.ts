@@ -190,6 +190,7 @@ fn finish(r: Raw) -> Fin {
     let s0 = sqrt(max(e.x, 1e-18));
     let s1 = sqrt(max(e.y, 1e-18));
     let s2 = sqrt(max(e.z, 1e-18));
+    // capped deliberately: see the merged-opacity note in edge-cost-cpu.ts
     f.alpha = min(1.0, r.w / max(ellipsoidArea(s0, s1, s2), 1e-30));
     f.bc = r.bw * iw;
     f.selfM = f.alpha * f.alpha * dot(f.bc, f.bc) * PI_1_5 * f.sd;

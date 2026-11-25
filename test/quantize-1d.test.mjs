@@ -183,6 +183,38 @@ describe('quantize1dColumns', () => {
         }
     });
 
+    it('importance (gamma) shifts resolution toward a sparse tail of large values', () => {
+        // log-scale-like: a wide core of small splats and a narrow 1% tail of large ones
+        const rnd = mulberry32(7);
+        const core = 300000, tail = 3000;
+        const data = new Float32Array(core + tail);
+        for (let i = 0; i < core; i++) {
+            const u = rnd() || 1e-9, v = rnd();
+            data[i] = -8 + 2 * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+        }
+        for (let i = 0; i < tail; i++) {
+            data[core + i] = 1 + 0.9 * rnd();
+        }
+
+        const rms = (result, from, to) => {
+            let se = 0;
+            for (let i = from; i < to; i++) {
+                se += (data[i] - decode(result, 0, i)) ** 2;
+            }
+            return Math.sqrt(se / (to - from));
+        };
+
+        const plain = quantize1dColumns([{ name: 'scale_0', data }]);
+        const weighted = quantize1dColumns([{ name: 'scale_0', data }], 256, 0.5, 0.25);
+
+        // gamma 0 is the default
+        assert.deepStrictEqual(quantize1dColumns([{ name: 'scale_0', data }], 256, 0.5, 0).centroids, plain.centroids);
+
+        assertAscending(weighted.centroids);
+        assert.ok(rms(weighted, core, core + tail) < 0.7 * rms(plain, core, core + tail), 'tail error should drop');
+        assert.ok(rms(weighted, 0, core) < 1.25 * rms(plain, 0, core), 'core error should stay close');
+    });
+
     it('empty input returns zeroed shapes', () => {
         const result = quantize1dColumns([{ name: 'scale_0', data: new Float32Array(0) }]);
 

@@ -26,6 +26,18 @@ import {
 export const APP_CHUNK = 16;
 
 /**
+ * Columns per appearance chunk for a given total. The kernel has only the three
+ * appearance bindings (all eight guaranteed storage bindings are in use), so a
+ * 4th SH band (75 columns) widens the chunks to ceil(75/3) = 25 rather than
+ * adding a fourth; up to 48 columns the width stays {@link APP_CHUNK}. The
+ * per-binding ceiling for such blocks drops to ~21.5M splats.
+ *
+ * @param numAppCols - Total appearance column count.
+ * @returns Column width of every chunk but the last.
+ */
+export const appChunkWidth = (numAppCols: number): number => Math.max(APP_CHUNK, Math.ceil(numAppCols / 3));
+
+/**
  * WGSL kernel: per-edge KL-style cost (matches `computeEdgeCostView` in
  * `decimate/edge-cost-cpu.ts`).
  *
@@ -317,8 +329,9 @@ class GpuEdgeCost {
         // splats, past the ~11.2M wall the single 48-col buffer hit. The three
         // kernel bindings (appA/appB/appC) cap the layout at three chunks.
         // e.g. [16, 11, 0] for 27 cols, [3, 0, 0] for DC-only.
+        const chunkWidth = appChunkWidth(maxAppCols);
         const appStrides = [0, 1, 2].map((ch) => {
-            return Math.min(APP_CHUNK, Math.max(0, maxAppCols - ch * APP_CHUNK));
+            return Math.min(chunkWidth, Math.max(0, maxAppCols - ch * chunkWidth));
         });
         // Non-empty chunk count the kernel reads. execute() validates the cache
         // supplies exactly this many: a short count would leave a hoisted (reused
@@ -483,6 +496,7 @@ class GpuEdgeCost {
             edgesIBuf.destroy();
             edgesJBuf.destroy();
             outBuf.destroy();
+            compute.destroy();
             shader.destroy();
             bindGroupFormat.destroy();
         };

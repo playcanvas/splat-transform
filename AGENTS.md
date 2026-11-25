@@ -25,12 +25,10 @@ splat-transform is a library and CLI tool for 3D Gaussian splat format conversio
 
 ### ESLint Configuration
 
-Base: `@playcanvas/eslint-config` with TypeScript overrides:
+Base: `@playcanvas/eslint-config/typescript` with these overrides:
 
-- **Relaxed rules**: `@typescript-eslint/ban-ts-comment`, `@typescript-eslint/no-explicit-any`, `@typescript-eslint/no-unused-vars` are off
-- **JSDoc types relaxed**: `jsdoc/require-param-type`, `jsdoc/require-returns-type` off (TypeScript provides types)
-- **Other relaxations**: `lines-between-class-members`, `no-await-in-loop`, `require-atomic-updates` off
-- **Globals**: Both `node` and `browser` for `.ts` files; `node` only for `.mjs` files
+- **Relaxed rules**: `@typescript-eslint/ban-ts-comment` and `@typescript-eslint/no-unused-vars` are off for `.ts` files
+- **`.mjs` files**: `import-x/no-unresolved` is off, since they import build output from `dist/`
 
 ### Naming Conventions
 
@@ -88,7 +86,8 @@ src/
 │   │   ├── read-spz.ts
 │   │   ├── read-lcc.ts
 │   │   ├── read-lcc2.ts
-│   │   └── read-mjs.ts
+│   │   ├── read-mjs.ts
+│   │   └── read-csv.ts
 │   ├── writers/            # Format-specific writers (one per file)
 │   │   ├── write-ply-streaming.ts  # chunk-native PLY (the streaming hot path)
 │   │   ├── write-ply.ts
@@ -207,7 +206,7 @@ Read and write operations use abstract interfaces so the same code works in brow
 
 ### Supported Formats
 
-**Input**: PLY, splat, KSplat, SOG, Streamed SOG, SPZ, LCC, LCC2, MJS
+**Input**: PLY, splat, KSplat, SOG, Streamed SOG, SPZ, LCC, LCC2, MJS, CSV
 
 **Output**: PLY, compressed PLY, SOG, SOG-bundle, SPZ, GLB, CSV, HTML, HTML-bundle, LOD, voxel, image (WebP)
 

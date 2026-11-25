@@ -6,7 +6,7 @@ import { RotateSH } from '../utils';
 import type { TypedArray } from './data-table';
 import { Column, DataTable } from './data-table';
 
-const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
+const shNames = new Array(72).fill('').map((_, i) => `f_rest_${i}`);
 
 const _v = new Vec3();
 const _q = new Quat();
@@ -27,12 +27,12 @@ const computeWriteTransform = (transform: Transform, outputFormatTransform: Tran
 };
 
 /**
- * Detects how many SH bands (0-3) the DataTable has.
+ * Detects how many SH bands (0-4) the DataTable has.
  * @ignore
  */
 const detectSHBands = (dataTable: DataTable): number => {
     return (
-        ({ '9': 1, '24': 2, '-1': 3 } as Record<string, number>)[
+        ({ '9': 1, '24': 2, '45': 3, '-1': 4 } as Record<string, number>)[
             String(shNames.findIndex((n) => !dataTable.hasColumn(n)))
         ] ?? 0
     );
@@ -81,7 +81,7 @@ const transformColumns = (
     const needScale = scaleNames.some((n) => columnNames.includes(n) && dataTable.hasColumn(n)) && s !== 1;
 
     const shBands = detectSHBands(dataTable);
-    const shCoeffsPerChannel = [0, 3, 8, 15][shBands];
+    const shCoeffsPerChannel = [0, 3, 8, 15, 24][shBands];
     const rotIsIdentity = Math.abs(Math.abs(r.w) - 1) < 1e-6;
     const requestedSH =
         shBands > 0 && !rotIsIdentity && shNames.slice(0, shCoeffsPerChannel * 3).some((n) => columnNames.includes(n));

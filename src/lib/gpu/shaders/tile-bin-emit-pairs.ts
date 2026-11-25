@@ -33,21 +33,14 @@ const tileBinEmitPairsWgsl = () => /* wgsl */ `
 @group(0) @binding(4) var<storage, read_write> tileKeys: array<u32>;
 @group(0) @binding(5) var<storage, read_write> splatValues: array<u32>;
 
-// First pair slot of splat i. The chunked path's prefix sum is already
-// global to the chunk. The scene rasterizer scans in blocks of 2048 splats:
+// First pair slot of splat i. The prefix sum scans in blocks of 2048 splats:
 // \`emitOffset\` is block-local, \`blockPrefix\` holds each block's exclusive
 // pair prefix, and \`emitBase\` rebases the range being emitted to slot 0.
-#ifdef SCENE
 @group(0) @binding(6) var<storage, read> blockPrefix: array<u32>;
 
 fn pairBase(i: u32) -> u32 {
     return blockPrefix[i >> 11u] - uniforms.emitBase;
 }
-#else
-fn pairBase(i: u32) -> u32 {
-    return 0u;
-}
-#endif
 
 @compute @workgroup_size(64)
 fn main(

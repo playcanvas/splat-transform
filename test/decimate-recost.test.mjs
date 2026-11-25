@@ -47,7 +47,7 @@ const makeCache = (n, seed) => {
         geo[i * 8 + 4] = Math.log(0.05 + rand() * 0.1);
         geo[i * 8 + 5] = Math.log(0.05 + rand() * 0.1);
         geo[i * 8 + 6] = Math.log(0.05 + rand() * 0.1);
-        geo[i * 8 + 7] = rand() * 4 - 2;
+        geo[i * 8 + 7] = 1 / (1 + Math.exp(-(rand() * 4 - 2))); // true opacity
         color[i * 3] = rand() - 0.5;
         color[i * 3 + 1] = rand() - 0.5;
         color[i * 3 + 2] = rand() - 0.5;
@@ -210,7 +210,7 @@ describe('selectMergesRecosted', () => {
         for (let i = 0; i < n; i++) {
             geo[i * 8] = 1;
             geo[i * 8 + 4] = geo[i * 8 + 5] = geo[i * 8 + 6] = Math.log(0.1);
-            geo[i * 8 + 7] = 0;
+            geo[i * 8 + 7] = 0.5; // true opacity
         }
         const cache = new Float32Array(n * CACHE_STRIDE);
         buildSplatCache({ pos, geo, color, colorDim: 3 }, cache);

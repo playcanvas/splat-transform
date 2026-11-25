@@ -1,4 +1,4 @@
-import { createInMemoryChunkSource, SH_REST_COUNTS, DEFAULT_CHUNK_SIZE } from '../chunk';
+import { createInMemoryChunkSource, OPACITY_LINEAR_COLUMN, SH_REST_COUNTS, DEFAULT_CHUNK_SIZE } from '../chunk';
 import type {
     InMemoryChunkSource,
     ExtraColumn,
@@ -12,6 +12,7 @@ import type {
 import { Column, DataTable } from '../data-table';
 import type { SplatModel } from '../splat-model';
 import type { Transform } from '../utils';
+import { opacityToLogit } from '../utils/opacity';
 
 /**
  * The legacy `DataTable` <-> `ChunkSource` compatibility bridge.
@@ -34,7 +35,13 @@ const POSITION_COLS = ['x', 'y', 'z'] as const;
 const GEOMETRIC_COLS = ['rot_0', 'rot_1', 'rot_2', 'rot_3', 'scale_0', 'scale_1', 'scale_2', 'opacity'] as const;
 const COLOR_DC_COLS = ['f_dc_0', 'f_dc_1', 'f_dc_2'] as const;
 
-const standardColumnSet = new Set<string>([...POSITION_COLS, ...GEOMETRIC_COLS, ...COLOR_DC_COLS]);
+// opacity_linear is standard too: it fills the geometric layer's opacity slot, not an extra
+const standardColumnSet = new Set<string>([
+    ...POSITION_COLS,
+    ...GEOMETRIC_COLS,
+    ...COLOR_DC_COLS,
+    OPACITY_LINEAR_COLUMN
+]);
 
 /**
  * Enumerate the canonical column names a source exposes, in the same order
@@ -79,6 +86,7 @@ const detectShBands = (dataTable: DataTable): SHBands => {
     if (count === SH_REST_COUNTS[1]) return 1;
     if (count === SH_REST_COUNTS[2]) return 2;
     if (count === SH_REST_COUNTS[3]) return 3;
+    if (count === SH_REST_COUNTS[4]) return 4;
     throw new Error(`dataTableToChunkSource: unrecognized f_rest_* count: ${count}`);
 };
 
@@ -163,7 +171,9 @@ const dataTableToChunkSource = (
     const transform: Transform = dataTable.transform;
 
     const hasPosition = POSITION_COLS.every((c) => dataTable.hasColumn(c));
-    const hasGeometric = GEOMETRIC_COLS.every((c) => dataTable.hasColumn(c));
+    // the opacity slot holds true opacity: opacity_linear when the table has it, else sigmoid(opacity)
+    const linear = dataTable.getColumnByName(OPACITY_LINEAR_COLUMN)?.data;
+    const hasGeometric = GEOMETRIC_COLS.every((c) => dataTable.hasColumn(c) || (c === 'opacity' && !!linear));
     const hasColor = COLOR_DC_COLS.every((c) => dataTable.hasColumn(c));
     const hasOther = extras.length > 0;
 
@@ -196,7 +206,7 @@ const dataTableToChunkSource = (
               const s0 = col('scale_0'),
                   s1 = col('scale_1'),
                   s2 = col('scale_2');
-              const op = col('opacity');
+              const op = linear ? null : col('opacity');
               for (let i = 0; i < count; i++) {
                   const s = srcRow(i);
                   const o = i * 8;
@@ -207,7 +217,7 @@ const dataTableToChunkSource = (
                   arr[o + 4] = s0[s];
                   arr[o + 5] = s1[s];
                   arr[o + 6] = s2[s];
-                  arr[o + 7] = op[s];
+                  arr[o + 7] = linear ? linear[s] : 1 / (1 + Math.exp(-op![s]));
               }
               return splitToChunks(arr, count, 8, chunkSize);
           })()
@@ -263,6 +273,7 @@ const dataTableToChunkSource = (
         extraColumns: extras,
         transform,
         lodCounts: [count],
+        opacityAboveOne: !!linear,
         position: positionChunks ? [positionChunks] : undefined,
         geometric: geometricChunks ? [geometricChunks] : undefined,
         color: colorChunks ? [colorChunks] : undefined,
@@ -280,7 +291,9 @@ const dataTableToChunkSource = (
  *
  * Each requested layer is read chunk-by-chunk and scattered into the
  * appropriate named columns (`x, y, z, rot_*, scale_*, opacity, f_dc_*,
- * f_rest_*`, plus extras).
+ * f_rest_*`, plus extras). The source's true opacity becomes the `opacity`
+ * logit (see `opacityToLogit`), plus an `opacity_linear` column holding it
+ * when some gaussian's exceeds 1.
  * @param src - The source to materialize.
  * @param pool - The `ChunkData` pool used for the temporary read buffers; its `chunkSize` must be >= the source's.
  * @param layers - Optional layer filter; when set, only these layers (intersected with the source's) are read and allocated. Omit for every available layer. Consumers of a subset (e.g. voxelization needs only position + geometric) skip the unused columns entirely rather than loading and discarding them.
@@ -315,7 +328,8 @@ const materializeToDataTable = async (
     const scale0 = wantsGeometric ? new Float32Array(N) : null;
     const scale1 = wantsGeometric ? new Float32Array(N) : null;
     const scale2 = wantsGeometric ? new Float32Array(N) : null;
-    const opacity = wantsGeometric ? new Float32Array(N) : null;
+    // true opacity from the opacity slot, written as an `opacity` logit plus (when some exceeds 1) `opacity_linear`
+    const linearOpacity = wantsGeometric ? new Float32Array(N) : null;
 
     const dc0 = wantsColor ? new Float32Array(N) : null;
     const dc1 = wantsColor ? new Float32Array(N) : null;
@@ -411,7 +425,7 @@ const materializeToDataTable = async (
                     scale0![di] = f32[si + 4];
                     scale1![di] = f32[si + 5];
                     scale2![di] = f32[si + 6];
-                    opacity![di] = f32[si + 7];
+                    linearOpacity![di] = f32[si + 7];
                 }
             } else if (layer === 'color') {
                 const f32 = new Float32Array(chunkData.data, 0, count * elemsPerRow);
@@ -459,9 +473,17 @@ const materializeToDataTable = async (
             new Column('rot_3', rot3!),
             new Column('scale_0', scale0!),
             new Column('scale_1', scale1!),
-            new Column('scale_2', scale2!),
-            new Column('opacity', opacity!)
+            new Column('scale_2', scale2!)
         );
+        const opacity = new Float32Array(N);
+        let aboveOne = false;
+        for (let i = 0; i < N; i++) {
+            const a = linearOpacity![i];
+            opacity[i] = opacityToLogit(a);
+            if (a > 1) aboveOne = true;
+        }
+        columns.push(new Column('opacity', opacity));
+        if (aboveOne) columns.push(new Column(OPACITY_LINEAR_COLUMN, linearOpacity!));
     }
     if (wantsColor) {
         columns.push(new Column('f_dc_0', dc0!), new Column('f_dc_1', dc1!), new Column('f_dc_2', dc2!));

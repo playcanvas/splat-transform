@@ -45,7 +45,7 @@ export const makeSyntheticSource = async (n, shBands, seed, opts = {}) => {
         geo.set([
             q[0] / qn, q[1] / qn, q[2] / qn, q[3] / qn,
             Math.log(r() * 0.05 + 0.01), Math.log(r() * 0.05 + 0.01), Math.log(r() * 0.05 + 0.01),
-            r() * 8 - 4
+            1 / (1 + Math.exp(-(r() * 8 - 4))) // true opacity (a source stores it, not the logit)
         ], i * 8);
         for (let c = 0; c < colorDim; c++) color[i * colorDim + c] = r() * 2 - 1;
     }

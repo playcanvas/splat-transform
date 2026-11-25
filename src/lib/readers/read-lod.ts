@@ -1,11 +1,16 @@
 import type { ChunkDataPool, ChunkSource } from '../chunk';
+import { withComments } from '../comments';
+import { withExtras } from '../extras';
 import { dirname, join, readFile } from '../io/read';
 import type { ReadFileSystem } from '../io/read';
+import { isSplatModel } from '../splat-model';
+import type { SplatModel } from '../splat-model';
 import type { Options } from '../types';
+import { logger } from '../utils';
 
-import { containerSource } from './container-source';
+import { containerSource, summarizeUnits } from './container-source';
 import type { ContainerSegment } from './container-source';
-import { readSogSource } from './read-sog';
+import { readSogSource, statSogSource } from './read-sog';
 
 type LodReference = {
     file: number;
@@ -21,11 +26,21 @@ type LodNode = {
 type LodMeta = {
     version?: number;
     count?: number;
+    model?: string;
     counts?: number[];
     lodLevels: number;
     environment?: string;
     filenames: string[];
     tree: LodNode;
+    extras?: unknown;
+    comments?: string[];
+};
+
+// An unrecognized model reads as 'default', as in SOG meta.json.
+const modelFromLodMeta = (value: string): SplatModel => {
+    if (isSplatModel(value)) return value;
+    logger.warn(`unrecognized splat model '${value}' in lod-meta.json, reading as 'default'`);
+    return 'default';
 };
 
 const parseLodMeta = (text: string, filename: string): LodMeta => {
@@ -153,20 +168,31 @@ const readLodSource = async (
     }
 
     const filesByLod = collectFilesByLod(meta, filename);
+    const filesOf = (lod: number) => [...(filesByLod.get(lod)?.entries() ?? [])].sort(([a], [b]) => a - b);
+
+    // whether any selected unit holds opacity above 1, and their blind origins; only each unit's meta.json is read
+    const paths = [...new Set(inputLods.flatMap((lod) => filesOf(lod).map(([file]) => related(meta.filenames[file]))))];
+    const units = await summarizeUnits(paths, (path) => statSogSource(fileSystem, path));
+
     const segmentsByLod = inputLods.map((lod): ContainerSegment[] => {
-        const files = filesByLod.get(lod);
-        return [...(files?.entries() ?? [])]
-            .sort(([a], [b]) => a - b)
-            .map(([file, count]) => {
-                const path = related(meta.filenames[file]);
-                return {
-                    count,
-                    decode: () => readSogSource(fileSystem, path, pool, { logging: 'silent' })
-                };
-            });
+        return filesOf(lod).map(([file, count]) => {
+            const path = related(meta.filenames[file]);
+            return { count, decode: () => readSogSource(fileSystem, path, pool, { logging: 'silent' }) };
+        });
     });
 
-    return containerSource(segmentsByLod, pool);
+    // the scene's extras and comments live in lod-meta.json, not in its units; the model recorded
+    // for the whole tree wins over the files' own, and without one the files decide
+    return withComments(
+        withExtras(
+            await containerSource(segmentsByLod, pool, {
+                ...units,
+                ...(meta.model === undefined ? {} : { model: modelFromLodMeta(meta.model) })
+            }),
+            meta.extras
+        ),
+        Array.isArray(meta.comments) ? meta.comments.map(String) : undefined
+    );
 };
 
 /**

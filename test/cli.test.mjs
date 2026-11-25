@@ -3,9 +3,11 @@
  */
 
 import { spawn } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -14,6 +16,9 @@ const cliArgsEnvName = 'SPLAT_TRANSFORM_CLI_TEST_ARGS';
 
 const cliBootstrap = `
 const cliArgs = JSON.parse(process.env.${cliArgsEnvName});
+// from source the codec resolves its wasm relative to src/lib; point it at the shipped copy
+const { WebPCodec } = await import('./src/lib/utils/webp-codec.ts');
+WebPCodec.wasmUrl = process.cwd() + '/lib/webp.wasm';
 process.argv = ['node', 'src/cli/index.ts', ...cliArgs];
 const { main } = await import('./src/cli/index.ts');
 await main();
@@ -107,6 +112,112 @@ describe('CLI parsing', () => {
 
         assert.notStrictEqual(result.code, 0, 'CLI should reject --tag-lod -2');
         assert.match(result.stderr, /Must be >= 0, or -1/);
+    });
+
+    it('rejects --aa-filter-size values that are not positive', async () => {
+        for (const value of ['0', '-0.1', 'abc']) {
+            const result = await runCli(['--gpu', 'cpu', 'test/fixtures/splat/minimal.splat', '--aa-filter-size', value, 'null']);
+            assert.notStrictEqual(result.code, 0, `CLI should reject --aa-filter-size ${value}`);
+            assert.match(result.stderr, /aa-filter-size|Invalid number value|Value must be/);
+        }
+    });
+
+    it('rejects --sog-version values other than 2 or 3', async () => {
+        const result = await runCli(['--gpu', 'cpu', 'test/fixtures/splat/minimal.splat', '--sog-version', '4', 'null']);
+
+        assert.notStrictEqual(result.code, 0, 'CLI should reject --sog-version 4');
+        assert.match(result.stderr, /Invalid sog-version value: 4/);
+    });
+
+    it('packs repeated --sog-blind fields into blind textures', async () => {
+        const { Column } = await import('../src/lib/index.js');
+        const { createTestDataTable, encodePlyBinary } = await import('./helpers/test-utils.mjs');
+        const dt = createTestDataTable(16);
+        dt.addColumn(new Column('a', Float32Array.from({ length: 16 }, (_, i) => i / 15)));
+        dt.addColumn(new Column('depth', Float32Array.from({ length: 16 }, (_, i) => 1 + i)));
+        dt.addColumn(new Column('id', Uint32Array.from({ length: 16 }, (_, i) => i * 1000)));
+        const dir = await mkdtemp(join(tmpdir(), 'st-blind-cli-'));
+        try {
+            await writeFile(join(dir, 'in.ply'), encodePlyBinary(dt));
+            await mkdir(join(dir, 'out'));
+            const result = await runCli([
+                '--gpu', 'cpu', join(dir, 'in.ply'),
+                '--sog-blind', 'a:unorm8,depth:unorm8[1,16]', '--sog-blind', 'id',
+                join(dir, 'out', 'meta.json')
+            ]);
+            assert.strictEqual(result.code, 0, result.stderr);
+            const meta = JSON.parse(await readFile(join(dir, 'out', 'meta.json'), 'utf8'));
+            assert.deepStrictEqual(meta.blind, [
+                { files: ['blind_0.webp'], fields: [{ name: 'a', type: 'unorm8' }, { name: 'depth', type: 'unorm8', range: [1, 16] }] },
+                { files: ['blind_1.webp'], fields: [{ name: 'id', type: 'u16' }] }
+            ]);
+        } finally {
+            await rm(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('keeps a SOG input\'s blind data by default, and drops it with --sog-blind none', async () => {
+        const { Column } = await import('../src/lib/index.js');
+        const { createTestDataTable, encodePlyBinary } = await import('./helpers/test-utils.mjs');
+        const dt = createTestDataTable(16);
+        dt.addColumn(new Column('depth', Float32Array.from({ length: 16 }, (_, i) => 1 + i)));
+        dt.addColumn(new Column('id', Uint32Array.from({ length: 16 }, (_, i) => i * 1000)));
+        const dir = await mkdtemp(join(tmpdir(), 'st-blind-keep-'));
+        try {
+            await writeFile(join(dir, 'in.ply'), encodePlyBinary(dt));
+            const first = await runCli(['--gpu', 'cpu', join(dir, 'in.ply'), '--sog-blind', 'depth:unorm8[1,16],id', join(dir, 'a.sog')]);
+            assert.strictEqual(first.code, 0, first.stderr);
+            await mkdir(join(dir, 'kept'));
+            const kept = await runCli(['--gpu', 'cpu', join(dir, 'a.sog'), join(dir, 'kept', 'meta.json')]);
+            assert.strictEqual(kept.code, 0, kept.stderr);
+            assert.deepStrictEqual(JSON.parse(await readFile(join(dir, 'kept', 'meta.json'), 'utf8')).blind, [
+                { files: ['blind_0.webp'], fields: [{ name: 'depth', type: 'unorm8', range: [1, 16] }, { name: 'id', type: 'u16' }] }
+            ]);
+            await mkdir(join(dir, 'dropped'));
+            const dropped = await runCli(['--gpu', 'cpu', join(dir, 'a.sog'), '--sog-blind', 'none', join(dir, 'dropped', 'meta.json')]);
+            assert.strictEqual(dropped.code, 0, dropped.stderr);
+            assert.strictEqual(JSON.parse(await readFile(join(dir, 'dropped', 'meta.json'), 'utf8')).blind, undefined);
+            const mixed = await runCli(['--gpu', 'cpu', join(dir, 'a.sog'), '--sog-blind', 'none', '--sog-blind', 'id', 'null']);
+            assert.notStrictEqual(mixed.code, 0);
+            assert.match(mixed.stderr, /none cannot be combined/);
+        } finally {
+            await rm(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('keeps blind data when combining inputs of different layouts', async () => {
+        const { Column } = await import('../src/lib/index.js');
+        const { createTestDataTable, encodePlyBinary } = await import('./helpers/test-utils.mjs');
+        const sogInput = createTestDataTable(16);
+        sogInput.addColumn(new Column('id', Uint32Array.from({ length: 16 }, (_, i) => i)));
+        const plyInput = createTestDataTable(16);
+        plyInput.addColumn(new Column('id', Uint32Array.from({ length: 16 }, (_, i) => 1000 + i)));
+        plyInput.addColumn(new Column('weight', new Float32Array(16).fill(0.5)));
+        const dir = await mkdtemp(join(tmpdir(), 'st-blind-mixed-'));
+        try {
+            await writeFile(join(dir, 'a.ply'), encodePlyBinary(sogInput));
+            await writeFile(join(dir, 'b.ply'), encodePlyBinary(plyInput));
+            const first = await runCli(['--gpu', 'cpu', join(dir, 'a.ply'), '--sog-blind', 'id:u8', join(dir, 'a.sog')]);
+            assert.strictEqual(first.code, 0, first.stderr);
+            await mkdir(join(dir, 'out'));
+            const result = await runCli(['--gpu', 'cpu', join(dir, 'a.sog'), join(dir, 'b.ply'), join(dir, 'out', 'meta.json')]);
+            assert.strictEqual(result.code, 0, result.stderr);
+            // the PLY input's ids are untagged, so id widens to hold any uint32
+            assert.deepStrictEqual(JSON.parse(await readFile(join(dir, 'out', 'meta.json'), 'utf8')).blind, [
+                { files: ['blind_0.webp'], fields: [{ name: 'id', type: 'u32' }] }
+            ]);
+        } finally {
+            await rm(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('rejects a malformed --sog-blind', async () => {
+        for (const value of [':u8', 'id:5', 'id:u8:u8', 'id:unorm8[0]', 'a,,b', 'id:u9']) {
+            const result = await runCli(['--gpu', 'cpu', 'test/fixtures/splat/minimal.splat', '--sog-blind', value, 'null']);
+
+            assert.notStrictEqual(result.code, 0, `CLI should reject --sog-blind ${value}`);
+            assert.match(result.stderr, /Invalid sog-blind value/);
+        }
     });
 });
 
@@ -344,3 +455,77 @@ describe('CLI --info (header-only report)', () => {
     });
 });
 
+
+describe('CLI --sog-extras', () => {
+    it('writes extras to lod-meta.json only, and the LOD reader carries them on', async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'sog-extras-'));
+        try {
+            const extras = { scene: 'minimal', ids: [1, 2, 3] };
+            await writeFile(join(dir, 'extras.json'), JSON.stringify(extras));
+            // LOD output takes PLY inputs
+            const ply = join(dir, 'minimal.ply');
+            let result = await runCli(['--gpu', 'cpu', '-w', 'test/fixtures/splat/minimal.splat', ply]);
+            assert.strictEqual(result.code, 0, `CLI failed:\n${result.stderr}\n${result.stdout}`);
+            const lodMeta = join(dir, 'lod', 'lod-meta.json');
+            result = await runCli([
+                '--gpu', 'cpu', '-w',
+                ply, '-l', '0',
+                ply, '-l', '1',
+                '--sog-extras', join(dir, 'extras.json'),
+                lodMeta
+            ]);
+            assert.strictEqual(result.code, 0, `CLI failed:\n${result.stderr}\n${result.stdout}`);
+            assert.deepStrictEqual(JSON.parse(await readFile(lodMeta, 'utf8')).extras, extras);
+            for (const unit of (await readdir(join(dir, 'lod'))).filter((d) => /^\d+_\d+$/.test(d))) {
+                const unitMeta = JSON.parse(await readFile(join(dir, 'lod', unit, 'meta.json'), 'utf8'));
+                assert.strictEqual(unitMeta.extras, undefined, `unit ${unit} carries no extras`);
+            }
+
+            // the LOD reader puts them on the source, so a SOG written from it keeps them
+            const sogMeta = join(dir, 'out', 'meta.json');
+            result = await runCli(['--gpu', 'cpu', '-w', lodMeta, sogMeta]);
+            assert.strictEqual(result.code, 0, `CLI failed:\n${result.stderr}\n${result.stdout}`);
+            assert.deepStrictEqual(JSON.parse(await readFile(sogMeta, 'utf8')).extras, extras);
+        } finally {
+            await rm(dir, { recursive: true, force: true });
+        }
+    });
+});
+
+describe('CLI combining opacity_linear', () => {
+    // A 2-gaussian PLY at half opacity (logit 0), with `extra` float columns.
+    const writePly = async (path, extra) => {
+        const { encodePlyBinary } = await import('./helpers/test-utils.mjs');
+        const { Column, DataTable } = await import('../src/lib/index.js');
+        const one = (v) => new Float32Array(2).fill(v);
+        const names = ['x', 'y', 'z', 'rot_0', 'rot_1', 'rot_2', 'rot_3', 'scale_0', 'scale_1', 'scale_2', 'f_dc_0', 'f_dc_1', 'f_dc_2', 'opacity'];
+        const columns = names.map((n) => new Column(n, one(n === 'rot_0' ? 1 : n.startsWith('scale') ? -3 : 0)));
+        for (const [n, v] of Object.entries(extra)) columns.push(new Column(n, one(v)));
+        await writeFile(path, encodePlyBinary(new DataTable(columns)));
+    };
+
+    for (const [label, plainExtra] of [['matching layouts', {}], ['mixed layouts (the table combine)', { tag: 7 }]]) {
+        it(`fills it with sigmoid(opacity) for an input without it, with ${label}`, async () => {
+            const dir = await mkdtemp(join(tmpdir(), 'splat-linear-'));
+            try {
+                await writePly(join(dir, 'plain.ply'), plainExtra);
+                await writePly(join(dir, 'heavy.ply'), { opacity_linear: 1.5 });
+                const out = join(dir, 'out.ply');
+                const result = await runCli(['--gpu', 'cpu', join(dir, 'plain.ply'), join(dir, 'heavy.ply'), out]);
+                assert.strictEqual(result.code, 0, `CLI failed:\n${result.stderr}\n${result.stdout}`);
+
+                const { MemoryReadFileSystem } = await import('../src/lib/index.js');
+                const { createChunkDataPool } = await import('../src/lib/chunk/index.js');
+                const { materializeToDataTable } = await import('../src/lib/compat/data-table.js');
+                const { readPly } = await import('../src/lib/readers/read-ply.js');
+                const rfs = new MemoryReadFileSystem();
+                rfs.set('out.ply', new Uint8Array(await readFile(out)));
+                const pool = createChunkDataPool();
+                const table = await materializeToDataTable(await readPly(await rfs.createSource('out.ply'), pool), pool);
+                assert.deepStrictEqual(Array.from(table.getColumnByName('opacity_linear').data), [0.5, 0.5, 1.5, 1.5]);
+            } finally {
+                await rm(dir, { recursive: true, force: true });
+            }
+        });
+    }
+});

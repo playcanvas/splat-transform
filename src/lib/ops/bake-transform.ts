@@ -5,7 +5,7 @@ import type { ChunkData, ReadRequest, ChunkSource, ChunkSourceMetadata } from '.
 import type { Transform } from '../utils';
 import { RotateSH } from '../utils';
 
-const SH_PER_CHANNEL = [0, 3, 8, 15];
+const SH_PER_CHANNEL = [0, 3, 8, 15, 24];
 
 /**
  * Bake a source's pending coordinate-space transform into a target space,
