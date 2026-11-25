@@ -59,15 +59,16 @@ const checkColumnGroups = (names: Set<string>) => {
     if (!present.has('f_dc_0')) {
         throw csvError('line 1: f_rest_* columns require f_dc_0, f_dc_1, f_dc_2');
     }
+    // Check the count first: it bounds the gap scan below to at most 72 names.
+    if (!SH_REST_TOTALS.includes(numRest)) {
+        throw csvError(`line 1: expected ${SH_REST_TOTALS.join(', ')} f_rest_* columns, got ${numRest}`);
+    }
     const missing = [];
     for (let i = 0; i < numRest; i++) {
         if (!present.has(`f_rest_${i}`)) missing.push(`f_rest_${i}`);
     }
     if (missing.length > 0) {
         throw csvError(`line 1: incomplete f_rest columns, missing ${missing.join(', ')}`);
-    }
-    if (!SH_REST_TOTALS.includes(numRest)) {
-        throw csvError(`line 1: expected ${SH_REST_TOTALS.join(', ')} f_rest_* columns, got ${numRest}`);
     }
 };
 

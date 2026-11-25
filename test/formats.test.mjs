@@ -1281,8 +1281,13 @@ describe('CSV Format', () => {
             ],
             ['f_dc_0,f_dc_1\n0,0\n', /line 1: incomplete color columns, missing f_dc_2/],
             ['x,y,z,f_rest_0\n0,0,0,0\n', /line 1: f_rest_\* columns require f_dc_0, f_dc_1, f_dc_2/],
-            ['f_dc_0,f_dc_1,f_dc_2,f_rest_1\n0,0,0,0\n', /line 1: incomplete f_rest columns, missing f_rest_0$/],
-            ['f_dc_0,f_dc_1,f_dc_2,f_rest_0\n0,0,0,0\n', /line 1: expected 9, 24, 45, 72 f_rest_\* columns, got 1/]
+            [
+                `f_dc_0,f_dc_1,f_dc_2,${[0, 1, 2, 3, 5, 6, 7, 8].map((i) => `f_rest_${i}`).join(',')}\n`,
+                /line 1: incomplete f_rest columns, missing f_rest_4$/
+            ],
+            ['f_dc_0,f_dc_1,f_dc_2,f_rest_0\n0,0,0,0\n', /line 1: expected 9, 24, 45, 72 f_rest_\* columns, got 1/],
+            // A huge index must fail on the count check, not scan a billion names for gaps.
+            ['f_dc_0,f_dc_1,f_dc_2,f_rest_999999999\n0,0,0,0\n', /expected 9, 24, 45, 72 f_rest_\* columns, got 1000000000/]
         ];
 
         for (const [csv, expected] of invalidCases) {
