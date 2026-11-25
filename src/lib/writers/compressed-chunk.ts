@@ -66,7 +66,9 @@ class CompressedChunk {
                     if (v > max) max = v;
                 }
             }
-            return min <= max ? { min, max } : { min: 0, max: 0 };
+            // with no finite values, fall back to the smallest scale rather than a unit scale
+            const fallback = scale ? -20 : 0;
+            return min <= max ? { min, max } : { min: fallback, max: fallback };
         };
 
         const normalize = (x: number, min: number, max: number) => {
@@ -165,11 +167,15 @@ class CompressedChunk {
                 normalize(scale_2[i], sz.min, sz.max)
             );
 
+            // a non-finite position has no place in the chunk, so hide the splat
+            // instead of drawing it at the chunk bounds
+            const validPosition = Number.isFinite(x[i]) && Number.isFinite(y[i]) && Number.isFinite(z[i]);
+
             this.color[i] = pack8888(
                 normalize(f_dc_0[i], cr.min, cr.max),
                 normalize(f_dc_1[i], cg.min, cg.max),
                 normalize(f_dc_2[i], cb.min, cb.max),
-                sigmoid(opacity[i])
+                validPosition ? sigmoid(opacity[i]) : 0
             );
         }
 
