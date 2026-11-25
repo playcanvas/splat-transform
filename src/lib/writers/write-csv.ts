@@ -1,8 +1,9 @@
 import { basename } from 'pathe';
 
 import type { DataTable } from '../data-table';
+import { convertToSpace } from '../data-table';
 import type { FileSystem } from '../io/write';
-import { logger } from '../utils';
+import { logger, Transform } from '../utils';
 
 import { logWrittenFile } from './utils';
 
@@ -16,13 +17,16 @@ type WriteCSVOptions = {
  *
  * Useful for debugging, analysis, or importing into spreadsheet applications.
  * Each row represents one splat with all column values separated by commas.
+ * Values are written in PLY coordinate space (the convention of the PLY column
+ * names), which is the space `readCsv` assumes when reading them back.
  *
  * @param options - Options including filename and data table to write.
  * @param fs - File system for writing the output file.
  * @ignore
  */
 const writeCsv = async (options: WriteCSVOptions, fs: FileSystem) => {
-    const { filename, dataTable } = options;
+    const { filename } = options;
+    const dataTable = convertToSpace(options.dataTable, Transform.PLY);
 
     const len = dataTable.numRows;
 
