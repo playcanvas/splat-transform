@@ -275,6 +275,84 @@ describe('Compressed PLY Format', () => {
         compareSummaries(actualSummary, expectedSummary, { tolerance: 0.1 });
     });
 
+    // Round-trip a single 256-splat chunk through compressed PLY. Rows come back in
+    // morton order, so callers compare value multisets rather than row by row.
+    const compressedRoundTrip = async (dt) => {
+        const writeFs = new MemoryFileSystem();
+        await writeCompressedPly({ filename: 'chunk.compressed.ply', dataTable: dt }, writeFs);
+        const pool = createChunkDataPool();
+        return materializeToDataTable(
+            await readPly(new BufferReadSource(writeFs.results.get('chunk.compressed.ply')), pool), pool
+        );
+    };
+
+    const sorted = values => Array.from(values).sort((a, b) => a - b);
+
+    it('a non-finite value must not corrupt the rest of its 256-splat chunk', async () => {
+        const dt = createTestDataTable(256);
+        dt.transform = Transform.PLY.clone();
+        const expectedX = sorted(dt.getColumnByName('x').data.filter((_, i) => i !== 7));
+        const expectedScale = dt.getColumnByName('scale_0').data[0];
+        dt.getColumnByName('x').data[7] = NaN;
+        dt.getColumnByName('scale_0').data[9] = NaN;
+        dt.getColumnByName('f_dc_1').data[11] = NaN;
+
+        const readBack = await compressedRoundTrip(dt);
+
+        // Before the fix all 256 splats decoded as NaN in each of these columns.
+        for (const name of ['x', 'scale_0', 'f_dc_1']) {
+            const nanCount = Array.from(readBack.getColumnByName(name).data).filter(Number.isNaN).length;
+            assert.strictEqual(nanCount, 0, `${name}: ${nanCount} NaN values after round-trip`);
+        }
+
+        // The NaN-position splat is hidden rather than drawn at the chunk bounds.
+        const opacity = readBack.getColumnByName('opacity').data;
+        const hidden = Array.from(opacity.keys()).filter(i => opacity[i] < -10);
+        assert.strictEqual(hidden.length, 1, 'exactly the NaN-position splat is hidden');
+
+        // The other splats keep their positions and scales.
+        const x = readBack.getColumnByName('x').data;
+        const visibleX = sorted(x.filter((_, i) => i !== hidden[0]));
+        visibleX.forEach((v, i) => assert(Math.abs(v - expectedX[i]) < 0.01, `x[${i}]: ${v} vs ${expectedX[i]}`));
+        assert(readBack.getColumnByName('scale_0').data.every(v => Math.abs(v - expectedScale) < 1e-4));
+    });
+
+    it('preserves the lower log-scale clamp for an entirely flat chunk', async () => {
+        const dt = createTestDataTable(256);
+        dt.transform = Transform.PLY.clone();
+        dt.getColumnByName('scale_2').data.fill(-Infinity);
+
+        const values = (await compressedRoundTrip(dt)).getColumnByName('scale_2').data;
+        assert.strictEqual(values.length, 256);
+        assert(values.every(value => value === -20));
+    });
+
+    it('a chunk with no finite scale falls back to the lower log-scale clamp', async () => {
+        const dt = createTestDataTable(256);
+        dt.transform = Transform.PLY.clone();
+        dt.getColumnByName('scale_1').data.fill(NaN);
+
+        const values = (await compressedRoundTrip(dt)).getColumnByName('scale_1').data;
+        assert(values.every(value => value === -20));
+    });
+
+    it('mixes infinite, NaN and finite log scales in one chunk', async () => {
+        const dt = createTestDataTable(256);
+        dt.transform = Transform.PLY.clone();
+        const scale = dt.getColumnByName('scale_2').data;
+        for (let i = 0; i < 256; ++i) {
+            scale[i] = i < 32 ? -Infinity : i === 32 ? NaN : -4 + (i % 8) * 0.25;
+        }
+        const expectedFinite = sorted(scale.filter(Number.isFinite));
+
+        const values = sorted((await compressedRoundTrip(dt)).getColumnByName('scale_2').data);
+
+        // -Infinity saturates at -20, the NaN splat decodes to the chunk minimum (also -20)
+        assert(values.slice(0, 33).every(value => value === -20));
+        // finite scales keep their precision: the -20..-2.25 range spans 2047 steps
+        values.slice(33).forEach((v, i) => assert(Math.abs(v - expectedFinite[i]) < 0.01, `${v} vs ${expectedFinite[i]}`));
+    });
+
     it('writeCompressedPlySource (ChunkSource adapter) == writeCompressedPly byte-for-byte', async () => {
         const dt = createTestDataTable(300, { includeSH: true, shBands: 1 });
         dt.transform = Transform.PLY.clone();
