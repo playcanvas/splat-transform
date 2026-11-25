@@ -1,3 +1,4 @@
+import { OPACITY_LINEAR_COLUMN, SH_REST_COUNTS } from '../chunk';
 import { Column, DataTable } from '../data-table';
 import type { ReadSource } from '../io/read';
 import { Transform } from '../utils';
@@ -28,6 +29,48 @@ const parseValue = (value: string, line: number, column: string): number => {
     return Number(token);
 };
 
+const COLUMN_GROUPS: [string, string[]][] = [
+    ['position', ['x', 'y', 'z']],
+    ['rotation/scale/opacity', ['rot_0', 'rot_1', 'rot_2', 'rot_3', 'scale_0', 'scale_1', 'scale_2', 'opacity']],
+    ['color', ['f_dc_0', 'f_dc_1', 'f_dc_2']]
+];
+const SH_REST_TOTALS = Object.values(SH_REST_COUNTS).filter((n) => n > 0);
+
+// The splat pipeline keeps a standard column only when its whole group is
+// present, so a partial group (e.g. a hand-deleted rot_3) would silently drop
+// its siblings. Reject it up front instead.
+const checkColumnGroups = (names: Set<string>) => {
+    const present = new Set(names);
+    if (present.has(OPACITY_LINEAR_COLUMN)) present.add('opacity');
+
+    for (const [label, group] of COLUMN_GROUPS) {
+        const missing = group.filter((name) => !present.has(name));
+        if (missing.length > 0 && missing.length < group.length) {
+            throw csvError(`line 1: incomplete ${label} columns, missing ${missing.join(', ')}`);
+        }
+    }
+
+    let numRest = 0;
+    for (const name of names) {
+        const match = /^f_rest_(\d+)$/.exec(name);
+        if (match) numRest = Math.max(numRest, parseInt(match[1], 10) + 1);
+    }
+    if (numRest === 0) return;
+    if (!present.has('f_dc_0')) {
+        throw csvError('line 1: f_rest_* columns require f_dc_0, f_dc_1, f_dc_2');
+    }
+    const missing = [];
+    for (let i = 0; i < numRest; i++) {
+        if (!present.has(`f_rest_${i}`)) missing.push(`f_rest_${i}`);
+    }
+    if (missing.length > 0) {
+        throw csvError(`line 1: incomplete f_rest columns, missing ${missing.join(', ')}`);
+    }
+    if (!SH_REST_TOTALS.includes(numRest)) {
+        throw csvError(`line 1: expected ${SH_REST_TOTALS.join(', ')} f_rest_* columns, got ${numRest}`);
+    }
+};
+
 const parseHeader = (line: string): string[] => {
     const names = line.split(',').map((name) => name.trim());
     const seen = new Set<string>();
@@ -41,6 +84,7 @@ const parseHeader = (line: string): string[] => {
         }
         seen.add(name);
     }
+    checkColumnGroups(seen);
     return names;
 };
 
@@ -64,8 +108,10 @@ const lineBreak = /\r\n|\n|\r/;
  *
  * @param source - Source containing UTF-8 encoded CSV data. The caller owns and closes it.
  * @returns A data table containing the CSV columns and rows.
- * @throws If the CSV is not valid UTF-8, has an invalid header, contains rows
- * with the wrong number of values, or contains an invalid numeric value.
+ * @throws If the CSV is not valid UTF-8, has an invalid header (including a
+ * partial group of standard splat columns, such as `rot_0`-`rot_2` without
+ * `rot_3`), contains rows with the wrong number of values, or contains an
+ * invalid numeric value.
  */
 const readCsv = async (source: ReadSource): Promise<DataTable> => {
     let names: string[] | null = null;
