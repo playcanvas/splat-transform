@@ -53,13 +53,14 @@ class CompressedChunk {
     }
 
     pack() {
-        // Bounds over the finite values only: a single NaN/Infinity would otherwise
-        // make the whole chunk's bounds non-finite and corrupt all 256 splats.
-        const calcMinMax = (data: Float32Array) => {
+        // Unbounded log scales are valid and saturate at the packed scale limits.
+        const clampScale = (value: number) => Math.max(-20, Math.min(20, value));
+        // NaN values must not contaminate the bounds of their neighboring splats.
+        const calcMinMax = (data: Float32Array, scale = false) => {
             let min = Infinity;
             let max = -Infinity;
             for (let i = 0; i < data.length; ++i) {
-                const v = data[i];
+                const v = scale ? clampScale(data[i]) : data[i];
                 if (Number.isFinite(v)) {
                     if (v < min) min = v;
                     if (v > max) max = v;
@@ -95,18 +96,9 @@ class CompressedChunk {
         const py = calcMinMax(y);
         const pz = calcMinMax(z);
 
-        const sx = calcMinMax(scale_0);
-        const sy = calcMinMax(scale_1);
-        const sz = calcMinMax(scale_2);
-
-        // clamp scale because sometimes values are at infinity
-        const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
-        sx.min = clamp(sx.min, -20, 20);
-        sx.max = clamp(sx.max, -20, 20);
-        sy.min = clamp(sy.min, -20, 20);
-        sy.max = clamp(sy.max, -20, 20);
-        sz.min = clamp(sz.min, -20, 20);
-        sz.max = clamp(sz.max, -20, 20);
+        const sx = calcMinMax(scale_0, true);
+        const sy = calcMinMax(scale_1, true);
+        const sz = calcMinMax(scale_2, true);
 
         // convert f_dc_ to colors before calculating min/max and packaging
         const SH_C0 = 0.28209479177387814;

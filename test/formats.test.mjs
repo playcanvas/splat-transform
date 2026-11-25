@@ -292,6 +292,23 @@ describe('Compressed PLY Format', () => {
         }
     });
 
+    it('preserves the lower log-scale clamp for an entirely flat chunk', async () => {
+        const dt = createTestDataTable(256);
+        dt.transform = Transform.PLY.clone();
+        dt.getColumnByName('scale_2').data.fill(-Infinity);
+        const writeFs = new MemoryFileSystem();
+        await writeCompressedPly({ filename: 'flat.compressed.ply', dataTable: dt }, writeFs);
+
+        const pool = createChunkDataPool();
+        const readBack = await materializeToDataTable(
+            await readPly(new BufferReadSource(writeFs.results.get('flat.compressed.ply')), pool), pool
+        );
+
+        const values = readBack.getColumnByName('scale_2').data;
+        assert.strictEqual(values.length, 256);
+        assert(values.every(value => value === -20));
+    });
+
     it('writeCompressedPlySource (ChunkSource adapter) == writeCompressedPly byte-for-byte', async () => {
         const dt = createTestDataTable(300, { includeSH: true, shBands: 1 });
         dt.transform = Transform.PLY.clone();
