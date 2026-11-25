@@ -84,8 +84,8 @@ export { dataTableToChunkSource, materializeToDataTable } from './compat/data-ta
 export { processDataTable } from './process';
 
 // Individual readers (advanced use; ply/splat/spz/glb return a `ChunkSource`,
-// ksplat/mjs/sog return a `DataTable`)
-export { readGlb, readKsplat, readMjs, readPly, readSog, readSplat, readSpz } from './readers';
+// csv/ksplat/mjs/sog return a `DataTable`)
+export { readCsv, readGlb, readKsplat, readMjs, readPly, readSog, readSplat, readSpz } from './readers';
 
 // Individual writers (advanced use; DataTable-input compat set)
 export {

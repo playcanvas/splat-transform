@@ -86,7 +86,8 @@ src/
 │   │   ├── read-spz.ts
 │   │   ├── read-lcc.ts
 │   │   ├── read-lcc2.ts
-│   │   └── read-mjs.ts
+│   │   ├── read-mjs.ts
+│   │   └── read-csv.ts
 │   ├── writers/            # Format-specific writers (one per file)
 │   │   ├── write-ply-streaming.ts  # chunk-native PLY (the streaming hot path)
 │   │   ├── write-ply.ts
@@ -205,7 +206,7 @@ Read and write operations use abstract interfaces so the same code works in brow
 
 ### Supported Formats
 
-**Input**: PLY, splat, KSplat, SOG, Streamed SOG, SPZ, LCC, LCC2, MJS
+**Input**: PLY, splat, KSplat, SOG, Streamed SOG, SPZ, LCC, LCC2, MJS, CSV
 
 **Output**: PLY, compressed PLY, SOG, SOG-bundle, SPZ, GLB, CSV, HTML, HTML-bundle, LOD, voxel, image (WebP)
 

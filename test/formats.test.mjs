@@ -9,12 +9,15 @@ import { readFile as fsReadFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { Vec3 } from 'playcanvas';
+
 import {
     Column,
     DataTable,
     Transform,
     getInputFormat,
     readFile,
+    readCsv,
     readPly,
     readSplat,
     readKsplat,
@@ -25,6 +28,7 @@ import {
     writeSog,
     writeSpz,
     writeCsv,
+    writeSource,
     MemoryReadFileSystem,
     MemoryFileSystem,
     ZipReadFileSystem,
@@ -38,6 +42,7 @@ import { writeCompressedPlySource } from '../src/lib/writers/write-compressed-pl
 import { writeSplatStreaming } from '../src/lib/writers/write-splat-streaming.js';
 import { gaussianCloudToDataTable, getSpzModule } from '../src/lib/spz-module.js';
 import { createChunkDataPool } from '../src/lib/chunk/index.js';
+import { convertToSpace } from '../src/lib/data-table/index.js';
 
 import { compareSummaries, compareDataTables, computeStatsView } from './helpers/summary-compare.mjs';
 import { createMinimalTestData, createTestDataTable, encodePlyBinary, assertColumnValue } from './helpers/test-utils.mjs';
@@ -1079,7 +1084,7 @@ describe('SPZ pure-JS decoder vs @adobe/spz (raw decode)', () => {
     });
 });
 
-describe('CSV Format (Output Only)', () => {
+describe('CSV Format', () => {
     let testData;
 
     before(() => {
@@ -1114,6 +1119,180 @@ describe('CSV Format (Output Only)', () => {
         for (const value of firstRow) {
             const num = parseFloat(value);
             assert(!Number.isNaN(num), `Invalid number in CSV: ${value}`);
+        }
+    });
+
+    it('should preserve an export through import and export', async () => {
+        const firstWriteFs = new MemoryFileSystem();
+        await writeCsv({ filename: 'first.csv', dataTable: testData }, firstWriteFs);
+        const firstCsv = firstWriteFs.results.get('first.csv');
+        assert(firstCsv, 'First CSV file should be written');
+
+        const imported = await readCsv(new BufferReadSource(firstCsv));
+        assert.strictEqual(imported.transform.equals(Transform.PLY), true);
+        compareDataTables(imported, convertToSpace(testData, Transform.PLY), 0);
+
+        const secondWriteFs = new MemoryFileSystem();
+        await writeCsv({ filename: 'second.csv', dataTable: imported }, secondWriteFs);
+        const secondCsv = secondWriteFs.results.get('second.csv');
+        assert(secondCsv, 'Second CSV file should be written');
+        assert.deepStrictEqual(secondCsv, firstCsv);
+    });
+
+    it('should import CSV through the high-level file reader', async () => {
+        const writeFs = new MemoryFileSystem();
+        await writeCsv({ filename: 'test.csv', dataTable: testData }, writeFs);
+        const csv = writeFs.results.get('test.csv');
+        assert(csv);
+
+        const readFs = new MemoryReadFileSystem();
+        readFs.set('test.csv', csv);
+        assert.strictEqual(getInputFormat('test.csv'), 'csv');
+
+        const [source] = await readFile({
+            filename: 'test.csv',
+            inputFormat: getInputFormat('test.csv'),
+            fileSystem: readFs
+        });
+        try {
+            const pool = createChunkDataPool();
+            const imported = await materializeToDataTable(source, pool);
+            const expectedSource = dataTableToChunkSource(convertToSpace(testData, Transform.PLY));
+            try {
+                const expected = await materializeToDataTable(expectedSource, pool);
+                assert.strictEqual(imported.transform.equals(Transform.PLY), true);
+                compareDataTables(imported, expected, 0);
+            } finally {
+                await expectedSource.close();
+            }
+        } finally {
+            await source.close();
+        }
+    });
+
+    it('should keep the pending transform through writeSource and readFile', async () => {
+        // A PLY-space source (pending Transform.PLY) plus a translation, as the
+        // CLI produces for `in.ply -t 10,0,0 out.csv`.
+        const original = testData.clone();
+        original.transform = new Transform(new Vec3(10, 0, 0)).mul(Transform.PLY);
+
+        const pool = createChunkDataPool();
+        const writeFs = new MemoryFileSystem();
+        const originalSource = dataTableToChunkSource(original);
+        try {
+            await writeSource({ filename: 'scene.csv', outputFormat: 'csv', source: originalSource, pool, options: {} }, writeFs);
+        } finally {
+            await originalSource.close();
+        }
+
+        const readFs = new MemoryReadFileSystem();
+        readFs.set('scene.csv', writeFs.results.get('scene.csv'));
+        const [source] = await readFile({ filename: 'scene.csv', inputFormat: 'csv', fileSystem: readFs });
+        try {
+            const imported = await materializeToDataTable(source, pool);
+            const expectedSource = dataTableToChunkSource(original);
+            try {
+                const expected = await materializeToDataTable(expectedSource, pool);
+                compareDataTables(
+                    convertToSpace(imported, Transform.IDENTITY),
+                    convertToSpace(expected, Transform.IDENTITY),
+                    1e-5
+                );
+            } finally {
+                await expectedSource.close();
+            }
+        } finally {
+            await source.close();
+        }
+    });
+
+    it('should parse rows split across arbitrary read boundaries', async () => {
+        const bytes = new TextEncoder().encode('a,é\r\n1,2\r\n3,4\r\n\r\n');
+        // Deliver one byte per pull so CRLF pairs and the two-byte 'é' straddle reads.
+        const trickleSource = {
+            size: bytes.length,
+            seekable: false,
+            read() {
+                let offset = 0;
+                return {
+                    async pull(target) {
+                        if (offset >= bytes.length) return 0;
+                        target[0] = bytes[offset++];
+                        return 1;
+                    },
+                    close() {}
+                };
+            },
+            close() {}
+        };
+
+        const imported = await readCsv(trickleSource);
+        assert.deepStrictEqual(imported.columnNames, ['a', 'é']);
+        assert.deepStrictEqual(Array.from(imported.getColumnByName('a').data), [1, 3]);
+        assert.deepStrictEqual(Array.from(imported.getColumnByName('é').data), [2, 4]);
+    });
+
+    it('should grow past the initial row capacity', async () => {
+        const rows = 5000;
+        let text = 'v\n';
+        for (let i = 0; i < rows; i++) text += `${i}\n`;
+        const imported = await readCsv(new BufferReadSource(new TextEncoder().encode(text)));
+        const values = imported.getColumnByName('v').data;
+        assert.strictEqual(values.length, rows);
+        assert.strictEqual(values[0], 0);
+        assert.strictEqual(values[rows - 1], rows - 1);
+    });
+
+    it('should accept opacity_linear in place of opacity', async () => {
+        const csv = 'rot_0,rot_1,rot_2,rot_3,scale_0,scale_1,scale_2,opacity_linear\n1,0,0,0,0,0,0,1.5\n';
+        const imported = await readCsv(new BufferReadSource(new TextEncoder().encode(csv)));
+        assert.strictEqual(imported.getColumnByName('opacity_linear').data[0], 1.5);
+    });
+
+    it('should accept every non-finite value emitted by the exporter', async () => {
+        const data = new TextEncoder().encode('value\nNaN\nInfinity\n-Infinity\n');
+        const imported = await readCsv(new BufferReadSource(data));
+        const values = imported.getColumnByName('value').data;
+
+        assert(Number.isNaN(values[0]));
+        assert.strictEqual(values[1], Infinity);
+        assert.strictEqual(values[2], -Infinity);
+    });
+
+    it('should report clear errors for invalid CSV', async () => {
+        const invalidCases = [
+            ['', /readCsv: invalid CSV: missing header/],
+            ['x,,z\n1,2,3\n', /line 1, column 2: empty column name/],
+            ['x,y,x\n1,2,3\n', /line 1: duplicate column name 'x'/],
+            ['a,b\n1\n', /line 2: expected 2 values, got 1/],
+            ['a,b\n1,\n', /line 2, column 'b': empty value/],
+            ['a,b\n1,2oops\n', /line 2, column 'b': invalid number '2oops'/],
+            ['\na,b\n1,2\n', /missing header/],
+            ['a,b\n1,2\n\n3,4\n', /line 3: empty line/],
+            [new Uint8Array([0x61, 0x0a, 0xff, 0x0a]), /file is not valid UTF-8/],
+            ['x,y\n1,2\n', /line 1: incomplete position columns, missing z/],
+            [
+                'x,y,z,opacity\n1,2,3,0.5\n',
+                /line 1: incomplete rotation\/scale\/opacity columns, missing rot_0, rot_1, rot_2, rot_3, scale_0, scale_1, scale_2$/
+            ],
+            [
+                'rot_0,rot_1,rot_2,scale_0,scale_1,scale_2,opacity\n1,0,0,0,0,0,0\n',
+                /line 1: incomplete rotation\/scale\/opacity columns, missing rot_3$/
+            ],
+            ['f_dc_0,f_dc_1\n0,0\n', /line 1: incomplete color columns, missing f_dc_2/],
+            ['x,y,z,f_rest_0\n0,0,0,0\n', /line 1: f_rest_\* columns require f_dc_0, f_dc_1, f_dc_2/],
+            [
+                `f_dc_0,f_dc_1,f_dc_2,${[0, 1, 2, 3, 5, 6, 7, 8].map((i) => `f_rest_${i}`).join(',')}\n`,
+                /line 1: incomplete f_rest columns, missing f_rest_4$/
+            ],
+            ['f_dc_0,f_dc_1,f_dc_2,f_rest_0\n0,0,0,0\n', /line 1: expected 9, 24, 45, 72 f_rest_\* columns, got 1/],
+            // A huge index must fail on the count check, not scan a billion names for gaps.
+            ['f_dc_0,f_dc_1,f_dc_2,f_rest_999999999\n0,0,0,0\n', /expected 9, 24, 45, 72 f_rest_\* columns, got 1000000000/]
+        ];
+
+        for (const [csv, expected] of invalidCases) {
+            const bytes = typeof csv === 'string' ? new TextEncoder().encode(csv) : csv;
+            await assert.rejects(readCsv(new BufferReadSource(bytes)), expected);
         }
     });
 });
